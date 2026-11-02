@@ -4,7 +4,7 @@ Monitor the real speed of every internet connection you own, around the clock.
 
 Small agents on your machines run a speed test on a schedule and report to one dashboard. The dashboard stores every result, remembers which public IP each machine used and where it is, and shows averages, trends and the best and worst hours.
 
-**Status: interface preview.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The Go backend is a scaffold: it builds, tests and loads its configuration, but has no business logic yet.
+**Status: interface preview.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The Go backend is a scaffold: it builds, tests and loads its configuration, and includes embedded PostgreSQL migrations and a connection pool; API/agent business logic is not implemented yet.
 
 ## View the preview
 
@@ -72,12 +72,19 @@ make build        # go build ./...
 make test         # go test ./...
 make lint         # golangci-lint run
 make ci           # vet + test + build + lint
+make migrate      # apply embedded PostgreSQL migrations using .env
+make migrate-down # roll back latest migration (deletes version 1 data)
+make test-db      # migration/constraint integration tests on a verified test DB
 make run-center   # start the command center
 make run-agent    # start a node agent
 ```
 
-Configuration is read only from the environment (`.env`); service endpoints are
-never hard-coded to Docker or to a specific machine.
+Configuration uses the environment; migration commands also load the current
+directory's `.env` (existing environment values take precedence). Service
+endpoints are never hard-coded to Docker or a specific machine.
+Read [the migration runbook](migrations/README.md) and verify the non-live
+database before any migration or database test. `make test-db` requires an
+empty application schema and verifies its database name and ownership marker.
 
 ### `make ci` prerequisites
 
