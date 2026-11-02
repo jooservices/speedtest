@@ -18,14 +18,15 @@ Before **every** database migration, seed or integration test, verify the target
 using the Workspaces safety helper:
 
 ```bash
-/home/joos/Workspaces/scripts/docker/shared check-project speedtest --env-file "$PWD/.env" --mode wt:10
+/home/joos/Workspaces/scripts/docker/shared check-project speedtest --env-file "$PWD/.env" --mode "wt:<id>"
 ```
 
-Use the worktree's own ID instead of `10`, or `--mode test` for `speedtest_test`.
+Replace `<id>` with the worktree's own ID, or `--mode test` for `speedtest_test`.
 Do not proceed if validation fails. On the Dev Workspaces VM only, Claude's
 JOOST-10 unblock comment 24165 authorizes manual verification because this
 helper targets the retired Docker stack: verify the configured name is
-`speedtest_wt10` or `speedtest_test` and check the connected database's marker:
+`speedtest_test` or matches `^speedtest_wt[a-z0-9]{1,12}$`, then check the
+connected database's marker:
 
 ```sql
 SELECT current_database(), shobj_description(oid, 'pg_database')
@@ -114,16 +115,21 @@ check, run against the worktree/test database named in `.env`:
 
 ```bash
 make test-db
-go test -tags integration ./internal/center/db/... -count=1 -coverprofile=.tmp/coverage-db.out
+go test -race -p 1 -tags integration ./... -count=1 -coverprofile=.tmp/coverage-db.out
 go tool cover -func=.tmp/coverage-db.out
 make ci
 ```
 
 Create `.tmp/` first for the coverage artifact. Integration tests fail closed
 without `.env`, a permitted database name and the server-side ownership marker.
-They require an empty public application schema (goose journal may remain),
-serialize against each other, apply version 1, insert synthetic fixtures across
-all 13 tables, roll back populated data, reapply concurrently and clean up.
+Each suite resets the project tables and goose journal after validating the
+database name and ownership marker, and leaves the schema empty on cleanup.
+The geo suite applies its own schema before testing. These are destructive
+fixtures: use only a disposable test/worktree database. Always use `-p 1` and
+`-count=1`; never run separate integration commands or parallel tests against
+the same database concurrently. Migration suites apply version 1, insert
+synthetic fixtures across all 13 tables, roll back populated data, reapply
+concurrently and clean up.
 They verify UUID uniqueness, foreign keys, bounds, nulls, IPv6, UTC precision,
 indexes, cancellation and transactional failure on an external view dependency.
 Never point this destructive rehearsal at data you need to keep.

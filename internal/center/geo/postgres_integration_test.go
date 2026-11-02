@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	centerdb "github.com/jooservices/speedtest/internal/center/db"
+	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
 
@@ -29,8 +30,8 @@ func integrationPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	if err != nil {
 		t.Fatal("invalid test database configuration")
 	}
-	if cfg.Database.Name != "speedtest_wt34" && cfg.Database.Name != "speedtest_test" {
-		t.Fatal("refusing database outside the ticket worktree/test allowlist")
+	if err := centerdb.CheckTestDatabase(cfg.Database.Name); err != nil {
+		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
@@ -43,6 +44,9 @@ func integrationPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	if err := pool.QueryRow(ctx, "SELECT current_database(), shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()").Scan(&name, &marker); err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
 		t.Fatal("test database identity/ownership verification failed")
 	}
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
 	t.Log("PASS: database name and Workspaces project ownership marker verified")
 	return pool, ctx
 }

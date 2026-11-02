@@ -12,6 +12,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/db"
+	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
 
@@ -32,8 +33,8 @@ func TestRunMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal("invalid test configuration")
 	}
-	if cfg.Database.Name != "speedtest_wt10" && cfg.Database.Name != "speedtest_test" {
-		t.Fatal("refusing non-test database")
+	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
@@ -41,25 +42,14 @@ func TestRunMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	var name, marker string
 	err = pool.QueryRow(ctx, "SELECT current_database(),shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()").Scan(&name, &marker)
 	if err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
 		t.Fatal("database safety check failed")
 	}
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Release()
-	if _, err = conn.Exec(ctx, "SELECT pg_advisory_lock(1000010)"); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock(1000010)") }()
-	var n int
-	if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name <> 'goose_db_version'").Scan(&n); e != nil || n != 0 {
-		t.Fatal("CLI test requires empty schema")
-	}
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	for _, direction := range []string{"up", "up", "down"} {
 		var out bytes.Buffer
 		if code := run([]string{direction}, &out); code != 0 || !strings.Contains(out.String(), "complete") {
