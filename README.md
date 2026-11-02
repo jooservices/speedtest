@@ -105,9 +105,10 @@ pull request using the same pinned version.
 
 See [`docs/ui-decisions.md`](docs/ui-decisions.md) for the reasoning behind the UI choices and the open questions.
 
-### Offline geolocation library
+### Geolocation lookup
 
-`internal/center/geo` provides offline GeoLite2 City/ASN lookups and a weekly,
-checksum-verified updater. It is ready for the center lifecycle and Settings
-service to consume; it does not change the demo UI. See
+`internal/center/geo` provides offline GeoLite2 City/ASN lookups, a weekly,
+checksum-verified updater, an `ip_addresses` result cache and optional ip-api /
+IPinfo Lite fallbacks. Compose the resolver with the shared PostgreSQL pool
+when the center lifecycle is added. This does not change the demo UI. See
 [configuration, lifecycle and verification](docs/geolocation.md).
