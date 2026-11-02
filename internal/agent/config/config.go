@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/jooservices/speedtest/internal/agent/engine"
+	"github.com/jooservices/speedtest/internal/agent/netpath"
 	"gopkg.in/yaml.v3"
 )
 
@@ -35,6 +36,12 @@ type Config struct {
 	// ParallelConnections overrides the LibreSpeed CLI concurrency setting.
 	// Zero keeps the engine's .env default.
 	ParallelConnections int
+	// NetworkInterface selects a local network interface for tests. It is
+	// mutually exclusive with SourceIP; empty values use the default route.
+	NetworkInterface string
+	// SourceIP selects a local source address for tests. It is mutually
+	// exclusive with NetworkInterface; empty values use the default route.
+	SourceIP string
 }
 
 // fileConfig is the YAML shape. Pointer fields tell a missing key apart from
@@ -46,6 +53,8 @@ type fileConfig struct {
 	ExpectedUploadMbps   *int    `yaml:"expected_upload_mbps"`
 	Interval             *string `yaml:"interval"`
 	ParallelConnections  *int    `yaml:"parallel_connections"`
+	NetworkInterface     *string `yaml:"network_interface"`
+	SourceIP             *string `yaml:"source_ip"`
 }
 
 // Load reads the configuration file at path. A missing file is allowed and
@@ -109,6 +118,12 @@ func applyFile(path string, cfg *Config) error {
 	if f.ParallelConnections != nil {
 		cfg.ParallelConnections = *f.ParallelConnections
 	}
+	if f.NetworkInterface != nil {
+		cfg.NetworkInterface = strings.TrimSpace(*f.NetworkInterface)
+	}
+	if f.SourceIP != nil {
+		cfg.SourceIP = strings.TrimSpace(*f.SourceIP)
+	}
 	return nil
 }
 
@@ -130,6 +145,9 @@ func (c Config) validate() error {
 	}
 	if c.ParallelConnections < 0 {
 		return fmt.Errorf("parallel_connections must be greater than 0 when set, got %d", c.ParallelConnections)
+	}
+	if err := (netpath.Binding{Interface: c.NetworkInterface, SourceIP: c.SourceIP}).Validate(); err != nil {
+		return fmt.Errorf("network binding: %w", err)
 	}
 	return nil
 }

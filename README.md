@@ -126,7 +126,15 @@ name: node
 expected_download_mbps: 0
 expected_upload_mbps: 0
 interval: 30m
+# Optional: choose one local path; omit both to use the default route.
+# network_interface: enp1s0
+# source_ip: 192.0.2.10
 ```
+
+`network_interface` and `source_ip` are mutually exclusive. The selected
+interface must exist, be up, and have an IP address; the selected source IP
+must be assigned locally. See [Linux multi-uplink routing](docs/multi-wan.md)
+for policy-routing prerequisites and verification.
 
 Only the configuration and credential file paths are agent environment
 overrides; node values come from `config.yaml`. Malformed YAML, unknown keys,

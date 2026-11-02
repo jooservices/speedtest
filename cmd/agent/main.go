@@ -22,6 +22,7 @@ import (
 
 	agentconfig "github.com/jooservices/speedtest/internal/agent/config"
 	"github.com/jooservices/speedtest/internal/agent/enroll"
+	"github.com/jooservices/speedtest/internal/agent/netpath"
 )
 
 // version is the agent version, overridable at build time with
@@ -151,6 +152,11 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		logger.Error("invalid credential", "credential", credentialPath, "error", err.Error())
 		return 1
 	}
+	path, err := netpath.Resolve(netpath.Binding{Interface: cfg.NetworkInterface, SourceIP: cfg.SourceIP})
+	if err != nil {
+		logger.Error("invalid network path", "error", err.Error())
+		return 1
+	}
 
 	logger.Info("agent started",
 		"version", version,
@@ -158,6 +164,7 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		"expected_download_mbps", cfg.ExpectedDownloadMbps,
 		"expected_upload_mbps", cfg.ExpectedUploadMbps,
 		"interval", cfg.Interval.String(),
+		"network_path", path.Description(),
 	)
 
 	<-ctx.Done()

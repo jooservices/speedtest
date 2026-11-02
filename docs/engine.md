@@ -1,9 +1,10 @@
 # Speed test engines
 
 `internal/agent/engine` implements `Engine.Run(ctx, Options) (Result, error)`.
-This is a library for the agent scheduler; the scaffold `cmd/agent` does not yet
-schedule tests. Interface binding and reporting belong to JOOST-16/17.
-No dependency, database, HTTP endpoint or UI change is introduced here.
+This is a library for the agent scheduler; `cmd/agent` still does not schedule
+tests. JOOST-16 adds per-run interface/source-IP options to this engine and the
+`internal/agent/netpath` coordinator, which also calls the center's existing
+`GET /api/agent/ip` endpoint on the same path. JOOST-17 owns result reporting.
 
 The node's `engine` config key selects `ookla` (the default) or `librespeed`.
 `config.Config.NewEngine()` constructs the selected runner using `.env` values.
@@ -20,6 +21,26 @@ if err != nil { return err }
 result, err := runner.Run(ctx, engine.Options{ServerID: 12345})
 ```
 
+For a complete path-bound run, construct the coordinator with the node's
+configured binding and center URL:
+
+```go
+run, err := netpath.NewRunner(runner, centerURL, credential, netpath.Binding{
+    Interface: cfg.NetworkInterface,
+    SourceIP:  cfg.SourceIP,
+})
+if err != nil { return err }
+out, err := run.Run(ctx, engine.Options{ServerID: 12345})
+```
+
+The binding fields are mutually exclusive. The coordinator validates the
+selected local interface/address before invoking the engine, passes
+`--interface <name>` or `--ip <address>`, then fetches the center-observed IP on
+that same interface/source address. `out.PublicIP` is the center-observed run
+address; `out.Measurement.ExternalIP` preserves Ookla's value. Differences are
+reported in `out.Warnings`. If the echo request fails, the measurement remains
+available with a public-IP detection warning.
+
 `SPEEDTEST_OOKLA_BINARY` defaults to `speedtest` on PATH; point it at the official
 Ookla executable installed by the operator, not Python's `speedtest-cli`.
 `SPEEDTEST_OOKLA_ARGS` defaults to
@@ -28,6 +49,11 @@ arguments (including those consent flags), primarily for wrappers and test
 executables. It must be a JSON string array; `[]` passes no base arguments.
 There is no shell expansion. A positive `Options.ServerID` appends
 `--server-id <id>`; zero uses automatic server selection, negative is invalid.
+`Options.InterfaceName` appends `--interface <name>` and `Options.SourceIP`
+appends `--ip <address>`; setting both or supplying an invalid source IP is
+rejected. The node coordinator checks that the selected value is present on an
+up local interface before each run. See [Linux multi-uplink routing](multi-wan.md)
+for the host routing prerequisites.
 Do not place credentials in arguments or the executable path.
 
 `SPEEDTEST_OOKLA_TIMEOUT` defaults to `120s`. A positive `Options.Timeout`

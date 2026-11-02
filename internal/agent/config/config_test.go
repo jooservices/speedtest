@@ -58,7 +58,8 @@ func TestLoadFromFile(t *testing.T) {
 		"parallel_connections: 8\n"+
 		"expected_download_mbps: 300\n"+
 		"expected_upload_mbps: 150\n"+
-		"interval: 45m\n")
+		"interval: 45m\n"+
+		"network_interface: enp3s0\n")
 
 	cfg, err := Load(path)
 	if err != nil {
@@ -72,6 +73,7 @@ func TestLoadFromFile(t *testing.T) {
 		ExpectedUploadMbps:   150,
 		Interval:             45 * time.Minute,
 		ParallelConnections:  8,
+		NetworkInterface:     "enp3s0",
 	}
 	if cfg != want {
 		t.Fatalf("Load() = %+v, want %+v", cfg, want)
@@ -139,6 +141,16 @@ func TestLoadErrors(t *testing.T) {
 			file:    "interval: 0s\n",
 			wantErr: "interval must be greater than 0",
 		},
+		{
+			name:    "both network selectors",
+			file:    "network_interface: eth0\nsource_ip: 192.0.2.10\n",
+			wantErr: "set only one of network_interface or source_ip",
+		},
+		{
+			name:    "invalid source IP",
+			file:    "source_ip: not-an-ip\n",
+			wantErr: "source_ip \"not-an-ip\" must be an IPv4 or IPv6 literal",
+		},
 	}
 
 	for _, tt := range tests {
@@ -184,6 +196,7 @@ func TestValidate(t *testing.T) {
 		{name: "zero interval", cfg: Config{Name: "n", Engine: "ookla"}, wantErr: "interval must be greater than 0"},
 		{name: "negative interval", cfg: Config{Name: "n", Engine: "ookla", Interval: -time.Minute}, wantErr: "interval must be greater than 0"},
 		{name: "negative parallel connections", cfg: Config{Name: "n", Engine: "ookla", Interval: time.Minute, ParallelConnections: -1}, wantErr: "parallel_connections must be greater than 0 when set"},
+		{name: "both network selectors", cfg: Config{Name: "n", Engine: "ookla", Interval: time.Minute, NetworkInterface: "eth0", SourceIP: "192.0.2.10"}, wantErr: "set only one of network_interface or source_ip"},
 	}
 
 	for _, tt := range tests {

@@ -56,6 +56,47 @@ exec "$ENGINE_TEST_FAKE" "$@"
 	}
 }
 
+func TestRunnerPassesNetworkBindingFlags(t *testing.T) {
+	fake := testutil.BuildFakeSpeedtest(t)
+	capture := filepath.Join(t.TempDir(), "args")
+	t.Setenv("ENGINE_TEST_FAKE", fake)
+	t.Setenv("ENGINE_TEST_ARGS", capture)
+	adapter := script(t, `printf '%s\n' "$@" > "$ENGINE_TEST_ARGS"
+exec "$ENGINE_TEST_FAKE"
+`)
+	for _, tc := range []struct {
+		name string
+		opts Options
+		want []string
+	}{
+		{
+			name: "interface",
+			opts: Options{ServerID: 42, InterfaceName: "enp3s0"},
+			want: []string{"--accept-license", "--accept-gdpr", "-f", "json", "--server-id", "42", "--interface", "enp3s0"},
+		},
+		{
+			name: "source IP",
+			opts: Options{SourceIP: "192.0.2.10"},
+			want: []string{"--accept-license", "--accept-gdpr", "-f", "json", "--ip", "192.0.2.10"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := newEngine(t, Config{Binary: adapter}).Run(context.Background(), tc.opts)
+			if err != nil || r.Down == nil {
+				t.Fatalf("Run() = %+v, %v", r, err)
+			}
+			gotBytes, err := os.ReadFile(capture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := strings.Fields(string(gotBytes))
+			if !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("arguments = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestRunnerCustomArgumentsAndConcurrency(t *testing.T) {
 	args := []string{"--scenario", "loss"}
 	e := newEngine(t, Config{Binary: testutil.BuildFakeSpeedtest(t), Args: args})
@@ -91,6 +132,9 @@ func TestRunnerErrorsAndDeadlines(t *testing.T) {
 		{"override timeout", Config{Binary: fake, Args: []string{"--scenario", "timeout"}}, Options{Timeout: 20 * time.Millisecond}, Timeout},
 		{"negative pin", Config{}, Options{ServerID: -1}, InvalidOptions},
 		{"negative timeout", Config{}, Options{Timeout: -1}, InvalidOptions},
+		{"both network selectors", Config{}, Options{InterfaceName: "eth0", SourceIP: "192.0.2.10"}, InvalidOptions},
+		{"invalid source IP", Config{}, Options{SourceIP: "not-an-ip"}, InvalidOptions},
+		{"long interface name", Config{}, Options{InterfaceName: "interface-name-too-long"}, InvalidOptions},
 		{"invalid output", Config{Binary: script(t, "printf invalid")}, Options{}, InvalidResult},
 		{"oversize output", Config{Binary: script(t, "head -c 70000 /dev/zero")}, Options{}, InvalidResult},
 	} {
