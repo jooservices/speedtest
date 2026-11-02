@@ -1,9 +1,14 @@
-# Ookla measurement engine
+# Speed test engines
 
 `internal/agent/engine` implements `Engine.Run(ctx, Options) (Result, error)`.
 This is a library for the agent scheduler; the scaffold `cmd/agent` does not yet
 schedule tests. Interface binding and reporting belong to JOOST-16/17.
 No dependency, database, HTTP endpoint or UI change is introduced here.
+
+The node's `engine` config key selects `ookla` (the default) or `librespeed`.
+`config.Config.NewEngine()` constructs the selected runner using `.env` values.
+The optional node `parallel_connections` value overrides LibreSpeed's
+concurrency default; zero leaves the `.env` value in effect.
 
 Export the values from `.env` using the application's existing launcher, then:
 
@@ -68,6 +73,34 @@ and reachability or timeout configuration for `timeout`. `execution` and
 do not log unredacted diagnostics. These errors are returned to the caller;
 this library does not create logs or retry.
 
+## LibreSpeed CLI engine
+
+Install the official `librespeed-cli` executable on each node and configure
+`SPEEDTEST_LIBRESPEED_BINARY` if it is not on `PATH`. The runner invokes it with
+`--json --concurrent <count>`. `SPEEDTEST_LIBRESPEED_CONCURRENT` defaults to 4;
+an optional node `parallel_connections` value overrides it. A positive
+`Options.ServerID` adds `--server <id>`. Set
+`SPEEDTEST_LIBRESPEED_SERVER_JSON` to an HTTP or HTTPS server-list URL to use a
+custom list; blank uses the CLI's built-in list. `SPEEDTEST_LIBRESPEED_TIMEOUT`
+defaults to `120s`. The process is started directly without a shell, and output
+is capped at 64 KiB per stream.
+
+The parser accepts the one-report JSON object used by older CLI versions and
+the one-element array used by newer versions. Speeds in the JSON are already
+Mbps. The engine maps download, upload, ping, jitter, byte counts, server URL,
+client IP and available ISP text to `Result`. The CLI does not report a server
+ID for automatic selection, location, loaded latency, packet loss, result ID or
+measurement duration; these remain unavailable (server ID is populated when a
+server is pinned). The raw report is retained. Telemetry is not enabled by the
+runner.
+
+Select LibreSpeed in a node config with:
+
+```yaml
+engine: librespeed
+parallel_connections: 4
+```
+
 ## Offline verification
 
 ```sh
@@ -78,8 +111,10 @@ go vet ./...
 golangci-lint run
 ```
 
-No database or live speed test is needed. Tests use JOOST-20's
-`testutil.BuildFakeSpeedtest` and `RunFakeSpeedtest`. A test-only adapter verifies
+No database or live speed test is needed. Ookla tests use JOOST-20's
+`testutil.BuildFakeSpeedtest` and `RunFakeSpeedtest`. LibreSpeed parser tests use
+the redacted real `--json` sample and both historical JSON shapes; runner tests
+use a controlled fake executable. A test-only adapter verifies
 the exact default Ookla flags before forwarding the pin to the fake, because
 that fake intentionally supports only its own scenario flags. Direct fake
 executions cover custom arguments, zero values, packet loss, crash, concurrency

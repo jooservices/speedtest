@@ -1,0 +1,25 @@
+{
+  "timestamp": "2021-03-16T17:35:15.3206446+05:30",
+  "server": {
+    "name": "Example LibreSpeed server",
+    "url": "https://speed.example.test/"
+  },
+  "client": {
+    "ip": "203.0.113.10",
+    "hostname": "node.example.test",
+    "city": "Example City",
+    "region": "Example Region",
+    "country": "ZZ",
+    "loc": "0,0",
+    "org": "AS64496 Example Network",
+    "postal": "00000",
+    "timezone": "Etc/UTC"
+  },
+  "bytes_sent": 6291456,
+  "bytes_received": 77692920,
+  "ping": 206.36363636363637,
+  "jitter": 92.92,
+  "upload": 3.2,
+  "download": 39.52,
+  "share": ""
+}

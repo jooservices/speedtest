@@ -109,6 +109,7 @@ structured JSON to stdout for the journal. When the YAML file is missing, these
 defaults apply:
 
 ```yaml
+engine: ookla
 name: node
 expected_download_mbps: 0
 expected_upload_mbps: 0
@@ -118,6 +119,12 @@ interval: 30m
 Only the configuration and credential file paths are agent environment
 overrides; node values come from `config.yaml`. Malformed YAML, unknown keys,
 and invalid values fail fast with a configuration error.
+
+Set `engine: librespeed` in a node's config to use `librespeed-cli`. Its
+optional `parallel_connections` key overrides the default configured in `.env`;
+the LibreSpeed binary, server-list URL and timeout are also configured there.
+See [`docs/engine.md`](docs/engine.md) for the engine settings and result
+mapping.
 
 ### `make ci` prerequisites
 

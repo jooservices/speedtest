@@ -143,9 +143,9 @@ func classify(s string) ErrorClass {
 		return License
 	case strings.Contains(s, "timed out"), strings.Contains(s, "timeout"):
 		return Timeout
-	case strings.Contains(s, "no route"), strings.Contains(s, "network is unreachable"), strings.Contains(s, "network unreachable"), strings.Contains(s, "cannot resolve"), strings.Contains(s, "could not resolve"):
+	case strings.Contains(s, "no route"), strings.Contains(s, "network is unreachable"), strings.Contains(s, "network unreachable"), strings.Contains(s, "cannot resolve"), strings.Contains(s, "could not resolve"), strings.Contains(s, "no such host"), strings.Contains(s, "lookup "):
 		return NoRoute
-	case strings.Contains(s, "server"), strings.Contains(s, "connection refused"):
+	case strings.Contains(s, "server unavailable"), strings.Contains(s, "server is unavailable"), strings.Contains(s, "no server is currently available"), strings.Contains(s, "unable to connect to server"), strings.Contains(s, "server is not responding"), strings.Contains(s, "server not responding"), strings.Contains(s, "specified server"), strings.Contains(s, "connection refused"):
 		return ServerUnavailable
 	default:
 		return Execution
