@@ -29,3 +29,17 @@ run-center:
 ## run-agent starts a node agent from the current .env.
 run-agent:
 	$(GO) run ./cmd/agent
+
+.PHONY: migrate migrate-down test-db
+
+## migrate applies all pending embedded migrations using .env.
+migrate:
+	$(GO) run ./internal/center/db/cmd/migrate up
+
+## migrate-down rolls back the latest migration (destructive; verify DB first).
+migrate-down:
+	$(GO) run ./internal/center/db/cmd/migrate down
+
+## test-db exercises migrations and constraints on a verified non-live database.
+test-db:
+	$(GO) test -tags integration ./internal/center/db/... -count=1 -v
