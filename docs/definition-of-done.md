@@ -10,9 +10,9 @@ The reviewer (Claude) checks every item below with evidence. A developer's own s
 - [ ] No unrelated change in the diff; no TODO, debug output or commented-out code left behind.
 
 ## 2. Tests (all must pass, none skipped to get green)
-- [ ] Unit tests for the new logic; changed packages keep at least 80% line coverage.
+- [ ] Unit tests for the new logic: at least 90% line coverage on changed packages and 100% for new feature logic.
 - [ ] Integration tests for every boundary touched (database, HTTP API, agent protocol).
-- [ ] End-to-end (browser) tests for every user flow the change touches, running through `scripts/browser/e2e`, three consecutive green runs.
+- [ ] End-to-end (browser) tests for every user flow the change touches, built from reusable steps (sign-in is one step, scenarios reuse steps), running through `scripts/browser/e2e`, three consecutive green runs.
 - [ ] Regression test for every bug fixed.
 - [ ] The whole suite is green in CI, not only the new tests.
 
