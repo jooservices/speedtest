@@ -1,0 +1,190 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+)
+
+func writeFile(t *testing.T, dir, name, content string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	return path
+}
+
+func TestLoadDefaultsNoFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "missing.yaml")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+
+	want := Config{
+		Name:                 "node",
+		ExpectedDownloadMbps: 0,
+		ExpectedUploadMbps:   0,
+		Interval:             30 * time.Minute,
+	}
+	if cfg != want {
+		t.Fatalf("Load() = %+v, want %+v", cfg, want)
+	}
+}
+
+func TestLoadEmptyFile(t *testing.T) {
+	path := writeFile(t, t.TempDir(), "config.yaml", "")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.Name != "node" || cfg.Interval != 30*time.Minute {
+		t.Fatalf("Load() = %+v, want defaults", cfg)
+	}
+}
+
+func TestLoadFromFile(t *testing.T) {
+	path := writeFile(t, t.TempDir(), "config.yaml", ""+
+		"name: viettel-fast-50\n"+
+		"expected_download_mbps: 300\n"+
+		"expected_upload_mbps: 150\n"+
+		"interval: 45m\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+
+	want := Config{
+		Name:                 "viettel-fast-50",
+		ExpectedDownloadMbps: 300,
+		ExpectedUploadMbps:   150,
+		Interval:             45 * time.Minute,
+	}
+	if cfg != want {
+		t.Fatalf("Load() = %+v, want %+v", cfg, want)
+	}
+}
+
+func TestLoadPartialFileKeepsDefaults(t *testing.T) {
+	path := writeFile(t, t.TempDir(), "config.yaml", "name: only-name\n")
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error = %v, want nil", err)
+	}
+	if cfg.Name != "only-name" {
+		t.Fatalf("Name = %q, want only-name", cfg.Name)
+	}
+	if cfg.ExpectedDownloadMbps != 0 || cfg.ExpectedUploadMbps != 0 || cfg.Interval != 30*time.Minute {
+		t.Fatalf("Load() = %+v, want file name with default speeds/interval", cfg)
+	}
+}
+
+func TestLoadErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		file    string
+		wantErr string
+	}{
+		{
+			name:    "malformed yaml",
+			file:    "name: [unclosed",
+			wantErr: "parse config",
+		},
+		{
+			name:    "unknown key",
+			file:    "nam: typo\n",
+			wantErr: "parse config",
+		},
+		{
+			name:    "download not an integer",
+			file:    "expected_download_mbps: fast\n",
+			wantErr: "parse config",
+		},
+		{
+			name:    "interval not a duration",
+			file:    "interval: often\n",
+			wantErr: "interval must be a duration",
+		},
+		{
+			name:    "file download negative",
+			file:    "expected_download_mbps: -1\n",
+			wantErr: "expected_download_mbps must be >= 0",
+		},
+		{
+			name:    "file name blank",
+			file:    "name: '   '\n",
+			wantErr: "name must not be blank",
+		},
+		{
+			name:    "file interval zero",
+			file:    "interval: 0s\n",
+			wantErr: "interval must be greater than 0",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "missing.yaml")
+			if tt.file != "" {
+				path = writeFile(t, t.TempDir(), "config.yaml", tt.file)
+			}
+
+			_, err := Load(path)
+			if err == nil {
+				t.Fatalf("Load() error = nil, want an error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("Load() error = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestLoadReadError(t *testing.T) {
+	dir := t.TempDir()
+
+	_, err := Load(dir)
+	if err == nil {
+		t.Fatal("Load() error = nil, want a read error for a directory path")
+	}
+	if !strings.Contains(err.Error(), "read config") {
+		t.Fatalf("Load() error = %v, want it to contain %q", err, "read config")
+	}
+}
+
+func TestValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr string
+	}{
+		{name: "ok", cfg: Config{Name: "n", Interval: time.Minute}},
+		{name: "blank name", cfg: Config{Interval: time.Minute}, wantErr: "name must not be blank"},
+		{name: "negative download", cfg: Config{Name: "n", Interval: time.Minute, ExpectedDownloadMbps: -1}, wantErr: "expected_download_mbps must be >= 0"},
+		{name: "negative upload", cfg: Config{Name: "n", Interval: time.Minute, ExpectedUploadMbps: -1}, wantErr: "expected_upload_mbps must be >= 0"},
+		{name: "zero interval", cfg: Config{Name: "n"}, wantErr: "interval must be greater than 0"},
+		{name: "negative interval", cfg: Config{Name: "n", Interval: -time.Minute}, wantErr: "interval must be greater than 0"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("validate() error = %v, want nil", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("validate() error = %v, want it to contain %q", err, tt.wantErr)
+			}
+		})
+	}
+}
