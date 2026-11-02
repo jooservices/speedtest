@@ -4,7 +4,7 @@ Monitor the real speed of every internet connection you own, around the clock.
 
 Small agents on your machines run a speed test on a schedule and report to one dashboard. The dashboard stores every result, remembers which public IP each machine used and where it is, and shows averages, trends and the best and worst hours.
 
-**Status: interface preview and backend skeleton.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The agent can enroll and run as a service but does not execute speed tests or report results yet. The command center embeds and serves the UI and exposes process/readiness checks; the product HTTP API and readiness database ping are not wired yet. PostgreSQL migrations, a connection pool, and geolocation modules are available.
+**Status: interface preview and backend foundation.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The command center serves the UI, checks database readiness, and provides owner authentication and session endpoints. Most product API endpoints are still being implemented. The agent can enroll and run as a service but does not execute speed tests or report results yet. PostgreSQL migrations and geolocation modules are available.
 
 ## View the preview
 
@@ -54,6 +54,7 @@ cmd/center/             command center entry point
 internal/agent/         node agent implementation
 internal/agent/config/  loads the node's own config.yaml
 internal/agent/enroll/  exchanges an enrollment token for a 0600 credential
+internal/center/auth/  Argon2id password hashes, owner sessions and login limits
 internal/center/server/ command center HTTP handlers and lifecycle
 internal/center/db/     PostgreSQL pool and migration helpers
 internal/center/geo/    offline and online geolocation
@@ -81,12 +82,21 @@ make migrate      # apply embedded PostgreSQL migrations using .env
 make migrate-down # roll back latest migration (deletes version 1 data)
 make test-db      # migration/constraint integration tests on a verified test DB
 make run-center   # start the command center
+go run ./cmd/center seed-admin # create the default administrator in local/test only
 make run-agent    # start a node agent
 ```
 
-Configuration uses the environment; migration commands also load the current
-directory's `.env` (existing environment values take precedence). Service
-endpoints are never hard-coded to Docker or a specific machine.
+Configuration uses the environment; the command center, seed command and
+migration commands load the current directory's `.env` (existing environment
+values take precedence). Service endpoints are never hard-coded to Docker or a
+specific machine. Set `APP_ENV=local` or `APP_ENV=test` before running
+`go run ./cmd/center seed-admin`; the command refuses staging, production and
+unknown environments, and it does not replace an existing administrator
+password. The local/test default login is documented in
+`JOOservices/guides/default-credentials.md`.
+For local/test startup and seeding, the configured database must be
+`speedtest_test` or this worktree's `speedtest_wt*` database and carry the
+Workspaces ownership marker; the live `speedtest` database is refused.
 Read [the migration runbook](migrations/README.md) and verify the non-live
 database before any migration or database test. `make test-db` verifies the
 database name and ownership marker, resets its application tables and migration

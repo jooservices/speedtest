@@ -13,6 +13,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jooservices/speedtest/internal/shared/config"
 )
 
 func TestUIFilesystemEmbedded(t *testing.T) {
@@ -152,6 +154,64 @@ func TestMainRunHelp(t *testing.T) {
 	}
 	if code := mainRun([]string{"-unknown"}, &stdout, &stderr); code != 1 {
 		t.Errorf("mainRun() with unknown flag = %d, want 1", code)
+	}
+}
+
+func TestDefaultSeedOnlyAllowsLocalAndTest(t *testing.T) {
+	for _, env := range []string{"local", "test"} {
+		if err := validateDefaultSeedEnvironment(env); err != nil {
+			t.Errorf("APP_ENV=%s rejected: %v", env, err)
+		}
+	}
+	for _, env := range []string{"staging", "production", "", "development"} {
+		if err := validateDefaultSeedEnvironment(env); err == nil {
+			t.Errorf("APP_ENV=%s accepted the default administrator seed", env)
+		}
+	}
+}
+
+func TestDefaultSeedRequiresExplicitSafeEnvironment(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		env        string
+		configured bool
+		wantErr    bool
+	}{
+		{name: "local", env: "local", configured: true},
+		{name: "test", env: "TEST", configured: true},
+		{name: "missing", wantErr: true},
+		{name: "blank", env: " ", configured: true, wantErr: true},
+		{name: "staging", env: "staging", configured: true, wantErr: true},
+		{name: "production", env: "production", configured: true, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateExplicitDefaultSeedEnvironment(tc.env, tc.configured)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateExplicitDefaultSeedEnvironment() error = %v, wantErr=%v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestLocalCenterRequiresSafeDatabaseName(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		appEnv  string
+		dbName  string
+		wantErr bool
+	}{
+		{name: "local worktree", appEnv: "local", dbName: "speedtest_wt12"},
+		{name: "test database", appEnv: "test", dbName: "speedtest_test"},
+		{name: "local live database", appEnv: "local", dbName: "speedtest", wantErr: true},
+		{name: "production database", appEnv: "production", dbName: "speedtest"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := config.CenterConfig{AppEnv: tc.appEnv, Database: config.DatabaseConfig{Name: tc.dbName}}
+			err := validateLocalDatabaseName(cfg)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("validateLocalDatabaseName() error = %v, wantErr=%v", err, tc.wantErr)
+			}
+		})
 	}
 }
 
@@ -319,10 +379,15 @@ func writeDiskUI(t *testing.T) string {
 func resetCenterEnvironment(t *testing.T) {
 	t.Helper()
 	for key, value := range map[string]string{
-		"SPEEDTEST_HTTP_ADDR":  "",
-		"SPEEDTEST_UI_DIR":     "",
-		"SPEEDTEST_DB_PORT":    "",
-		"SPEEDTEST_DB_SSLMODE": "",
+		"APP_ENV":                       "",
+		"SPEEDTEST_HTTP_ADDR":           "",
+		"SPEEDTEST_UI_DIR":              "",
+		"SPEEDTEST_SESSION_TTL":         "",
+		"SPEEDTEST_LOGIN_MAX_ATTEMPTS":  "",
+		"SPEEDTEST_LOGIN_WINDOW":        "",
+		"SPEEDTEST_TRUSTED_PROXY_CIDRS": "",
+		"SPEEDTEST_DB_PORT":             "",
+		"SPEEDTEST_DB_SSLMODE":          "",
 	} {
 		t.Setenv(key, value)
 	}

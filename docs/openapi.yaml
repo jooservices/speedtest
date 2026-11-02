@@ -52,7 +52,7 @@ paths:
       summary: Read identity and bootstrap CSRF token
       description: Unauthenticated callers receive 200 with user=null, csrfToken and expiry for an
         anonymous session. Authenticated callers receive their user. Expired/revoked sessions return
-        401; a fresh request without a cookie bootstraps again.
+        401; a fresh request without a cookie bootstraps again. HTTPS is required outside local/test.
       security:
         - {}
         - SessionCookie: []
@@ -66,16 +66,12 @@ paths:
           headers:
             Set-Cookie:
               $ref: "#/components/headers/SetCookie"
-        "400":
-          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
-        "422":
-          $ref: "#/components/responses/Validation"
-        "429":
-          $ref: "#/components/responses/RateLimited"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "500":
           $ref: "#/components/responses/ServerError"
   /api/auth/login:
@@ -84,9 +80,9 @@ paths:
       tags:
         - Auth
       summary: Create authenticated session
-      description: Requires anonymous session cookie and matching CSRF token; verifies Origin. Generic
-        invalid-credentials error; per-IP and per-account rate limits. Rotates session ID and CSRF
-        token.
+      description: Requires anonymous session cookie, matching CSRF token, and same-origin Origin.
+        HTTPS is required outside local/test. Generic invalid-credentials error; per-IP and
+        per-account rate limits. Rotates session ID and CSRF token.
       security:
         - {}
         - SessionCookie: []
@@ -100,14 +96,16 @@ paths:
           headers:
             Set-Cookie:
               $ref: "#/components/headers/SetCookie"
-        "400":
-          $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "409":
           $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/TooLarge"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -116,6 +114,7 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
       requestBody:
         required: true
         content:
@@ -128,13 +127,42 @@ paths:
       tags:
         - Auth
       summary: Invalidate current session
-      description: Invalidates server-side session; expires cookie. Subsequent auth/me using the old
-        cookie returns 401.
+      description: Requires same-origin Origin and matching CSRF token. Invalidates the
+        server-side session and expires the cookie. Subsequent auth/me using the old cookie returns
+        401. HTTPS is required outside local/test.
       security:
         - SessionCookie: []
       responses:
         "204":
-          description: No content; no response body.
+          description: No content; the session cookie is expired.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/SetCookie"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+  /api/auth/password:
+    post:
+      operationId: changePassword
+      tags:
+        - Auth
+      summary: Change password and invalidate other sessions
+      description: Requires same-origin Origin and matching CSRF token. Verify current password,
+        apply password policy, hash using argon2id, and rotate current session and CSRF token. Fetch
+        auth/me afterwards. HTTPS is required outside local/test.
+      security:
+        - SessionCookie: []
+      responses:
+        "204":
+          description: No content; the current session cookie is rotated.
           headers:
             Set-Cookie:
               $ref: "#/components/headers/SetCookie"
@@ -144,45 +172,17 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
-        "409":
-          $ref: "#/components/responses/Conflict"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          $ref: "#/components/responses/TooLarge"
         "422":
           $ref: "#/components/responses/Validation"
-        "429":
-          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/CSRF"
-  /api/auth/password:
-    post:
-      operationId: changePassword
-      tags:
-        - Auth
-      summary: Change password and invalidate other sessions
-      description: Verify current password, apply password policy, hash using argon2id; rotate current
-        session and CSRF token. Fetch auth/me afterwards.
-      security:
-        - SessionCookie: []
-      responses:
-        "204":
-          description: No content; no response body.
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        "422":
-          $ref: "#/components/responses/Validation"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-        "500":
-          $ref: "#/components/responses/ServerError"
-      parameters:
-        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
       requestBody:
         required: true
         content:
@@ -449,7 +449,10 @@ paths:
         - SessionCookie: []
       responses:
         "204":
-          description: No content; no response body.
+          description: No content; session cookie is rotated.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/SetCookie"
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -1733,6 +1736,7 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
         - $ref: "#/components/parameters/Idempotency"
       requestBody:
         required: true
@@ -2821,7 +2825,7 @@ components:
       type: apiKey
       in: cookie
       name: speedtest_session
-      description: Opaque server-side session; UI writes also require X-CSRF-Token and Origin validation.
+      description: Opaque server-side session; UI writes also require X-CSRF-Token and same-origin Origin validation.
     NodeBearer:
       type: http
       scheme: bearer
@@ -2927,6 +2931,14 @@ components:
       description: Session-bound CSRF token from auth/me, including the anonymous bootstrap session.
       schema:
         type: string
+    Origin:
+      name: Origin
+      in: header
+      required: true
+      description: Must be the same origin as the command center request. HTTPS deployments behind a TLS-terminating proxy must configure its CIDR as trusted.
+      schema:
+        type: string
+        format: uri
     Idempotency:
       name: Idempotency-Key
       in: header
