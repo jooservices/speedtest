@@ -28,7 +28,7 @@ run-center:
 
 ## run-agent starts a node agent from the current .env.
 run-agent:
-	$(GO) run ./cmd/agent
+	$(GO) run ./cmd/agent run
 
 .PHONY: migrate migrate-down test-db
 
