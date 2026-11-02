@@ -5,11 +5,13 @@
 package config
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
 )
 
 // validSSLModes lists the PostgreSQL sslmode values accepted by
@@ -31,6 +33,10 @@ type CenterConfig struct {
 	UIDir string
 	// Database holds the PostgreSQL connection settings.
 	Database DatabaseConfig
+	// AppKey protects short-lived idempotent API response replays at rest.
+	AppKey []byte
+	// AgentRequestsPerMinute is the per-node sustained agent API rate.
+	AgentRequestsPerMinute int
 }
 
 // DatabaseConfig holds the PostgreSQL connection settings.
@@ -65,6 +71,14 @@ func LoadCenter() (CenterConfig, error) {
 	if err != nil {
 		return CenterConfig{}, err
 	}
+	rateLimit, err := getInt("SPEEDTEST_AGENT_REQUESTS_PER_MINUTE", 120)
+	if err != nil {
+		return CenterConfig{}, err
+	}
+	appKey, err := decodeAppKey(os.Getenv("APP_KEY"))
+	if err != nil {
+		return CenterConfig{}, err
+	}
 
 	cfg := CenterConfig{
 		HTTPAddr: getString("SPEEDTEST_HTTP_ADDR", "127.0.0.1:8080"),
@@ -77,6 +91,8 @@ func LoadCenter() (CenterConfig, error) {
 			Password: getString("SPEEDTEST_DB_PASSWORD", ""),
 			SSLMode:  getString("SPEEDTEST_DB_SSLMODE", "disable"),
 		},
+		AppKey:                 appKey,
+		AgentRequestsPerMinute: rateLimit,
 	}
 	if err := cfg.validate(); err != nil {
 		return CenterConfig{}, err
@@ -94,7 +110,22 @@ func (c CenterConfig) validate() error {
 	if !validSSLModes[c.Database.SSLMode] {
 		return fmt.Errorf("SPEEDTEST_DB_SSLMODE must be one of disable, allow, prefer, require, verify-ca, verify-full, got %q", c.Database.SSLMode)
 	}
+	if c.AgentRequestsPerMinute < 1 || c.AgentRequestsPerMinute > 60000 {
+		return fmt.Errorf("SPEEDTEST_AGENT_REQUESTS_PER_MINUTE must be between 1 and 60000, got %d", c.AgentRequestsPerMinute)
+	}
 	return nil
+}
+
+func decodeAppKey(value string) ([]byte, error) {
+	if value == "" {
+		return nil, nil
+	}
+	encoded := strings.TrimPrefix(value, "base64:")
+	key, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil || len(key) != 32 {
+		return nil, fmt.Errorf("APP_KEY must be base64 encoding of exactly 32 bytes")
+	}
+	return key, nil
 }
 
 // validateHostPort checks that raw is a host:port address with a numeric port.

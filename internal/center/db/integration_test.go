@@ -74,12 +74,12 @@ func TestMigrations(t *testing.T) {
 			t.Error(e)
 		}
 	}()
-	t.Run("AllThirteenTables", func(t *testing.T) {
+	t.Run("AllFourteenTables", func(t *testing.T) {
 		var got int
-		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands"}).Scan(&got); e != nil || got != 13 {
-			t.Fatalf("required tables: got %d want 13: %v", got, e)
+		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency"}).Scan(&got); e != nil || got != 14 {
+			t.Fatalf("required tables: got %d want 14: %v", got, e)
 		}
-		t.Log("PASS: 13 required tables created by embedded version 1")
+		t.Log("PASS: 14 required tables created by embedded migrations")
 	})
 	t.Run("IndexesUUIDUnitsAndTimeTypes", func(t *testing.T) {
 		var got int
@@ -161,7 +161,11 @@ INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title) SELECT '00000000-
 INSERT INTO alert_state(rule_id,node_id) SELECT '00000000-0000-4000-8000-000000000013',id FROM nodes;
 INSERT INTO settings(key,value) VALUES ('display','{"theme":"dark"}');
 INSERT INTO settings(key,secret_ciphertext) VALUES ('integration',decode('aabb','hex'));
+INSERT INTO api_idempotency(principal,operation,key_hash,request_hash,response_ciphertext,expires_at) VALUES ('owner','create-node',repeat('a',64),repeat('b',64),decode(repeat('00',28),'hex'),now()+interval '1 hour');
 INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000-8000-000000000015',id,'run_now','00000000-0000-4000-8000-000000000002' FROM nodes;`)
+		if e := db.Migrate(ctx, pool, "down"); e != nil {
+			t.Fatal(e)
+		}
 		if e := db.Migrate(ctx, pool, "down"); e != nil {
 			t.Fatal(e)
 		}
@@ -184,6 +188,9 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		if e := db.Migrate(ctx, pool, "up"); e != nil {
 			t.Fatal(e)
 		}
+		if e := db.Migrate(ctx, pool, "up"); e != nil {
+			t.Fatal(e)
+		}
 		t.Log("PASS: populated rollback, concurrent reapply and idempotent up")
 	})
 	t.Run("CancelledMigration", func(t *testing.T) {
@@ -194,6 +201,9 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		}
 	})
 	t.Run("TransactionalRollbackFailure", func(t *testing.T) {
+		if e := db.Migrate(ctx, pool, "down"); e != nil {
+			t.Fatal(e)
+		}
 		exec(t, ctx, pool, "CREATE VIEW rollback_blocker AS SELECT id FROM users")
 		t.Cleanup(func() { exec(t, context.Background(), pool, "DROP VIEW IF EXISTS rollback_blocker") })
 		if e := db.Migrate(ctx, pool, "down"); e == nil {

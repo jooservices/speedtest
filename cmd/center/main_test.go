@@ -319,10 +319,13 @@ func writeDiskUI(t *testing.T) string {
 func resetCenterEnvironment(t *testing.T) {
 	t.Helper()
 	for key, value := range map[string]string{
-		"SPEEDTEST_HTTP_ADDR":  "",
-		"SPEEDTEST_UI_DIR":     "",
-		"SPEEDTEST_DB_PORT":    "",
-		"SPEEDTEST_DB_SSLMODE": "",
+		"SPEEDTEST_HTTP_ADDR":                 "",
+		"SPEEDTEST_UI_DIR":                    "",
+		"SPEEDTEST_DB_PORT":                   "",
+		"SPEEDTEST_DB_SSLMODE":                "",
+		"SPEEDTEST_DB_PASSWORD":               "",
+		"SPEEDTEST_AGENT_REQUESTS_PER_MINUTE": "",
+		"APP_KEY":                             "",
 	} {
 		t.Setenv(key, value)
 	}

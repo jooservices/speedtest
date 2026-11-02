@@ -14,9 +14,15 @@ import (
 	"syscall"
 
 	"github.com/jooservices/speedtest"
+	"github.com/jooservices/speedtest/internal/center/db"
+	"github.com/jooservices/speedtest/internal/center/nodes"
 	"github.com/jooservices/speedtest/internal/center/server"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
+
+type pingerFunc func(context.Context) error
+
+func (p pingerFunc) PingContext(ctx context.Context) error { return p(ctx) }
 
 func main() {
 	os.Exit(mainRun(os.Args[1:], os.Stdout, os.Stderr))
@@ -63,10 +69,17 @@ func run(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writ
 		return fmt.Errorf("listen on configured address: %w", err)
 	}
 
-	handler := server.NewHandler(server.Options{
-		Logger: logger,
-		UI:     ui,
-	})
+	serverOptions := server.Options{Logger: logger, UI: ui, AgentRateLimit: cfg.AgentRequestsPerMinute}
+	if cfg.Database.Password != "" {
+		pool, err := db.Open(ctx, cfg.Database)
+		if err != nil {
+			return fmt.Errorf("open command-center database: %w", err)
+		}
+		defer pool.Close()
+		serverOptions.Pinger = pingerFunc(pool.Ping)
+		serverOptions.NodeCredentials = nodes.NewService(pool, cfg.AppKey)
+	}
+	handler := server.NewHandler(serverOptions)
 	logger.Info("command center listening",
 		"address", listener.Addr().String(),
 		"ui_source", uiSource,

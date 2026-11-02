@@ -4,7 +4,7 @@ Monitor the real speed of every internet connection you own, around the clock.
 
 Small agents on your machines run a speed test on a schedule and report to one dashboard. The dashboard stores every result, remembers which public IP each machine used and where it is, and shows averages, trends and the best and worst hours.
 
-**Status: interface preview and backend skeleton.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The agent can enroll and run as a service but does not execute speed tests or report results yet. The command center embeds and serves the UI and exposes process/readiness checks; the product HTTP API and readiness database ping are not wired yet. PostgreSQL migrations, a connection pool, and geolocation modules are available.
+**Status: interface preview and backend in progress.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The agent can enroll and run as a service but does not execute speed tests or report results yet. The command center embeds and serves the UI, pings PostgreSQL for readiness when configured, and supports node enrollment and credential lifecycle endpoints. Other product API areas remain in progress. PostgreSQL migrations, a connection pool, and geolocation modules are available.
 
 ## View the preview
 
