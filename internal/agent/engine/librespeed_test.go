@@ -329,3 +329,47 @@ func TestLibreSpeedRunnerCancellation(t *testing.T) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
 }
+
+func TestLibreSpeedRunnerSourceIPBinding(t *testing.T) {
+	fixturePath := filepath.Join(t.TempDir(), "report.json")
+	if err := os.WriteFile(fixturePath, librespeedFixture(t), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	argsPath := filepath.Join(t.TempDir(), "args.txt")
+	t.Setenv("LIBRESPEED_FIXTURE", fixturePath)
+	t.Setenv("LIBRESPEED_ARGS_PATH", argsPath)
+	binary := script(t, "printf '%s\\n' \"$@\" > \"$LIBRESPEED_ARGS_PATH\"\ncat \"$LIBRESPEED_FIXTURE\"\n")
+	runner, err := NewLibreSpeed(LibreSpeedConfig{Binary: binary, Concurrent: 3})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := runner.Run(context.Background(), Options{SourceIP: "192.0.2.10"}); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "--json\n--concurrent\n3\n--source\n192.0.2.10\n"; string(args) != want {
+		t.Fatalf("arguments = %q, want %q", args, want)
+	}
+}
+
+func TestLibreSpeedRunnerRefusesInterfaceAndInvalidSourceBinding(t *testing.T) {
+	runner, err := NewLibreSpeed(LibreSpeedConfig{Binary: "/nonexistent/librespeed-cli"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, opts := range map[string]Options{
+		"interface is unsupported":   {InterfaceName: "eth0"},
+		"invalid source address":     {SourceIP: "not-an-ip"},
+		"interface plus source":      {InterfaceName: "eth0", SourceIP: "192.0.2.10"},
+		"padded source address text": {SourceIP: " 192.0.2.10"},
+	} {
+		_, err := runner.Run(context.Background(), opts)
+		var runErr *RunError
+		if !errors.As(err, &runErr) || runErr.Class != InvalidOptions {
+			t.Errorf("%s: error = %v, want invalid_options (and no process started)", name, err)
+		}
+	}
+}

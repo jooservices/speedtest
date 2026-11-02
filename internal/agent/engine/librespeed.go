@@ -109,7 +109,9 @@ func NewConfigured(name string, parallelConnections int) (Engine, error) {
 }
 
 func (e *LibreSpeed) Run(ctx context.Context, opts Options) (Result, error) {
-	if opts.ServerID < 0 || opts.Timeout < 0 {
+	// librespeed-cli can bind a source address (--source) but not an interface; refuse
+	// an interface binding instead of silently measuring the default route.
+	if opts.ServerID < 0 || opts.Timeout < 0 || opts.InterfaceName != "" || !validNetworkOptions(opts) {
 		return failed(Result{}, InvalidOptions, nil)
 	}
 	timeout := e.config.Timeout
@@ -125,6 +127,9 @@ func (e *LibreSpeed) Run(ctx context.Context, opts Options) (Result, error) {
 	}
 	if opts.ServerID > 0 {
 		args = append(args, "--server", strconv.FormatInt(opts.ServerID, 10))
+	}
+	if opts.SourceIP != "" {
+		args = append(args, "--source", opts.SourceIP)
 	}
 	cmd := exec.CommandContext(ctx, e.config.Binary, args...)
 	cmd.WaitDelay = 100 * time.Millisecond
