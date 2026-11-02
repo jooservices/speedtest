@@ -4,7 +4,7 @@ Monitor the real speed of every internet connection you own, around the clock.
 
 Small agents on your machines run a speed test on a schedule and report to one dashboard. The dashboard stores every result, remembers which public IP each machine used and where it is, and shows averages, trends and the best and worst hours.
 
-**Status: interface preview.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. There is no backend yet; everything you change is kept in the browser's local storage.
+**Status: interface preview.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The Go backend is a scaffold: it builds, tests and loads its configuration, but has no business logic yet.
 
 ## View the preview
 
@@ -45,5 +45,55 @@ node (agent) ──HTTPS──► command center ── API + scheduler + databa
 - Agent: small single binary running the speed test program (Ookla CLI by default) bound to the right network interface, reporting results and heartbeats.
 - Geolocation: MaxMind GeoLite2 City + ASN offline database first (free, no rate limit), free web service as fallback; results cached per IP.
 - Keep tests from overlapping so a node that measures a combination of connections is never skewed by other nodes testing at the same moment.
+
+## Repository layout
+
+```
+cmd/agent/              node agent entry point
+cmd/center/             command center entry point
+internal/agent/         node agent implementation (placeholder)
+internal/center/        command center implementation (placeholder)
+internal/shared/config/ configuration loaded from the environment
+migrations/             database migrations
+deploy/                 deployment artifacts
+docs/                   design and process documents
+ui/                     the interface preview (unchanged, no build step)
+```
+
+## Development
+
+Prerequisites: Go 1.27 or later (installed natively on the Dev Workspaces VM).
+
+Copy `.env.example` to `.env` and adjust it; every variable is documented there
+with its default, and no secret is committed.
+
+```bash
+make build        # go build ./...
+make test         # go test ./...
+make lint         # golangci-lint run
+make ci           # vet + test + build + lint
+make run-center   # start the command center
+make run-agent    # start a node agent
+```
+
+Configuration is read only from the environment (`.env`); service endpoints are
+never hard-coded to Docker or to a specific machine.
+
+### `make ci` prerequisites
+
+`make ci` runs the same checks as GitHub Actions, including `golangci-lint`
+v2.15.0. That binary must be on `PATH` (the other targets only need Go). Install
+it into a local, git-ignored directory if it is not already installed:
+
+```bash
+mkdir -p .tmp/bin
+curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
+  | sh -s -- -b .tmp/bin v2.15.0
+PATH="$PWD/.tmp/bin:$PATH" make ci
+```
+
+`.tmp/` is git-ignored, so the local binary is never committed. The workflow
+`.github/workflows/ci.yml` runs vet, test and `golangci-lint` on every push and
+pull request using the same pinned version.
 
 See [`docs/ui-decisions.md`](docs/ui-decisions.md) for the reasoning behind the UI choices and the open questions.
