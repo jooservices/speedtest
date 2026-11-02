@@ -1,0 +1,75 @@
+/* Settings: general, speed test engine, location service, notifications, data, access. */
+(function () {
+  'use strict';
+  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt;
+  var tab = 'general';
+
+  function row(title, desc, ctl) { return h('div', { class: 'setting' }, h('div', null, h('div', { style: 'font-weight:600' }, title), desc ? h('div', { class: 'hint' }, desc) : null), h('div', { class: 's-ctl' }, ctl)); }
+  function saved() { U.toast('Saved'); }
+
+  ST.pages.settings = function (root) {
+    var s = ST.settings();
+    root.appendChild(U.pageHead('Settings', 'Preferences for this dashboard and for every node.'));
+    root.appendChild(U.tabs([
+      { value: 'general', label: 'General' }, { value: 'engine', label: 'Speed test' }, { value: 'geo', label: 'Location' },
+      { value: 'notify', label: 'Notifications' }, { value: 'data', label: 'Data' }, { value: 'access', label: 'Access' }], tab, function (v) { tab = v; ST.refresh(); }));
+    var body = h('div', { class: 'card card-pad', style: 'max-width:860px' });
+    root.appendChild(body);
+
+    if (tab === 'general') {
+      var tzs = [{ value: 'browser', label: 'This device (' + Intl.DateTimeFormat().resolvedOptions().timeZone + ')' }, { value: 'UTC', label: 'UTC' }, { value: 'Asia/Ho_Chi_Minh', label: 'Ho Chi Minh City' }, { value: 'Asia/Singapore', label: 'Singapore' }, { value: 'Europe/London', label: 'London' }, { value: 'America/New_York', label: 'New York' }];
+      body.appendChild(row('Theme', 'Dark is the default. You can also use the sun/moon button at the top.', U.seg([{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }], s.theme === 'light' ? 'light' : 'dark', function (v) { ST.setSettings({ theme: v }); })));
+      body.appendChild(row('Speed units', 'How speeds are shown everywhere.', U.select([{ value: 'auto', label: 'Automatic (Mbps / Gbps)' }, { value: 'Mbps', label: 'Always Mbps' }, { value: 'Gbps', label: 'Always Gbps' }, { value: 'MBps', label: 'Megabytes per second (MB/s)' }], s.units, function (v) { ST.setSettings({ units: v }); saved(); })));
+      body.appendChild(row('Decimal places', null, U.select([0, 1, 2].map(function (x) { return { value: x, label: String(x) }; }), s.decimals, function (v) { ST.setSettings({ decimals: +v }); saved(); })));
+      body.appendChild(row('Time zone', 'Used for charts, tables and the week heatmap.', U.select(tzs, s.timezone, function (v) { ST.setSettings({ timezone: v }); saved(); })));
+      body.appendChild(row('12-hour clock', null, U.toggle(s.hour12, function (v) { ST.setSettings({ hour12: v }); saved(); }, '12-hour clock')));
+      body.appendChild(row('Default time range', 'What the dashboard shows when you open it.', U.rangeSelect(s.range, function (v) { ST.setSettings({ range: v }); saved(); })));
+    }
+
+    if (tab === 'engine') {
+      body.appendChild(row('Speed test program', 'The tool each node runs to measure speed.', U.select([{ value: 'ookla', label: 'Ookla Speedtest' }, { value: 'librespeed', label: 'LibreSpeed (self-hosted servers)' }, { value: 'cloudflare', label: 'Cloudflare speed test' }], s.engine, function (v) { ST.setSettings({ engine: v }, true); saved(); })));
+      body.appendChild(row('Server choice', 'Automatic picks the closest server for each test.', U.select([{ value: 'auto', label: 'Closest automatically' }, { value: 'pinned', label: 'Use the server set on each node' }], s.serverMode, function (v) { ST.setSettings({ serverMode: v }, true); saved(); })));
+      body.appendChild(row('Parallel connections', 'More connections fill very fast links. Applies to new nodes.', U.select([1, 2, 4, 6, 8, 16].map(function (x) { return { value: x, label: String(x) }; }), s.defaultThreads, function (v) { ST.setSettings({ defaultThreads: +v }, true); saved(); })));
+      body.appendChild(U.callout('Tests use real bandwidth. On a connection with a data cap, lengthen the interval on the Schedules page.', null, 'info'));
+    }
+
+    if (tab === 'geo') {
+      body.appendChild(row('Location database', 'Looks up addresses on the server itself — free, private and fast.', U.select([{ value: 'geolite2', label: 'MaxMind GeoLite2 (recommended)' }, { value: 'ipinfo', label: 'IPinfo Lite' }, { value: 'ip-api', label: 'ip-api.com' }], s.geoProvider, function (v) { ST.setSettings({ geoProvider: v }, true); saved(); })));
+      body.appendChild(row('Backup service', 'Used when the database has no answer.', U.select([{ value: 'none', label: 'None' }, { value: 'ip-api', label: 'ip-api.com (free)' }, { value: 'ipinfo', label: 'IPinfo (free tier)' }], s.geoFallback, function (v) { ST.setSettings({ geoFallback: v }, true); saved(); })));
+      body.appendChild(row('MaxMind license key', 'Free to get from maxmind.com. Needed to download database updates.', U.input(s.geoKey, function (v) { ST.setSettings({ geoKey: v }, true); }, { type: 'password', placeholder: 'Paste key', autocomplete: 'off', 'aria-label': 'MaxMind license key' })));
+      body.appendChild(row('Update the database weekly', null, U.toggle(s.geoAutoUpdate, function (v) { ST.setSettings({ geoAutoUpdate: v }, true); saved(); }, 'Weekly update')));
+    }
+
+    if (tab === 'notify') {
+      var ch = [['email', 'Email', 'Address', 'ops@example.com'], ['telegram', 'Telegram', 'Chat ID', '-1001234567890'], ['slack', 'Slack', 'Webhook URL', 'https://hooks.slack.com/…'], ['webhook', 'Webhook', 'URL', 'https://example.com/hook']];
+      ch.forEach(function (c) {
+        var cfg = s.notify[c[0]];
+        body.appendChild(row(c[1], null, h('div', { class: 'stack', style: 'gap:8px' }, h('div', { style: 'text-align:right' }, U.toggle(cfg.on, function (v) { cfg.on = v; ST.setSettings({ notify: s.notify }, true); saved(); }, 'Enable ' + c[1])),
+          U.input(cfg.to, function (v) { cfg.to = v; ST.setSettings({ notify: s.notify }, true); }, { placeholder: c[3], 'aria-label': c[2] + ' for ' + c[1] }),
+          U.btn('Send a test', { size: 'sm', onClick: function () { if (!cfg.to.trim()) { U.toast('Enter the ' + c[2].toLowerCase() + ' first', 'error'); return; } U.toast('Test message sent to ' + c[1]); } }))));
+      });
+    }
+
+    if (tab === 'data') {
+      body.appendChild(row('Keep results for', 'Older results are removed automatically.', U.select([{ value: 30, label: '30 days' }, { value: 90, label: '90 days' }, { value: 365, label: '1 year' }, { value: 1095, label: '3 years' }, { value: 0, label: 'Forever' }], s.retentionDays, function (v) { ST.setSettings({ retentionDays: +v }, true); saved(); })));
+      body.appendChild(row('Export all results', 'Everything in one file, for spreadsheets or backups.', h('div', { class: 'row', style: 'justify-content:flex-end' },
+        U.btn('CSV', { icon: 'download', onClick: function () { U.download('speedtest-all.csv', ST.csv(ST.results({})), 'text/csv'); U.toast('Exported'); } }),
+        U.btn('JSON', { icon: 'download', onClick: function () { U.download('speedtest-all.json', JSON.stringify(ST.results({}), null, 1), 'application/json'); U.toast('Exported'); } }))));
+      body.appendChild(row('Reset the demo', 'Clears everything you changed in this preview.', U.btn('Reset demo data', { variant: 'danger', icon: 'refresh', onClick: function () {
+        U.confirm({ title: 'Reset demo data?', text: 'Nodes, rules, settings and manual tests you created here are cleared and the sample data returns.', confirm: 'Reset', danger: true }).then(function (ok) { if (ok) ST.resetDemo(); });
+      } })));
+    }
+
+    if (tab === 'access') {
+      var tokenBox = h('div');
+      function drawToken() { U.clear(tokenBox); tokenBox.appendChild(U.code(ST.settings().enrollToken)); }
+      body.appendChild(row('Dashboard address', 'Nodes report to this address.', U.input(s.centerUrl, function (v) { ST.setSettings({ centerUrl: v }, true); }, { 'aria-label': 'Dashboard address' })));
+      body.appendChild(h('div', { class: 'setting', style: 'align-items:flex-start' }, h('div', null, h('div', { style: 'font-weight:600' }, 'Enrolment key'), h('div', { class: 'hint' }, 'Lets a new machine join. Treat it like a password. Changing it does not disconnect existing nodes.')),
+        h('div', { class: 's-ctl' }, tokenBox, h('div', { style: 'margin-top:8px' }, U.btn('Generate a new key', { size: 'sm', icon: 'refresh', onClick: function () {
+          U.confirm({ title: 'Generate a new enrolment key?', text: 'The old key stops working for new machines. Nodes that already joined are not affected.', confirm: 'Generate' }).then(function (ok) { if (!ok) return; ST.setSettings({ enrollToken: 'st_enroll_' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10) }, true); drawToken(); U.toast('New key created'); });
+        } })))));
+      drawToken();
+      body.appendChild(U.callout('Sign-in and user accounts arrive with the real application. This preview has no login.', null, 'info'));
+    }
+  };
+})();

@@ -1,0 +1,246 @@
+/* Nodes: list, add-node wizard (guided install), node detail with settings and agent controls. */
+(function () {
+  'use strict';
+  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
+  var detailTab = {};
+
+  /* ---------- List ---------- */
+  ST.pages.nodes = function (root) {
+    var nodes = ST.nodes(), now = Date.now();
+    root.appendChild(U.pageHead('Nodes', 'A node is a machine that measures one internet connection. Add as many as you need.',
+      [U.btn('Add a node', { icon: 'plus', variant: 'primary', onClick: function () { openWizard(); } })]));
+    if (!nodes.length) {
+      root.appendChild(U.card(null, null, U.empty('No nodes yet', 'Add a node and the app installs a small program on that machine for you.', U.btn('Add your first node', { icon: 'plus', variant: 'primary', onClick: openWizard }))));
+      return;
+    }
+    var rows = nodes.map(function (n) { var last = ST.latest(n.id); return { n: n, last: last, sum: S.nodeSummary(n.id, now - ST.ranges[ST.settings().range], now) }; });
+    root.appendChild(h('div', { class: 'card' }, U.table({
+      columns: [
+        { key: 'name', label: 'Node', render: function (r) { return h('div', null, h('div', { class: 'row', style: 'font-weight:650' }, U.dot(ST.nodeColor(r.n)), r.n.name), h('div', { class: 'muted' }, r.n.label)); } },
+        { key: 'status', label: 'Status', render: function (r) { return !r.n.enabled ? U.chip('Paused', '', 'pause') : r.last && r.last.status === 'failed' ? U.chip('Last test failed', 'crit', 'x') : U.chip('Online', 'good', 'check'); } },
+        { key: 'exp', label: 'Expected', num: true, render: function (r) { return F.speed(r.n.expectedDown) + ' / ' + F.speed(r.n.expectedUp); } },
+        { key: 'avg', label: 'Average ' + ST.settings().range, num: true, render: function (r) { return r.sum.down.mean == null ? '—' : F.speed(r.sum.down.mean) + ' (' + F.num(r.sum.downPct, 0) + '%)'; } },
+        { key: 'ping', label: 'Latency', num: true, render: function (r) { return F.ms(r.sum.ping.median); } },
+        { key: 'ip', label: 'Public IP', render: function (r) { return h('span', { class: 'mono' }, r.last ? r.last.ip : '—'); } },
+        { key: 'seen', label: 'Last test', render: function (r) { return r.last ? F.rel(r.last.ts) : 'Never'; } },
+        { key: 'agent', label: 'Agent', render: function (r) { return h('span', { class: 'mono' }, 'v' + r.n.agent); } },
+        { key: 'act', label: '', render: function (r) { return h('span', { class: 'row', style: 'justify-content:flex-end' }, U.btn('', { icon: 'play', size: 'sm', title: 'Run a test on ' + r.n.name, onClick: function (e) { e.stopPropagation(); U.runTestDialog([r.n.id]); } })); } }],
+      rows: rows, onRow: function (r) { location.hash = '#/nodes/' + r.n.id; }
+    })));
+    root.appendChild(h('div', { class: 'mt' }, U.callout('Each node works on its own. It only needs to know how fast its connection should be; it does not need to know what kind of connection it is attached to.', null, 'info')));
+  };
+
+  /* ---------- Add-node wizard ---------- */
+  function validIp(v) { return /^(\d{1,3}\.){3}\d{1,3}$/.test(v) && v.split('.').every(function (p) { return +p <= 255; }); }
+  function validHost(v) { return validIp(v) || /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(v); }
+
+  function openWizard() {
+    var d = { name: '', label: '', down: '', up: '', method: 'ssh', host: '', port: '22', user: '', auth: 'password', secret: '', iface: '' };
+    var step = 0, body = h('div'), steps = h('div', { class: 'steps', 'aria-hidden': 'true' }, [0, 1, 2, 3].map(function () { return h('span'); }));
+    var errBox = h('div');
+    var timers = [], layer;
+    var token = ST.settings().enrollToken;
+
+    function setSteps() { Array.prototype.forEach.call(steps.children, function (s, i) { s.className = i <= step ? 'done' : ''; }); }
+    function error(msg) { U.clear(errBox); if (msg) errBox.appendChild(U.callout(msg, 'crit', 'alert')); }
+
+    function s0() {
+      var name = U.input(d.name, function (v) { d.name = v; }, { placeholder: 'e.g. VM6', maxlength: 40, 'aria-label': 'Node name' });
+      var label = U.input(d.label, function (v) { d.label = v; }, { placeholder: 'e.g. Home fiber 500', maxlength: 60, 'aria-label': 'What it measures' });
+      var down = U.input(d.down, function (v) { d.down = v; }, { type: 'number', min: 1, placeholder: '1000', inputmode: 'decimal', 'aria-label': 'Expected download' });
+      var up = U.input(d.up, function (v) { d.up = v; }, { type: 'number', min: 1, placeholder: '1000', inputmode: 'decimal', 'aria-label': 'Expected upload' });
+      return h('div', { class: 'stack' },
+        U.field('Node name', name, 'A short name you will recognise.'),
+        U.field('What does it measure?', label, 'Optional. For example the provider and plan, or “All connections”.'),
+        h('div', { class: 'field-row' }, U.field('Expected download', U.suffix(down, 'Mbps')), U.field('Expected upload', U.suffix(up, 'Mbps'))),
+        h('span', { class: 'hint' }, 'The expected speed is the figure this node is compared against. Use what you actually get, not only what the plan promises.'));
+    }
+    function s1() {
+      var wrap = h('div', { class: 'stack' });
+      var sshForm = h('div', { class: 'stack' });
+      function drawForm() {
+        U.clear(sshForm);
+        if (d.method === 'ssh') {
+          sshForm.appendChild(h('div', { class: 'field-row' },
+            U.field('Machine address', U.input(d.host, function (v) { d.host = v; }, { placeholder: '192.168.10.36', 'aria-label': 'Machine address' }), 'IP address or host name of the machine.'),
+            U.field('Port', U.input(d.port, function (v) { d.port = v; }, { type: 'number', 'aria-label': 'Port' }))));
+          sshForm.appendChild(U.field('User name', U.input(d.user, function (v) { d.user = v; }, { placeholder: 'ubuntu', autocomplete: 'off', 'aria-label': 'User name' }), 'Needs permission to install a service (sudo).'));
+          sshForm.appendChild(U.field('Sign in with', U.seg([{ value: 'password', label: 'Password' }, { value: 'key', label: 'Private key' }], d.auth, function (v) { d.auth = v; d.secret = ''; drawForm(); })));
+          sshForm.appendChild(d.auth === 'password' ? U.field('Password', U.input(d.secret, function (v) { d.secret = v; }, { type: 'password', autocomplete: 'new-password', 'aria-label': 'Password' }), 'Used once for the installation and never stored.')
+            : U.field('Private key', h('textarea', { class: 'input', rows: 4, placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----', 'aria-label': 'Private key', onInput: function (e) { d.secret = e.target.value; } }), 'Used once for the installation and never stored.'));
+        } else {
+          var cmd = 'curl -fsSL ' + ST.settings().centerUrl + '/install.sh | sudo sh -s -- \\\n  --token ' + token + ' \\\n  --name "' + (d.name || 'node') + '"';
+          sshForm.appendChild(h('p', null, 'Open a terminal on the machine and paste this single command. The node appears here by itself when it finishes.'));
+          sshForm.appendChild(U.code(cmd));
+          sshForm.appendChild(h('span', { class: 'hint' }, 'The command contains a one-time enrolment key. Do not share it.'));
+        }
+        sshForm.appendChild(h('details', null, h('summary', { style: 'cursor:pointer;font-weight:600' }, 'Advanced'),
+          h('div', { style: 'margin-top:10px' }, U.field('Network interface', U.input(d.iface, function (v) { d.iface = v; }, { placeholder: 'Automatic', 'aria-label': 'Network interface' }), 'Leave empty unless the machine has more than one network connection and the test must use a specific one.'))));
+      }
+      wrap.appendChild(h('div', { class: 'grid cols-2' },
+        h('button', { type: 'button', class: 'choice ' + (d.method === 'ssh' ? 'on' : ''), onClick: function (e) { d.method = 'ssh'; var btns = wrap.querySelectorAll('.choice'); btns[0].classList.add('on'); btns[1].classList.remove('on'); drawForm(); } }, h('b', null, U.icon('terminal', 16), 'Install for me'), h('span', { class: 'muted' }, 'We connect to the machine and set everything up.')),
+        h('button', { type: 'button', class: 'choice ' + (d.method === 'manual' ? 'on' : ''), onClick: function () { d.method = 'manual'; var btns = wrap.querySelectorAll('.choice'); btns[1].classList.add('on'); btns[0].classList.remove('on'); drawForm(); } }, h('b', null, U.icon('copy', 16), 'I will run a command'), h('span', { class: 'muted' }, 'Copy one line and paste it on the machine.'))));
+      wrap.appendChild(sshForm); drawForm();
+      return wrap;
+    }
+    var checklist, resultBox;
+    var tasks = ['Connecting to the machine', 'Checking the system', 'Downloading the speed test program', 'Installing it as a background service', 'Registering with this dashboard', 'Running the first speed test'];
+    function s2() {
+      checklist = h('ul', { class: 'checklist' });
+      tasks.forEach(function (t, i) { if (d.method === 'manual' && i === 0) t = 'Waiting for the machine to check in'; checklist.appendChild(h('li', { id: 'ck' + i }, h('span', { style: 'width:16px;display:inline-grid' }, U.icon('clock', 14)), t)); });
+      resultBox = h('div', { style: 'margin-top:14px' });
+      return h('div', null, h('p', { class: 'muted', style: 'margin-bottom:12px' }, 'This usually takes under a minute. You can leave this window open.'), checklist, resultBox);
+    }
+    function runInstall() {
+      var i = 0;
+      (function next() {
+        if (i > 0) { var prev = checklist.children[i - 1]; prev.className = 'ok'; U.clear(prev.firstChild); prev.firstChild.appendChild(U.icon('check', 14)); }
+        if (i >= tasks.length) { finish(); return; }
+        var li = checklist.children[i]; li.className = 'run'; U.clear(li.firstChild); li.firstChild.appendChild(h('span', { class: 'spinner' }));
+        i++; timers.push(setTimeout(next, i === 6 ? 2600 : 650 + Math.random() * 700));
+      })();
+    }
+    var created = null;
+    function finish() {
+      created = ST.addNode({ name: d.name.trim(), label: d.label.trim() || 'Unnamed connection', provider: '', plan: '', expectedDown: +d.down, expectedUp: +d.up, host: d.host || '192.168.10.' + (40 + ST.nodes().length) });
+      // Give the new node a first result immediately.
+      var byId = {}; ST.nodes().forEach(function (n) { byId[n.id] = n; });
+      ST.runTest(created.id).then(function (res) {
+        step = 3; render();
+      });
+      // runTest emits data events that refresh the page behind the dialog; keep the dialog as-is until the result is in.
+    }
+    function s3() {
+      var res = ST.latest(created.id);
+      return h('div', { class: 'stack', style: 'text-align:center;padding:6px 0' },
+        h('div', { class: 'ev-ico good', style: 'width:48px;height:48px;margin:0 auto;border-radius:14px' }, U.icon('check', 26)),
+        h('h2', null, created.name + ' is online'),
+        res && res.status !== 'failed' ? h('p', { class: 'text-2' }, 'First result: ' + F.speed(res.down) + ' down, ' + F.speed(res.up) + ' up, ' + F.ms(res.ping) + ' ping.') : h('p', { class: 'text-2' }, 'The node is connected. Its first scheduled test will run shortly.'),
+        h('p', { class: 'hint' }, 'It will now test every ' + created.interval + ' minutes. You can change that under Schedules.'));
+    }
+
+    function validate() {
+      if (step === 0) {
+        if (!d.name.trim()) return 'Give the node a name.';
+        if (ST.nodes().some(function (n) { return n.name.toLowerCase() === d.name.trim().toLowerCase(); })) return 'A node with this name already exists. Choose another name.';
+        if (!(+d.down > 0) || !(+d.up > 0)) return 'Enter the expected download and upload speed in Mbps.';
+      }
+      if (step === 1 && d.method === 'ssh') {
+        if (!validHost(d.host.trim())) return 'Enter a valid IP address or host name for the machine.';
+        if (!(+d.port >= 1 && +d.port <= 65535)) return 'The port must be between 1 and 65535.';
+        if (!d.user.trim()) return 'Enter the user name to sign in with.';
+        if (!d.secret.trim()) return d.auth === 'password' ? 'Enter the password.' : 'Paste the private key.';
+      }
+      return null;
+    }
+    var back, next;
+    function render() {
+      U.clear(body); setSteps(); error(null);
+      body.appendChild(steps);
+      var titles = ['Describe the node', 'Connect to the machine', 'Setting things up', 'Done'];
+      body.appendChild(h('h3', { style: 'margin-bottom:10px' }, titles[step]));
+      body.appendChild([s0, s1, s2, s3][step]());
+      body.appendChild(errBox);
+      if (layer) {
+        layer.setFoot(footer());
+      }
+      if (step === 2) runInstall();
+    }
+    function footer() {
+      if (step === 2) return [U.btn('Cancel', { onClick: function () { layer.close(); } })];
+      if (step === 3) return [U.btn('Add another', { onClick: function () { layer.close(); setTimeout(openWizard, 50); } }), U.btn('Open node', { variant: 'primary', onClick: function () { layer.close(); location.hash = '#/nodes/' + created.id; } })];
+      return [step > 0 ? U.btn('Back', { onClick: function () { step--; render(); } }) : U.btn('Cancel', { onClick: function () { layer.close(); } }),
+        U.btn(step === 1 ? (d.method === 'ssh' ? 'Install' : 'I ran the command') : 'Continue', { variant: 'primary', onClick: function () {
+          var e = validate(); if (e) { error(e); return; }
+          step++; render();
+        } })];
+    }
+    layer = U.modal({ title: 'Add a node', body: body, sticky: true, onClose: function () { timers.forEach(clearTimeout); }, actions: function () { return footer(); } });
+    render();
+  }
+  ST.openAddNode = openWizard;
+
+  /* ---------- Detail ---------- */
+  ST.pages.nodeDetail = function (root, params) {
+    var n = ST.node(params.id);
+    if (!n) { root.appendChild(U.empty('Node not found', 'This node does not exist or was removed.', h('a', { class: 'btn', href: '#/nodes' }, 'Back to nodes'))); return; }
+    var tab = detailTab[n.id] || 'overview', now = Date.now(), from = now - ST.ranges[ST.settings().range];
+    var last = ST.latest(n.id);
+    root.appendChild(U.pageHead(n.name + ' · ' + n.label, 'Expected ' + F.speed(n.expectedDown) + ' down / ' + F.speed(n.expectedUp) + ' up',
+      [U.btn(n.enabled ? 'Pause' : 'Resume', { icon: n.enabled ? 'pause' : 'play', onClick: function () { ST.updateNode(n.id, { enabled: !n.enabled }); U.toast(n.name + (n.enabled ? ' paused' : ' resumed')); } }),
+        U.btn('Run test', { icon: 'play', variant: 'primary', disabled: !n.enabled, title: n.enabled ? null : 'Resume the node first', onClick: function () { U.runTestDialog([n.id]); } })],
+      h('div', { class: 'crumb' }, h('a', { href: '#/nodes' }, 'Nodes'), ' / ', n.name)));
+    root.appendChild(U.tabs([{ value: 'overview', label: 'Overview' }, { value: 'settings', label: 'Settings' }, { value: 'agent', label: 'Agent' }], tab, function (v) { detailTab[n.id] = v; ST.refresh(); }));
+
+    if (tab === 'overview') {
+      var sum = S.nodeSummary(n.id, from, now), prev = S.nodeSummary(n.id, from - (now - from), from);
+      var tiles = h('div', { class: 'grid cols-5 mb' });
+      [['Average download', F.speed(sum.down.mean), U.deltaTag(sum.down.mean, prev.down.mean, true), F.num(sum.downPct, 0) + '% of expected'],
+        ['Average upload', F.speed(sum.up.mean), U.deltaTag(sum.up.mean, prev.up.mean, true), F.num(sum.upPct, 0) + '% of expected'],
+        ['Median latency', F.ms(sum.ping.median), U.deltaTag(sum.ping.median, prev.ping.median, false), 'Jitter ' + F.ms(sum.jitter.mean)],
+        ['Success rate', F.pct(sum.successRate, 1), U.deltaTag(sum.successRate, prev.successRate, true), sum.failed + ' failed of ' + sum.count],
+        ['Stability', sum.stability == null ? '—' : F.num(sum.stability, 0) + '/100', null, 'Steadiness of download speed']].forEach(function (t) {
+        tiles.appendChild(h('div', { class: 'card stat' }, h('div', { class: 'stat-label' }, t[0]), h('div', { class: 'stat-value tabnum', style: 'font-size:22px' }, t[1]), h('div', { class: 'row', style: 'gap:6px' }, t[2], h('span', { class: 'hint' }, t[3]))));
+      });
+      root.appendChild(tiles);
+      var chartHost = h('div');
+      var rs = ST.results({ nodeIds: [n.id], from: from });
+      root.appendChild(U.card('Speed over time', ST.rangeLabels[ST.settings().range], chartHost));
+      ST.charts.line(chartHost, {
+        series: [{ id: 'd', name: 'Download', color: 'var(--s1)', points: rs.map(function (r) { return [r.ts, r.status === 'failed' ? null : r.down]; }) },
+          { id: 'u', name: 'Upload', color: 'var(--s2)', points: rs.map(function (r) { return [r.ts, r.status === 'failed' ? null : r.up]; }) }],
+        x: { type: 'time', min: from, max: now }, y: { min: 0, format: F.axisSpeed, unit: F.axisUnit() }, height: 280, label: 'Download and upload for ' + n.name,
+        refLines: [{ v: n.expectedDown, label: 'Expected download', color: 'var(--text-2)' }], tipValue: function (s, v) { return F.speed(v); }
+      });
+      var recent = rs.slice(-12).reverse();
+      root.appendChild(h('div', { class: 'mt' }, U.card('Latest results', null, h('div', { style: 'margin:-8px -18px -18px' }, U.table({
+        columns: [
+          { key: 'ts', label: 'Time', render: function (r) { return F.date(r.ts); } },
+          { key: 'down', label: 'Download', num: true, render: function (r) { return F.speed(r.down); } },
+          { key: 'up', label: 'Upload', num: true, render: function (r) { return F.speed(r.up); } },
+          { key: 'ping', label: 'Ping', num: true, render: function (r) { return F.ms(r.ping); } },
+          { key: 'ip', label: 'Public IP', render: function (r) { return h('span', { class: 'mono' }, r.ip); } },
+          { key: 'st', label: 'Status', render: function (r) { return U.statusChip(r.status); } }],
+        rows: recent, onRow: function (r) { ST.openResult(r); } })),
+      [h('a', { class: 'btn sm', href: '#/history' }, 'All results')])));
+    }
+
+    if (tab === 'settings') {
+      var d = { name: n.name, label: n.label, down: n.expectedDown, up: n.expectedUp, threads: n.threads, server: n.server, note: n.note || '' };
+      var serverOpts = [{ value: 'auto', label: 'Choose the closest automatically' }].concat(ST.servers.map(function (s) { return { value: String(s.id), label: s.name + ' — ' + s.city }; }));
+      var form = h('div', { class: 'stack', style: 'max-width:640px' },
+        h('div', { class: 'field-row' }, U.field('Node name', U.input(d.name, function (v) { d.name = v; })), U.field('What does it measure?', U.input(d.label, function (v) { d.label = v; }))),
+        h('div', { class: 'field-row' }, U.field('Expected download', U.suffix(U.input(d.down, function (v) { d.down = v; }, { type: 'number', min: 1 }), 'Mbps')), U.field('Expected upload', U.suffix(U.input(d.up, function (v) { d.up = v; }, { type: 'number', min: 1 }), 'Mbps'))),
+        h('div', { class: 'field-row' }, U.field('Test server', U.select(serverOpts, d.server, function (v) { d.server = v; }), 'Which speed test server this node talks to.'),
+          U.field('Parallel connections', U.select([1, 2, 4, 6, 8, 12, 16, 32].map(function (x) { return { value: x, label: String(x) }; }), d.threads, function (v) { d.threads = +v; }), 'Use more for fast links or when the node goes through a load balancer.')),
+        U.field('Notes', h('textarea', { class: 'input', rows: 3, onInput: function (e) { d.note = e.target.value; } }, d.note)),
+        h('div', { class: 'row' }, U.btn('Save changes', { variant: 'primary', onClick: function () {
+          if (!d.name.trim()) { U.toast('Node name cannot be empty', 'error'); return; }
+          if (!(+d.down > 0) || !(+d.up > 0)) { U.toast('Expected speeds must be above zero', 'error'); return; }
+          ST.updateNode(n.id, { name: d.name.trim(), label: d.label.trim(), expectedDown: +d.down, expectedUp: +d.up, threads: d.threads, server: d.server, note: d.note });
+          U.toast('Settings saved');
+        } }), U.btn('Discard', { onClick: function () { ST.refresh(); } })));
+      root.appendChild(U.card('Node settings', null, form));
+      root.appendChild(h('div', { class: 'mt' }, U.card('Remove this node', 'Stops testing and removes the program from the machine.', h('div', null,
+        h('p', { class: 'text-2', style: 'margin-bottom:10px' }, 'The results already collected for this node are deleted from the dashboard.'),
+        U.btn('Remove ' + n.name, { variant: 'danger', icon: 'trash', onClick: function () {
+          U.confirm({ title: 'Remove ' + n.name + '?', text: 'This deletes ' + ST.nodeResults(n.id).length + ' results and uninstalls the program from the machine. This cannot be undone.', confirm: 'Remove node', danger: true }).then(function (ok) {
+            if (!ok) return; ST.removeNode(n.id); location.hash = '#/nodes'; U.toast(n.name + ' removed');
+          });
+        } })))));
+    }
+
+    if (tab === 'agent') {
+      var logs = ['info  agent started (v' + n.agent + ')', 'info  connected to ' + ST.settings().centerUrl, 'info  schedule received: every ' + n.interval + ' min, offset +' + n.offset + ' min', last ? 'info  last test ' + (last.status === 'failed' ? 'failed: ' + last.error : 'finished: ' + F.speed(last.down) + ' down, ' + F.speed(last.up) + ' up') : 'info  waiting for first test', 'info  heartbeat ok'];
+      var logBox = h('pre', { class: 'code', style: 'min-height:120px' }, logs.join('\n'));
+      var appendLog = function (line) { logBox.textContent += '\n' + line; logBox.scrollTop = logBox.scrollHeight; };
+      root.appendChild(U.card('Program on the machine', null, h('div', { class: 'stack' },
+        U.kv([['Machine', h('span', { class: 'mono' }, n.host || '—')], ['Program version', 'v' + n.agent + (n.agent !== '1.4.2' ? ' (update available: v1.4.2)' : ' (latest)')], ['Last check-in', last ? F.rel(last.ts) : 'Never'], ['Status', n.enabled ? U.chip('Running', 'good', 'check') : U.chip('Paused', '', 'pause')]]),
+        h('div', { class: 'row wrap' },
+          U.btn('Update program', { icon: 'refresh', disabled: n.agent === '1.4.2', onClick: function () { appendLog('info  downloading v1.4.2 …'); setTimeout(function () { appendLog('info  restarting'); }, 700); setTimeout(function () { ST.updateNode(n.id, { agent: '1.4.2' }); U.toast('Program updated to v1.4.2'); }, 1500); } }),
+          U.btn('Restart', { icon: 'refresh', onClick: function () { appendLog('info  restart requested'); setTimeout(function () { appendLog('info  agent started (v' + n.agent + ')'); U.toast('Restarted'); }, 800); } }),
+          U.btn('Reinstall', { onClick: function () { appendLog('info  reinstalling …'); setTimeout(function () { appendLog('info  done'); U.toast('Reinstalled'); }, 1200); } })),
+        h('div', null, h('div', { class: 'label', style: 'margin-bottom:6px' }, 'Recent activity'), logBox))));
+    }
+  };
+})();
