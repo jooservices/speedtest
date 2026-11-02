@@ -85,8 +85,11 @@ Configuration uses the environment; migration commands also load the current
 directory's `.env` (existing environment values take precedence). Service
 endpoints are never hard-coded to Docker or a specific machine.
 Read [the migration runbook](migrations/README.md) and verify the non-live
-database before any migration or database test. `make test-db` requires an
-empty application schema and verifies its database name and ownership marker.
+database before any migration or database test. `make test-db` verifies the
+database name and ownership marker, resets its application tables and migration
+journal, and runs self-contained suites serially.
+Use only a disposable test/worktree database; never run integration suites
+concurrently against the same database.
 
 ### Agent commands
 
