@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 )
@@ -47,16 +48,30 @@ func NewHandler(options Options) http.Handler {
 		readinessTimeout = defaultReadinessTimeout
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", healthz)
-	mux.HandleFunc("GET /readyz", readyz(options.Pinger, readinessTimeout))
+	var uiHandler http.Handler
 	if options.UI == nil {
-		mux.Handle("GET /", http.NotFoundHandler())
+		uiHandler = http.NotFoundHandler()
 	} else {
-		mux.Handle("GET /", http.FileServer(http.FS(options.UI)))
+		uiHandler = http.FileServer(http.FS(options.UI))
 	}
+	uiMux := http.NewServeMux()
+	uiMux.Handle("GET /", uiHandler)
 
-	var handler http.Handler = mux
+	readinessHandler := readyz(options.Pinger, readinessTimeout)
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/"):
+			writeNotFoundProblem(w, r)
+		case r.URL.Path == "/healthz":
+			serveGetRoute(w, r, http.HandlerFunc(healthz))
+		case r.URL.Path == "/readyz":
+			serveGetRoute(w, r, readinessHandler)
+		default:
+			uiMux.ServeHTTP(w, r)
+		}
+	})
+
+	var handler http.Handler = dispatch
 	handler = recoverPanics(handler, logger)
 	handler = logRequests(handler, logger)
 	handler = withRequestID(handler)
@@ -161,21 +176,54 @@ type problemResponse struct {
 	Title   string `json:"title"`
 	Status  int    `json:"status"`
 	Detail  string `json:"detail"`
-	TraceID string `json:"trace_id,omitempty"`
+	TraceID string `json:"trace_id"`
 }
 
 func writePanicProblem(w http.ResponseWriter, requestID string) {
 	const safeDetail = "Internal failure; safe detail only."
-	w.Header().Set("Cache-Control", "no-store")
-	w.Header().Set("Content-Type", "application/problem+json")
-	w.WriteHeader(http.StatusInternalServerError)
-	_ = json.NewEncoder(w).Encode(problemResponse{
+	writeProblemResponse(w, http.StatusInternalServerError, problemResponse{
 		Type:    "/problems/servererror",
-		Title:   "Internal failure; safe detail only",
+		Title:   safeDetail,
 		Status:  http.StatusInternalServerError,
 		Detail:  safeDetail,
 		TraceID: requestID,
 	})
+}
+
+func writeNotFoundProblem(w http.ResponseWriter, r *http.Request) {
+	writeProblemResponse(w, http.StatusNotFound, problemResponse{
+		Type:    "/problems/notfound",
+		Title:   "Resource not found or not owned",
+		Status:  http.StatusNotFound,
+		Detail:  "Resource not found or not owned.",
+		TraceID: requestIDFromContext(r.Context()),
+	})
+}
+
+func writeMethodNotAllowedProblem(w http.ResponseWriter, r *http.Request) {
+	writeProblemResponse(w, http.StatusMethodNotAllowed, problemResponse{
+		Type:    "/problems/methodnotallowed",
+		Title:   "Method not allowed",
+		Status:  http.StatusMethodNotAllowed,
+		Detail:  "The request method is not allowed for this resource.",
+		TraceID: requestIDFromContext(r.Context()),
+	})
+}
+
+func writeProblemResponse(w http.ResponseWriter, status int, problem problemResponse) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/problem+json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(problem)
+}
+
+func serveGetRoute(w http.ResponseWriter, r *http.Request, handler http.Handler) {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		w.Header().Set("Allow", "GET, HEAD")
+		writeMethodNotAllowedProblem(w, r)
+		return
+	}
+	handler.ServeHTTP(w, r)
 }
 
 type requestIDKey struct{}
@@ -184,11 +232,33 @@ var requestIDFallbackSequence atomic.Uint64
 
 func withRequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requestID := newRequestID()
+		requestIDs := r.Header.Values(requestIDHeader)
+		requestID := ""
+		if len(requestIDs) == 1 && validRequestID(requestIDs[0]) {
+			requestID = requestIDs[0]
+		} else {
+			requestID = newRequestID()
+		}
 		w.Header().Set(requestIDHeader, requestID)
 		ctx := context.WithValue(r.Context(), requestIDKey{}, requestID)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+func validRequestID(requestID string) bool {
+	if len(requestID) < 8 || len(requestID) > 64 {
+		return false
+	}
+	for i := 0; i < len(requestID); i++ {
+		c := requestID[i]
+		if (c >= 'a' && c <= 'z') ||
+			(c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-' || c == '_' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func requestIDFromContext(ctx context.Context) string {
@@ -259,6 +329,8 @@ func logRequests(next http.Handler, logger *slog.Logger) http.Handler {
 		logger.InfoContext(r.Context(), "http request",
 			slog.String("request_id", requestIDFromContext(r.Context())),
 			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.String("remote_addr", r.RemoteAddr),
 			slog.Int("status", status),
 			slog.Int64("duration_ms", time.Since(started).Milliseconds()),
 		)

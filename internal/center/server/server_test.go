@@ -32,7 +32,8 @@ func TestHealthz(t *testing.T) {
 
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	request.Header.Set(requestIDHeader, "client-supplied")
+	request.Header.Set(requestIDHeader, "bad id")
+	request.RemoteAddr = "203.0.113.9:4321"
 	handler.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusOK {
@@ -45,7 +46,7 @@ func TestHealthz(t *testing.T) {
 		t.Errorf("Cache-Control = %q, want no-store", got)
 	}
 	requestID := recorder.Header().Get(requestIDHeader)
-	if len(requestID) != 32 || requestID == "client-supplied" {
+	if len(requestID) != 32 || requestID == "bad id" {
 		t.Fatalf("request id = %q, want a generated 32-character id", requestID)
 	}
 
@@ -56,7 +57,63 @@ func TestHealthz(t *testing.T) {
 	if body.Status != "ok" {
 		t.Errorf("status body = %q, want ok", body.Status)
 	}
-	assertRequestLog(t, logs.String(), requestID, http.StatusOK)
+	assertRequestLog(t, logs.String(), requestID, http.StatusOK, http.MethodGet, "/healthz", request.RemoteAddr)
+}
+
+func TestRequestIDValidationAndEcho(t *testing.T) {
+	validIDs := []string{
+		"request_1",
+		"AbCd1234",
+		"id-" + strings.Repeat("a", 61),
+	}
+	for _, incoming := range validIDs {
+		t.Run("valid/"+incoming, func(t *testing.T) {
+			var logs bytes.Buffer
+			handler := NewHandler(Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			request.Header.Set(requestIDHeader, incoming)
+			handler.ServeHTTP(recorder, request)
+			if got := recorder.Header().Get(requestIDHeader); got != incoming {
+				t.Fatalf("response request id = %q, want incoming %q", got, incoming)
+			}
+			assertRequestLog(t, logs.String(), incoming, http.StatusOK, http.MethodGet, "/healthz", request.RemoteAddr)
+		})
+	}
+
+	invalidIDs := []struct {
+		name   string
+		values []string
+	}{
+		{name: "too short", values: []string{"short"}},
+		{name: "too long", values: []string{strings.Repeat("a", 65)}},
+		{name: "space", values: []string{"invalid id"}},
+		{name: "punctuation", values: []string{"request.id"}},
+		{name: "non-ascii", values: []string{"café1234"}},
+		{name: "duplicate headers", values: []string{"request_1", "request_2"}},
+	}
+	for _, tt := range invalidIDs {
+		t.Run("invalid/"+tt.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			handler := NewHandler(Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+			recorder := httptest.NewRecorder()
+			request := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+			for _, value := range tt.values {
+				request.Header.Add(requestIDHeader, value)
+			}
+			handler.ServeHTTP(recorder, request)
+			generated := recorder.Header().Get(requestIDHeader)
+			if !validRequestID(generated) {
+				t.Fatalf("response request id = %q, want a different valid generated id", generated)
+			}
+			for _, value := range tt.values {
+				if generated == value {
+					t.Fatalf("response request id = %q, want a different generated id", generated)
+				}
+			}
+			assertRequestLog(t, logs.String(), generated, http.StatusOK, http.MethodGet, "/healthz", request.RemoteAddr)
+		})
+	}
 }
 
 func TestReadyz(t *testing.T) {
@@ -163,11 +220,93 @@ func TestStaticUIAndNotFound(t *testing.T) {
 			if requestID == "" {
 				t.Fatal("request id header is empty")
 			}
-			assertRequestLog(t, logs.String(), requestID, tt.wantStatus)
+			assertRequestLog(t, logs.String(), requestID, tt.wantStatus, http.MethodGet, tt.path, httptest.NewRequest(http.MethodGet, tt.path, nil).RemoteAddr)
 			if tt.wantBody != "" && !strings.Contains(recorder.Body.String(), tt.wantBody) {
 				t.Errorf("body = %q, want it to contain %q", recorder.Body.String(), tt.wantBody)
 			}
+			if tt.path == "/missing.js" {
+				if got := recorder.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
+					t.Errorf("non-API missing asset Content-Type = %q, want text/plain", got)
+				}
+				if got := recorder.Body.String(); got != "404 page not found\n" {
+					t.Errorf("non-API missing asset body = %q, want the static file-server 404", got)
+				}
+			}
 		})
+	}
+}
+
+func TestUnknownAPIPathReturnsProblem(t *testing.T) {
+	for _, target := range []string{"/api/unknown?token=do-not-log", "/api"} {
+		var logs bytes.Buffer
+		handler := NewHandler(Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+		request := httptest.NewRequest(http.MethodGet, target, nil)
+		request.Header.Set(requestIDHeader, "client_req-123")
+		request.RemoteAddr = "198.51.100.4:5678"
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+
+		assertProblemResponse(t, recorder, http.StatusNotFound, "/problems/notfound", "Resource not found or not owned", "Resource not found or not owned.", "client_req-123")
+		assertRequestLog(t, logs.String(), "client_req-123", http.StatusNotFound, http.MethodGet, request.URL.Path, request.RemoteAddr)
+		if strings.Contains(logs.String(), "do-not-log") {
+			t.Fatal("query string was written to the access log")
+		}
+	}
+}
+
+func TestNonAPIWrongMethodKeepsStaticUIBehavior(t *testing.T) {
+	handler := NewHandler(Options{UI: fstest.MapFS{"index.html": &fstest.MapFile{Data: []byte("ui")}}})
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/missing.js", nil))
+
+	if recorder.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusMethodNotAllowed)
+	}
+	if got := recorder.Header().Get("Allow"); got != "GET, HEAD" {
+		t.Errorf("Allow = %q, want GET, HEAD", got)
+	}
+	if got := recorder.Header().Get("Content-Type"); !strings.HasPrefix(got, "text/plain") {
+		t.Errorf("Content-Type = %q, want static ServeMux text/plain response", got)
+	}
+}
+
+func TestWrongMethodOnKnownRouteReturnsProblemAndAllow(t *testing.T) {
+	for _, path := range []string{"/healthz", "/readyz"} {
+		var logs bytes.Buffer
+		handler := NewHandler(Options{Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+		request := httptest.NewRequest(http.MethodPost, path, nil)
+		request.Header.Set(requestIDHeader, "method_req-123")
+		recorder := httptest.NewRecorder()
+		handler.ServeHTTP(recorder, request)
+
+		assertProblemResponse(t, recorder, http.StatusMethodNotAllowed, "/problems/methodnotallowed", "Method not allowed", "The request method is not allowed for this resource.", "method_req-123")
+		if got := recorder.Header().Get("Allow"); got != "GET, HEAD" {
+			t.Errorf("Allow = %q, want GET, HEAD", got)
+		}
+		assertRequestLog(t, logs.String(), "method_req-123", http.StatusMethodNotAllowed, http.MethodPost, path, request.RemoteAddr)
+	}
+}
+
+func assertProblemResponse(t *testing.T, recorder *httptest.ResponseRecorder, status int, problemType, title, detail, traceID string) {
+	t.Helper()
+	if recorder.Code != status {
+		t.Fatalf("status = %d, want %d", recorder.Code, status)
+	}
+	if got := recorder.Header().Get("Content-Type"); got != "application/problem+json" {
+		t.Fatalf("Content-Type = %q, want application/problem+json", got)
+	}
+	if got := recorder.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, want no-store", got)
+	}
+	if got := recorder.Header().Get(requestIDHeader); got != traceID {
+		t.Errorf("response request id = %q, want trace_id %q", got, traceID)
+	}
+	var body problemResponse
+	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
+		t.Fatalf("decode problem response: %v", err)
+	}
+	if body.Type != problemType || body.Title != title || body.Status != status || body.Detail != detail || body.TraceID != traceID {
+		t.Errorf("problem = %+v, want type=%q title=%q status=%d detail=%q trace_id=%q", body, problemType, title, status, detail, traceID)
 	}
 }
 
@@ -187,7 +326,9 @@ func TestPanicRecoveryReturnsProblemEnvelope(t *testing.T) {
 	})
 	handler := withRequestID(logRequests(recoverPanics(next, logger), logger))
 	recorder := httptest.NewRecorder()
-	handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, "/panic", nil))
+	request := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	request.Header.Set(requestIDHeader, "panic_req-123")
+	handler.ServeHTTP(recorder, request)
 
 	if recorder.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusInternalServerError)
@@ -196,6 +337,9 @@ func TestPanicRecoveryReturnsProblemEnvelope(t *testing.T) {
 		t.Errorf("Content-Type = %q, want application/problem+json", got)
 	}
 	requestID := recorder.Header().Get(requestIDHeader)
+	if requestID != "panic_req-123" {
+		t.Fatalf("request id = %q, want panic_req-123", requestID)
+	}
 	var body problemResponse
 	if err := json.NewDecoder(recorder.Body).Decode(&body); err != nil {
 		t.Fatalf("decode response: %v", err)
@@ -209,7 +353,7 @@ func TestPanicRecoveryReturnsProblemEnvelope(t *testing.T) {
 	if strings.Contains(recorder.Body.String(), "private panic details") || strings.Contains(logs.String(), "private panic details") {
 		t.Fatal("panic details must not be exposed in the response or logs")
 	}
-	assertRequestLog(t, logs.String(), requestID, http.StatusInternalServerError)
+	assertRequestLog(t, logs.String(), requestID, http.StatusInternalServerError, http.MethodGet, "/panic", request.RemoteAddr)
 }
 
 func TestRequestIDsAreUnique(t *testing.T) {
@@ -258,7 +402,7 @@ func TestRequestLogDefaultsToStatusOK(t *testing.T) {
 	if recorder.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", recorder.Code, http.StatusOK)
 	}
-	assertRequestLog(t, logs.String(), recorder.Header().Get(requestIDHeader), http.StatusOK)
+	assertRequestLog(t, logs.String(), recorder.Header().Get(requestIDHeader), http.StatusOK, http.MethodGet, "/empty", httptest.NewRequest(http.MethodGet, "/empty", nil).RemoteAddr)
 }
 
 func TestServeGracefulShutdown(t *testing.T) {
@@ -430,7 +574,7 @@ func TestServeRejectsMissingArguments(t *testing.T) {
 	}
 }
 
-func assertRequestLog(t *testing.T, output, requestID string, status int) {
+func assertRequestLog(t *testing.T, output, requestID string, status int, method, path, remoteAddr string) {
 	t.Helper()
 	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
 		var fields map[string]any
@@ -446,8 +590,17 @@ func assertRequestLog(t *testing.T, output, requestID string, status int) {
 		if fields["status"] != float64(status) {
 			t.Errorf("logged status = %v, want %d", fields["status"], status)
 		}
-		if fields["method"] != http.MethodGet {
-			t.Errorf("logged method = %v, want GET", fields["method"])
+		if fields["method"] != method {
+			t.Errorf("logged method = %v, want %s", fields["method"], method)
+		}
+		if fields["path"] != path {
+			t.Errorf("logged path = %v, want %q", fields["path"], path)
+		}
+		if fields["remote_addr"] != remoteAddr {
+			t.Errorf("logged remote_addr = %v, want %q", fields["remote_addr"], remoteAddr)
+		}
+		if _, ok := fields["duration_ms"].(float64); !ok {
+			t.Errorf("logged duration_ms = %T(%v), want a JSON number", fields["duration_ms"], fields["duration_ms"])
 		}
 		return
 	}
