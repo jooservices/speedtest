@@ -42,6 +42,10 @@ Manual "Run test" shows live progress and adds a real entry to the data, so ever
 node (agent) ──HTTPS──► command center ── API + scheduler + database ── web UI
 ```
 
+See [`docs/architecture.md`](docs/architecture.md) for the full component
+diagram and a walkthrough of the agent, command center, database, geolocation
+and UI.
+
 - Agent: small single binary running the speed test program (Ookla CLI by default) bound to the right network interface, reporting results and heartbeats.
 - Geolocation: MaxMind GeoLite2 City + ASN offline database first (free, no rate limit), free web service as fallback; results cached per IP.
 - Keep tests from overlapping so a node that measures a combination of connections is never skewed by other nodes testing at the same moment.
@@ -84,9 +88,11 @@ make run-center   # start the command center
 make run-agent    # start a node agent
 ```
 
-Configuration uses the environment; migration commands also load the current
-directory's `.env` (existing environment values take precedence). Service
-endpoints are never hard-coded to Docker or a specific machine.
+Configuration is read from environment variables (documented in `.env.example`);
+export the file before running the center or agent — see
+[`docs/development.md`](docs/development.md). Migration commands also load the
+current directory's `.env` (existing environment values take precedence).
+Service endpoints are never hard-coded to Docker or a specific machine.
 Read [the migration runbook](migrations/README.md) and verify the non-live
 database before any migration or database test. `make test-db` verifies the
 database name and ownership marker, resets its application tables and migration
@@ -139,16 +145,33 @@ it into a local, git-ignored directory if it is not already installed:
 
 ```bash
 mkdir -p .tmp/bin
-curl -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh \
-  | sh -s -- -b .tmp/bin v2.15.0
+curl -fL https://github.com/golangci/golangci-lint/releases/download/v2.15.0/golangci-lint-2.15.0-linux-amd64.tar.gz -o .tmp/golangci-lint-2.15.0-linux-amd64.tar.gz
+curl -fL https://github.com/golangci/golangci-lint/releases/download/v2.15.0/golangci-lint-2.15.0-checksums.txt -o .tmp/golangci-lint-2.15.0-checksums.txt
+(cd .tmp && sha256sum --ignore-missing -c golangci-lint-2.15.0-checksums.txt)
+tar -xzf .tmp/golangci-lint-2.15.0-linux-amd64.tar.gz -C .tmp/bin --strip-components=1 golangci-lint-2.15.0-linux-amd64/golangci-lint
 PATH="$PWD/.tmp/bin:$PATH" make ci
 ```
+
+For another OS/architecture, see [development.md](docs/development.md#make-ci-prerequisites).
 
 `.tmp/` is git-ignored, so the local binary is never committed. The workflow
 `.github/workflows/ci.yml` runs vet, test and `golangci-lint` on every push and
 pull request using the same pinned version.
 
-See [`docs/ui-decisions.md`](docs/ui-decisions.md) for the reasoning behind the UI choices and the open questions.
+## Documentation
+
+- [`docs/architecture.md`](docs/architecture.md) — how the agent, command
+  center, database, geolocation and UI fit together, with a component diagram.
+- [`docs/development.md`](docs/development.md) — setup, `.env`, database
+  provisioning, running the center and agent locally, and running tests.
+- [`docs/glossary.md`](docs/glossary.md) — definitions of node, result,
+  expected speed, IP history, rule and event.
+- [`docs/api.md`](docs/api.md) and [`docs/openapi.yaml`](docs/openapi.yaml) —
+  the API contract for the agent and UI.
+- [`docs/ui-decisions.md`](docs/ui-decisions.md) — the reasoning behind the UI
+  choices and the open questions.
+- [`docs/definition-of-done.md`](docs/definition-of-done.md) — what "done"
+  means for a ticket in this project.
 
 ### Geolocation lookup
 
