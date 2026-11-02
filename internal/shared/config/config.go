@@ -1,7 +1,7 @@
 // Package config loads the application configuration from environment
 // variables. Every variable has a documented default in .env.example, so a
-// node or the center can start with sensible values and no secret is embedded
-// in the binary or committed to the repository.
+// command center can start with sensible values and no secret is embedded in
+// the binary or committed to the repository.
 package config
 
 import (
@@ -10,8 +10,6 @@ import (
 	"net/url"
 	"os"
 	"strconv"
-	"strings"
-	"time"
 )
 
 // validSSLModes lists the PostgreSQL sslmode values accepted by
@@ -23,21 +21,6 @@ var validSSLModes = map[string]bool{
 	"require":     true,
 	"verify-ca":   true,
 	"verify-full": true,
-}
-
-// AgentConfig is everything a single node needs to run. A node knows only its
-// own configuration and never what it is attached to.
-type AgentConfig struct {
-	// Name is the human-readable node name shown in the command center.
-	Name string
-	// ExpectedDownloadMbps and ExpectedUploadMbps are the speeds the node is
-	// compared against, in megabits per second.
-	ExpectedDownloadMbps int
-	ExpectedUploadMbps   int
-	// Interval is how often the node runs a speed test.
-	Interval time.Duration
-	// CenterURL is the command-center URL the node reports its results to.
-	CenterURL string
 }
 
 // CenterConfig is everything the command center needs to run.
@@ -71,50 +54,6 @@ func (d DatabaseConfig) DSN() string {
 		d.Name,
 		d.SSLMode,
 	)
-}
-
-// LoadAgent reads and validates the node configuration from the environment.
-func LoadAgent() (AgentConfig, error) {
-	download, err := getInt("SPEEDTEST_NODE_EXPECTED_DOWNLOAD_MBPS", 0)
-	if err != nil {
-		return AgentConfig{}, err
-	}
-	upload, err := getInt("SPEEDTEST_NODE_EXPECTED_UPLOAD_MBPS", 0)
-	if err != nil {
-		return AgentConfig{}, err
-	}
-	interval, err := getDuration("SPEEDTEST_NODE_INTERVAL", 30*time.Minute)
-	if err != nil {
-		return AgentConfig{}, err
-	}
-
-	cfg := AgentConfig{
-		Name:                 strings.TrimSpace(getString("SPEEDTEST_NODE_NAME", "node")),
-		ExpectedDownloadMbps: download,
-		ExpectedUploadMbps:   upload,
-		Interval:             interval,
-		CenterURL:            getString("SPEEDTEST_CENTER_URL", "http://127.0.0.1:8080"),
-	}
-	if err := cfg.validate(); err != nil {
-		return AgentConfig{}, err
-	}
-	return cfg, nil
-}
-
-func (c AgentConfig) validate() error {
-	if c.Name == "" {
-		return fmt.Errorf("SPEEDTEST_NODE_NAME must not be blank")
-	}
-	if c.ExpectedDownloadMbps < 0 {
-		return fmt.Errorf("SPEEDTEST_NODE_EXPECTED_DOWNLOAD_MBPS must be >= 0, got %d", c.ExpectedDownloadMbps)
-	}
-	if c.ExpectedUploadMbps < 0 {
-		return fmt.Errorf("SPEEDTEST_NODE_EXPECTED_UPLOAD_MBPS must be >= 0, got %d", c.ExpectedUploadMbps)
-	}
-	if c.Interval <= 0 {
-		return fmt.Errorf("SPEEDTEST_NODE_INTERVAL must be greater than 0, got %s", c.Interval)
-	}
-	return validateAbsoluteHTTPURL("SPEEDTEST_CENTER_URL", c.CenterURL)
 }
 
 // LoadCenter reads and validates the command-center configuration from the
@@ -155,18 +94,6 @@ func (c CenterConfig) validate() error {
 	return nil
 }
 
-// validateAbsoluteHTTPURL checks that raw is an absolute http or https URL.
-func validateAbsoluteHTTPURL(key, raw string) error {
-	u, err := url.Parse(raw)
-	if err != nil {
-		return fmt.Errorf("%s must be an absolute http or https URL, got %q: %w", key, raw, err)
-	}
-	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		return fmt.Errorf("%s must be an absolute http or https URL, got %q", key, raw)
-	}
-	return nil
-}
-
 // validateHostPort checks that raw is a host:port address with a numeric port.
 // The host may be empty (for example ":8080").
 func validateHostPort(key, raw string) error {
@@ -198,16 +125,4 @@ func getInt(key string, def int) (int, error) {
 		return 0, fmt.Errorf("%s must be an integer, got %q: %w", key, v, err)
 	}
 	return n, nil
-}
-
-func getDuration(key string, def time.Duration) (time.Duration, error) {
-	v, ok := os.LookupEnv(key)
-	if !ok || v == "" {
-		return def, nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return 0, fmt.Errorf("%s must be a duration, got %q: %w", key, v, err)
-	}
-	return d, nil
 }

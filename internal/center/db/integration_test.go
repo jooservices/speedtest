@@ -1,6 +1,6 @@
 //go:build integration
 
-package db
+package db_test
 
 import (
 	"context"
@@ -13,6 +13,8 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+	"github.com/jooservices/speedtest/internal/center/db"
+	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
 
@@ -34,12 +36,12 @@ func testPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 		t.Fatal("invalid test configuration")
 	}
 	// Fail closed before connecting, then verify the server-side identity/marker.
-	if cfg.Database.Name != "speedtest_wt10" && cfg.Database.Name != "speedtest_test" {
-		t.Fatal("refusing non-test database")
+	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	t.Cleanup(cancel)
-	pool, err := Open(ctx, cfg.Database)
+	pool, err := db.Open(ctx, cfg.Database)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,25 +64,13 @@ func exec(t *testing.T, ctx context.Context, p *pgxpool.Pool, sql string) {
 
 func TestMigrations(t *testing.T) {
 	pool, ctx := testPool(t)
-	// Serialize tests with CLI verification in other processes.
-	conn, err := pool.Acquire(ctx)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer conn.Release()
-	if _, err = conn.Exec(ctx, "SELECT pg_advisory_lock(1000010)"); err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _, _ = conn.Exec(context.Background(), "SELECT pg_advisory_unlock(1000010)") }()
-	var count int
-	if err = pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name <> 'goose_db_version'").Scan(&count); err != nil || count != 0 {
-		t.Fatal("migration test requires an empty worktree/test schema")
-	}
-	if err = Migrate(ctx, pool, "up"); err != nil {
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal(err)
 	}
 	defer func() {
-		if e := Migrate(context.Background(), pool, "down"); e != nil {
+		if e := db.Migrate(context.Background(), pool, "down"); e != nil {
 			t.Error(e)
 		}
 	}()
@@ -172,7 +162,7 @@ INSERT INTO alert_state(rule_id,node_id) SELECT '00000000-0000-4000-8000-0000000
 INSERT INTO settings(key,value) VALUES ('display','{"theme":"dark"}');
 INSERT INTO settings(key,secret_ciphertext) VALUES ('integration',decode('aabb','hex'));
 INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000-8000-000000000015',id,'run_now','00000000-0000-4000-8000-000000000002' FROM nodes;`)
-		if e := Migrate(ctx, pool, "down"); e != nil {
+		if e := db.Migrate(ctx, pool, "down"); e != nil {
 			t.Fatal(e)
 		}
 		var n int
@@ -182,7 +172,7 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		var wg sync.WaitGroup
 		errs := make(chan error, 2)
 		for range 2 {
-			wg.Go(func() { errs <- Migrate(ctx, pool, "up") })
+			wg.Go(func() { errs <- db.Migrate(ctx, pool, "up") })
 		}
 		wg.Wait()
 		close(errs)
@@ -191,7 +181,7 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 				t.Fatal(e)
 			}
 		}
-		if e := Migrate(ctx, pool, "up"); e != nil {
+		if e := db.Migrate(ctx, pool, "up"); e != nil {
 			t.Fatal(e)
 		}
 		t.Log("PASS: populated rollback, concurrent reapply and idempotent up")
@@ -199,14 +189,14 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 	t.Run("CancelledMigration", func(t *testing.T) {
 		c, cancel := context.WithCancel(ctx)
 		cancel()
-		if e := Migrate(c, pool, "up"); e == nil {
+		if e := db.Migrate(c, pool, "up"); e == nil {
 			t.Fatal("expected cancellation error")
 		}
 	})
 	t.Run("TransactionalRollbackFailure", func(t *testing.T) {
 		exec(t, ctx, pool, "CREATE VIEW rollback_blocker AS SELECT id FROM users")
 		t.Cleanup(func() { exec(t, context.Background(), pool, "DROP VIEW IF EXISTS rollback_blocker") })
-		if e := Migrate(ctx, pool, "down"); e == nil {
+		if e := db.Migrate(ctx, pool, "down"); e == nil {
 			t.Fatal("expected external dependency to stop rollback")
 		}
 		var n int

@@ -28,7 +28,7 @@ run-center:
 
 ## run-agent starts a node agent from the current .env.
 run-agent:
-	$(GO) run ./cmd/agent
+	$(GO) run ./cmd/agent run
 
 .PHONY: migrate migrate-down test-db
 
@@ -42,4 +42,4 @@ migrate-down:
 
 ## test-db exercises migrations and constraints on a verified non-live database.
 test-db:
-	$(GO) test -tags integration ./internal/center/db/... -count=1 -v
+	$(GO) test -p 1 -tags integration ./internal/center/db/... ./internal/center/geo -count=1 -v

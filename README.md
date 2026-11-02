@@ -4,7 +4,7 @@ Monitor the real speed of every internet connection you own, around the clock.
 
 Small agents on your machines run a speed test on a schedule and report to one dashboard. The dashboard stores every result, remembers which public IP each machine used and where it is, and shows averages, trends and the best and worst hours.
 
-**Status: interface preview.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The Go backend is a scaffold: it builds, tests and loads its configuration, and includes embedded PostgreSQL migrations and a connection pool; API/agent business logic is not implemented yet.
+**Status: interface preview.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The Go backend is an early scaffold: the agent binary can enroll against a command center, run as a background service, print its version and uninstall, but it does not run speed tests, report results or follow a schedule yet. The command center has embedded PostgreSQL migrations, a connection pool and an offline/online geolocation library, but no HTTP API yet.
 
 ## View the preview
 
@@ -55,9 +55,11 @@ and UI.
 ```
 cmd/agent/              node agent entry point
 cmd/center/             command center entry point
-internal/agent/         node agent implementation (placeholder)
+internal/agent/         node agent: configuration and enrollment (skeleton)
+internal/agent/config/  loads the node's own config.yaml
+internal/agent/enroll/  exchanges an enrollment token for a 0600 credential
 internal/center/        command center implementation (placeholder)
-internal/shared/config/ configuration loaded from the environment
+internal/shared/config/ command-center configuration loaded from the environment
 migrations/             database migrations
 deploy/                 deployment artifacts
 docs/                   design and process documents
@@ -89,8 +91,42 @@ export the file before running the center or agent — see
 current directory's `.env` (existing environment values take precedence).
 Service endpoints are never hard-coded to Docker or a specific machine.
 Read [the migration runbook](migrations/README.md) and verify the non-live
-database before any migration or database test. `make test-db` requires an
-empty application schema and verifies its database name and ownership marker.
+database before any migration or database test. `make test-db` verifies the
+database name and ownership marker, resets its application tables and migration
+journal, and runs self-contained suites serially.
+Use only a disposable test/worktree database; never run integration suites
+concurrently against the same database.
+
+### Agent commands
+
+The agent is a single binary with four subcommands:
+
+```bash
+agent enroll --center <url> --token <token> --name <name>   # enroll once, store the credential
+agent run                                                   # run as a background service
+agent version                                               # print the version
+agent uninstall                                             # remove config and credential
+```
+
+`agent enroll` accepts the command-center URL with `--center`, exchanges the
+one-time token, then writes the credential to `SPEEDTEST_AGENT_CREDENTIAL`
+(`/etc/speedtest-agent/credential` by default) with mode 0600. It never logs the
+token or credential. `agent run` loads node values from the YAML file at
+`SPEEDTEST_AGENT_CONFIG` (`/etc/speedtest-agent/config.yaml` by default),
+refuses to start if the credential file is group or world-readable, and logs
+structured JSON to stdout for the journal. When the YAML file is missing, these
+defaults apply:
+
+```yaml
+name: node
+expected_download_mbps: 0
+expected_upload_mbps: 0
+interval: 30m
+```
+
+Only the configuration and credential file paths are agent environment
+overrides; node values come from `config.yaml`. Malformed YAML, unknown keys,
+and invalid values fail fast with a configuration error.
 
 ### `make ci` prerequisites
 
@@ -135,3 +171,5 @@ checksum-verified updater, an `ip_addresses` result cache and optional ip-api /
 IPinfo Lite fallbacks. Compose the resolver with the shared PostgreSQL pool
 when the center lifecycle is added. This does not change the demo UI. See
 [configuration, lifecycle and verification](docs/geolocation.md).
+
+See [`docs/engine.md`](docs/engine.md) for the Ookla engine API, environment configuration, units, errors and offline runner tests.

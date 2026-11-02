@@ -141,12 +141,16 @@ go build ./...
 `make test` and CI prepare the fixtures before testing. Unit tests use local
 files and loopback `httptest` servers, with fake credentials. They make no
 licensed MaxMind download, database connection, or browser request. The
-database integration test is separate (`go test -tags integration
-./internal/center/geo`) and requires a migrated `speedtest_wt34` or
-`speedtest_test` database; it verifies the project ownership marker and rolls
-back its fixture transaction. The change touches no UI flow, so browser,
-layout, and theme checks are not applicable. Real provider calls and staging
-lifecycle integration require owner-authorized staging deployment; this library
+database integration test is separate (`go test -p 1 -tags integration
+./internal/center/geo -count=1`) and requires a disposable database named
+`speedtest_test` or matching `^speedtest_wt[a-z0-9]{1,12}$`; it verifies the
+project ownership marker, resets project tables and the goose
+journal, applies its own schema, rolls back fixture transactions and leaves the
+schema empty on cleanup. Run all suites with
+`go test -race -p 1 -tags integration ./... -count=1`. Never run integration
+suites concurrently against the same database. The change touches no UI flow,
+so browser, layout, and theme checks are not applicable. Real provider calls
+and staging lifecycle integration require owner-authorized staging deployment; this library
 does not deploy itself.
 
 References: [MaxMind updates](https://dev.maxmind.com/geoip/updating-databases/),
