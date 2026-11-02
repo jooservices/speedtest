@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jooservices/speedtest/internal/agent/engine"
 )
 
 func writeFile(t *testing.T, dir, name, content string) string {
@@ -26,6 +28,7 @@ func TestLoadDefaultsNoFile(t *testing.T) {
 	}
 
 	want := Config{
+		Engine:               "ookla",
 		Name:                 "node",
 		ExpectedDownloadMbps: 0,
 		ExpectedUploadMbps:   0,
@@ -51,6 +54,8 @@ func TestLoadEmptyFile(t *testing.T) {
 func TestLoadFromFile(t *testing.T) {
 	path := writeFile(t, t.TempDir(), "config.yaml", ""+
 		"name: viettel-fast-50\n"+
+		"engine: librespeed\n"+
+		"parallel_connections: 8\n"+
 		"expected_download_mbps: 300\n"+
 		"expected_upload_mbps: 150\n"+
 		"interval: 45m\n")
@@ -61,10 +66,12 @@ func TestLoadFromFile(t *testing.T) {
 	}
 
 	want := Config{
+		Engine:               "librespeed",
 		Name:                 "viettel-fast-50",
 		ExpectedDownloadMbps: 300,
 		ExpectedUploadMbps:   150,
 		Interval:             45 * time.Minute,
+		ParallelConnections:  8,
 	}
 	if cfg != want {
 		t.Fatalf("Load() = %+v, want %+v", cfg, want)
@@ -81,7 +88,7 @@ func TestLoadPartialFileKeepsDefaults(t *testing.T) {
 	if cfg.Name != "only-name" {
 		t.Fatalf("Name = %q, want only-name", cfg.Name)
 	}
-	if cfg.ExpectedDownloadMbps != 0 || cfg.ExpectedUploadMbps != 0 || cfg.Interval != 30*time.Minute {
+	if cfg.Engine != "ookla" || cfg.ExpectedDownloadMbps != 0 || cfg.ExpectedUploadMbps != 0 || cfg.Interval != 30*time.Minute {
 		t.Fatalf("Load() = %+v, want file name with default speeds/interval", cfg)
 	}
 }
@@ -101,6 +108,11 @@ func TestLoadErrors(t *testing.T) {
 			name:    "unknown key",
 			file:    "nam: typo\n",
 			wantErr: "parse config",
+		},
+		{
+			name:    "unknown engine",
+			file:    "engine: speedtest-cli\n",
+			wantErr: "engine must be ookla or librespeed",
 		},
 		{
 			name:    "download not an integer",
@@ -165,12 +177,13 @@ func TestValidate(t *testing.T) {
 		cfg     Config
 		wantErr string
 	}{
-		{name: "ok", cfg: Config{Name: "n", Interval: time.Minute}},
-		{name: "blank name", cfg: Config{Interval: time.Minute}, wantErr: "name must not be blank"},
-		{name: "negative download", cfg: Config{Name: "n", Interval: time.Minute, ExpectedDownloadMbps: -1}, wantErr: "expected_download_mbps must be >= 0"},
-		{name: "negative upload", cfg: Config{Name: "n", Interval: time.Minute, ExpectedUploadMbps: -1}, wantErr: "expected_upload_mbps must be >= 0"},
-		{name: "zero interval", cfg: Config{Name: "n"}, wantErr: "interval must be greater than 0"},
-		{name: "negative interval", cfg: Config{Name: "n", Interval: -time.Minute}, wantErr: "interval must be greater than 0"},
+		{name: "ok", cfg: Config{Name: "n", Engine: "ookla", Interval: time.Minute}},
+		{name: "blank name", cfg: Config{Engine: "ookla", Interval: time.Minute}, wantErr: "name must not be blank"},
+		{name: "negative download", cfg: Config{Name: "n", Engine: "ookla", Interval: time.Minute, ExpectedDownloadMbps: -1}, wantErr: "expected_download_mbps must be >= 0"},
+		{name: "negative upload", cfg: Config{Name: "n", Engine: "ookla", Interval: time.Minute, ExpectedUploadMbps: -1}, wantErr: "expected_upload_mbps must be >= 0"},
+		{name: "zero interval", cfg: Config{Name: "n", Engine: "ookla"}, wantErr: "interval must be greater than 0"},
+		{name: "negative interval", cfg: Config{Name: "n", Engine: "ookla", Interval: -time.Minute}, wantErr: "interval must be greater than 0"},
+		{name: "negative parallel connections", cfg: Config{Name: "n", Engine: "ookla", Interval: time.Minute, ParallelConnections: -1}, wantErr: "parallel_connections must be greater than 0 when set"},
 	}
 
 	for _, tt := range tests {
@@ -186,5 +199,34 @@ func TestValidate(t *testing.T) {
 				t.Fatalf("validate() error = %v, want it to contain %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+func TestNewEngineUsesNodeSelection(t *testing.T) {
+	for _, key := range []string{
+		"SPEEDTEST_OOKLA_BINARY", "SPEEDTEST_OOKLA_ARGS", "SPEEDTEST_OOKLA_TIMEOUT",
+		"SPEEDTEST_LIBRESPEED_BINARY", "SPEEDTEST_LIBRESPEED_SERVER_JSON",
+		"SPEEDTEST_LIBRESPEED_CONCURRENT", "SPEEDTEST_LIBRESPEED_TIMEOUT",
+	} {
+		t.Setenv(key, "")
+	}
+	t.Setenv("SPEEDTEST_LIBRESPEED_CONCURRENT", "3")
+
+	ookla, err := (Config{Name: "n", Engine: "ookla", Interval: time.Minute}).NewEngine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := ookla.(*engine.Ookla); !ok {
+		t.Fatalf("NewEngine() = %T, want *engine.Ookla", ookla)
+	}
+	librespeed, err := (Config{Name: "n", Engine: "librespeed", Interval: time.Minute, ParallelConnections: 6}).NewEngine()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := librespeed.(*engine.LibreSpeed); !ok {
+		t.Fatalf("NewEngine() = %T, want *engine.LibreSpeed", librespeed)
+	}
+	if _, err := (Config{Name: "n", Engine: "unknown", Interval: time.Minute}).NewEngine(); err == nil {
+		t.Fatal("NewEngine accepted an unsupported engine")
 	}
 }

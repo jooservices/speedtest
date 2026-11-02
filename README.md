@@ -121,6 +121,7 @@ structured JSON to stdout for the journal. When the YAML file is missing, these
 defaults apply:
 
 ```yaml
+engine: ookla
 name: node
 expected_download_mbps: 0
 expected_upload_mbps: 0
@@ -136,6 +137,12 @@ The command center listens on `SPEEDTEST_HTTP_ADDR` (default
 `SPEEDTEST_UI_DIR=./ui` or run `go run ./cmd/center -ui-dir ./ui` to serve
 the files from disk instead. Until a database pinger is wired into the server,
 `/readyz` reports that the database is not configured.
+
+Set `engine: librespeed` in a node's config to use `librespeed-cli`. Its
+optional `parallel_connections` key overrides the default configured in `.env`;
+the LibreSpeed binary, server-list URL and timeout are also configured there.
+See [`docs/engine.md`](docs/engine.md) for the engine settings and result
+mapping.
 
 ### `make ci` prerequisites
 
