@@ -5,11 +5,14 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/url"
 	"os"
 	"strconv"
+	"strings"
+	"time"
 )
 
 // validSSLModes lists the PostgreSQL sslmode values accepted by
@@ -27,8 +30,19 @@ var validSSLModes = map[string]bool{
 type CenterConfig struct {
 	// HTTPAddr is the listen address for the web UI and API.
 	HTTPAddr string
+	// AppEnv controls environment-gated operations such as default seeding.
+	AppEnv string
 	// UIDir optionally selects a development directory instead of embedded assets.
 	UIDir string
+	// SessionTTL is the lifetime of an owner session.
+	SessionTTL time.Duration
+	// LoginMaxAttempts is the maximum login requests per IP and account per window.
+	LoginMaxAttempts int
+	// LoginWindow is the sliding login rate-limit window.
+	LoginWindow time.Duration
+	// TrustedProxyCIDRs permits client IP recovery from X-Forwarded-For only
+	// when the direct peer is inside one of these configured networks.
+	TrustedProxyCIDRs string
 	// Database holds the PostgreSQL connection settings.
 	Database DatabaseConfig
 }
@@ -65,14 +79,31 @@ func LoadCenter() (CenterConfig, error) {
 	if err != nil {
 		return CenterConfig{}, err
 	}
+	sessionTTL, err := getDuration("SPEEDTEST_SESSION_TTL", 12*time.Hour)
+	if err != nil {
+		return CenterConfig{}, err
+	}
+	loginMaxAttempts, err := getInt("SPEEDTEST_LOGIN_MAX_ATTEMPTS", 5)
+	if err != nil {
+		return CenterConfig{}, err
+	}
+	loginWindow, err := getDuration("SPEEDTEST_LOGIN_WINDOW", 15*time.Minute)
+	if err != nil {
+		return CenterConfig{}, err
+	}
 
 	cfg := CenterConfig{
-		HTTPAddr: getString("SPEEDTEST_HTTP_ADDR", "127.0.0.1:8080"),
-		UIDir:    getString("SPEEDTEST_UI_DIR", ""),
+		HTTPAddr:          getString("SPEEDTEST_HTTP_ADDR", "127.0.0.1:8080"),
+		AppEnv:            strings.ToLower(strings.TrimSpace(getString("APP_ENV", "local"))),
+		UIDir:             getString("SPEEDTEST_UI_DIR", ""),
+		SessionTTL:        sessionTTL,
+		LoginMaxAttempts:  loginMaxAttempts,
+		LoginWindow:       loginWindow,
+		TrustedProxyCIDRs: getString("SPEEDTEST_TRUSTED_PROXY_CIDRS", ""),
 		Database: DatabaseConfig{
 			Host:     getString("SPEEDTEST_DB_HOST", "127.0.0.1"),
 			Port:     port,
-			Name:     getString("SPEEDTEST_DB_NAME", "speedtest"),
+			Name:     getString("SPEEDTEST_DB_NAME", "speedtest_test"),
 			User:     getString("SPEEDTEST_DB_USER", "speedtest"),
 			Password: getString("SPEEDTEST_DB_PASSWORD", ""),
 			SSLMode:  getString("SPEEDTEST_DB_SSLMODE", "disable"),
@@ -93,6 +124,34 @@ func (c CenterConfig) validate() error {
 	}
 	if !validSSLModes[c.Database.SSLMode] {
 		return fmt.Errorf("SPEEDTEST_DB_SSLMODE must be one of disable, allow, prefer, require, verify-ca, verify-full, got %q", c.Database.SSLMode)
+	}
+	if c.AppEnv != "local" && c.AppEnv != "test" && c.AppEnv != "staging" && c.AppEnv != "production" {
+		return fmt.Errorf("APP_ENV must be local, test, staging or production, got %q", c.AppEnv)
+	}
+	if c.SessionTTL <= 0 || c.SessionTTL > 30*24*time.Hour {
+		return fmt.Errorf("SPEEDTEST_SESSION_TTL must be positive and at most 720h, got %s", c.SessionTTL)
+	}
+	if c.LoginMaxAttempts < 1 || c.LoginMaxAttempts > 100 {
+		return fmt.Errorf("SPEEDTEST_LOGIN_MAX_ATTEMPTS must be between 1 and 100, got %d", c.LoginMaxAttempts)
+	}
+	if c.LoginWindow <= 0 || c.LoginWindow > 24*time.Hour {
+		return fmt.Errorf("SPEEDTEST_LOGIN_WINDOW must be positive and at most 24h, got %s", c.LoginWindow)
+	}
+	if err := validateCIDRList(c.TrustedProxyCIDRs); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateCIDRList(raw string) error {
+	for _, item := range strings.Split(raw, ",") {
+		cidr := strings.TrimSpace(item)
+		if cidr == "" {
+			continue
+		}
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			return errors.New("SPEEDTEST_TRUSTED_PROXY_CIDRS must be a comma-separated list of CIDRs")
+		}
 	}
 	return nil
 }
@@ -128,4 +187,16 @@ func getInt(key string, def int) (int, error) {
 		return 0, fmt.Errorf("%s must be an integer, got %q: %w", key, v, err)
 	}
 	return n, nil
+}
+
+func getDuration(key string, def time.Duration) (time.Duration, error) {
+	v, ok := os.LookupEnv(key)
+	if !ok || v == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("%s must be a Go duration, got %q: %w", key, v, err)
+	}
+	return d, nil
 }

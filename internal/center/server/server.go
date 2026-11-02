@@ -15,6 +15,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"time"
+
+	"github.com/jooservices/speedtest/internal/center/auth"
 )
 
 const (
@@ -30,10 +32,13 @@ type Pinger interface {
 
 // Options configures the HTTP handlers.
 type Options struct {
-	Pinger           Pinger
-	Logger           *slog.Logger
-	UI               fs.FS
-	ReadinessTimeout time.Duration
+	Pinger            Pinger
+	Auth              *auth.Service
+	RequireHTTPS      bool
+	TrustedProxyCIDRs string
+	Logger            *slog.Logger
+	UI                fs.FS
+	ReadinessTimeout  time.Duration
 }
 
 // NewHandler builds the health, readiness, and static UI routes.
@@ -58,8 +63,11 @@ func NewHandler(options Options) http.Handler {
 	uiMux.Handle("GET /", uiHandler)
 
 	readinessHandler := readyz(options.Pinger, readinessTimeout)
+	authHandler := &serverAuth{service: options.Auth, requireHTTPS: options.RequireHTTPS, trustedProxyCIDRs: options.TrustedProxyCIDRs}
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.URL.Path == "/api/auth" || strings.HasPrefix(r.URL.Path, "/api/auth/"):
+			authHandler.serve(w, r)
 		case r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/"):
 			writeNotFoundProblem(w, r)
 		case r.URL.Path == "/healthz":

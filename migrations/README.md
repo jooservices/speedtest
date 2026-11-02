@@ -139,6 +139,8 @@ Never point this destructive rehearsal at data you need to keep.
 `go.mod`/`go.sum`. Their transitive dependencies do not add database servers or
 runtime services.
 
-No HTTP endpoint, agent runtime or UI flow is implemented by this migration
-ticket; browser E2E, real-agent staging soak and screenshots belong to their
-implementation/QA tickets. No deployment is performed here.
+This migration ticket implemented no HTTP endpoint, agent runtime or UI flow.
+Owner authentication is implemented separately in `internal/center/auth` and
+`internal/center/server`; remaining browser E2E, real-agent staging soak and
+screenshots belong to their implementation/QA tickets. No deployment is
+performed by database migrations.
