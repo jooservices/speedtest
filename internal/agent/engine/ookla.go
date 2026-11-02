@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"os"
 	"os/exec"
 	"strconv"
@@ -92,7 +93,7 @@ func (b *capture) Write(p []byte) (int, error) {
 }
 
 func (e *Ookla) Run(ctx context.Context, opts Options) (Result, error) {
-	if opts.ServerID < 0 || opts.Timeout < 0 {
+	if opts.ServerID < 0 || opts.Timeout < 0 || !validNetworkOptions(opts) {
 		return failed(Result{}, InvalidOptions, nil)
 	}
 	timeout := e.config.Timeout
@@ -104,6 +105,12 @@ func (e *Ookla) Run(ctx context.Context, opts Options) (Result, error) {
 	args := append([]string{}, e.config.Args...)
 	if opts.ServerID > 0 {
 		args = append(args, "--server-id", strconv.FormatInt(opts.ServerID, 10))
+	}
+	if opts.InterfaceName != "" {
+		args = append(args, "--interface", opts.InterfaceName)
+	}
+	if opts.SourceIP != "" {
+		args = append(args, "--ip", opts.SourceIP)
 	}
 	cmd := exec.CommandContext(ctx, e.config.Binary, args...)
 	// Inherited pipes from a wrapper's descendants must not delay cancellation indefinitely.
@@ -134,6 +141,22 @@ func (e *Ookla) Run(ctx context.Context, opts Options) (Result, error) {
 		return failed(Result{}, InvalidResult, nil)
 	}
 	return ParseOokla(stdout.data)
+}
+
+func validNetworkOptions(opts Options) bool {
+	if opts.InterfaceName != "" && (strings.TrimSpace(opts.InterfaceName) != opts.InterfaceName || opts.SourceIP != "") {
+		return false
+	}
+	if opts.InterfaceName != "" && len(opts.InterfaceName) > 15 {
+		return false
+	}
+	if opts.SourceIP != "" {
+		ip := net.ParseIP(opts.SourceIP)
+		if ip == nil || strings.TrimSpace(opts.SourceIP) != opts.SourceIP {
+			return false
+		}
+	}
+	return true
 }
 
 func classify(s string) ErrorClass {

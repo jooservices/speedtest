@@ -13,10 +13,14 @@ type Engine interface {
 }
 
 // Options applies to one measurement. Zero ServerID lets the engine select a server.
-// Zero Timeout uses the configured timeout; a caller's earlier deadline wins.
+// InterfaceName and SourceIP are mutually exclusive and bind the Ookla CLI to
+// one local path. Zero Timeout uses the configured timeout; a caller's earlier
+// deadline wins.
 type Options struct {
-	ServerID int64
-	Timeout  time.Duration
+	ServerID      int64
+	Timeout       time.Duration
+	InterfaceName string
+	SourceIP      string
 }
 
 // LoadedLatency preserves engine-reported milliseconds; nil means unavailable.

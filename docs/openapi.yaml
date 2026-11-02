@@ -948,7 +948,8 @@ paths:
       tags:
         - Agent
       summary: Read caller public IP as observed by center
-      description: Uses socket peer address or headers from explicitly configured trusted proxies only. No
+      description: Agent clients call this after a successful test with the same selected interface/source
+        IP. Uses socket peer address or headers from explicitly configured trusted proxies only. No
         hostname resolution; no caller-controlled forwarded header trust.
       security:
         - NodeBearer: []

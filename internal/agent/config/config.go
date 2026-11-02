@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/agent/netpath"
 	"gopkg.in/yaml.v3"
 )
 
@@ -29,6 +30,12 @@ type Config struct {
 	ExpectedUploadMbps   int
 	// Interval is how often the node runs a speed test.
 	Interval time.Duration
+	// NetworkInterface selects a local network interface for tests. It is
+	// mutually exclusive with SourceIP; empty values use the default route.
+	NetworkInterface string
+	// SourceIP selects a local source address for tests. It is mutually
+	// exclusive with NetworkInterface; empty values use the default route.
+	SourceIP string
 }
 
 // fileConfig is the YAML shape. Pointer fields tell a missing key apart from
@@ -38,6 +45,8 @@ type fileConfig struct {
 	ExpectedDownloadMbps *int    `yaml:"expected_download_mbps"`
 	ExpectedUploadMbps   *int    `yaml:"expected_upload_mbps"`
 	Interval             *string `yaml:"interval"`
+	NetworkInterface     *string `yaml:"network_interface"`
+	SourceIP             *string `yaml:"source_ip"`
 }
 
 // Load reads the configuration file at path. A missing file is allowed and
@@ -94,6 +103,12 @@ func applyFile(path string, cfg *Config) error {
 		}
 		cfg.Interval = d
 	}
+	if f.NetworkInterface != nil {
+		cfg.NetworkInterface = strings.TrimSpace(*f.NetworkInterface)
+	}
+	if f.SourceIP != nil {
+		cfg.SourceIP = strings.TrimSpace(*f.SourceIP)
+	}
 	return nil
 }
 
@@ -109,6 +124,9 @@ func (c Config) validate() error {
 	}
 	if c.Interval <= 0 {
 		return fmt.Errorf("interval must be greater than 0, got %s", c.Interval)
+	}
+	if err := (netpath.Binding{Interface: c.NetworkInterface, SourceIP: c.SourceIP}).Validate(); err != nil {
+		return fmt.Errorf("network binding: %w", err)
 	}
 	return nil
 }

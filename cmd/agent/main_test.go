@@ -252,8 +252,28 @@ func TestRunAgentSuccess(t *testing.T) {
 	if !containsMsg(msgs, "agent started") {
 		t.Fatalf("logs = %q, want agent started", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), `"network_path":"default route"`) {
+		t.Fatalf("logs = %q, want default route status", stdout.String())
+	}
 	if !containsMsg(msgs, "agent stopped") {
 		t.Fatalf("logs = %q, want agent stopped", stdout.String())
+	}
+}
+
+func TestRunAgentMissingInterfaceFailsClearly(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, filepath.Join(dir, "config.yaml"), "name: n\nnetwork_interface: missing0\n")
+	credPath := filepath.Join(dir, "credential")
+	writeCredential(t, credPath, "secret", 0o600)
+	t.Setenv("SPEEDTEST_AGENT_CONFIG", filepath.Join(dir, "config.yaml"))
+	t.Setenv("SPEEDTEST_AGENT_CREDENTIAL", credPath)
+
+	var stdout, stderr bytes.Buffer
+	if code := run(context.Background(), []string{"run"}, &stdout, &stderr); code != 1 {
+		t.Fatalf("run() = %d, want 1", code)
+	}
+	if !strings.Contains(stdout.String(), "invalid network path") || !strings.Contains(stdout.String(), "missing0") || !strings.Contains(stdout.String(), "does not exist") {
+		t.Fatalf("stdout = %q, want clear missing-interface error", stdout.String())
 	}
 }
 

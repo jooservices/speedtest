@@ -111,6 +111,10 @@ allow null measurements; ok/degraded require down/up/ping/serverId and `error: n
 loss/jitter/loaded latency even on success; preserve those as null. Optional
 loadedDown/loadedUp retain low/iqm/high; engine details retain ISP, result ID/URL,
 external IP and mismatch warnings, with remaining original fields in raw.
+After each successful measurement, the agent calls `GET /api/agent/ip` over the
+same selected interface/source IP. The center-observed `data.ip` is the result's
+public IP; preserve the engine-reported address as `engineIp` and add a `warnings`
+entry when the two addresses differ.
 
 Agent config advertises the latest release URL/version/sha256 and defaults
 autoUpdate to false. The owner enables it per node; verify checksums, replace
