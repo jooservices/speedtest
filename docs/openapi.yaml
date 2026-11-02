@@ -3004,6 +3004,11 @@ components:
           - desc
         default: desc
   headers:
+    Allow:
+      description: Methods supported by the requested resource.
+      required: true
+      schema:
+        type: string
     ETag:
       description: Strong version of this representation.
       schema:
@@ -3073,6 +3078,20 @@ components:
             title: Resource not found or not owned
             status: 404
             detail: Resource not found or not owned.
+    MethodNotAllowed:
+      description: The request method is not supported by this resource
+      headers:
+        Allow:
+          $ref: "#/components/headers/Allow"
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: /problems/methodnotallowed
+            title: Method not allowed
+            status: 405
+            detail: The request method is not allowed for this resource.
     Conflict:
       description: State, unique name or idempotency conflict
       content:

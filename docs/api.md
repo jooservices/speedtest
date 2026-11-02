@@ -1,8 +1,11 @@
 # Speedtest API contract
 
 [openapi.yaml](openapi.yaml) is the OpenAPI 3.1 source of truth for JOOST-9.
-It defines future endpoints; the static `ui/` preview still runs on local demo
-state. No server, database, UI flow or runtime configuration is changed here.
+It defines the product API endpoints; the static `ui/` preview still runs on
+local demo state. The command center also exposes the operational `/healthz`
+and `/readyz` checks outside that product API contract. Readiness currently
+reports the database as not configured because the server has not injected a
+database pinger.
 See the [OpenAPI specification](https://spec.openapis.org/oas/v3.1.0) and
 [Redocly lint command](https://redocly.com/docs/cli/commands/lint).
 
@@ -59,6 +62,9 @@ events. Confirm/pin the host key before authentication; abort on change.
   `errors: null`, optional `trace_id`, defined once by `Success`. Collections put
   arrays directly in `data`. Errors are unwrapped RFC 9457 `Problem` objects with
   `application/problem+json`; use `type`/status, never parse human text.
+- Every response includes `X-Request-ID`. A supplied value is reused only when it
+  has 8–64 ASCII letters, digits, hyphens or underscores; otherwise the center
+  generates one. Problem responses include the same value as `trace_id`.
 - `Timestamp` is RFC 3339 UTC with `Z`, including result `ts`, creation times and
   IP `first`/`last`. The UI adapter converts to/from demo epoch milliseconds.
   Time ranges are `[from,to)`, avoiding duplicate boundary samples. Explicit
@@ -95,8 +101,11 @@ events. Confirm/pin the host key before authentication; abort on change.
   `id: <id>`, `event: progress`, `data: <InstallEvent JSON>`, blank line.
 - Errors: 400 malformed input; 401 auth; 403 authorization/CSRF; 404 hidden/missing
   resource; 409 state/idempotency conflict; 412/428 conditional update; 413 batch
-  too large; 422 validation; 429 rate limit with Retry-After; 500 safe server error.
-  Never include tokens, SQL, internal addresses or stack traces in errors/logs.
+  too large; 405 wrong method with an `Allow` header; 422 validation; 429 rate
+  limit with Retry-After; 500 safe server error. Unknown `/api/` paths use the
+  same 404 Problem shape. Non-API paths retain static UI file-server behavior.
+  Never include tokens, SQL details or stack traces in errors. Access logs record
+  the request path without its query string and the remote address.
 
 Agent result batches are at most 100 items/8 MiB, with engine `raw` at most 64 KiB
 per item. Validate individual items independently: a valid container returns 207

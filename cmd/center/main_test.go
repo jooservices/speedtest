@@ -2,65 +2,328 @@ package main
 
 import (
 	"bytes"
-	"errors"
+	"context"
+	"io"
+	"io/fs"
+	"log/slog"
+	"net"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/jooservices/speedtest/internal/shared/config"
+	"time"
 )
 
-func TestRunCenterSuccess(t *testing.T) {
-	load := func() (config.CenterConfig, error) {
-		return config.CenterConfig{
-			HTTPAddr: ":8080",
-			Database: config.DatabaseConfig{
-				Host:     "127.0.0.1",
-				Port:     5432,
-				Name:     "speedtest",
-				User:     "speedtest",
-				Password: "s3cret",
-				SSLMode:  "disable",
-			},
-		}, nil
+func TestUIFilesystemEmbedded(t *testing.T) {
+	ui, source, err := uiFilesystem("")
+	if err != nil {
+		t.Fatalf("uiFilesystem() error = %v, want nil", err)
+	}
+	if source != "embedded" {
+		t.Fatalf("uiFilesystem() source = %q, want embedded", source)
 	}
 
-	var stdout, stderr bytes.Buffer
-	code := run(load, &stdout, &stderr)
+	assertUIFile(t, ui, "index.html")
+	assertUIFile(t, ui, "assets/css/app.css")
+}
 
-	if code != 0 {
-		t.Fatalf("run() = %d, want 0", code)
+func TestUIFilesystemFromDisk(t *testing.T) {
+	root := t.TempDir()
+	cssDirectory := filepath.Join(root, "assets", "css")
+	if err := os.MkdirAll(cssDirectory, 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
 	}
-	if stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", stderr.String())
+	files := map[string]string{
+		"index.html":         "<!doctype html><title>development UI</title>",
+		"assets/css/app.css": "body { color: black; }",
 	}
-	want := "center: configuration loaded\n" +
-		"center: would listen on :8080 (HTTP server not implemented yet)\n" +
-		"center: database host 127.0.0.1 port 5432\n" +
-		"center: database name speedtest user speedtest\n" +
-		"center: database sslmode disable\n"
-	if stdout.String() != want {
-		t.Fatalf("stdout = %q, want %q", stdout.String(), want)
+	for name, contents := range files {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", name, err)
+		}
 	}
-	if strings.Contains(stdout.String(), "s3cret") {
-		t.Fatalf("stdout = %q, must never print the password", stdout.String())
+
+	ui, source, err := uiFilesystem(root)
+	if err != nil {
+		t.Fatalf("uiFilesystem() error = %v, want nil", err)
+	}
+	if source != "disk" {
+		t.Fatalf("uiFilesystem() source = %q, want disk", source)
+	}
+	for name, want := range files {
+		contents, err := fs.ReadFile(ui, name)
+		if err != nil {
+			t.Fatalf("ReadFile(%q) error = %v", name, err)
+		}
+		if string(contents) != want {
+			t.Errorf("ReadFile(%q) = %q, want %q", name, contents, want)
+		}
 	}
 }
 
-func TestRunCenterInvalidConfig(t *testing.T) {
-	load := func() (config.CenterConfig, error) {
-		return config.CenterConfig{}, errors.New("SPEEDTEST_DB_PORT must be between 1 and 65535, got 0")
+func TestUIFilesystemInvalidPath(t *testing.T) {
+	root := t.TempDir()
+	file := filepath.Join(root, "not-a-directory")
+	if err := os.WriteFile(file, []byte("file"), 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
 	}
 
+	tests := []struct {
+		name string
+		path string
+	}{
+		{name: "missing", path: filepath.Join(root, "missing")},
+		{name: "file", path: file},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, _, err := uiFilesystem(tt.path); err == nil {
+				t.Fatal("uiFilesystem() error = nil, want an error")
+			}
+		})
+	}
+}
+
+func TestRunServesEmbeddedUIAndStops(t *testing.T) {
+	assertRunServesUI(t, nil, "", "embedded")
+}
+
+func TestRunServesDiskUIFromFlagAndStops(t *testing.T) {
+	root := writeDiskUI(t)
+	assertRunServesUI(t, []string{"-ui-dir", root}, "", "disk")
+}
+
+func TestRunServesDiskUIFromEnvironment(t *testing.T) {
+	root := writeDiskUI(t)
+	assertRunServesUI(t, nil, root, "disk")
+}
+
+func TestRunRejectsInvalidConfiguration(t *testing.T) {
+	resetCenterEnvironment(t)
+	t.Setenv("SPEEDTEST_DB_PORT", "invalid")
+	if err := run(context.Background(), nil, slog.Default(), io.Discard); err == nil {
+		t.Fatal("run() error = nil, want invalid configuration error")
+	}
+}
+
+func TestRunRejectsInvalidArgumentsAndUIPath(t *testing.T) {
+	resetCenterEnvironment(t)
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+
+	if err := run(context.Background(), []string{"unexpected"}, logger, io.Discard); err == nil {
+		t.Error("run() with positional argument error = nil, want an error")
+	}
+	if err := run(context.Background(), []string{"-unknown"}, logger, io.Discard); err == nil {
+		t.Error("run() with unknown flag error = nil, want an error")
+	}
+	if err := run(context.Background(), []string{"-ui-dir", filepath.Join(t.TempDir(), "missing")}, logger, io.Discard); err == nil {
+		t.Error("run() with missing UI directory error = nil, want an error")
+	}
+}
+
+func TestRunRejectsOccupiedAddress(t *testing.T) {
+	resetCenterEnvironment(t)
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	t.Cleanup(func() {
+		if err := listener.Close(); err != nil {
+			t.Errorf("listener.Close() error = %v", err)
+		}
+	})
+	t.Setenv("SPEEDTEST_HTTP_ADDR", listener.Addr().String())
+
+	if err := run(context.Background(), nil, slog.Default(), io.Discard); err == nil {
+		t.Fatal("run() error = nil, want listen error")
+	}
+}
+
+func TestMainRunHelp(t *testing.T) {
+	resetCenterEnvironment(t)
 	var stdout, stderr bytes.Buffer
-	code := run(load, &stdout, &stderr)
+	if code := mainRun([]string{"-h"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("mainRun() = %d, want 0", code)
+	}
+	if !strings.Contains(stderr.String(), "-ui-dir") {
+		t.Errorf("help output = %q, want the -ui-dir flag", stderr.String())
+	}
+	if code := mainRun([]string{"-unknown"}, &stdout, &stderr); code != 1 {
+		t.Errorf("mainRun() with unknown flag = %d, want 1", code)
+	}
+}
 
-	if code != 1 {
-		t.Fatalf("run() = %d, want 1", code)
+func assertUIFile(t *testing.T, ui fs.FS, name string) {
+	t.Helper()
+	file, err := ui.Open(name)
+	if err != nil {
+		t.Fatalf("Open(%q) error = %v", name, err)
 	}
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty", stdout.String())
+	if err := file.Close(); err != nil {
+		t.Fatalf("Close(%q) error = %v", name, err)
 	}
-	if !strings.Contains(stderr.String(), "center: invalid configuration: SPEEDTEST_DB_PORT must be between 1 and 65535, got 0") {
-		t.Fatalf("stderr = %q, want it to name the offending variable", stderr.String())
+}
+
+func assertRunServesUI(t *testing.T, args []string, uiDir, expectedSource string) {
+	t.Helper()
+	resetCenterEnvironment(t)
+	address := freeTCPAddress(t)
+	t.Setenv("SPEEDTEST_HTTP_ADDR", address)
+	t.Setenv("SPEEDTEST_UI_DIR", uiDir)
+
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logs, nil))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() {
+		runDone <- run(ctx, args, logger, io.Discard)
+	}()
+
+	client := &http.Client{Timeout: time.Second}
+	baseURL := "http://" + address
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		response, err := client.Get(baseURL + "/healthz")
+		if err == nil {
+			if response.StatusCode != http.StatusOK {
+				_ = response.Body.Close()
+				cancel()
+				t.Fatalf("GET /healthz status = %d, want 200", response.StatusCode)
+			}
+			if closeErr := response.Body.Close(); closeErr != nil {
+				cancel()
+				t.Fatalf("close /healthz response: %v", closeErr)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			cancel()
+			t.Fatalf("command center did not start: %v", err)
+		}
+		select {
+		case runErr := <-runDone:
+			cancel()
+			t.Fatalf("run() returned before accepting requests: %v", runErr)
+		default:
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	effectiveUIDir := uiDir
+	if len(args) == 2 && args[0] == "-ui-dir" {
+		effectiveUIDir = args[1]
+	}
+	expectedUI, _, err := uiFilesystem(effectiveUIDir)
+	if err != nil {
+		cancel()
+		t.Fatalf("uiFilesystem() error = %v", err)
+	}
+	for _, asset := range []struct {
+		path string
+		file string
+	}{
+		{path: "/", file: "index.html"},
+		{path: "/assets/css/app.css", file: "assets/css/app.css"},
+	} {
+		response, err := client.Get(baseURL + asset.path)
+		if err != nil {
+			cancel()
+			t.Fatalf("GET %s error = %v", asset.path, err)
+		}
+		body, readErr := io.ReadAll(response.Body)
+		closeErr := response.Body.Close()
+		if readErr != nil || closeErr != nil {
+			cancel()
+			t.Fatalf("read GET %s response: read=%v close=%v", asset.path, readErr, closeErr)
+		}
+		if response.StatusCode != http.StatusOK {
+			cancel()
+			t.Fatalf("GET %s status = %d, want 200", asset.path, response.StatusCode)
+		}
+		want, readErr := fs.ReadFile(expectedUI, asset.file)
+		if readErr != nil {
+			cancel()
+			t.Fatalf("read expected UI file %s: %v", asset.file, readErr)
+		}
+		if !bytes.Equal(body, want) {
+			cancel()
+			t.Errorf("GET %s did not return %s", asset.path, asset.file)
+		}
+	}
+
+	response, err := client.Get(baseURL + "/readyz")
+	if err != nil {
+		cancel()
+		t.Fatalf("GET /readyz error = %v", err)
+	}
+	readyBody, readErr := io.ReadAll(response.Body)
+	closeErr := response.Body.Close()
+	if readErr != nil || closeErr != nil {
+		cancel()
+		t.Fatalf("read /readyz response: read=%v close=%v", readErr, closeErr)
+	}
+	if response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(string(readyBody), "not configured") {
+		cancel()
+		t.Fatalf("GET /readyz = %d %q, want 503 with not configured", response.StatusCode, readyBody)
+	}
+
+	client.CloseIdleConnections()
+	cancel()
+	select {
+	case err := <-runDone:
+		if err != nil {
+			t.Fatalf("run() after cancellation error = %v, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("run() did not stop after cancellation")
+	}
+	if !strings.Contains(logs.String(), `"ui_source":"`+expectedSource+`"`) {
+		t.Errorf("startup logs = %q, want ui_source %q", logs.String(), expectedSource)
+	}
+}
+
+func freeTCPAddress(t *testing.T) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	address := listener.Addr().String()
+	if err := listener.Close(); err != nil {
+		t.Fatalf("listener.Close() error = %v", err)
+	}
+	return address
+}
+
+func writeDiskUI(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "assets", "css"), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	for name, contents := range map[string]string{
+		"index.html":         "<!doctype html><title>development UI</title>",
+		"assets/css/app.css": "body { color: black; }",
+	} {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
+			t.Fatalf("WriteFile(%q) error = %v", name, err)
+		}
+	}
+	return root
+}
+
+func resetCenterEnvironment(t *testing.T) {
+	t.Helper()
+	for key, value := range map[string]string{
+		"SPEEDTEST_HTTP_ADDR":  "",
+		"SPEEDTEST_UI_DIR":     "",
+		"SPEEDTEST_DB_PORT":    "",
+		"SPEEDTEST_DB_SSLMODE": "",
+	} {
+		t.Setenv(key, value)
 	}
 }

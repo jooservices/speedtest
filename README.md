@@ -4,7 +4,7 @@ Monitor the real speed of every internet connection you own, around the clock.
 
 Small agents on your machines run a speed test on a schedule and report to one dashboard. The dashboard stores every result, remembers which public IP each machine used and where it is, and shows averages, trends and the best and worst hours.
 
-**Status: interface preview.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The Go backend is an early scaffold: the agent binary can enroll against a command center, run as a background service, print its version and uninstall, but it does not run speed tests, report results or follow a schedule yet. The command center has embedded PostgreSQL migrations, a connection pool and an offline/online geolocation library, but no HTTP API yet.
+**Status: interface preview and backend skeleton.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The agent can enroll and run as a service but does not execute speed tests or report results yet. The command center embeds and serves the UI and exposes process/readiness checks; the product HTTP API and readiness database ping are not wired yet. PostgreSQL migrations, a connection pool, and geolocation modules are available.
 
 ## View the preview
 
@@ -55,15 +55,18 @@ and UI.
 ```
 cmd/agent/              node agent entry point
 cmd/center/             command center entry point
-internal/agent/         node agent: configuration and enrollment (skeleton)
+internal/agent/         node agent implementation
 internal/agent/config/  loads the node's own config.yaml
 internal/agent/enroll/  exchanges an enrollment token for a 0600 credential
-internal/center/        command center implementation (placeholder)
+internal/center/server/ command center HTTP handlers and lifecycle
+internal/center/db/     PostgreSQL pool and migration helpers
+internal/center/geo/    offline and online geolocation
 internal/shared/config/ command-center configuration loaded from the environment
 migrations/             database migrations
 deploy/                 deployment artifacts
 docs/                   design and process documents
 ui/                     the interface preview (unchanged, no build step)
+ui.go                   embeds ui/ for the command center binary
 ```
 
 ## Development
@@ -128,6 +131,12 @@ Only the configuration and credential file paths are agent environment
 overrides; node values come from `config.yaml`. Malformed YAML, unknown keys,
 and invalid values fail fast with a configuration error.
 
+The command center listens on `SPEEDTEST_HTTP_ADDR` (default
+`127.0.0.1:8080`). Its UI is embedded in the binary by default. For development, set
+`SPEEDTEST_UI_DIR=./ui` or run `go run ./cmd/center -ui-dir ./ui` to serve
+the files from disk instead. Until a database pinger is wired into the server,
+`/readyz` reports that the database is not configured.
+
 ### `make ci` prerequisites
 
 `make ci` runs the same checks as GitHub Actions, including `golangci-lint`
@@ -168,8 +177,8 @@ pull request using the same pinned version.
 
 `internal/center/geo` provides offline GeoLite2 City/ASN lookups, a weekly,
 checksum-verified updater, an `ip_addresses` result cache and optional ip-api /
-IPinfo Lite fallbacks. Compose the resolver with the shared PostgreSQL pool
-when the center lifecycle is added. This does not change the demo UI. See
+IPinfo Lite fallbacks. The resolver is not yet wired to command-center handlers.
+This does not change the demo UI. See
 [configuration, lifecycle and verification](docs/geolocation.md).
 
 See [`docs/engine.md`](docs/engine.md) for the Ookla engine API, environment configuration, units, errors and offline runner tests.
