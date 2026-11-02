@@ -44,6 +44,8 @@ type AgentConfig struct {
 type CenterConfig struct {
 	// HTTPAddr is the listen address for the web UI and API.
 	HTTPAddr string
+	// UIDir optionally selects a development directory instead of embedded assets.
+	UIDir string
 	// Database holds the PostgreSQL connection settings.
 	Database DatabaseConfig
 }
@@ -126,7 +128,8 @@ func LoadCenter() (CenterConfig, error) {
 	}
 
 	cfg := CenterConfig{
-		HTTPAddr: getString("SPEEDTEST_HTTP_ADDR", ":8080"),
+		HTTPAddr: getString("SPEEDTEST_HTTP_ADDR", "127.0.0.1:8080"),
+		UIDir:    getString("SPEEDTEST_UI_DIR", ""),
 		Database: DatabaseConfig{
 			Host:     getString("SPEEDTEST_DB_HOST", "127.0.0.1"),
 			Port:     port,

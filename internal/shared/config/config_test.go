@@ -13,6 +13,7 @@ var allEnvVars = []string{
 	"SPEEDTEST_NODE_INTERVAL",
 	"SPEEDTEST_CENTER_URL",
 	"SPEEDTEST_HTTP_ADDR",
+	"SPEEDTEST_UI_DIR",
 	"SPEEDTEST_DB_HOST",
 	"SPEEDTEST_DB_PORT",
 	"SPEEDTEST_DB_NAME",
@@ -169,7 +170,8 @@ func TestLoadCenterDefaults(t *testing.T) {
 	}
 
 	want := CenterConfig{
-		HTTPAddr: ":8080",
+		HTTPAddr: "127.0.0.1:8080",
+		UIDir:    "",
 		Database: DatabaseConfig{
 			Host:     "127.0.0.1",
 			Port:     5432,
@@ -187,6 +189,7 @@ func TestLoadCenterDefaults(t *testing.T) {
 func TestLoadCenterOverrides(t *testing.T) {
 	resetEnv(t)
 	t.Setenv("SPEEDTEST_HTTP_ADDR", "0.0.0.0:9000")
+	t.Setenv("SPEEDTEST_UI_DIR", "./ui")
 	t.Setenv("SPEEDTEST_DB_HOST", "db.internal")
 	t.Setenv("SPEEDTEST_DB_PORT", "6543")
 	t.Setenv("SPEEDTEST_DB_NAME", "speedtest_test")
@@ -201,6 +204,7 @@ func TestLoadCenterOverrides(t *testing.T) {
 
 	want := CenterConfig{
 		HTTPAddr: "0.0.0.0:9000",
+		UIDir:    "./ui",
 		Database: DatabaseConfig{
 			Host:     "db.internal",
 			Port:     6543,

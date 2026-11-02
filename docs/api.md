@@ -1,8 +1,10 @@
 # Speedtest API contract
 
 [openapi.yaml](openapi.yaml) is the OpenAPI 3.1 source of truth for JOOST-9.
-It defines future endpoints; the static `ui/` preview still runs on local demo
-state. No server, database, UI flow or runtime configuration is changed here.
+It defines the product API endpoints; the static `ui/` preview still runs on
+local demo state. The command center also exposes the operational `/healthz`
+and `/readyz` checks outside that product API contract. Readiness reports the
+database as not configured until the later PostgreSQL wiring work.
 See the [OpenAPI specification](https://spec.openapis.org/oas/v3.1.0) and
 [Redocly lint command](https://redocly.com/docs/cli/commands/lint).
 

@@ -4,7 +4,7 @@ Monitor the real speed of every internet connection you own, around the clock.
 
 Small agents on your machines run a speed test on a schedule and report to one dashboard. The dashboard stores every result, remembers which public IP each machine used and where it is, and shows averages, trends and the best and worst hours.
 
-**Status: interface preview.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The Go backend is a scaffold: it builds, tests and loads its configuration, but has no business logic yet.
+**Status: interface preview and server skeleton.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The Go command center embeds and serves the interface and provides process and readiness checks; business endpoints and database wiring are added by later tickets.
 
 ## View the preview
 
@@ -52,12 +52,13 @@ node (agent) ──HTTPS──► command center ── API + scheduler + databa
 cmd/agent/              node agent entry point
 cmd/center/             command center entry point
 internal/agent/         node agent implementation (placeholder)
-internal/center/        command center implementation (placeholder)
+internal/center/server/ command center HTTP handlers and lifecycle
 internal/shared/config/ configuration loaded from the environment
 migrations/             database migrations
 deploy/                 deployment artifacts
 docs/                   design and process documents
 ui/                     the interface preview (unchanged, no build step)
+ui.go                   embeds ui/ for the command center binary
 ```
 
 ## Development
@@ -78,6 +79,13 @@ make run-agent    # start a node agent
 
 Configuration is read only from the environment (`.env`); service endpoints are
 never hard-coded to Docker or to a specific machine.
+
+The command center listens on `SPEEDTEST_HTTP_ADDR` (default
+`127.0.0.1:8080`). Its UI
+is embedded in the binary by default. For development, set
+`SPEEDTEST_UI_DIR=./ui` or run `go run ./cmd/center -ui-dir ./ui` to serve
+the files from disk instead. Until the database wiring ticket is implemented,
+`/readyz` reports that the database is not configured.
 
 ### `make ci` prerequisites
 
