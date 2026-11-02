@@ -5,3 +5,6 @@
 node_modules/
 *.log
 .DS_Store
+# GeoLite2 databases are downloaded locally, never committed.
+*.mmdb
+data/geoip/
