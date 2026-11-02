@@ -154,3 +154,5 @@ checksum-verified updater, an `ip_addresses` result cache and optional ip-api /
 IPinfo Lite fallbacks. The resolver is not yet wired to command-center handlers.
 This does not change the demo UI. See
 [configuration, lifecycle and verification](docs/geolocation.md).
+
+See [`docs/engine.md`](docs/engine.md) for the Ookla engine API, environment configuration, units, errors and offline runner tests.
