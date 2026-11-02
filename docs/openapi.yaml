@@ -1,0 +1,6353 @@
+openapi: 3.1.0
+info:
+  title: Speedtest agent and UI API
+  version: 1.0.0
+  description: "Contract-first API for JOOST-9; no endpoints implemented by this document. See api.md
+    for authentication, limits, formulas, UI mapping and compatibility. All JSON successes share
+    Success; errors use RFC 9457 Problem. Timestamps use Timestamp; units use Mbps, Milliseconds and
+    Percent. All responses are private, Cache-Control: no-store except conditional agent config
+    (private, no-cache). Paths deliberately retain backlog /api prefix; breaking changes require a
+    new major prefix /api/v2 and coordinated migration."
+  license:
+    name: License not specified
+    identifier: LicenseRef-NotSpecified
+servers:
+  - url: /
+    description: Same configured command-center origin; no machine address embedded.
+tags:
+  - name: Auth
+    description: UI session lifecycle
+  - name: Agent
+    description: Node credential protocol
+  - name: Nodes
+    description: Independent node administration
+  - name: Results
+    description: History and exports
+  - name: Statistics
+    description: Aggregates and charts
+  - name: Dashboard
+    description: Fleet overview
+  - name: Schedules
+    description: Timing and coordination
+  - name: Alerts
+    description: Rules and activity
+  - name: Notifications
+    description: Delivery and tests
+  - name: Settings
+    description: Preferences and integrations
+  - name: IP
+    description: Address history and geolocation
+  - name: Jobs
+    description: Asynchronous maintenance
+  - name: Installer
+    description: Secure remote installation
+security:
+  - SessionCookie: []
+paths:
+  /api/auth/me:
+    get:
+      operationId: getSession
+      tags:
+        - Auth
+      summary: Read identity and bootstrap CSRF token
+      description: Unauthenticated callers receive 200 with user=null, csrfToken and expiry for an
+        anonymous session. Authenticated callers receive their user. Expired/revoked sessions return
+        401; a fresh request without a cookie bootstraps again.
+      security:
+        - {}
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getSessionResponse"
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/SetCookie"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/auth/login:
+    post:
+      operationId: login
+      tags:
+        - Auth
+      summary: Create authenticated session
+      description: Requires anonymous session cookie and matching CSRF token; verifies Origin. Generic
+        invalid-credentials error; per-IP and per-account rate limits. Rotates session ID and CSRF
+        token.
+      security:
+        - {}
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/loginResponse"
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/SetCookie"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Login"
+  /api/auth/logout:
+    post:
+      operationId: logout
+      tags:
+        - Auth
+      summary: Invalidate current session
+      description: Invalidates server-side session; expires cookie. Subsequent auth/me using the old
+        cookie returns 401.
+      security:
+        - SessionCookie: []
+      responses:
+        "204":
+          description: No content; no response body.
+          headers:
+            Set-Cookie:
+              $ref: "#/components/headers/SetCookie"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+  /api/auth/password:
+    post:
+      operationId: changePassword
+      tags:
+        - Auth
+      summary: Change password and invalidate other sessions
+      description: Verify current password, apply password policy, hash using argon2id; rotate current
+        session and CSRF token. Fetch auth/me afterwards.
+      security:
+        - SessionCookie: []
+      responses:
+        "204":
+          description: No content; no response body.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordChange"
+  /api/nodes:
+    get:
+      operationId: listNodes
+      tags:
+        - Nodes
+      summary: List nodes
+      description: Sorted by name then id. Contains latest status, results and current location; never
+        credentials.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listNodesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+    post:
+      operationId: createNode
+      tags:
+        - Nodes
+      summary: Create node and one-time enrollment token
+      description: Unique name; token is single use and expires in 24h. Store only a hash. Same
+        idempotency key replays the issuance securely for its retention period.
+      security:
+        - SessionCookie: []
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/createNodeResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NodeInput"
+  /api/agent/tokens:
+    post:
+      operationId: createEnrollmentToken
+      tags:
+        - Agent
+      summary: Create node/token using Settings enrollment key
+      description: "Install-script bootstrap only. Authorization: Bearer <settings-enrolment-key>. Same
+        behavior as POST /api/nodes; cannot list/read/change existing nodes. Rate limited."
+      security:
+        - EnrollmentKey: []
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/createEnrollmentTokenResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Idempotency"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TokenRequest"
+  /api/agent/enroll:
+    post:
+      operationId: enroll
+      tags:
+        - Agent
+      summary: Exchange single-use token for node credential
+      description: Token in body authorizes only its reserved node; name must match. Atomically consumes
+        token; expired, reused or invalid tokens return generic 401. On lost response issue a new
+        token from the owner session; never reuse a consumed token.
+      security: []
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/enrollResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+          description: Invalid, expired or consumed one-time enrollment token.
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EnrollRequest"
+  /api/nodes/{id}:
+    get:
+      operationId: getNode
+      tags:
+        - Nodes
+      summary: Read node details
+      description: Read node details.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNodeResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+    patch:
+      operationId: updateNode
+      tags:
+        - Nodes
+      summary: Update allowed node configuration
+      description: Partial replacement of allowed properties. enabled=false pauses, true resumes. Bumps
+        agent config ETag; node name must remain unique.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/updateNodeResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema:
+              $ref: "#/components/schemas/NodePatch"
+    delete:
+      operationId: deleteNode
+      tags:
+        - Nodes
+      summary: Delete node and its data
+      description: Atomically revokes credentials and deletes dependent data. Repeat returns 404 without
+        further effects. Uninstall remotely before deletion or use the local agent uninstall
+        command.
+      security:
+        - SessionCookie: []
+      responses:
+        "204":
+          description: No content; no response body.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/IfMatch"
+        - name: confirm
+          in: query
+          required: true
+          description: Explicit confirmation required.
+          schema:
+            const: true
+        - $ref: "#/components/parameters/CSRF"
+  /api/nodes/{id}/run:
+    post:
+      operationId: runNode
+      tags:
+        - Nodes
+      summary: Queue manual run
+      description: Queues run_now. Poll Location (/api/nodes/{id}/commands/{commandId}). 409 when paused
+        or already running. Never overlaps tests on this node.
+      security:
+        - SessionCookie: []
+      responses:
+        "202":
+          description: Accepted; poll Location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/runNodeResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+  /api/nodes/{id}/commands:
+    post:
+      operationId: createCommand
+      tags:
+        - Nodes
+      summary: Queue node control command
+      description: run_now, pause, resume, update_config or update_agent. Configuration commands advance
+        effective revision; update_agent requires version.
+      security:
+        - SessionCookie: []
+      responses:
+        "202":
+          description: Accepted; poll Location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/createCommandResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommandInput"
+  /api/nodes/{id}/commands/{commandId}:
+    get:
+      operationId: getCommand
+      tags:
+        - Nodes
+      summary: Read command progress
+      description: Read command progress.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getCommandResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: commandId
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+  /api/nodes/{id}/credential:
+    post:
+      operationId: rotateCredential
+      tags:
+        - Nodes
+      summary: Rotate node credential
+      description: Revokes previous credential immediately; returns new credential once. Owner must
+        deliver securely to node; existing node data remains. Config contains only this node.
+      security:
+        - SessionCookie: []
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/rotateCredentialResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+    delete:
+      operationId: revokeCredential
+      tags:
+        - Nodes
+      summary: Revoke node credential
+      description: All agent endpoints reject the revoked credential immediately. Repeated revocation has
+        no extra effect.
+      security:
+        - SessionCookie: []
+      responses:
+        "204":
+          description: No content; no response body.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+  /api/nodes/{id}/enrolment-token:
+    post:
+      operationId: reissueToken
+      tags:
+        - Nodes
+      summary: Issue replacement one-time enrollment token
+      description: Invalidates previous unused token; expires in 24h. Successful exchange replaces any
+        existing credential.
+      security:
+        - SessionCookie: []
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/reissueTokenResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+  /api/agent/results:
+    post:
+      operationId: ingestResults
+      tags:
+        - Agent
+      summary: Ingest independently validated result batch
+      description: "Always returns 207 for a syntactically valid batch, even if all items are rejected.
+        Each outcome includes original index; invalid/missing UUID yields id=null. Schema/range
+        validation is PER ITEM, not whole batch. Malformed JSON/invalid top-level container returns
+        400/422; oversized body returns 413. UUID scoped to authenticated node: identical
+        replay=duplicate, different content=409 for that item. Commit accepted items before
+        responding; agent drops accepted/duplicate items, quarantines rejected items, retries
+        transport/5xx/429 with exponential backoff and jitter."
+      security:
+        - NodeBearer: []
+      responses:
+        "207":
+          description: Per-item batch outcomes
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ingestResultsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResultBatch"
+  /api/agent/config:
+    get:
+      operationId: getAgentConfig
+      tags:
+        - Agent
+      summary: Read own effective configuration
+      description: 304 with no body when unchanged. Any effective configuration change advances ETag. Only
+        credential owner configuration is visible.
+      security:
+        - NodeBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getAgentConfigResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "304":
+          description: Not modified; no body.
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: If-None-Match
+          in: header
+          required: false
+          description: Previously received ETag.
+          schema:
+            type: string
+  /api/agent/heartbeat:
+    post:
+      operationId: heartbeat
+      tags:
+        - Agent
+      summary: Record node liveness
+      description: Record node liveness.
+      security:
+        - NodeBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/heartbeatResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Heartbeat"
+  /api/agent/commands:
+    get:
+      operationId: pollCommands
+      tags:
+        - Agent
+      summary: Poll own unacknowledged commands
+      description: Up to 100 oldest pending/running commands in createdAt,id order. Re-delivers until
+        terminal acknowledgement; deduplicate execution by command id. Empty array means no work.
+      security:
+        - NodeBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/pollCommandsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/agent/commands/{id}/ack:
+    post:
+      operationId: ackCommand
+      tags:
+        - Agent
+      summary: Acknowledge own command
+      description: Acknowledge own command.
+      security:
+        - NodeBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ackCommandResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CommandAck"
+  /api/agent/ip:
+    get:
+      operationId: getAgentIP
+      tags:
+        - Agent
+      summary: Read caller public IP as observed by center
+      description: Uses socket peer address or headers from explicitly configured trusted proxies only. No
+        hostname resolution; no caller-controlled forwarded header trust.
+      security:
+        - NodeBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getAgentIPResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/results:
+    get:
+      operationId: listResults
+      tags:
+        - Results
+      summary: Filter, sort and paginate results
+      description: Filter, sort and paginate results.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listResultsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Status"
+        - $ref: "#/components/parameters/Query"
+        - $ref: "#/components/parameters/MinDown"
+        - $ref: "#/components/parameters/MaxDown"
+        - $ref: "#/components/parameters/Sort"
+        - $ref: "#/components/parameters/Dir"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+  /api/results/{id}:
+    get:
+      operationId: getResult
+      tags:
+        - Results
+      summary: Read all stored result fields and geolocation
+      description: Read all stored result fields and geolocation.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getResultResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+  /api/results/export.csv:
+    get:
+      operationId: exportFilteredCSV
+      tags:
+        - Results
+      summary: Stream results export
+      description: Same filters and stable sort as listResults, no pagination; streams all matching rows.
+        CSV columns and escaping are defined in docs/api.md; formula-like cells are neutralized.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Streaming export; no JSON envelope.
+          headers:
+            Content-Disposition:
+              description: Attachment filename.
+              schema:
+                type: string
+          content:
+            text/csv:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Status"
+        - $ref: "#/components/parameters/Query"
+        - $ref: "#/components/parameters/MinDown"
+        - $ref: "#/components/parameters/MaxDown"
+        - $ref: "#/components/parameters/Sort"
+        - $ref: "#/components/parameters/Dir"
+  /api/export/results.csv:
+    get:
+      operationId: exportAllCSV
+      tags:
+        - Results
+      summary: Stream results export
+      description: All stored results, ts,id ascending, streamed; CSV columns match filtered export.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Streaming export; no JSON envelope.
+          headers:
+            Content-Disposition:
+              description: Attachment filename.
+              schema:
+                type: string
+          content:
+            text/csv:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/export/results.json:
+    get:
+      operationId: exportAllJSON
+      tags:
+        - Results
+      summary: Stream results export
+      description: All stored results as a streamed JSON array, ts,id ascending; deliberate export
+        exception to envelope. Do not materialize entire history in memory.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Streaming export; no JSON envelope.
+          headers:
+            Content-Disposition:
+              description: Attachment filename.
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Result"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/stats/summary:
+    get:
+      operationId: getSummary
+      tags:
+        - Statistics
+      summary: Read per-node statistics with previous period
+      description: Current [from,to), previous equally long adjacent period. See docs/api.md for sample
+        and formula rules.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getSummaryResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+  /api/stats/trend:
+    get:
+      operationId: getTrend
+      tags:
+        - Statistics
+      summary: Read bucketed trend and optional display total
+      description: Ok-only samples to match stats.js trend. Missing buckets are null, not zero; combined
+        is null unless all selected nodes have a value. Return 422 if requested fixed buckets exceed
+        300.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getTrendResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Metric"
+        - $ref: "#/components/parameters/Timezone"
+        - name: bucket
+          in: query
+          required: false
+          description: Calendar bucket; 300 points maximum per series.
+          schema:
+            type: string
+            enum:
+              - hour
+              - day
+            default: day
+        - name: combined
+          in: query
+          required: false
+          description: Sum selected nodes only for down/up; not a topology relation.
+          schema:
+            type: boolean
+            default: false
+  /api/stats/hour-of-day:
+    get:
+      operationId: getHourOfDay
+      tags:
+        - Statistics
+      summary: Read per-node hour-of-day averages
+      description: Ok-only samples; all 24 hours, count=0/value=null where absent; zone handles DST by
+        local hour.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getHourOfDayResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Metric"
+        - $ref: "#/components/parameters/Timezone"
+  /api/stats/heatmap:
+    get:
+      operationId: getHeatmap
+      tags:
+        - Statistics
+      summary: Read weekday by hour heatmap
+      description: Last 30 days ending at snapshot; ok-only samples. Exactly 168 cells, weekday 0=Monday.
+        Repeated DST hours contribute to the same cell.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getHeatmapResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: node
+          in: query
+          required: true
+          description: Exactly one node.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/Metric"
+        - $ref: "#/components/parameters/Timezone"
+  /api/stats/distribution:
+    get:
+      operationId: getDistribution
+      tags:
+        - Statistics
+      summary: Read metric histograms
+      description: Ok-only samples. Bin edges span min..max; bins=[] on empty data; final upper edge
+        inclusive. Values/counts support UI tooltips.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getDistributionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Metric"
+        - $ref: "#/components/parameters/Timezone"
+        - name: bins
+          in: query
+          required: false
+          description: Number of equal-width histogram bins.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 15
+  /api/dashboard:
+    get:
+      operationId: getDashboard
+      tags:
+        - Dashboard
+      summary: Read fleet tiles, node cards, recent results and alerts
+      description: "Single server snapshot: current and previous fleet metrics, 24h down sparklines,
+        latest good results, 9 recent results and 6 newest unacknowledged alerts. Empty fleet
+        returns empty arrays, zero counts and null aggregates."
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getDashboardResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Range"
+  /api/series:
+    get:
+      operationId: getSeries
+      tags:
+        - Dashboard
+      summary: Read bounded comparison series
+      description: Nonfailed samples; failed/missing slots are null gaps. Bucket mean and source count;
+        summary is computed from original samples. Percent converts per node using expected speed
+        before aggregation. At most maxPoints per node.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getSeriesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - $ref: "#/components/parameters/Metric"
+        - $ref: "#/components/parameters/Timezone"
+        - name: mode
+          in: query
+          required: false
+          description: percent valid only for down/up.
+          schema:
+            type: string
+            enum:
+              - absolute
+              - percent
+            default: absolute
+        - name: maxPoints
+          in: query
+          required: false
+          description: Maximum equally spaced buckets per series.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 300
+            default: 300
+  /api/schedules:
+    get:
+      operationId: getSchedules
+      tags:
+        - Schedules
+      summary: Read rules, per-node upcoming runs, usage and clashes
+      description: Read rules, per-node upcoming runs, usage and clashes.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getSchedulesResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/schedules/{node}:
+    get:
+      operationId: getSchedule
+      tags:
+        - Schedules
+      summary: Read one node schedule and estimates
+      description: Read one node schedule and estimates.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getScheduleResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: node
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+    put:
+      operationId: replaceSchedule
+      tags:
+        - Schedules
+      summary: Replace node schedule
+      description: Replace node schedule.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/replaceScheduleResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: node
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScheduleInput"
+  /api/schedules/rules:
+    put:
+      operationId: replaceScheduleRules
+      tags:
+        - Schedules
+      summary: Replace center coordination rules
+      description: Use ETag from GET /api/schedules; atomically recompute effective offsets/quiet hours,
+        update config revisions. Equal quiet endpoints invalid. Resolve browser timezone to IANA
+        before applying.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/replaceScheduleRulesResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ScheduleRules"
+  /api/schedules/stagger:
+    post:
+      operationId: staggerSchedules
+      tags:
+        - Schedules
+      summary: Spread offsets evenly
+      description: Use schedules ETag. Deterministic assignment by node id, offsets < interval. Reports
+        remaining clashes; no node learns peer identity.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/staggerSchedulesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+  /api/alerts/rules:
+    get:
+      operationId: listRules
+      tags:
+        - Alerts
+      summary: List alert rules
+      description: List alert rules.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listRulesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+    post:
+      operationId: createRule
+      tags:
+        - Alerts
+      summary: Create alert rule
+      description: Create alert rule.
+      security:
+        - SessionCookie: []
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/createRuleResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertRuleInput"
+  /api/alerts/rules/{id}:
+    get:
+      operationId: getRule
+      tags:
+        - Alerts
+      summary: Read alert rule
+      description: Read alert rule.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getRuleResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+    put:
+      operationId: replaceRule
+      tags:
+        - Alerts
+      summary: Replace alert rule
+      description: Replace alert rule.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/replaceRuleResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AlertRuleInput"
+    delete:
+      operationId: deleteRule
+      tags:
+        - Alerts
+      summary: Delete alert rule
+      description: Delete alert rule.
+      security:
+        - SessionCookie: []
+      responses:
+        "204":
+          description: No content; no response body.
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+  /api/alerts/events:
+    get:
+      operationId: listEvents
+      tags:
+        - Alerts
+      summary: List alert activity
+      description: Newest ts,id first. Resolution is automatic when streak breaks; IP-change events are
+        one-shot. Acknowledgement does not alter resolution; reopening sets acked=false.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listEventsResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+        - name: state
+          in: query
+          required: false
+          description: open means unacknowledged (includes resolved events), matching preview Activity; all
+            includes acknowledged.
+          schema:
+            type: string
+            enum:
+              - open
+              - all
+            default: open
+        - name: severity
+          in: query
+          required: false
+          description: Importance filter.
+          schema:
+            $ref: "#/components/schemas/Severity"
+        - $ref: "#/components/parameters/Node"
+  /api/alerts/events/{id}:
+    get:
+      operationId: getEvent
+      tags:
+        - Alerts
+      summary: Read event
+      description: Read event.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getEventResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+  /api/alerts/events/{id}/ack:
+    put:
+      operationId: ackEvent
+      tags:
+        - Alerts
+      summary: Acknowledge or reopen alert attention
+      description: Acknowledge or reopen alert attention.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ackEventResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Acknowledgement"
+  /api/alerts/acknowledgements:
+    post:
+      operationId: ackAllEvents
+      tags:
+        - Alerts
+      summary: Acknowledge current unacknowledged alerts
+      description: Snapshot bulk acknowledgement; newly arriving events are unaffected. Poll /api/jobs/{id}.
+      security:
+        - SessionCookie: []
+      responses:
+        "202":
+          description: Accepted; poll Location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ackAllEventsResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+  /api/notifications/test/{channel}:
+    post:
+      operationId: testNotification
+      tags:
+        - Notifications
+      summary: Queue test notification
+      description: channel is email, telegram, slack or webhook; reject unconfigured destinations with
+        422. Poll /api/notifications/deliveries/{id}.
+      security:
+        - SessionCookie: []
+      responses:
+        "202":
+          description: Accepted; poll Location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/testNotificationResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: channel
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+  /api/notifications/deliveries:
+    get:
+      operationId: listDeliveries
+      tags:
+        - Notifications
+      summary: Read notification delivery log
+      description: Newest createdAt,id first. Secret-free attempt/error metadata; retries preserve one
+        logical delivery per event/channel.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listDeliveriesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+        - name: event
+          in: query
+          required: false
+          description: Optional alert event filter.
+          schema:
+            $ref: "#/components/schemas/ID"
+  /api/notifications/deliveries/{id}:
+    get:
+      operationId: getDelivery
+      tags:
+        - Notifications
+      summary: Read delivery status
+      description: Read delivery status.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getDeliveryResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+  /api/settings:
+    get:
+      operationId: getSettings
+      tags:
+        - Settings
+      summary: Read public preferences and configured flags
+      description: Read public preferences and configured flags.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getSettingsResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    put:
+      operationId: replaceSettings
+      tags:
+        - Settings
+      summary: Replace preferences and optionally integration secrets
+      description: Replace preferences and optionally integration secrets.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/replaceSettingsResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SettingsInput"
+  /api/settings/enrolment-key:
+    post:
+      operationId: rotateEnrollmentKey
+      tags:
+        - Settings
+      summary: Rotate shared bootstrap enrollment key
+      description: Old key immediately stops issuing tokens; previously issued single-use tokens and
+        enrolled node credentials remain valid. New key shown only in issuance response. GET
+        settings returns only configured flag.
+      security:
+        - SessionCookie: []
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/rotateEnrollmentKeyResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+  /api/ip/history:
+    get:
+      operationId: listIPChanges
+      tags:
+        - IP
+      summary: Read address-change timeline
+      description: Newest ts,id first. Includes all independent nodes; no topology-based exclusion.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listIPChangesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Node"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+  /api/ip/addresses:
+    get:
+      operationId: listIPAddresses
+      tags:
+        - IP
+      summary: Read distinct node addresses and aggregates
+      description: Newest last,nodeId,ip first. first/last from all observed results; averages exclude
+        failed samples.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listIPAddressesResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Node"
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+  /api/ip/lookup:
+    get:
+      operationId: lookupIP
+      tags:
+        - IP
+      summary: Look up literal IP location
+      description: Cache first, then offline database, then configured fallback; explicit refresh jobs
+        bypass cache. No match returns data=null; invalid literal returns 422. Never resolve
+        hostnames.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/lookupIPResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: ip
+          in: query
+          required: true
+          description: IPv4/IPv6 literal; no DNS lookup.
+          schema:
+            $ref: "#/components/schemas/IP"
+  /api/ip/map:
+    get:
+      operationId: getMap
+      tags:
+        - IP
+      summary: Read current location per node
+      description: Current latest observed IP per node. No-IP nodes omitted; unknown location is geo=null.
+        Join Node for label/color.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getMapResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Node"
+  /api/ip/service:
+    get:
+      operationId: getGeoStatus
+      tags:
+        - IP
+      summary: Read location service health metadata
+      description: Read location service health metadata.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getGeoStatusResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/ip/database-updates:
+    post:
+      operationId: updateGeoDatabase
+      tags:
+        - IP
+      summary: Queue location database update
+      description: Queue location database update.
+      security:
+        - SessionCookie: []
+      responses:
+        "202":
+          description: Accepted; poll Location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/updateGeoDatabaseResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+  /api/ip/refreshes:
+    post:
+      operationId: refreshLocations
+      tags:
+        - IP
+      summary: Queue refresh of remembered locations
+      description: Refresh configured cache chain with bounded provider rate limits; poll /api/jobs/{id}.
+      security:
+        - SessionCookie: []
+      responses:
+        "202":
+          description: Accepted; poll Location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/refreshLocationsResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+  /api/jobs/{id}:
+    get:
+      operationId: getJob
+      tags:
+        - Jobs
+      summary: Read asynchronous maintenance status
+      description: Read asynchronous maintenance status.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getJobResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+  /api/installer/probes:
+    post:
+      operationId: probeSSH
+      tags:
+        - Installer
+      summary: Probe SSH and return host fingerprint
+      description: Performs only the SSH host-key handshake, without username/password/key. Returns
+        observed fingerprint for owner confirmation. Probe records endpoint/fingerprint with expiry,
+        never credentials; it does not authenticate or install.
+      security:
+        - SessionCookie: []
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/probeSSHResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SSHProbeInput"
+  /api/nodes/{id}/installations:
+    post:
+      operationId: installAgent
+      tags:
+        - Installer
+      summary: Install or repair node agent
+      description: Requires explicit confirmed fingerprint from probe. Linux amd64/arm64, checksum
+        verified, dedicated service user, enrollment, first heartbeat. Idempotent repair; changed
+        key aborts and failure cleans up.
+      security:
+        - SessionCookie: []
+      responses:
+        "202":
+          description: Accepted; poll Location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/installAgentResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InstallInput"
+  /api/installations/{id}:
+    get:
+      operationId: getInstallation
+      tags:
+        - Installer
+      summary: Read installation state
+      description: Read installation state.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getInstallationResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+  /api/installations/{id}/events:
+    get:
+      operationId: streamInstallEvents
+      tags:
+        - Installer
+      summary: Stream safe installer progress
+      description: "SSE data is one InstallEvent JSON object per event, event: progress. id matches
+        InstallEvent.id. Replay retained events on reconnect; 409 if cursor expired. Terminal event
+        closes stream. Errors before opening use Problem; after opening use failed InstallEvent.
+        Session authorization checked before stream and on expiry."
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Server-sent events; no JSON envelope.
+          content:
+            text/event-stream:
+              schema:
+                $ref: "#/components/schemas/InstallEvent"
+              example:
+                id: step-1
+                ts: 2026-11-03T00:00:00Z
+                step: verify
+                message: Agent checksum verified
+                pct: 30
+                status: running
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - name: Last-Event-ID
+          in: header
+          required: false
+          description: Resume after last seen event.
+          schema:
+            type: string
+  /api/nodes/{id}/uninstallations:
+    post:
+      operationId: uninstallAgent
+      tags:
+        - Installer
+      summary: Uninstall agent before node deletion
+      description: Confirmed pinned SSH connection; remove only agent-owned files/service. Poll
+        /api/installations/{id}; then explicitly delete node. If SSH unavailable show local agent
+        uninstall command; never claim remote cleanup succeeded.
+      security:
+        - SessionCookie: []
+      responses:
+        "202":
+          description: Accepted; poll Location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/uninstallAgentResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Resource identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Idempotency"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InstallInput"
+  /install.sh:
+    get:
+      operationId: getInstallScript
+      tags:
+        - Installer
+      summary: Download public checksum-verifying installer
+      description: Public script contains no embedded credentials. Caller supplies center URL and token at
+        execution time; script never logs credentials. Resolves OS/architecture and verifies
+        released SHA256SUMS.
+      security: []
+      responses:
+        "200":
+          description: Shell script; no JSON envelope.
+          content:
+            text/x-shellscript:
+              schema:
+                type: string
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+components:
+  securitySchemes:
+    SessionCookie:
+      type: apiKey
+      in: cookie
+      name: speedtest_session
+      description: Opaque server-side session; UI writes also require X-CSRF-Token and Origin validation.
+    NodeBearer:
+      type: http
+      scheme: bearer
+      description: Node-scoped long-lived credential; never accepts UI sessions or enrollment keys.
+    EnrollmentKey:
+      type: http
+      scheme: bearer
+      description: Shared Settings key, accepted only to create enrollment tokens.
+  parameters:
+    Page:
+      name: page
+      in: query
+      required: false
+      description: 1-based page.
+      schema:
+        type: integer
+        minimum: 1
+        default: 1
+    Size:
+      name: size
+      in: query
+      required: false
+      description: Maximum items per page.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 100
+        default: 25
+    Nodes:
+      name: nodes
+      in: query
+      required: false
+      description: Comma-separated node IDs; omitted means all authorized nodes, empty means none.
+      schema:
+        type: array
+        items:
+          $ref: "#/components/schemas/ID"
+        maxItems: 100
+        uniqueItems: true
+      style: form
+      explode: false
+    Node:
+      name: node
+      in: query
+      required: false
+      description: Optional single-node filter; omitted means all.
+      schema:
+        $ref: "#/components/schemas/ID"
+    From:
+      name: from
+      in: query
+      required: false
+      description: Inclusive start; paired with to. Overrides the default range; explicitly supplying both
+        range and from/to is invalid.
+      schema:
+        $ref: "#/components/schemas/Timestamp"
+    To:
+      name: to
+      in: query
+      required: false
+      description: Exclusive end; must follow from; maximum analytics span 366 days.
+      schema:
+        $ref: "#/components/schemas/Timestamp"
+    Range:
+      name: range
+      in: query
+      required: false
+      description: Trailing range ending at snapshot, default 7d only if no from/to. Explicit range with
+        from/to is invalid.
+      schema:
+        $ref: "#/components/schemas/Range"
+    Metric:
+      name: metric
+      in: query
+      required: false
+      description: Selected metric; default down.
+      schema:
+        $ref: "#/components/schemas/Metric"
+        default: down
+    Timezone:
+      name: timezone
+      in: query
+      required: false
+      description: IANA zone for calendar grouping, never browser.
+      schema:
+        type: string
+        description: IANA time-zone name; browser is a UI preference only and must be resolved before
+          analytics requests.
+        examples:
+          - Asia/Ho_Chi_Minh
+        default: UTC
+    IfMatch:
+      name: If-Match
+      in: header
+      required: true
+      description: Required strong ETag from GET; 412 if stale, 428 if missing.
+      schema:
+        type: string
+    CSRF:
+      name: X-CSRF-Token
+      in: header
+      required: true
+      description: Session-bound CSRF token from auth/me, including the anonymous bootstrap session.
+      schema:
+        type: string
+    Idempotency:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: Required for retryable creates. Same principal/key/body replays original response for
+        24h; different body returns 409.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 128
+    Status:
+      name: status
+      in: query
+      required: false
+      description: Result status filter.
+      schema:
+        type: string
+        enum:
+          - all
+          - ok
+          - degraded
+          - failed
+        default: all
+    Query:
+      name: q
+      in: query
+      required: false
+      description: Case-insensitive substring in IP, server name/city, location city/ISP, node name/label
+        or error.
+      schema:
+        type: string
+        maxLength: 200
+    MinDown:
+      name: minDown
+      in: query
+      required: false
+      description: Inclusive minimum download; null metrics do not match.
+      schema:
+        $ref: "#/components/schemas/Mbps"
+    MaxDown:
+      name: maxDown
+      in: query
+      required: false
+      description: Inclusive maximum download; must be >= minDown.
+      schema:
+        $ref: "#/components/schemas/Mbps"
+    Sort:
+      name: sort
+      in: query
+      required: false
+      description: Allowlisted sort key; node=name, server=city; nulls last; id breaks ties.
+      schema:
+        type: string
+        enum:
+          - ts
+          - node
+          - down
+          - up
+          - ping
+          - jitter
+          - loss
+          - server
+          - ip
+          - status
+        default: ts
+    Dir:
+      name: dir
+      in: query
+      required: false
+      description: Sort direction.
+      schema:
+        type: string
+        enum:
+          - asc
+          - desc
+        default: desc
+  headers:
+    ETag:
+      description: Strong version of this representation.
+      schema:
+        type: string
+    Location:
+      description: URI of the created or accepted resource.
+      schema:
+        type: string
+        format: uri-reference
+    SetCookie:
+      description: "speedtest_session cookie: HttpOnly; SameSite=Lax; Path=/; Secure over HTTPS. Logout
+        expires it."
+      schema:
+        type: string
+    RetryAfter:
+      description: Seconds before retry.
+      schema:
+        type: integer
+        minimum: 1
+  responses:
+    BadRequest:
+      description: Malformed request
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: /problems/badrequest
+            title: Malformed request
+            status: 400
+            detail: Malformed request.
+    Unauthorized:
+      description: Missing, expired, revoked or invalid credential
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: /problems/unauthorized
+            title: Missing, expired, revoked or invalid credential
+            status: 401
+            detail: Missing, expired, revoked or invalid credential.
+      headers:
+        WWW-Authenticate:
+          description: Bearer for agent/bootstrap; Session for UI.
+          schema:
+            type: string
+    Forbidden:
+      description: Not authorized or CSRF/Origin validation failed
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: /problems/forbidden
+            title: Not authorized or CSRF/Origin validation failed
+            status: 403
+            detail: Not authorized or CSRF/Origin validation failed.
+    NotFound:
+      description: Resource not found or not owned
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: /problems/notfound
+            title: Resource not found or not owned
+            status: 404
+            detail: Resource not found or not owned.
+    Conflict:
+      description: State, unique name or idempotency conflict
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: /problems/conflict
+            title: State, unique name or idempotency conflict
+            status: 409
+            detail: State, unique name or idempotency conflict.
+    Stale:
+      description: ETag does not match
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: /problems/stale
+            title: ETag does not match
+            status: 412
+            detail: ETag does not match.
+    TooLarge:
+      description: Request body exceeds limit
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: /problems/toolarge
+            title: Request body exceeds limit
+            status: 413
+            detail: Request body exceeds limit.
+    Validation:
+      description: Field or cross-field validation failed
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: /problems/validation
+            title: Field or cross-field validation failed
+            status: 422
+            detail: Field or cross-field validation failed.
+    PreconditionRequired:
+      description: If-Match required
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: /problems/preconditionrequired
+            title: If-Match required
+            status: 428
+            detail: If-Match required.
+    RateLimited:
+      description: Rate limited
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: /problems/ratelimited
+            title: Rate limited
+            status: 429
+            detail: Rate limited.
+      headers:
+        Retry-After:
+          $ref: "#/components/headers/RetryAfter"
+    ServerError:
+      description: Internal failure; safe detail only
+      content:
+        application/problem+json:
+          schema:
+            $ref: "#/components/schemas/Problem"
+          example:
+            type: /problems/servererror
+            title: Internal failure; safe detail only
+            status: 500
+            detail: Internal failure; safe detail only.
+  schemas:
+    ID:
+      type: string
+      description: Opaque resource identifier; clients must not interpret its structure.
+      minLength: 1
+      maxLength: 128
+    UUID:
+      type: string
+      format: uuid
+    Timestamp:
+      type: string
+      description: RFC 3339 UTC timestamp. Convert demo epoch milliseconds at the UI boundary.
+      format: date-time
+      pattern: Z$
+      examples:
+        - 2026-11-03T00:00:00Z
+    IP:
+      description: IPv4 or IPv6 literal only; never a hostname.
+      anyOf:
+        - type: string
+          format: ipv4
+        - type: string
+          format: ipv6
+    Mbps:
+      type: number
+      description: Decimal megabits per second (1 Mbps = 1,000,000 bit/s).
+      minimum: 0
+    Milliseconds:
+      type: number
+      description: Milliseconds.
+      minimum: 0
+    Percent:
+      type: number
+      description: Percent on the 0–100 scale.
+      minimum: 0
+      maximum: 100
+    Measurement:
+      type:
+        - number
+        - "null"
+      description: Unavailable measurements are null, never zero-filled.
+      minimum: 0
+    Metric:
+      type: string
+      enum:
+        - down
+        - up
+        - ping
+        - jitter
+        - loss
+    Range:
+      type: string
+      enum:
+        - 6h
+        - 24h
+        - 7d
+        - 30d
+      default: 7d
+    Channel:
+      type: string
+      enum:
+        - email
+        - telegram
+        - slack
+        - webhook
+    Severity:
+      type: string
+      enum:
+        - info
+        - warn
+        - crit
+    ResultStatus:
+      type: string
+      enum:
+        - ok
+        - degraded
+        - failed
+    Secret:
+      type: string
+      description: Write-only secret; never returned, logged or included in errors.
+      minLength: 1
+      maxLength: 8192
+      writeOnly: true
+    Timezone:
+      type: string
+      description: IANA time-zone name; browser is a UI preference only and must be resolved before
+        analytics requests.
+      examples:
+        - Asia/Ho_Chi_Minh
+    Problem:
+      type: object
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          description: Stable category URI.
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          minimum: 400
+          maximum: 599
+        detail:
+          type: string
+          description: Safe actionable detail.
+        instance:
+          type: string
+          format: uri-reference
+        errors:
+          type: object
+          additionalProperties:
+            type: array
+            items:
+              type: string
+        trace_id:
+          type: string
+      required:
+        - type
+        - title
+        - status
+        - detail
+    Pagination:
+      type: object
+      additionalProperties: false
+      properties:
+        current_page:
+          type: integer
+          minimum: 1
+        per_page:
+          type: integer
+          minimum: 1
+          maximum: 100
+        total:
+          type: integer
+          minimum: 0
+        last_page:
+          type: integer
+          minimum: 1
+      required:
+        - current_page
+        - per_page
+        - total
+        - last_page
+      description: Page/size request parameters; last_page is at least 1 even when total is 0. Beyond-last
+        pages return an empty array.
+    Meta:
+      type: object
+      additionalProperties: false
+      properties:
+        pagination:
+          $ref: "#/components/schemas/Pagination"
+      required: []
+    Success:
+      type: object
+      additionalProperties: false
+      properties:
+        success:
+          const: true
+        code:
+          type: integer
+          minimum: 200
+          maximum: 299
+        message:
+          type: string
+        data: {}
+        meta:
+          $ref: "#/components/schemas/Meta"
+        errors:
+          type: "null"
+        trace_id:
+          type: string
+      required:
+        - success
+        - code
+        - message
+        - data
+        - meta
+        - errors
+      description: Shared JSON envelope. code equals the HTTP status. Endpoint schemas specialize data and
+        code; 204/304 and documented streams have no envelope.
+    Server:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+        city:
+          type: string
+        sponsor:
+          type: string
+        host:
+          type: string
+          description: Engine-reported test-server host, if supplied.
+          maxLength: 255
+      required:
+        - id
+        - name
+        - city
+        - sponsor
+    Geo:
+      type: object
+      additionalProperties: false
+      properties:
+        ip:
+          $ref: "#/components/schemas/IP"
+        version:
+          type: integer
+          enum:
+            - 4
+            - 6
+        asn:
+          type: integer
+          minimum: 0
+        asnOrg:
+          type: string
+        isp:
+          type: string
+        country:
+          type: string
+        countryCode:
+          type: string
+          minLength: 2
+          maxLength: 2
+        region:
+          type: string
+        city:
+          type: string
+        lat:
+          type: number
+          minimum: -90
+          maximum: 90
+        lon:
+          type: number
+          minimum: -180
+          maximum: 180
+        timezone:
+          $ref: "#/components/schemas/Timezone"
+        radiusKm:
+          type: number
+          description: Approximate accuracy radius in km.
+          minimum: 0
+        connection:
+          type: string
+        source:
+          type: string
+      required:
+        - ip
+        - version
+        - source
+      description: Unknown individual attributes are omitted; an unavailable lookup is null, not
+        fabricated coordinates.
+    Binding:
+      type: object
+      additionalProperties: false
+      properties:
+        iface:
+          type: string
+          description: Interface name, empty for automatic.
+          maxLength: 64
+          default: ""
+        sourceIp:
+          anyOf:
+            - $ref: "#/components/schemas/IP"
+            - type: "null"
+      required:
+        - iface
+        - sourceIp
+      description: Local network binding only; contains no topology relationships.
+    NodeInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        label:
+          type: string
+          maxLength: 200
+          default: ""
+        provider:
+          type: string
+          description: User-supplied display label.
+          maxLength: 200
+          default: ""
+        plan:
+          type: string
+          description: User-supplied display label.
+          maxLength: 200
+          default: ""
+        expectedDown:
+          type: number
+          exclusiveMinimum: 0
+        expectedUp:
+          type: number
+          exclusiveMinimum: 0
+        threads:
+          type: integer
+          minimum: 1
+          maximum: 64
+          default: 4
+        server:
+          oneOf:
+            - const: auto
+            - type: integer
+              minimum: 1
+          default: auto
+        note:
+          type: string
+          maxLength: 4000
+          default: ""
+        enabled:
+          type: boolean
+          default: true
+        binding:
+          $ref: "#/components/schemas/Binding"
+        autoUpdate:
+          type: boolean
+          default: false
+      required:
+        - name
+        - expectedDown
+        - expectedUp
+    NodePatch:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        label:
+          type: string
+          maxLength: 200
+          default: ""
+        provider:
+          type: string
+          description: User-supplied display label.
+          maxLength: 200
+          default: ""
+        plan:
+          type: string
+          description: User-supplied display label.
+          maxLength: 200
+          default: ""
+        expectedDown:
+          type: number
+          exclusiveMinimum: 0
+        expectedUp:
+          type: number
+          exclusiveMinimum: 0
+        threads:
+          type: integer
+          minimum: 1
+          maximum: 64
+          default: 4
+        server:
+          oneOf:
+            - const: auto
+            - type: integer
+              minimum: 1
+          default: auto
+        note:
+          type: string
+          maxLength: 4000
+          default: ""
+        enabled:
+          type: boolean
+          default: true
+        binding:
+          $ref: "#/components/schemas/Binding"
+        autoUpdate:
+          type: boolean
+          default: false
+      required: []
+      description: JSON Merge Patch; supplied properties replace their value, null is invalid. At least
+        one property required. Name must be unique.
+      minProperties: 1
+    ScheduleInput:
+      type: object
+      additionalProperties: false
+      properties:
+        interval:
+          type: integer
+          minimum: 5
+          maximum: 1440
+          default: 30
+        offset:
+          type: integer
+          minimum: 0
+          maximum: 1439
+          default: 0
+        enabled:
+          type: boolean
+          default: true
+      required:
+        - interval
+        - offset
+        - enabled
+      description: Minutes. offset must be less than interval; PUT clamps offset to interval-1 after an
+        interval change. Base slots are Unix epoch + offset + k*interval.
+    QuietHours:
+      type: object
+      additionalProperties: false
+      properties:
+        quietStart:
+          type: string
+          description: HH:mm or empty; both quiet fields must be empty or set.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        quietEnd:
+          type: string
+          description: HH:mm or empty; equal nonempty endpoints are invalid. Crossing midnight is allowed.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        timezone:
+          $ref: "#/components/schemas/Timezone"
+          default: UTC
+      required:
+        - quietStart
+        - quietEnd
+        - timezone
+    ScheduleRules:
+      type: object
+      additionalProperties: false
+      properties:
+        stagger:
+          type: boolean
+          default: true
+        maxConcurrent:
+          type: integer
+          minimum: 1
+          maximum: 5
+          default: 1
+        quiet:
+          $ref: "#/components/schemas/QuietHours"
+      required:
+        - stagger
+        - maxConcurrent
+        - quiet
+      description: Center-only coordination rules. Effective offsets and quiet hours are sent separately
+        to each node; no peer list is sent.
+    Schedule:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        config:
+          $ref: "#/components/schemas/ScheduleInput"
+        nextRun:
+          anyOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        upcoming:
+          type: array
+          items:
+            $ref: "#/components/schemas/Timestamp"
+          maxItems: 10
+        bytesPerDay:
+          type: number
+          minimum: 0
+        bytesPerMonth:
+          type: number
+          description: 30-day estimate from up to 200 recent nonfailed results; zero with no history or while
+            paused.
+          minimum: 0
+      required:
+        - nodeId
+        - config
+        - nextRun
+        - upcoming
+        - bytesPerDay
+        - bytesPerMonth
+    Clash:
+      type: object
+      additionalProperties: false
+      properties:
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/ID"
+          minItems: 2
+          maxItems: 2
+        detail:
+          type: string
+      required:
+        - nodes
+        - detail
+    Schedules:
+      type: object
+      additionalProperties: false
+      properties:
+        rules:
+          $ref: "#/components/schemas/ScheduleRules"
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Schedule"
+        clashes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Clash"
+      required:
+        - rules
+        - nodes
+        - clashes
+    AgentConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        revision:
+          type: string
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        expectedDown:
+          $ref: "#/components/schemas/Mbps"
+        expectedUp:
+          $ref: "#/components/schemas/Mbps"
+        schedule:
+          $ref: "#/components/schemas/ScheduleInput"
+        quiet:
+          $ref: "#/components/schemas/QuietHours"
+        engine:
+          type: string
+          enum:
+            - ookla
+            - librespeed
+            - cloudflare
+          default: ookla
+        threads:
+          type: integer
+          minimum: 1
+          maximum: 64
+          default: 4
+        server:
+          oneOf:
+            - const: auto
+            - type: integer
+              minimum: 1
+          default: auto
+        binding:
+          $ref: "#/components/schemas/Binding"
+        autoUpdate:
+          type: boolean
+          default: false
+        release:
+          anyOf:
+            - $ref: "#/components/schemas/AgentRelease"
+            - type: "null"
+      required:
+        - revision
+        - name
+        - expectedDown
+        - expectedUp
+        - schedule
+        - quiet
+        - engine
+        - threads
+        - server
+        - binding
+        - autoUpdate
+        - release
+      description: Only this authenticated node’s effective configuration. Apply atomically without
+        restart; retain last known configuration offline. release advertises latest
+        version/url/sha256; update only when owner enables autoUpdate. Verify checksum; atomically
+        replace and roll back if first heartbeat fails within 2 minutes.
+    ResultInput:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        ts:
+          $ref: "#/components/schemas/Timestamp"
+        status:
+          $ref: "#/components/schemas/ResultStatus"
+        down:
+          $ref: "#/components/schemas/NullableMbps"
+        up:
+          $ref: "#/components/schemas/NullableMbps"
+        ping:
+          $ref: "#/components/schemas/NullableMilliseconds"
+        jitter:
+          $ref: "#/components/schemas/NullableMilliseconds"
+        dLat:
+          $ref: "#/components/schemas/NullableMilliseconds"
+        uLat:
+          $ref: "#/components/schemas/NullableMilliseconds"
+        loss:
+          type:
+            - number
+            - "null"
+          description: Packet loss percent; unavailable on failure.
+          minimum: 0
+          maximum: 100
+        serverId:
+          anyOf:
+            - type: integer
+              minimum: 1
+            - type: "null"
+        ip:
+          $ref: "#/components/schemas/IP"
+        threads:
+          type: integer
+          minimum: 1
+          maximum: 64
+          default: 4
+        bytesDown:
+          type: integer
+          minimum: 0
+        bytesUp:
+          type: integer
+          minimum: 0
+        duration:
+          type: number
+          description: Seconds.
+          minimum: 0
+        error:
+          type:
+            - string
+            - "null"
+          maxLength: 2000
+        manual:
+          type: boolean
+          default: false
+        raw:
+          type: object
+          additionalProperties: true
+          description: Original engine JSON, at most 64 KiB encoded. Redact credentials before ingestion;
+            never a transport log.
+        loadedDown:
+          anyOf:
+            - $ref: "#/components/schemas/LoadedLatency"
+            - type: "null"
+        loadedUp:
+          anyOf:
+            - $ref: "#/components/schemas/LoadedLatency"
+            - type: "null"
+        server:
+          anyOf:
+            - $ref: "#/components/schemas/Server"
+            - type: "null"
+        engineISP:
+          type:
+            - string
+            - "null"
+        engineResultId:
+          type:
+            - string
+            - "null"
+        engineResultUrl:
+          anyOf:
+            - type: string
+              format: uri
+            - type: "null"
+        engineIp:
+          anyOf:
+            - $ref: "#/components/schemas/IP"
+            - type: "null"
+        warnings:
+          type: array
+          items:
+            type: string
+            maxLength: 2000
+          maxItems: 10
+      required:
+        - id
+        - ts
+        - status
+        - down
+        - up
+        - ping
+        - jitter
+        - dLat
+        - uLat
+        - loss
+        - serverId
+        - ip
+        - threads
+        - bytesDown
+        - bytesUp
+        - duration
+        - error
+        - manual
+      description: UUID allocated before spooling. Failed results require a nonempty error and allow null
+        metrics/serverId; ok/degraded require down, up, ping and serverId, and error=null. down/up
+        are Mbps; ping/jitter/dLat/uLat are ms. Missing measurements remain null. Engine-specific
+        loss/jitter/loaded metrics may be null even on success when unavailable; never invent zero.
+        Optional typed engine details preserve low/iqm/high, ISP, external IP, result ID/URL; raw
+        retains remaining fields. warnings records an engine/public-IP mismatch without changing
+        selected binding.
+      allOf:
+        - if:
+            properties:
+              status:
+                const: failed
+          then:
+            properties:
+              error:
+                type: string
+                minLength: 1
+                maxLength: 2000
+          else:
+            properties:
+              down:
+                $ref: "#/components/schemas/Mbps"
+              up:
+                $ref: "#/components/schemas/Mbps"
+              ping:
+                $ref: "#/components/schemas/Milliseconds"
+              serverId:
+                type: integer
+                minimum: 1
+              error:
+                type: "null"
+    Result:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/UUID"
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        ts:
+          $ref: "#/components/schemas/Timestamp"
+        status:
+          $ref: "#/components/schemas/ResultStatus"
+        down:
+          $ref: "#/components/schemas/NullableMbps"
+        up:
+          $ref: "#/components/schemas/NullableMbps"
+        ping:
+          $ref: "#/components/schemas/NullableMilliseconds"
+        jitter:
+          $ref: "#/components/schemas/NullableMilliseconds"
+        dLat:
+          $ref: "#/components/schemas/NullableMilliseconds"
+        uLat:
+          $ref: "#/components/schemas/NullableMilliseconds"
+        loss:
+          type:
+            - number
+            - "null"
+          description: Packet loss percent; unavailable on failure.
+          minimum: 0
+          maximum: 100
+        serverId:
+          anyOf:
+            - type: integer
+              minimum: 1
+            - type: "null"
+        ip:
+          $ref: "#/components/schemas/IP"
+        threads:
+          type: integer
+          minimum: 1
+          maximum: 64
+          default: 4
+        bytesDown:
+          type: integer
+          minimum: 0
+        bytesUp:
+          type: integer
+          minimum: 0
+        duration:
+          type: number
+          description: Seconds.
+          minimum: 0
+        error:
+          type:
+            - string
+            - "null"
+          maxLength: 2000
+        manual:
+          type: boolean
+          default: false
+        raw:
+          type: object
+          additionalProperties: true
+          description: Original engine JSON, at most 64 KiB encoded. Redact credentials before ingestion;
+            never a transport log.
+        server:
+          anyOf:
+            - $ref: "#/components/schemas/Server"
+            - type: "null"
+        geo:
+          anyOf:
+            - $ref: "#/components/schemas/Geo"
+            - type: "null"
+        loadedDown:
+          anyOf:
+            - $ref: "#/components/schemas/LoadedLatency"
+            - type: "null"
+        loadedUp:
+          anyOf:
+            - $ref: "#/components/schemas/LoadedLatency"
+            - type: "null"
+        engineISP:
+          type:
+            - string
+            - "null"
+        engineResultId:
+          type:
+            - string
+            - "null"
+        engineResultUrl:
+          anyOf:
+            - type: string
+              format: uri
+            - type: "null"
+        engineIp:
+          anyOf:
+            - $ref: "#/components/schemas/IP"
+            - type: "null"
+        warnings:
+          type: array
+          items:
+            type: string
+            maxLength: 2000
+          maxItems: 10
+      required:
+        - id
+        - nodeId
+        - ts
+        - status
+        - down
+        - up
+        - ping
+        - jitter
+        - dLat
+        - uLat
+        - loss
+        - serverId
+        - ip
+        - threads
+        - bytesDown
+        - bytesUp
+        - duration
+        - error
+        - manual
+        - raw
+        - server
+        - geo
+      description: Stored fields plus resolved server and location. nodeId is derived from the credential
+        on ingestion, never trusted from agent input. raw is {} if no raw engine JSON was supplied.
+        Engine-specific loss/jitter/loaded metrics may be null even on success when unavailable;
+        never invent zero. Optional typed engine details preserve low/iqm/high, ISP, external IP,
+        result ID/URL; raw retains remaining fields. warnings records an engine/public-IP mismatch
+        without changing selected binding.
+      allOf:
+        - if:
+            properties:
+              status:
+                const: failed
+          then:
+            properties:
+              error:
+                type: string
+                minLength: 1
+                maxLength: 2000
+          else:
+            properties:
+              down:
+                $ref: "#/components/schemas/Mbps"
+              up:
+                $ref: "#/components/schemas/Mbps"
+              ping:
+                $ref: "#/components/schemas/Milliseconds"
+              serverId:
+                type: integer
+                minimum: 1
+              error:
+                type: "null"
+    Node:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        label:
+          type: string
+          maxLength: 200
+          default: ""
+        provider:
+          type: string
+          description: User-supplied display label.
+          maxLength: 200
+          default: ""
+        plan:
+          type: string
+          description: User-supplied display label.
+          maxLength: 200
+          default: ""
+        expectedDown:
+          type: number
+          exclusiveMinimum: 0
+        expectedUp:
+          type: number
+          exclusiveMinimum: 0
+        threads:
+          type: integer
+          minimum: 1
+          maximum: 64
+          default: 4
+        server:
+          oneOf:
+            - const: auto
+            - type: integer
+              minimum: 1
+          default: auto
+        note:
+          type: string
+          maxLength: 4000
+          default: ""
+        enabled:
+          type: boolean
+          default: true
+        binding:
+          $ref: "#/components/schemas/Binding"
+        id:
+          $ref: "#/components/schemas/ID"
+        colorSlot:
+          type: integer
+          minimum: 1
+          maximum: 8
+        interval:
+          type: integer
+          minimum: 5
+          maximum: 1440
+        offset:
+          type: integer
+          minimum: 0
+        host:
+          type: string
+        agent:
+          type: string
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        lastSeen:
+          anyOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+          description: Receive time of latest heartbeat; not inferred from result time.
+        status:
+          type: string
+          enum:
+            - online
+            - offline
+            - paused
+            - failed
+            - degraded
+        latest:
+          anyOf:
+            - $ref: "#/components/schemas/Result"
+            - type: "null"
+        latestGood:
+          anyOf:
+            - $ref: "#/components/schemas/Result"
+            - type: "null"
+        currentIp:
+          anyOf:
+            - $ref: "#/components/schemas/IP"
+            - type: "null"
+        geo:
+          anyOf:
+            - $ref: "#/components/schemas/Geo"
+            - type: "null"
+        updateVersion:
+          type:
+            - string
+            - "null"
+        autoUpdate:
+          type: boolean
+          default: false
+      required:
+        - name
+        - label
+        - provider
+        - plan
+        - expectedDown
+        - expectedUp
+        - threads
+        - server
+        - note
+        - enabled
+        - binding
+        - id
+        - colorSlot
+        - interval
+        - offset
+        - host
+        - agent
+        - createdAt
+        - lastSeen
+        - status
+        - latest
+        - latestGood
+        - currentIp
+        - geo
+        - updateVersion
+      description: paused if disabled; otherwise offline if never seen or heartbeat age >90 seconds (three
+        30-second heartbeat intervals); otherwise failed/degraded from latest result, else online.
+        latestGood includes ok and degraded. host/agent may be empty before enrollment.
+    Enrollment:
+      type: object
+      additionalProperties: false
+      properties:
+        node:
+          $ref: "#/components/schemas/Node"
+        token:
+          type: string
+          description: One-time token, disclosed only in this creation response. Store hashed; never log.
+          readOnly: true
+        expiresAt:
+          $ref: "#/components/schemas/Timestamp"
+      required:
+        - node
+        - token
+        - expiresAt
+    EnrollRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        token:
+          $ref: "#/components/schemas/Secret"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        host:
+          type: string
+          maxLength: 255
+        agent:
+          type: string
+          maxLength: 64
+      required:
+        - token
+        - name
+        - agent
+    Enrolled:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        credential:
+          type: string
+          description: Shown only on successful exchange; store in a 0600 file. Never log.
+          readOnly: true
+        config:
+          $ref: "#/components/schemas/AgentConfig"
+      required:
+        - nodeId
+        - credential
+        - config
+    TokenRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        node:
+          $ref: "#/components/schemas/NodeInput"
+      required:
+        - node
+    Heartbeat:
+      type: object
+      additionalProperties: false
+      properties:
+        agent:
+          type: string
+          maxLength: 64
+        uptime:
+          type: integer
+          minimum: 0
+          description: Seconds since process start.
+        lastTest:
+          anyOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        updateResult:
+          anyOf:
+            - $ref: "#/components/schemas/AgentUpdateResult"
+            - type: "null"
+      required:
+        - agent
+        - uptime
+        - lastTest
+      description: Send every 30 seconds. Center records its own receive time as lastSeen.
+    Receipt:
+      type: object
+      additionalProperties: false
+      properties:
+        receivedAt:
+          $ref: "#/components/schemas/Timestamp"
+      required:
+        - receivedAt
+    ResultBatch:
+      type: object
+      additionalProperties: false
+      properties:
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/ResultInput"
+          minItems: 1
+          maxItems: 100
+      required:
+        - results
+      description: Maximum HTTP body 8 MiB. Items are processed independently in input order, including
+        invalid items with a recognizable UUID.
+    BatchOutcome:
+      type: object
+      additionalProperties: false
+      properties:
+        index:
+          type: integer
+          minimum: 0
+        id:
+          anyOf:
+            - $ref: "#/components/schemas/UUID"
+            - type: "null"
+        outcome:
+          type: string
+          enum:
+            - accepted
+            - duplicate
+            - rejected
+        status:
+          type: integer
+          enum:
+            - 201
+            - 200
+            - 409
+            - 422
+        problem:
+          anyOf:
+            - $ref: "#/components/schemas/Problem"
+            - type: "null"
+      required:
+        - index
+        - id
+        - outcome
+        - status
+        - problem
+      description: One outcome per input index. accepted=201, duplicate=200, conflicting UUID content=409,
+        invalid item=422; problem is null for accepted/duplicate.
+    CommandInput:
+      type: object
+      additionalProperties: false
+      properties:
+        type:
+          type: string
+          enum:
+            - run_now
+            - pause
+            - resume
+            - update_config
+            - update_agent
+        version:
+          type: string
+          description: Required only for update_agent.
+          maxLength: 64
+      required:
+        - type
+    Command:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        type:
+          type: string
+          enum:
+            - run_now
+            - pause
+            - resume
+            - update_config
+            - update_agent
+        version:
+          type:
+            - string
+            - "null"
+        status:
+          type: string
+          enum:
+            - pending
+            - running
+            - succeeded
+            - failed
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        ackedAt:
+          anyOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        phase:
+          type: string
+        pct:
+          $ref: "#/components/schemas/Percent"
+        resultId:
+          anyOf:
+            - $ref: "#/components/schemas/UUID"
+            - type: "null"
+        error:
+          type:
+            - string
+            - "null"
+      required:
+        - id
+        - nodeId
+        - type
+        - version
+        - status
+        - createdAt
+        - ackedAt
+        - phase
+        - pct
+        - resultId
+        - error
+      description: Progress is reported in acknowledgements; poll this resource for manual run progress.
+    CommandAck:
+      type: object
+      additionalProperties: false
+      properties:
+        status:
+          type: string
+          enum:
+            - running
+            - succeeded
+            - failed
+        phase:
+          type: string
+          maxLength: 200
+        pct:
+          $ref: "#/components/schemas/Percent"
+        resultId:
+          anyOf:
+            - $ref: "#/components/schemas/UUID"
+            - type: "null"
+        error:
+          type:
+            - string
+            - "null"
+          maxLength: 2000
+      required:
+        - status
+      description: Monotonic status/progress. Repeating an identical acknowledgement is idempotent; a
+        conflicting terminal acknowledgement returns 409. Failed acknowledgements require safe error
+        detail.
+    User:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        email:
+          type: string
+          format: email
+      required:
+        - id
+        - email
+    Login:
+      type: object
+      additionalProperties: false
+      properties:
+        email:
+          type: string
+          format: email
+        password:
+          $ref: "#/components/schemas/Secret"
+      required:
+        - email
+        - password
+    Session:
+      type: object
+      additionalProperties: false
+      properties:
+        user:
+          anyOf:
+            - $ref: "#/components/schemas/User"
+            - type: "null"
+        csrfToken:
+          type: string
+          description: Send in X-CSRF-Token on UI writes; never log.
+        expiresAt:
+          $ref: "#/components/schemas/Timestamp"
+      required:
+        - user
+        - csrfToken
+        - expiresAt
+      description: "Anonymous bootstrap: user=null. Authenticated session: user is present.
+        Invalid/expired existing cookie returns 401."
+    PasswordChange:
+      type: object
+      additionalProperties: false
+      properties:
+        currentPassword:
+          $ref: "#/components/schemas/Secret"
+        newPassword:
+          $ref: "#/components/schemas/Secret"
+      required:
+        - currentPassword
+        - newPassword
+    MetricSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        n:
+          type: integer
+          minimum: 0
+        mean:
+          type:
+            - number
+            - "null"
+          description: Same unit as the selected metric; null for no samples.
+          minimum: 0
+        median:
+          type:
+            - number
+            - "null"
+          description: Same unit as the selected metric; null for no samples.
+          minimum: 0
+        min:
+          type:
+            - number
+            - "null"
+          description: Same unit as the selected metric; null for no samples.
+          minimum: 0
+        max:
+          type:
+            - number
+            - "null"
+          description: Same unit as the selected metric; null for no samples.
+          minimum: 0
+        p5:
+          type:
+            - number
+            - "null"
+          description: Same unit as the selected metric; null for no samples.
+          minimum: 0
+        p95:
+          type:
+            - number
+            - "null"
+          description: Same unit as the selected metric; null for no samples.
+          minimum: 0
+        std:
+          type:
+            - number
+            - "null"
+          description: Same unit as the selected metric; null for no samples.
+          minimum: 0
+      required:
+        - n
+        - mean
+        - median
+        - min
+        - max
+        - p5
+        - p95
+        - std
+      description: Population std deviation. Percentiles interpolate at (n-1)*p. A single sample has
+        std=0; empty aggregates have n=0 and null values.
+    NodeSummary:
+      type: object
+      additionalProperties: false
+      properties:
+        count:
+          type: integer
+          minimum: 0
+        ok:
+          type: integer
+          minimum: 0
+        failed:
+          type: integer
+          minimum: 0
+        successRate:
+          anyOf:
+            - $ref: "#/components/schemas/Percent"
+            - type: "null"
+        down:
+          $ref: "#/components/schemas/MetricSummary"
+        up:
+          $ref: "#/components/schemas/MetricSummary"
+        ping:
+          $ref: "#/components/schemas/MetricSummary"
+        jitter:
+          $ref: "#/components/schemas/MetricSummary"
+        loss:
+          $ref: "#/components/schemas/MetricSummary"
+        ipCount:
+          type: integer
+          minimum: 0
+        downPct:
+          $ref: "#/components/schemas/Measurement"
+        upPct:
+          $ref: "#/components/schemas/Measurement"
+        stability:
+          anyOf:
+            - $ref: "#/components/schemas/Percent"
+            - type: "null"
+      required:
+        - count
+        - ok
+        - failed
+        - successRate
+        - down
+        - up
+        - ping
+        - jitter
+        - loss
+        - ipCount
+        - downPct
+        - upPct
+        - stability
+      description: ok counts all nonfailed results. Ratios of expected may exceed 100.
+        stability=clamp(100-220*down.std/down.mean,0,100); null for zero/no mean.
+    SummaryComparison:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        current:
+          $ref: "#/components/schemas/NodeSummary"
+        previous:
+          $ref: "#/components/schemas/NodeSummary"
+      required:
+        - nodeId
+        - current
+        - previous
+    Point:
+      type: object
+      additionalProperties: false
+      properties:
+        ts:
+          $ref: "#/components/schemas/Timestamp"
+        value:
+          type:
+            - number
+            - "null"
+        count:
+          type: integer
+          minimum: 0
+      required:
+        - ts
+        - value
+        - count
+    Series:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
+        name:
+          type: string
+        metric:
+          $ref: "#/components/schemas/Metric"
+        unit:
+          type: string
+          enum:
+            - Mbps
+            - ms
+            - "%"
+        points:
+          type: array
+          items:
+            $ref: "#/components/schemas/Point"
+          maxItems: 300
+        summary:
+          $ref: "#/components/schemas/MetricSummary"
+      required:
+        - nodeId
+        - name
+        - metric
+        - unit
+        - points
+        - summary
+      description: nodeId=null denotes an optional display-only combined total, never a node relationship.
+        summary uses source samples, not averages of buckets.
+    HourValue:
+      type: object
+      additionalProperties: false
+      properties:
+        hour:
+          type: integer
+          minimum: 0
+          maximum: 23
+        value:
+          type:
+            - number
+            - "null"
+        count:
+          type: integer
+          minimum: 0
+      required:
+        - hour
+        - value
+        - count
+    HourSeries:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        hours:
+          type: array
+          items:
+            $ref: "#/components/schemas/HourValue"
+          minItems: 24
+          maxItems: 24
+      required:
+        - nodeId
+        - hours
+    HeatCell:
+      type: object
+      additionalProperties: false
+      properties:
+        weekday:
+          type: integer
+          minimum: 0
+          maximum: 6
+          description: Monday=0.
+        hour:
+          type: integer
+          minimum: 0
+          maximum: 23
+        value:
+          type:
+            - number
+            - "null"
+        count:
+          type: integer
+          minimum: 0
+      required:
+        - weekday
+        - hour
+        - value
+        - count
+    Heatmap:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        metric:
+          $ref: "#/components/schemas/Metric"
+        timezone:
+          $ref: "#/components/schemas/Timezone"
+        cells:
+          type: array
+          items:
+            $ref: "#/components/schemas/HeatCell"
+          minItems: 168
+          maxItems: 168
+      required:
+        - nodeId
+        - metric
+        - timezone
+        - cells
+    Bin:
+      type: object
+      additionalProperties: false
+      properties:
+        from:
+          type: number
+        to:
+          type: number
+        count:
+          type: integer
+          minimum: 0
+        percent:
+          $ref: "#/components/schemas/Percent"
+      required:
+        - from
+        - to
+        - count
+        - percent
+      description: Lower-inclusive, upper-exclusive; last bin includes upper bound.
+    Distribution:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        metric:
+          $ref: "#/components/schemas/Metric"
+        bins:
+          type: array
+          items:
+            $ref: "#/components/schemas/Bin"
+          maxItems: 100
+        count:
+          type: integer
+          minimum: 0
+      required:
+        - nodeId
+        - metric
+        - bins
+        - count
+      description: Empty data returns bins=[] and count=0; constant data uses a nonzero width centered on
+        the constant.
+    Fleet:
+      type: object
+      additionalProperties: false
+      properties:
+        down:
+          $ref: "#/components/schemas/Measurement"
+        up:
+          $ref: "#/components/schemas/Measurement"
+        ping:
+          $ref: "#/components/schemas/Measurement"
+        success:
+          anyOf:
+            - $ref: "#/components/schemas/Percent"
+            - type: "null"
+        ips:
+          type: integer
+          minimum: 0
+        count:
+          type: integer
+          minimum: 0
+      required:
+        - down
+        - up
+        - ping
+        - success
+        - ips
+        - count
+      description: "down/up: unweighted mean of nonnull node percentages. ping: median of ok-only pings.
+        success: nonfailed/total*100. ips: number of address changes for all independent nodes; no
+        demo topology exclusion."
+    NodeCard:
+      type: object
+      additionalProperties: false
+      properties:
+        node:
+          $ref: "#/components/schemas/Node"
+        summary:
+          $ref: "#/components/schemas/NodeSummary"
+        sparkline:
+          type: array
+          items:
+            $ref: "#/components/schemas/Point"
+          maxItems: 300
+      required:
+        - node
+        - summary
+        - sparkline
+    Dashboard:
+      type: object
+      additionalProperties: false
+      properties:
+        current:
+          $ref: "#/components/schemas/Fleet"
+        previous:
+          $ref: "#/components/schemas/Fleet"
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/NodeCard"
+        latestResults:
+          type: array
+          items:
+            $ref: "#/components/schemas/Result"
+          maxItems: 9
+        openAlerts:
+          type: array
+          items:
+            $ref: "#/components/schemas/AlertEvent"
+          maxItems: 6
+        openAlertCount:
+          type: integer
+          minimum: 0
+      required:
+        - current
+        - previous
+        - nodes
+        - latestResults
+        - openAlerts
+        - openAlertCount
+    AlertRuleInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        metric:
+          type: string
+          enum:
+            - down_pct
+            - up_pct
+            - ping
+            - jitter
+            - loss
+            - failed
+            - ip_changed
+            - offline
+        op:
+          type: string
+          enum:
+            - <
+            - ">"
+            - <=
+            - ">="
+            - =
+        value:
+          type: number
+          minimum: 0
+        forTests:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        nodes:
+          oneOf:
+            - const: all
+            - type: array
+              items:
+                $ref: "#/components/schemas/ID"
+              minItems: 1
+              maxItems: 100
+              uniqueItems: true
+        severity:
+          $ref: "#/components/schemas/Severity"
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Channel"
+          maxItems: 4
+          uniqueItems: true
+          minItems: 1
+        enabled:
+          type: boolean
+          default: true
+      required:
+        - name
+        - metric
+        - op
+        - value
+        - forTests
+        - nodes
+        - severity
+        - channels
+        - enabled
+      description: down_pct/up_pct use percent of expected; ping/jitter ms; loss percent <=100. failed
+        uses consecutive failures, ip_changed a one-shot change, offline three missed heartbeats.
+        For ip_changed/offline use op="=", value=1, forTests=1.
+    AlertRule:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        metric:
+          type: string
+          enum:
+            - down_pct
+            - up_pct
+            - ping
+            - jitter
+            - loss
+            - failed
+            - ip_changed
+            - offline
+        op:
+          type: string
+          enum:
+            - <
+            - ">"
+            - <=
+            - ">="
+            - =
+        value:
+          type: number
+          minimum: 0
+        forTests:
+          type: integer
+          minimum: 1
+          maximum: 1000
+        nodes:
+          oneOf:
+            - const: all
+            - type: array
+              items:
+                $ref: "#/components/schemas/ID"
+              minItems: 1
+              maxItems: 100
+              uniqueItems: true
+        severity:
+          $ref: "#/components/schemas/Severity"
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Channel"
+          maxItems: 4
+          uniqueItems: true
+          minItems: 1
+        enabled:
+          type: boolean
+          default: true
+      required:
+        - id
+        - name
+        - metric
+        - op
+        - value
+        - forTests
+        - nodes
+        - severity
+        - channels
+        - enabled
+    AlertEvent:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        ruleId:
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        severity:
+          $ref: "#/components/schemas/Severity"
+        ts:
+          $ref: "#/components/schemas/Timestamp"
+        resolvedAt:
+          anyOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        title:
+          type: string
+        detail:
+          type: string
+        acked:
+          type: boolean
+      required:
+        - id
+        - ruleId
+        - nodeId
+        - severity
+        - ts
+        - resolvedAt
+        - title
+        - detail
+        - acked
+      description: Acknowledgement is independent of resolution. Setting acked=false reopens attention,
+        not the underlying streak. One event per streak; system offline events may have ruleId=null.
+    Acknowledgement:
+      type: object
+      additionalProperties: false
+      properties:
+        acked:
+          type: boolean
+      required:
+        - acked
+    ChannelConfig:
+      type: object
+      additionalProperties: false
+      properties:
+        on:
+          type: boolean
+          default: false
+        to:
+          type: string
+          description: "Public destination: email or Telegram chat ID; empty for secret webhook destinations."
+          maxLength: 320
+        configured:
+          type: boolean
+      required:
+        - on
+        - to
+        - configured
+      description: Never returns webhook URLs, SMTP passwords or bot tokens.
+    ChannelWrite:
+      type: object
+      additionalProperties: false
+      properties:
+        on:
+          type: boolean
+        to:
+          type: string
+          description: Email address or chat ID. For Slack/webhook supply secret instead; no plaintext URL is
+            returned.
+          maxLength: 320
+        secret:
+          $ref: "#/components/schemas/Secret"
+      required:
+        - on
+        - to
+      description: Omitted secret preserves current secret; replacement is write-only. Server validates
+        destination by channel and prevents requests to private/internal destinations.
+    NotificationSettings:
+      type: object
+      additionalProperties: false
+      properties:
+        email:
+          $ref: "#/components/schemas/ChannelConfig"
+        telegram:
+          $ref: "#/components/schemas/ChannelConfig"
+        slack:
+          $ref: "#/components/schemas/ChannelConfig"
+        webhook:
+          $ref: "#/components/schemas/ChannelConfig"
+      required:
+        - email
+        - telegram
+        - slack
+        - webhook
+    NotificationSettingsWrite:
+      type: object
+      additionalProperties: false
+      properties:
+        email:
+          $ref: "#/components/schemas/ChannelWrite"
+        telegram:
+          $ref: "#/components/schemas/ChannelWrite"
+        slack:
+          $ref: "#/components/schemas/ChannelWrite"
+        webhook:
+          $ref: "#/components/schemas/ChannelWrite"
+      required:
+        - email
+        - telegram
+        - slack
+        - webhook
+    Settings:
+      type: object
+      additionalProperties: false
+      properties:
+        theme:
+          type: string
+          enum:
+            - dark
+            - light
+          default: dark
+        range:
+          $ref: "#/components/schemas/Range"
+        units:
+          type: string
+          enum:
+            - auto
+            - Mbps
+            - Gbps
+            - MBps
+          default: auto
+        timezone:
+          type: string
+          description: browser or valid IANA time zone.
+          default: browser
+        hour12:
+          type: boolean
+          default: false
+        decimals:
+          type: integer
+          minimum: 0
+          maximum: 2
+          default: 1
+        retentionDays:
+          type: integer
+          enum:
+            - 0
+            - 30
+            - 90
+            - 365
+            - 1095
+          default: 365
+        geoProvider:
+          type: string
+          enum:
+            - geolite2
+            - ipinfo
+            - ip-api
+          default: geolite2
+        geoFallback:
+          type: string
+          enum:
+            - none
+            - ip-api
+            - ipinfo
+          default: ip-api
+        geoAutoUpdate:
+          type: boolean
+          default: true
+        engine:
+          type: string
+          enum:
+            - ookla
+            - librespeed
+            - cloudflare
+          default: ookla
+        defaultThreads:
+          type: integer
+          minimum: 1
+          maximum: 64
+          default: 4
+        serverMode:
+          type: string
+          enum:
+            - auto
+            - pinned
+          default: auto
+        maxConcurrent:
+          type: integer
+          minimum: 1
+          maximum: 5
+          default: 1
+        stagger:
+          type: boolean
+          default: true
+        quietStart:
+          type: string
+          description: HH:mm or empty; both quiet fields must be empty or set.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        quietEnd:
+          type: string
+          description: HH:mm or empty; equal nonempty endpoints are invalid. Crossing midnight is allowed.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        centerUrl:
+          type: string
+          description: Configured public HTTPS origin; HTTP permitted only for local/test.
+          format: uri
+        geoKeyConfigured:
+          type: boolean
+        enrollKeyConfigured:
+          type: boolean
+        notify:
+          $ref: "#/components/schemas/NotificationSettings"
+      required:
+        - theme
+        - range
+        - units
+        - timezone
+        - hour12
+        - decimals
+        - retentionDays
+        - geoProvider
+        - geoFallback
+        - geoAutoUpdate
+        - engine
+        - defaultThreads
+        - serverMode
+        - maxConcurrent
+        - stagger
+        - quietStart
+        - quietEnd
+        - centerUrl
+        - geoKeyConfigured
+        - enrollKeyConfigured
+        - notify
+      description: Defaults follow store.js. Credentials are represented by configured flags, never a
+        masked placeholder that could accidentally be saved.
+    SettingsInput:
+      type: object
+      additionalProperties: false
+      properties:
+        theme:
+          type: string
+          enum:
+            - dark
+            - light
+          default: dark
+        range:
+          $ref: "#/components/schemas/Range"
+        units:
+          type: string
+          enum:
+            - auto
+            - Mbps
+            - Gbps
+            - MBps
+          default: auto
+        timezone:
+          type: string
+          description: browser or valid IANA time zone.
+          default: browser
+        hour12:
+          type: boolean
+          default: false
+        decimals:
+          type: integer
+          minimum: 0
+          maximum: 2
+          default: 1
+        retentionDays:
+          type: integer
+          enum:
+            - 0
+            - 30
+            - 90
+            - 365
+            - 1095
+          default: 365
+        geoProvider:
+          type: string
+          enum:
+            - geolite2
+            - ipinfo
+            - ip-api
+          default: geolite2
+        geoFallback:
+          type: string
+          enum:
+            - none
+            - ip-api
+            - ipinfo
+          default: ip-api
+        geoAutoUpdate:
+          type: boolean
+          default: true
+        engine:
+          type: string
+          enum:
+            - ookla
+            - librespeed
+            - cloudflare
+          default: ookla
+        defaultThreads:
+          type: integer
+          minimum: 1
+          maximum: 64
+          default: 4
+        serverMode:
+          type: string
+          enum:
+            - auto
+            - pinned
+          default: auto
+        maxConcurrent:
+          type: integer
+          minimum: 1
+          maximum: 5
+          default: 1
+        stagger:
+          type: boolean
+          default: true
+        quietStart:
+          type: string
+          description: HH:mm or empty; both quiet fields must be empty or set.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        quietEnd:
+          type: string
+          description: HH:mm or empty; equal nonempty endpoints are invalid. Crossing midnight is allowed.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        centerUrl:
+          type: string
+          description: Configured public HTTPS origin; HTTP permitted only for local/test.
+          format: uri
+        geoKey:
+          $ref: "#/components/schemas/Secret"
+        notify:
+          $ref: "#/components/schemas/NotificationSettingsWrite"
+      required:
+        - theme
+        - range
+        - units
+        - timezone
+        - hour12
+        - decimals
+        - retentionDays
+        - geoProvider
+        - geoFallback
+        - geoAutoUpdate
+        - engine
+        - defaultThreads
+        - serverMode
+        - maxConcurrent
+        - stagger
+        - quietStart
+        - quietEnd
+        - centerUrl
+        - notify
+      description: PUT replaces all nonsecret preferences. Optional geoKey and channel secrets replace
+        only when supplied; omission preserves stored values. Encryption key comes only from
+        APP_KEY, never this API.
+    IssuedKey:
+      type: object
+      additionalProperties: false
+      properties:
+        enrollToken:
+          type: string
+          description: New Settings enrollment key, shown once at issuance only; hash at rest.
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+      required:
+        - enrollToken
+        - createdAt
+    Delivery:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        eventId:
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
+        channel:
+          $ref: "#/components/schemas/Channel"
+        status:
+          type: string
+          enum:
+            - pending
+            - sent
+            - failed
+        attempts:
+          type: integer
+          minimum: 0
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        lastAttempt:
+          anyOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        error:
+          type:
+            - string
+            - "null"
+      required:
+        - id
+        - eventId
+        - channel
+        - status
+        - attempts
+        - createdAt
+        - lastAttempt
+        - error
+      description: Safe delivery metadata only; no payload secrets or destination credentials.
+    IPChange:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        ts:
+          $ref: "#/components/schemas/Timestamp"
+        from:
+          $ref: "#/components/schemas/IP"
+        to:
+          $ref: "#/components/schemas/IP"
+        fromGeo:
+          anyOf:
+            - $ref: "#/components/schemas/Geo"
+            - type: "null"
+        toGeo:
+          anyOf:
+            - $ref: "#/components/schemas/Geo"
+            - type: "null"
+      required:
+        - id
+        - nodeId
+        - ts
+        - from
+        - to
+        - fromGeo
+        - toGeo
+    IPAddress:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        ip:
+          $ref: "#/components/schemas/IP"
+        first:
+          $ref: "#/components/schemas/Timestamp"
+        last:
+          $ref: "#/components/schemas/Timestamp"
+        tests:
+          type: integer
+          minimum: 0
+        avgDown:
+          $ref: "#/components/schemas/Measurement"
+        avgUp:
+          $ref: "#/components/schemas/Measurement"
+        geo:
+          anyOf:
+            - $ref: "#/components/schemas/Geo"
+            - type: "null"
+      required:
+        - nodeId
+        - ip
+        - first
+        - last
+        - tests
+        - avgDown
+        - avgUp
+        - geo
+    MapLocation:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        ip:
+          $ref: "#/components/schemas/IP"
+        geo:
+          anyOf:
+            - $ref: "#/components/schemas/Geo"
+            - type: "null"
+      required:
+        - nodeId
+        - ip
+        - geo
+    GeoStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        primary:
+          type: string
+        fallback:
+          type: string
+        updatedAt:
+          anyOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+        cachedAddresses:
+          type: integer
+          minimum: 0
+      required:
+        - primary
+        - fallback
+        - updatedAt
+        - cachedAddresses
+    Job:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        status:
+          type: string
+          enum:
+            - pending
+            - running
+            - succeeded
+            - failed
+        error:
+          type:
+            - string
+            - "null"
+      required:
+        - id
+        - status
+        - error
+    SSHInput:
+      type: object
+      additionalProperties: false
+      properties:
+        host:
+          type: string
+          maxLength: 255
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          default: 22
+        user:
+          type: string
+          maxLength: 100
+        auth:
+          type: string
+          enum:
+            - password
+            - key
+        secret:
+          $ref: "#/components/schemas/Secret"
+        sudoPassword:
+          $ref: "#/components/schemas/Secret"
+      required:
+        - host
+        - port
+        - user
+        - auth
+        - secret
+      description: Credentials are submitted exactly once, with the confirmed installation request. They
+        remain in memory for that operation only; never persisted, echoed or logged. Fixed installer
+        scripts only.
+    SSHProbe:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        fingerprint:
+          type: string
+          description: SHA256 host-key fingerprint requiring explicit user confirmation.
+        expiresAt:
+          $ref: "#/components/schemas/Timestamp"
+      required:
+        - id
+        - fingerprint
+        - expiresAt
+    InstallInput:
+      type: object
+      additionalProperties: false
+      properties:
+        probeId:
+          $ref: "#/components/schemas/ID"
+        fingerprint:
+          type: string
+        ssh:
+          $ref: "#/components/schemas/SSHInput"
+      required:
+        - probeId
+        - fingerprint
+        - ssh
+      description: Owner confirms observed fingerprint from unauthenticated probe. SSH host/port must
+        match probe; pin fingerprint and abort on key change. Credentials are submitted once, only
+        here; do not authenticate before confirmation.
+    Install:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        status:
+          type: string
+          enum:
+            - pending
+            - running
+            - succeeded
+            - failed
+        step:
+          type: string
+        error:
+          type:
+            - string
+            - "null"
+      required:
+        - id
+        - nodeId
+        - status
+        - step
+        - error
+    InstallEvent:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        ts:
+          $ref: "#/components/schemas/Timestamp"
+        step:
+          type: string
+        message:
+          type: string
+          description: Plain-language, secret-free progress.
+        pct:
+          $ref: "#/components/schemas/Percent"
+        status:
+          type: string
+          enum:
+            - running
+            - succeeded
+            - failed
+      required:
+        - id
+        - ts
+        - step
+        - message
+        - pct
+        - status
+      description: JSON payload of each SSE data field; transport framing is text/event-stream, not a JSON
+        document.
+    getSessionResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Session"
+    loginResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Session"
+    listNodesResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/Node"
+            meta:
+              type: object
+              additionalProperties: false
+              properties:
+                pagination:
+                  $ref: "#/components/schemas/Pagination"
+              required:
+                - pagination
+    createNodeResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 201
+            data:
+              $ref: "#/components/schemas/Enrollment"
+    createEnrollmentTokenResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 201
+            data:
+              $ref: "#/components/schemas/Enrollment"
+    enrollResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 201
+            data:
+              $ref: "#/components/schemas/Enrolled"
+    getNodeResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Node"
+    updateNodeResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Node"
+    runNodeResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 202
+            data:
+              $ref: "#/components/schemas/Command"
+    createCommandResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 202
+            data:
+              $ref: "#/components/schemas/Command"
+    getCommandResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Command"
+    rotateCredentialResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 201
+            data:
+              $ref: "#/components/schemas/Enrolled"
+    reissueTokenResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 201
+            data:
+              $ref: "#/components/schemas/Enrollment"
+    ingestResultsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 207
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/BatchOutcome"
+              minItems: 1
+              maxItems: 100
+    getAgentConfigResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/AgentConfig"
+    heartbeatResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Receipt"
+    pollCommandsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/Command"
+              maxItems: 100
+    ackCommandResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Command"
+    getAgentIPResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: object
+              additionalProperties: false
+              properties:
+                ip:
+                  $ref: "#/components/schemas/IP"
+              required:
+                - ip
+    listResultsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/Result"
+            meta:
+              type: object
+              additionalProperties: false
+              properties:
+                pagination:
+                  $ref: "#/components/schemas/Pagination"
+              required:
+                - pagination
+    getResultResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Result"
+    getSummaryResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/SummaryComparison"
+    getTrendResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/Series"
+    getHourOfDayResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/HourSeries"
+    getHeatmapResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Heatmap"
+    getDistributionResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/Distribution"
+    getDashboardResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Dashboard"
+    getSeriesResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/Series"
+    getSchedulesResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Schedules"
+    getScheduleResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Schedule"
+    replaceScheduleResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Schedule"
+    replaceScheduleRulesResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/ScheduleRules"
+    staggerSchedulesResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Schedules"
+    listRulesResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/AlertRule"
+            meta:
+              type: object
+              additionalProperties: false
+              properties:
+                pagination:
+                  $ref: "#/components/schemas/Pagination"
+              required:
+                - pagination
+    createRuleResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 201
+            data:
+              $ref: "#/components/schemas/AlertRule"
+    getRuleResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/AlertRule"
+    replaceRuleResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/AlertRule"
+    listEventsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/AlertEvent"
+            meta:
+              type: object
+              additionalProperties: false
+              properties:
+                pagination:
+                  $ref: "#/components/schemas/Pagination"
+              required:
+                - pagination
+    getEventResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/AlertEvent"
+    ackEventResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/AlertEvent"
+    ackAllEventsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 202
+            data:
+              $ref: "#/components/schemas/Job"
+    testNotificationResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 202
+            data:
+              $ref: "#/components/schemas/Delivery"
+    listDeliveriesResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/Delivery"
+            meta:
+              type: object
+              additionalProperties: false
+              properties:
+                pagination:
+                  $ref: "#/components/schemas/Pagination"
+              required:
+                - pagination
+    getDeliveryResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Delivery"
+    getSettingsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Settings"
+    replaceSettingsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Settings"
+    rotateEnrollmentKeyResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 201
+            data:
+              $ref: "#/components/schemas/IssuedKey"
+    listIPChangesResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/IPChange"
+            meta:
+              type: object
+              additionalProperties: false
+              properties:
+                pagination:
+                  $ref: "#/components/schemas/Pagination"
+              required:
+                - pagination
+    listIPAddressesResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/IPAddress"
+            meta:
+              type: object
+              additionalProperties: false
+              properties:
+                pagination:
+                  $ref: "#/components/schemas/Pagination"
+              required:
+                - pagination
+    lookupIPResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              anyOf:
+                - $ref: "#/components/schemas/Geo"
+                - type: "null"
+    getMapResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/MapLocation"
+    getGeoStatusResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/GeoStatus"
+    updateGeoDatabaseResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 202
+            data:
+              $ref: "#/components/schemas/Job"
+    refreshLocationsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 202
+            data:
+              $ref: "#/components/schemas/Job"
+    getJobResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Job"
+    probeSSHResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 201
+            data:
+              $ref: "#/components/schemas/SSHProbe"
+    installAgentResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 202
+            data:
+              $ref: "#/components/schemas/Install"
+    getInstallationResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Install"
+    uninstallAgentResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 202
+            data:
+              $ref: "#/components/schemas/Install"
+    NullableMilliseconds:
+      anyOf:
+        - $ref: "#/components/schemas/Milliseconds"
+        - type: "null"
+    NullableMbps:
+      anyOf:
+        - $ref: "#/components/schemas/Mbps"
+        - type: "null"
+    SSHProbeInput:
+      type: object
+      additionalProperties: false
+      properties:
+        host:
+          type: string
+          maxLength: 255
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          default: 22
+      required:
+        - host
+        - port
+    AgentRelease:
+      type: object
+      additionalProperties: false
+      properties:
+        version:
+          type: string
+        url:
+          type: string
+          description: Configured HTTPS release URL.
+          format: uri
+        sha256:
+          type: string
+          pattern: ^[0-9a-f]{64}$
+      required:
+        - version
+        - url
+        - sha256
+    AgentUpdateResult:
+      type: object
+      additionalProperties: false
+      properties:
+        version:
+          type: string
+        status:
+          type: string
+          enum:
+            - succeeded
+            - failed
+            - rolled_back
+        ts:
+          $ref: "#/components/schemas/Timestamp"
+        error:
+          type:
+            - string
+            - "null"
+      required:
+        - version
+        - status
+        - ts
+        - error
+    LoadedLatency:
+      type: object
+      additionalProperties: false
+      properties:
+        low:
+          $ref: "#/components/schemas/NullableMilliseconds"
+        iqm:
+          $ref: "#/components/schemas/NullableMilliseconds"
+        high:
+          $ref: "#/components/schemas/NullableMilliseconds"
+      required:
+        - low
+        - iqm
+        - high
+      description: Engine latency under load in ms; iqm is the UI dLat/uLat value when available.
