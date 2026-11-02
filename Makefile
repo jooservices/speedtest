@@ -8,6 +8,7 @@ build:
 
 ## test runs the unit tests.
 test:
+	python3 scripts/geo-test-fixtures.py
 	$(GO) test ./...
 
 ## vet reports suspicious constructs.

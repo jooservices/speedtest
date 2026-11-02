@@ -97,3 +97,10 @@ PATH="$PWD/.tmp/bin:$PATH" make ci
 pull request using the same pinned version.
 
 See [`docs/ui-decisions.md`](docs/ui-decisions.md) for the reasoning behind the UI choices and the open questions.
+
+### Offline geolocation library
+
+`internal/center/geo` provides offline GeoLite2 City/ASN lookups and a weekly,
+checksum-verified updater. It is ready for the center lifecycle and Settings
+service to consume; it does not change the demo UI. See
+[configuration, lifecycle and verification](docs/geolocation.md).
