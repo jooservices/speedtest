@@ -1,0 +1,41 @@
+# Speedtest node agent systemd unit (template).
+#
+# Copy this file to /etc/systemd/system/speedtest-agent.service and adjust
+# ExecStart to the installed binary. The agent runs as a dedicated,
+# unprivileged user that owns /etc/speedtest-agent, so it can read its own
+# configuration and 0600 credential. Enroll as that same user (for example
+# `sudo -u speedtest-agent speedtest-agent enroll ...`) so the credential file
+# ends up owned by it.
+#
+# Configuration is read by the agent from SPEEDTEST_AGENT_CONFIG and
+# SPEEDTEST_AGENT_CREDENTIAL (defaults in the program); override them in an
+# Environment= line or a drop-in rather than editing the binary.
+# Update ReadWritePaths below if the credential is moved outside the default
+# agent directory.
+
+[Unit]
+Description=Speedtest node agent
+Documentation=file:///usr/share/doc/speedtest-agent/README.md
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=speedtest-agent
+Group=speedtest-agent
+ExecStart=/usr/local/bin/speedtest-agent run
+Restart=always
+RestartSec=5
+
+# Structured JSON logs go to the journal via standard output.
+StandardOutput=journal
+StandardError=journal
+
+# Run unprivileged and read-only except for the agent's own directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/etc/speedtest-agent
+
+[Install]
+WantedBy=multi-user.target

@@ -3,15 +3,9 @@ package config
 import (
 	"strings"
 	"testing"
-	"time"
 )
 
 var allEnvVars = []string{
-	"SPEEDTEST_NODE_NAME",
-	"SPEEDTEST_NODE_EXPECTED_DOWNLOAD_MBPS",
-	"SPEEDTEST_NODE_EXPECTED_UPLOAD_MBPS",
-	"SPEEDTEST_NODE_INTERVAL",
-	"SPEEDTEST_CENTER_URL",
 	"SPEEDTEST_HTTP_ADDR",
 	"SPEEDTEST_UI_DIR",
 	"SPEEDTEST_DB_HOST",
@@ -27,137 +21,6 @@ func resetEnv(t *testing.T) {
 	t.Helper()
 	for _, key := range allEnvVars {
 		t.Setenv(key, "")
-	}
-}
-
-func TestLoadAgentDefaults(t *testing.T) {
-	resetEnv(t)
-
-	cfg, err := LoadAgent()
-	if err != nil {
-		t.Fatalf("LoadAgent() error = %v, want nil", err)
-	}
-
-	want := AgentConfig{
-		Name:                 "node",
-		ExpectedDownloadMbps: 0,
-		ExpectedUploadMbps:   0,
-		Interval:             30 * time.Minute,
-		CenterURL:            "http://127.0.0.1:8080",
-	}
-	if cfg != want {
-		t.Fatalf("LoadAgent() = %+v, want %+v", cfg, want)
-	}
-}
-
-func TestLoadAgentOverrides(t *testing.T) {
-	resetEnv(t)
-	t.Setenv("SPEEDTEST_NODE_NAME", "  viettel-fast-50  ")
-	t.Setenv("SPEEDTEST_NODE_EXPECTED_DOWNLOAD_MBPS", "300")
-	t.Setenv("SPEEDTEST_NODE_EXPECTED_UPLOAD_MBPS", "150")
-	t.Setenv("SPEEDTEST_NODE_INTERVAL", "45m")
-	t.Setenv("SPEEDTEST_CENTER_URL", "https://center.example.com")
-
-	cfg, err := LoadAgent()
-	if err != nil {
-		t.Fatalf("LoadAgent() error = %v, want nil", err)
-	}
-
-	want := AgentConfig{
-		Name:                 "viettel-fast-50",
-		ExpectedDownloadMbps: 300,
-		ExpectedUploadMbps:   150,
-		Interval:             45 * time.Minute,
-		CenterURL:            "https://center.example.com",
-	}
-	if cfg != want {
-		t.Fatalf("LoadAgent() = %+v, want %+v", cfg, want)
-	}
-}
-
-func TestLoadAgentInvalid(t *testing.T) {
-	tests := []struct {
-		name    string
-		env     map[string]string
-		wantErr string
-	}{
-		{
-			name:    "download not an integer",
-			env:     map[string]string{"SPEEDTEST_NODE_EXPECTED_DOWNLOAD_MBPS": "fast"},
-			wantErr: "SPEEDTEST_NODE_EXPECTED_DOWNLOAD_MBPS",
-		},
-		{
-			name:    "download negative",
-			env:     map[string]string{"SPEEDTEST_NODE_EXPECTED_DOWNLOAD_MBPS": "-1"},
-			wantErr: "SPEEDTEST_NODE_EXPECTED_DOWNLOAD_MBPS must be >= 0",
-		},
-		{
-			name:    "upload not an integer",
-			env:     map[string]string{"SPEEDTEST_NODE_EXPECTED_UPLOAD_MBPS": "-1.5"},
-			wantErr: "SPEEDTEST_NODE_EXPECTED_UPLOAD_MBPS",
-		},
-		{
-			name:    "upload negative",
-			env:     map[string]string{"SPEEDTEST_NODE_EXPECTED_UPLOAD_MBPS": "-1"},
-			wantErr: "SPEEDTEST_NODE_EXPECTED_UPLOAD_MBPS must be >= 0",
-		},
-		{
-			name:    "interval not a duration",
-			env:     map[string]string{"SPEEDTEST_NODE_INTERVAL": "often"},
-			wantErr: "SPEEDTEST_NODE_INTERVAL",
-		},
-		{
-			name:    "interval zero",
-			env:     map[string]string{"SPEEDTEST_NODE_INTERVAL": "0s"},
-			wantErr: "SPEEDTEST_NODE_INTERVAL must be greater than 0",
-		},
-		{
-			name:    "interval negative",
-			env:     map[string]string{"SPEEDTEST_NODE_INTERVAL": "-5m"},
-			wantErr: "SPEEDTEST_NODE_INTERVAL must be greater than 0",
-		},
-		{
-			name:    "name blank",
-			env:     map[string]string{"SPEEDTEST_NODE_NAME": "   "},
-			wantErr: "SPEEDTEST_NODE_NAME must not be blank",
-		},
-		{
-			name:    "center url without scheme",
-			env:     map[string]string{"SPEEDTEST_CENTER_URL": "center.example.com"},
-			wantErr: "SPEEDTEST_CENTER_URL must be an absolute http or https URL",
-		},
-		{
-			name:    "center url relative path",
-			env:     map[string]string{"SPEEDTEST_CENTER_URL": "/results"},
-			wantErr: "SPEEDTEST_CENTER_URL must be an absolute http or https URL",
-		},
-		{
-			name:    "center url wrong scheme",
-			env:     map[string]string{"SPEEDTEST_CENTER_URL": "ftp://center.example.com"},
-			wantErr: "SPEEDTEST_CENTER_URL must be an absolute http or https URL",
-		},
-		{
-			name:    "center url missing host",
-			env:     map[string]string{"SPEEDTEST_CENTER_URL": "http://"},
-			wantErr: "SPEEDTEST_CENTER_URL must be an absolute http or https URL",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			resetEnv(t)
-			for k, v := range tt.env {
-				t.Setenv(k, v)
-			}
-
-			_, err := LoadAgent()
-			if err == nil {
-				t.Fatalf("LoadAgent() error = nil, want an error containing %q", tt.wantErr)
-			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("LoadAgent() error = %v, want it to contain %q", err, tt.wantErr)
-			}
-		})
 	}
 }
 
