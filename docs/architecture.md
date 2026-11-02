@@ -94,6 +94,7 @@ The web UI is plain HTML, CSS and JavaScript under `ui/` with no build step and
 no framework; charts use a small in-browser SVG kit so the preview makes no
 external requests. It is a complete, clickable preview running on generated
 sample data and persisted to the browser's local storage. The Go backend is
-still a scaffold (it loads configuration only); the UI and API are joined in
-later tickets. See [ui-decisions.md](ui-decisions.md) for the design decisions
+being built ticket by ticket: the server serves this UI, the database schema and
+migration runner exist, and the API endpoints that replace the sample data are
+joined in later tickets. See [ui-decisions.md](ui-decisions.md) for the design decisions
 and open questions.

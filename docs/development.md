@@ -79,30 +79,42 @@ live, test and worktree naming scheme and ownership comments above.
 
 Migrate or test only on `speedtest_test` or `speedtest_wt<id>`, never on
 `speedtest`. Verify the configured database name before any database operation.
-The current Go tests do not connect to PostgreSQL. Migrations in `migrations/`
-are plain SQL applied in lexical order; the runner lands in a later ticket
-(see `migrations/README.md`).
+Unit tests need no database. Database-backed tests carry the `integration` build
+tag, run serially (`-p 1`, they share one database) and refuse any database other
+than `speedtest_test` or `speedtest_wt<id>` (guard in `internal/center/db`,
+helpers in `internal/center/db/dbtest`). Migrations in `migrations/` are applied
+by the embedded runner (`make migrate`, `make migrate-down`; see
+`migrations/README.md`).
 
 ## Running the center and the agent locally
 
-Both binaries are scaffolds today: they load and report their configuration and
-exit, without an HTTP server, database access or a test loop.
+```bash
+make migrate      # apply the schema to the database in .env (a test or worktree database)
+make run-center   # HTTP server on SPEEDTEST_HTTP_ADDR (default 127.0.0.1:8080); Ctrl+C stops it
+```
+
+The center serves the embedded UI at `/` (set `SPEEDTEST_UI_DIR` to serve `ui/`
+from disk while editing it), `GET /healthz` (process) and `GET /readyz`
+(readiness; reports the database as "not configured" until a pool is wired), and
+writes JSON access logs with a request id. API paths return RFC 9457
+`application/problem+json` errors. The business endpoints of `docs/openapi.yaml`
+are implemented by later tickets.
+
+The agent is configured by `config.yaml` (default `/etc/speedtest-agent/config.yaml`)
+plus the `SPEEDTEST_AGENT_CONFIG` and `SPEEDTEST_AGENT_CREDENTIAL` path overrides:
 
 ```bash
-make run-center   # loads and prints the command-center configuration
-make run-agent    # loads and prints the node-agent configuration
+go run ./cmd/agent enroll --center http://127.0.0.1:8080 --token <token> --name vm1
+make run-agent    # agent run: needs an enrolled credential file with mode 0600
+go run ./cmd/agent version
+go run ./cmd/agent uninstall
 ```
 
-With no `.env`, the documented defaults apply and both exit `0`:
-
-```
-center: configuration loaded
-center: would listen on :8080 (HTTP server not implemented yet)
-center: database host 127.0.0.1 port 5432
-...
-```
-
-The password is intentionally never printed.
+Agent building blocks: `internal/agent/config`, `internal/agent/enroll`,
+`internal/agent/engine` (Ookla runner, see [engine.md](engine.md)); offline test
+helpers (fake speedtest binary, recording center double) are described in
+[testing-harness.md](testing-harness.md). Geolocation is in
+[geolocation.md](geolocation.md).
 
 ### UI preview
 
@@ -118,11 +130,13 @@ Opening `ui/index.html` directly also works.
 ## Running tests
 
 ```bash
-make test     # go test ./...
+make test     # fetches the geolocation test fixtures, then go test ./...
 make vet      # go vet ./...
 make build    # go build ./...
 make lint     # golangci-lint run
 make ci       # vet + test + build + lint, the same checks as CI
+make test-db  # integration tests (-tags integration -p 1) on the database in .env
+
 ```
 
 The Go tests today exercise only configuration loading and need no database.
