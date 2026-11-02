@@ -1,18 +1,27 @@
-# Offline geolocation and database updates
+# Geolocation lookup, fallback and database updates
 
 `internal/center/geo` implements `Geo.Lookup(ctx, ip)` with MaxMind City and ASN
-MMDBs using `oschwald/geoip2-golang` v1.13.0, as required by JOOST-33. The
-package is a library; the center scaffold has no server lifecycle yet. Its future
-lifecycle owner opens the reader, starts `Run` with a cancellable context, cancels
-and joins it on shutdown, then closes the reader. No fallback, persistence,
-Settings UI or HTTP endpoint is added here.
+MMDBs using `oschwald/geoip2-golang` v1.13.0, as required by JOOST-33. `Resolver`
+adds the ordered `ip_addresses` cache, offline reader, and online fallback chain
+behind the same `Geo` interface. The package is a library; the center scaffold
+has no server lifecycle yet. Its lifecycle owner supplies the shared PostgreSQL
+pool and closes the reader after cancelling and joining its updater.
 
 ```go
 reader, err := geo.Open(geo.ConfigFromEnv(), slog.Default())
 if err != nil {
     return err
 }
-// Call reader.Lookup(ctx, ip) from the center's geolocation consumer.
+providerConfig, err := geo.ProviderConfigFromEnv()
+if err != nil {
+    return err
+}
+providers, err := geo.NewFallbackProviders(providerConfig)
+if err != nil {
+    return err
+}
+resolver := geo.NewResolver(geo.NewPostgresCache(pool), reader, providers...)
+// Call resolver.Lookup(ctx, ip) from the center's geolocation consumer.
 // Run blocks until cancellation; start it in the owner's lifecycle goroutine:
 // reader.Run(ctx, geo.EnvironmentSettings{})
 // Cancel and join that goroutine before reader.Close().
@@ -26,6 +35,46 @@ be available, and an IP absent from both returns `ErrNotFound`. Invalid addresse
 return `ErrInvalidIP`, canceled contexts return their context error. Missing or
 invalid databases return `ErrNotFound` and one warning per reader, not per IP.
 Concurrent lookups, replacements and repeated closes are safe.
+
+## Fallback providers and cache
+
+The resolver checks `ip_addresses` first, then GeoLite2, then enabled providers
+in this order: ip-api.com and IPinfo Lite. Successful results are stored in the
+existing `ip_addresses.geo` JSONB, `source`, and `looked_up_at` columns. Cache
+entries are write-once: later provider responses cannot replace a completed
+lookup. Concurrent requests for the same IP in one center process share one
+lookup. Invalid addresses never reach PostgreSQL or an online provider. A cache
+read/write failure is returned to the caller so a successful upstream result is
+not reported complete without its durable cache entry. Provider failures do not
+stop later providers in the chain; caller cancellation does.
+
+The providers use a timeout that bounds both rate-limit waiting and HTTP I/O,
+plus independent circuit breakers.
+After the configured number of transport, HTTP, timeout, or malformed-response
+failures, a provider is skipped until its reset period expires; one half-open
+request checks recovery. A provider's `not found` response is treated as a
+healthy answer and does not open the breaker. Error messages do not include
+request URLs, response bodies, or tokens.
+
+The free ip-api JSON endpoint is HTTP-only, allows 45 requests per minute per
+client IP, and requires clients to stop when `X-Rl` reaches zero until `X-Ttl`
+expires. The built-in limiter spaces requests at no more than 45/minute and
+honours both headers. Its free endpoint is not licensed for commercial use;
+operators must use it only where its terms permit. [ip-api JSON API and limits](https://ip-api.com/docs/api%3Ajson)
+and its [free-use terms](https://ip-api.com/docs/legal) are authoritative.
+
+IPinfo Lite is optional and requires `SPEEDTEST_GEO_IPINFO_TOKEN`. The free Lite
+API is authenticated and currently has no request cap, but returns country and
+basic ASN only (no city or coordinates). IPinfo requires attribution when Lite
+data is shown publicly. See [IPinfo Lite API](https://ipinfo.io/developers/lite-api)
+and its [free-plan details](https://support.ipinfo.io/hc/en-us/articles/30792535492626-What-Is-the-Usage-Limit-for-the-Free-Plan).
+Set `SPEEDTEST_GEO_IPINFO_REQUESTS_PER_MINUTE` to add local pacing if needed;
+zero follows the provider's published unlimited request policy.
+
+All provider controls and defaults are documented in `.env.example`. The
+IPinfo token has no default and must remain private. Disabled providers are not
+constructed or called. Only successful lookups are cached, so a transient
+network or database failure can be retried on a later request.
 
 All configuration is documented in `.env.example`. Paths default to
 `data/geoip/GeoLite2-{City,ASN}.mmdb`, relative to the center working directory.
@@ -81,8 +130,7 @@ idempotent and works offline after the verified files are cached.
 
 ```sh
 python3 scripts/geo-test-fixtures.py
-# Follow the workspace pre-test database guard or an explicitly authorized
-# exception for this entirely database-free suite.
+# Unit coverage uses local MMDB fixtures and loopback HTTP test servers.
 go test -race -coverprofile=.tmp/geo.cover ./internal/center/geo
 go tool cover -func=.tmp/geo.cover
 go test ./...
@@ -90,12 +138,16 @@ go vet ./...
 go build ./...
 ```
 
-`make test` and CI prepare the fixtures before testing. Tests use only local
+`make test` and CI prepare the fixtures before testing. Unit tests use local
 files and loopback `httptest` servers, with fake credentials. They make no
-licensed MaxMind download, database connection, or browser request. The change
-touches no UI flow, so browser/layout/theme checks are not applicable. Real
-licensed downloads and staging lifecycle integration require the center runtime
-and owner-authorized staging deployment; this library does not deploy itself.
+licensed MaxMind download, database connection, or browser request. The
+database integration test is separate (`go test -tags integration
+./internal/center/geo`) and requires a migrated `speedtest_wt34` or
+`speedtest_test` database; it verifies the project ownership marker and rolls
+back its fixture transaction. The change touches no UI flow, so browser,
+layout, and theme checks are not applicable. Real provider calls and staging
+lifecycle integration require owner-authorized staging deployment; this library
+does not deploy itself.
 
 References: [MaxMind updates](https://dev.maxmind.com/geoip/updating-databases/),
 [download API](https://github.com/maxmind/openapi/blob/main/bundled/downloads.yaml),

@@ -23,12 +23,15 @@ var (
 // Location is a combination of City and ASN data, using English place names.
 // Country is the ISO 3166-1 alpha-2 code; accuracy radius is in kilometres.
 type Location struct {
-	City, Region, Country string
-	Latitude, Longitude   float64
-	TimeZone              string
-	AccuracyRadius        uint16
-	ASN                   uint
-	Organisation          string
+	City           string  `json:"city"`
+	Region         string  `json:"region"`
+	Country        string  `json:"country"`
+	Latitude       float64 `json:"latitude"`
+	Longitude      float64 `json:"longitude"`
+	TimeZone       string  `json:"time_zone"`
+	AccuracyRadius uint16  `json:"accuracy_radius"`
+	ASN            uint    `json:"asn"`
+	Organisation   string  `json:"organisation"`
 }
 
 // Geo is the offline lookup boundary used by the command center.
