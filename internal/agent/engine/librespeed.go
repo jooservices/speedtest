@@ -103,6 +103,12 @@ func NewConfigured(name string, parallelConnections int) (Engine, error) {
 			c.Concurrent = parallelConnections
 		}
 		return NewLibreSpeed(c)
+	case "speedtestcli":
+		c, err := SpeedtestCLIConfigFromEnv()
+		if err != nil {
+			return nil, err
+		}
+		return NewSpeedtestCLI(c)
 	default:
 		return nil, fmt.Errorf("unsupported speed test engine %q", name)
 	}

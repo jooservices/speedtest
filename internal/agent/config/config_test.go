@@ -114,7 +114,7 @@ func TestLoadErrors(t *testing.T) {
 		{
 			name:    "unknown engine",
 			file:    "engine: speedtest-cli\n",
-			wantErr: "engine must be ookla or librespeed",
+			wantErr: "engine must be ookla, librespeed or speedtestcli",
 		},
 		{
 			name:    "download not an integer",
