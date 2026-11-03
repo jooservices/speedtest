@@ -47,6 +47,8 @@ type Options struct {
 	OwnerSchedules OwnerSchedulesStore
 	// OwnerResults optionally serves the dashboard result API (list, detail, CSV export).
 	OwnerResults OwnerResultsStore
+	// OwnerStats optionally serves the owner statistics API.
+	OwnerStats OwnerStatsStore
 	// Install optionally serves /install.sh and /download/<artifact>.
 	Install  http.Handler
 	AgentAPI agentapi.Store
@@ -88,6 +90,10 @@ func NewHandler(options Options) http.Handler {
 	if options.OwnerResults != nil {
 		ownerResultsHandler = newOwnerResultsHandler(options.OwnerResults, authHandler, options.AgentRateLimit)
 	}
+	var ownerStatsHandler http.Handler
+	if options.OwnerStats != nil {
+		ownerStatsHandler = newOwnerStatsHandler(options.OwnerStats, authHandler, options.AgentRateLimit)
+	}
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/auth" || strings.HasPrefix(r.URL.Path, "/api/auth/"):
@@ -98,6 +104,8 @@ func NewHandler(options Options) http.Handler {
 			ownerSchedulesHandler.ServeHTTP(w, r)
 		case ownerResultsHandler != nil && ownerResultsRoute(r.URL.Path):
 			ownerResultsHandler.ServeHTTP(w, r)
+		case ownerStatsHandler != nil && ownerStatsRoute(r.URL.Path):
+			ownerStatsHandler.ServeHTTP(w, r)
 		case r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/"):
 			apiHandler.ServeHTTP(w, r)
 		case options.Install != nil && (r.URL.Path == "/install.sh" || strings.HasPrefix(r.URL.Path, "/download/")):

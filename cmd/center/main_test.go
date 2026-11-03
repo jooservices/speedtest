@@ -440,7 +440,7 @@ func TestServeStartsBackgroundJobsAndStopsThem(t *testing.T) {
 	cfg := config.CenterConfig{AppEnv: "local", HTTPAddr: "127.0.0.1:0"}
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(ctx, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), io.Discard, cfg, nil, nil, nil, nil, nil, nil, nil, background)
+		done <- serve(ctx, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), io.Discard, cfg, nil, nil, nil, nil, nil, nil, nil, nil, background)
 	}()
 	select {
 	case <-started:
