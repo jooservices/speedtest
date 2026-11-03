@@ -69,6 +69,13 @@ synthetic defaults `test-enrollment-token`, `test-node-credential`, `test-node-1
   without a second record. Empty or over-100 batches return 422.
 - `POST /api/agent/heartbeat` requires that bearer, records `Heartbeat`s and
   returns 200 with the server's RFC3339 receive time.
+- `GET /api/agent/config` requires that bearer; `WithConfig(etag, config)` sets
+  the effective schedule and quiet hours. Matching `If-None-Match` returns 304.
+  `ConfigRequests()` records the conditional headers.
+- `GET /api/agent/commands` returns commands set with `WithCommands(...)` or
+  `QueueCommand(...)`; polling intentionally redelivers them for deduplication
+  tests. `POST /api/agent/commands/{id}/ack` records acknowledgements in `Acks()`.
+  The double does not remove acknowledged commands or validate progress.
 
 Malformed JSON returns 400; wrong tokens/credentials return 401. Success uses
 the API envelope; errors use an RFC9457 problem. `Enrollments()`, `Results()` and
@@ -95,4 +102,17 @@ Run self-tests (Go skips `testdata` in `./...`, so name the fake explicitly):
 ```sh
 go test -cover ./... ./internal/agent/testdata/fake-speedtest
 go test -race ./... ./internal/agent/testdata/fake-speedtest
+```
+
+Scheduler tests inject `sched.Clock` and a jitter function, advance virtual time,
+and assert exact offset slots, quiet windows, live configuration changes,
+overrun logging, stale timer rejection and single-run serialization. Controller
+HTTP tests cover ETags, offline retention, acknowledgement retries, bounded
+unacknowledged history, heartbeat isolation, cancellation and unsafe responses.
+`cmd/agent` also runs the real control/scheduler wiring against the center double
+and fake executable without a database or external speed measurement:
+
+```sh
+go test -race -v ./cmd/agent -run TestRunAgentControlAndEngine
+go test -race -cover ./internal/agent/control ./internal/agent/sched
 ```

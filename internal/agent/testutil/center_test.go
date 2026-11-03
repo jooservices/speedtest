@@ -396,3 +396,129 @@ func TestBatchLimitAndSliceSnapshots(t *testing.T) {
 		t.Fatal("heartbeat slice aliases recorded entries")
 	}
 }
+
+func TestConfigCommandsAndAckEndpoints(t *testing.T) {
+	c := NewCenter(
+		WithConfig("5", AgentConfigFull{
+			Revision: "5", Name: "node", ExpectedDown: 300, ExpectedUp: 150,
+			Schedule: ScheduleInput{Interval: 30, Offset: 3, Enabled: true},
+			Quiet:    QuietHours{QuietStart: "01:00", QuietEnd: "02:00", Timezone: "UTC"},
+		}),
+		WithCommands(Command{ID: "c1", Type: "run_now"}),
+	)
+	t.Cleanup(c.Close)
+	cred := enroll(t, c)
+
+	// Config fetch returns the configured body with its ETag.
+	get := func(path string) (*http.Response, []byte) {
+		req, _ := http.NewRequest(http.MethodGet, c.URL+path, nil)
+		req.Header.Set("Authorization", "Bearer "+cred)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("get %s: %v", path, err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		var buf bytes.Buffer
+		if _, err := buf.ReadFrom(resp.Body); err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		return resp, buf.Bytes()
+	}
+
+	resp, body := get("/api/agent/config")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("config status = %d, want 200; body %s", resp.StatusCode, body)
+	}
+	if resp.Header.Get("ETag") != "5" {
+		t.Fatalf("config ETag = %q, want 5", resp.Header.Get("ETag"))
+	}
+	if !bytes.Contains(body, []byte(`"interval":30`)) || !bytes.Contains(body, []byte(`"offset":3`)) {
+		t.Fatalf("config body = %s", body)
+	}
+
+	// Conditional fetch with the matching etag returns 304.
+	req, _ := http.NewRequest(http.MethodGet, c.URL+"/api/agent/config", nil)
+	req.Header.Set("Authorization", "Bearer "+cred)
+	req.Header.Set("If-None-Match", "5")
+	r2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("conditional config: %v", err)
+	}
+	_ = r2.Body.Close()
+	if r2.StatusCode != http.StatusNotModified {
+		t.Fatalf("conditional config status = %d, want 304", r2.StatusCode)
+	}
+	if got := c.ConfigRequests(); len(got) != 2 || got[0] != "" || got[1] != "5" {
+		t.Fatalf("ConfigRequests() = %q, want [\"\", \"5\"]", got)
+	}
+
+	// Poll returns queued commands.
+	resp, body = get("/api/agent/commands")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("commands status = %d, want 200; body %s", resp.StatusCode, body)
+	}
+	if !bytes.Contains(body, []byte(`"id":"c1"`)) || !bytes.Contains(body, []byte(`"type":"run_now"`)) {
+		t.Fatalf("commands body = %s", body)
+	}
+
+	// Ack records the command id and body.
+	code, _ := postJSON(t, c.URL+"/api/agent/commands/c1/ack", cred, CommandAck{Status: "succeeded"})
+	if code != http.StatusOK {
+		t.Fatalf("ack status = %d, want 200", code)
+	}
+	acks := c.Acks()
+	if len(acks) != 1 || acks[0].CommandID != "c1" || acks[0].Ack.Status != "succeeded" {
+		t.Fatalf("Acks() = %+v", acks)
+	}
+}
+
+func TestControlEndpointErrorsAndSnapshots(t *testing.T) {
+	c := NewCenter()
+	defer c.Close()
+	c.QueueCommand(Command{ID: "queued", Type: "pause"})
+	for _, path := range []string{"/api/agent/config", "/api/agent/commands"} {
+		resp, err := http.Get(c.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != 401 {
+			t.Fatalf("%s: %d", path, resp.StatusCode)
+		}
+	}
+	code, _ := postJSON(t, c.URL+"/api/agent/commands/queued/ack", "wrong", CommandAck{})
+	if code != 401 {
+		t.Fatal(code)
+	}
+	req, err := http.NewRequest(http.MethodPost, c.URL+"/api/agent/commands/queued/ack", strings.NewReader("bad"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer test-node-credential")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatal(resp.StatusCode)
+	}
+}
+
+func TestConfigWithoutETagReturnsBody(t *testing.T) {
+	c := NewCenter(WithConfig("", AgentConfigFull{Revision: "unversioned"}))
+	defer c.Close()
+	req, err := http.NewRequest(http.MethodGet, c.URL+"/api/agent/config", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer test-node-credential")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("initial unversioned config returned %d", resp.StatusCode)
+	}
+}

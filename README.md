@@ -4,7 +4,7 @@ Monitor the real speed of every internet connection you own, around the clock.
 
 Small agents on your machines run a speed test on a schedule and report to one dashboard. The dashboard stores every result, remembers which public IP each machine used and where it is, and shows averages, trends and the best and worst hours.
 
-**Status: interface preview and backend foundation.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The agent can enroll and run as a service but does not execute speed tests or report results yet. The command center serves the UI, checks database readiness, provides owner authentication and session endpoints, and supports node enrollment, credential lifecycle and authenticated agent ingestion endpoints (results, configuration, heartbeat, commands and observed IP). Other product API areas are still being implemented. PostgreSQL migrations, a connection pool, and geolocation modules are available.
+**Status: interface preview and backend foundation.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The command center serves the UI, checks database readiness, provides owner authentication and session endpoints, and supports node enrollment, credential lifecycle and authenticated agent ingestion endpoints (results, configuration, heartbeat, commands and observed IP). The agent can enroll, run scheduled speed tests, heartbeat every 30 s, sync its schedule with ETags, and handle `run_now`, `pause`, `resume` and `update_config`; spooled result reporting is being added. Other product API areas are still being implemented. PostgreSQL migrations, a connection pool, and geolocation modules are available.
 
 ## View the preview
 
@@ -58,7 +58,11 @@ cmd/center/             command center entry point
 internal/agent/         node agent implementation
 internal/agent/config/  loads the node's own config.yaml
 internal/agent/enroll/  exchanges an enrollment token for a 0600 credential
-internal/center/auth/  Argon2id password hashes, owner sessions and login limits
+internal/agent/engine/  executes Ookla or LibreSpeed speed tests
+internal/agent/netpath/ validates a node's local network binding
+internal/agent/sched/   runs tests on the node's local schedule (interval + offset, quiet hours)
+internal/agent/control/ heartbeats, syncs configuration (ETag) and acknowledges commands
+internal/center/auth/   Argon2id password hashes, owner sessions and login limits
 internal/center/server/ command center HTTP handlers and lifecycle
 internal/center/db/     PostgreSQL pool and migration helpers
 internal/center/geo/    offline and online geolocation
@@ -145,9 +149,32 @@ interface must exist, be up, and have an IP address; the selected source IP
 must be assigned locally. See [Linux multi-uplink routing](docs/multi-wan.md)
 for policy-routing prerequisites and verification.
 
-Only the configuration and credential file paths are agent environment
-overrides; node values come from `config.yaml`. Malformed YAML, unknown keys,
-and invalid values fail fast with a configuration error.
+Only the configuration and credential file paths and center address are agent
+environment overrides; node values come from `config.yaml`. Malformed YAML,
+unknown keys, and invalid values fail fast with a configuration error.
+
+### Agent control loop
+
+`agent run` also reads `SPEEDTEST_AGENT_CENTER` (the same origin given to
+`agent enroll`) and connects to it as a background service:
+
+- **Heartbeat** every 30 s with the agent version, process uptime and the last
+  test time.
+- **Configuration sync** using `GET /api/agent/config` with `If-None-Match`;
+  an unchanged configuration returns 304; a changed schedule is applied
+  without restart. The schedule (interval, offset, enabled) and quiet hours come
+  from the center; the local `config.yaml` only seeds the bootstrap interval.
+- **Commands** are polled and acknowledged (`run_now`, `pause`, `resume`,
+  `update_config`); a command is executed once and redeliveries are only
+  re-acknowledged.
+- **Offline behavior**: if the center is unreachable the agent keeps the last
+  known schedule and only logs.
+
+The local scheduler runs one test at a time on the slot grid
+`epoch + offset + k*interval` with a small jitter, honors quiet hours and the
+enabled flag, and never stacks a test that overruns its slot (the missed slot is
+skipped and logged). See [agent control and scheduling](docs/agent-control.md)
+for configuration, command semantics and operational checks.
 
 The command center listens on `SPEEDTEST_HTTP_ADDR` (default
 `127.0.0.1:8080`). Its UI is embedded in the binary by default. For development, set
