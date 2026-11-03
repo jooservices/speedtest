@@ -54,7 +54,7 @@ export async function startStack({ seed = true } = {}) {
   run('go', ['build', '-o', join(out, 'bin', 'fake-speedtest'), './internal/agent/testdata/fake-speedtest']);
   sql(db, 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
   const port = await freePort();
-  const centerEnv = { ...process.env, ...env, APP_ENV: 'local', APP_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=', SPEEDTEST_HTTP_ADDR: `127.0.0.1:${port}`,
+  const centerEnv = { ...process.env, ...env, APP_ENV: 'local', APP_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=', SPEEDTEST_HTTP_ADDR: `127.0.0.1:${port}`, // gitleaks:allow (fixed test-only key)
     SPEEDTEST_ADMIN_EMAIL: '' };
   run('go', ['run', './internal/center/db/cmd/migrate', 'up'], { env: centerEnv });
   run(join(out, 'bin', 'center'), ['seed-admin'], { env: centerEnv });

@@ -26,7 +26,7 @@ import (
 
 const (
 	testNodeID = "10000000-0000-4000-8000-000000000001"
-	appKey     = "0123456789abcdef0123456789abcdef"
+	appKey     = "0123456789abcdef0123456789abcdef" // gitleaks:allow (fixed test-only key)
 )
 
 func openIntegrationDB(t *testing.T) (*pgxpool.Pool, context.Context) {

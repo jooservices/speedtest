@@ -1,0 +1,3 @@
+# Fixed, test-only keys (not secrets)
+66d14e9de4a9a2b8e695bdd8e7389cf0c9fa21a7:tests/e2e/lib.mjs:generic-api-key:57
+d31b6948417a01516995f467d5410e2b8bbb40b7:internal/center/alerts/integration_test.go:generic-api-key:29
