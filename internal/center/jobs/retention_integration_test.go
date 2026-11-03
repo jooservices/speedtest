@@ -141,3 +141,32 @@ func TestRetentionStopsWhenCancelledAndLoopReturns(t *testing.T) {
 		t.Fatal("Loop did not return after cancellation")
 	}
 }
+
+func TestJobRegistryRecordsAndReadsStatus(t *testing.T) {
+	pool, ctx := openPool(t)
+	id, err := Start(ctx, pool, "test-job")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := &Registry{DB: pool}
+	job, err := registry.Get(ctx, id)
+	if err != nil || job["status"] != StatusRunning || job["error"] != nil || job["id"] != id {
+		t.Fatalf("running job = %v %v", job, err)
+	}
+	if err := Finish(ctx, pool, id, nil); err != nil {
+		t.Fatal(err)
+	}
+	if job, _ = registry.Get(ctx, id); job["status"] != StatusSucceeded {
+		t.Fatalf("finished job = %v", job)
+	}
+	failed, _ := Start(ctx, pool, "test-job")
+	if err := Finish(ctx, pool, failed, context.DeadlineExceeded); err != nil {
+		t.Fatal(err)
+	}
+	if job, _ = registry.Get(ctx, failed); job["status"] != StatusFailed || job["error"] == nil || job["error"] == context.DeadlineExceeded.Error() {
+		t.Fatalf("failed job must carry a safe message: %v", job)
+	}
+	if _, err := registry.Get(ctx, "00000000-0000-4000-8000-0000000000ff"); err != ErrNotFound {
+		t.Fatalf("unknown job = %v", err)
+	}
+}

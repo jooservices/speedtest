@@ -259,6 +259,9 @@ func TestMigrationBackfillAndRollbackIntegration(t *testing.T) {
 	if err := db.Migrate(t.Context(), p, "down"); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Migrate(t.Context(), p, "down"); err != nil {
+		t.Fatal(err)
+	}
 	// Populate version-3 data, including an obsolete history row, as a pre-upgrade fixture.
 	s.Hook = nil
 	save(t, s, nodeA, result(20, 3, "203.0.113.3"))

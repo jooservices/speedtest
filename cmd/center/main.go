@@ -19,6 +19,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
+	"github.com/jooservices/speedtest/internal/center/alerts"
 	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/install"
@@ -101,16 +102,23 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 	defer func() { _ = closeGeo() }()
 	nodeService := nodes.NewService(pool, cfg.AppKey)
 	owner := &ownerapi.Store{DB: pool}
+	alertStore := &alerts.Store{DB: pool, AppKey: cfg.AppKey, Logger: logger}
+	retention := &jobs.Retention{DB: pool, Logger: logger}
 	return serve(ctx, args, logger, stderr, cfg, services{
 		Auth:           service,
 		NodeCredential: nodeService,
 		Pinger:         poolPinger{pool: pool},
-		Agent:          &agentapi.Postgres{Pool: pool, Hook: watcher},
+		Agent:          &agentapi.Postgres{Pool: pool, Hook: agentapi.ResultHookChain{watcher, alertStore}},
 		OwnerNodes:     owner,
 		OwnerResults:   owner,
 		OwnerSchedules: owner,
 		OwnerStats:     &stats.Store{DB: pool},
-		Background:     (&jobs.Retention{DB: pool, Logger: logger}).Loop,
+		OwnerAlerts:    alertStore,
+		OwnerJobs:      &jobs.Registry{DB: pool},
+		Background: func(ctx context.Context) {
+			go retention.Loop(ctx)
+			alertStore.Loop(ctx)
+		},
 	})
 }
 
@@ -142,6 +150,8 @@ type services struct {
 	OwnerResults   server.OwnerResultsStore
 	OwnerSchedules server.OwnerSchedulesStore
 	OwnerStats     server.OwnerStatsStore
+	OwnerAlerts    server.OwnerAlertsStore
+	OwnerJobs      server.OwnerJobsStore
 	// Background runs until the context ends, for example the daily retention job.
 	Background func(context.Context)
 }
@@ -187,6 +197,8 @@ func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Wr
 		OwnerResults:      svc.OwnerResults,
 		OwnerSchedules:    svc.OwnerSchedules,
 		OwnerStats:        svc.OwnerStats,
+		OwnerAlerts:       svc.OwnerAlerts,
+		OwnerJobs:         svc.OwnerJobs,
 		AgentAPI:          svc.Agent,
 		Logger:            logger,
 		UI:                ui,

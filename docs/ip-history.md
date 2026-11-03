@@ -81,13 +81,14 @@ FROM ip_change_signals WHERE consumed_at IS NULL
 ORDER BY ts,result_id LIMIT 100 FOR UPDATE SKIP LOCKED;
 ```
 
-Process each row and set `consumed_at` **in the same transaction** as alert state
-and event persistence; deduplicate event effects by result UUID. On failure,
-roll back, leaving the signal pending for retry. The pending partial index
-supports draining without rescanning consumed rows. Alert rule evaluation and
-notification delivery are downstream scope, not implemented here. Signals are
-owned by their node/result and deleted with them; retention must drain pending
-signals before deleting results. History corrections do not rewrite signals.
+JOOST-29 processes each row and sets `consumed_at` **in the same transaction**
+as alert event persistence; event effects are deduplicated by result UUID. On
+failure, the transaction rolls back, leaving the signal pending for retry. The
+pending partial index supports draining without rescanning consumed rows. See
+[the alert engine contract](alerts.md) for its startup and periodic bounded
+drain and its notification outbox to JOOST-30. Signals are owned by their
+node/result and deleted with them; retention must drain pending signals before
+deleting results. History corrections do not rewrite signals.
 
 Operator checks: `/readyz` checks PostgreSQL; monitor pending signal count/age
 once JOOST-29 is running, plus ingestion errors and generic location/late logs.
