@@ -65,13 +65,13 @@ func TestOwnerStatisticsHTTPFlowIntegration(t *testing.T) {
 	seedResult := func(id int, node string, at time.Time, status string, down, up, ping, jitter, loss any, ip string) {
 		t.Helper()
 		var serverID any = 9
-		var errorText any
+		var errorText, serverJSON any = nil, `{"id":9,"name":"Fixture","city":"C","sponsor":"P"}`
 		if status == "failed" {
-			serverID, errorText = nil, "fixture failure"
+			serverID, errorText, serverJSON = nil, "fixture failure", nil
 		}
 		resultID := fmt.Sprintf("00000000-0000-4000-8000-%012x", id)
-		_, err := pool.Exec(ctx, `INSERT INTO results (id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,loss_percent,server_id,ip,threads,error)
-VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,4,$12)`, resultID, node, at, status, down, up, ping, jitter, loss, serverID, ip, errorText)
+		_, err := pool.Exec(ctx, `INSERT INTO results (id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,loss_percent,server_id,server,ip,threads,error)
+VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$13::jsonb,$11,4,$12)`, resultID, node, at, status, down, up, ping, jitter, loss, serverID, ip, errorText, serverJSON)
 		if err != nil {
 			t.Fatal(err)
 		}

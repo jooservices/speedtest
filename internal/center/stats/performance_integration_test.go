@@ -78,14 +78,15 @@ func TestStatisticsQueriesMeetLatencyTargetOnOneYearDataset(t *testing.T) {
  FROM generate_series(1, $1::int) AS node(node_no)
  CROSS JOIN generate_series(1, $2::int) AS sample(sample_no)
 )
-INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,loss_percent,server_id,ip,threads,error)
+INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,loss_percent,server_id,server,ip,threads,error)
 SELECT g.result_id, n.id, $3::timestamptz + (g.sample_no - 1) * interval '30 minutes', g.status,
        CASE WHEN g.status='failed' THEN NULL ELSE 100 + g.node_no * 10 + (g.sample_no % 100) END,
        CASE WHEN g.status='failed' THEN NULL ELSE 20 + g.node_no + (g.sample_no % 30) END,
        CASE WHEN g.status='failed' THEN NULL ELSE 10 + (g.sample_no % 20) END,
        CASE WHEN g.status='failed' THEN NULL ELSE (g.sample_no % 5)::float8 END,
        CASE WHEN g.status='failed' THEN NULL ELSE (g.sample_no % 10)::float8 END,
-       CASE WHEN g.status='failed' THEN NULL ELSE 1 END, $4::inet, 4,
+       CASE WHEN g.status='failed' THEN NULL ELSE 1 END,
+       CASE WHEN g.status='failed' THEN NULL ELSE '{"id":1,"name":"Fixture","city":"C","sponsor":"P"}'::jsonb END, $4::inet, 4,
        CASE WHEN g.status='failed' THEN 'performance fixture failure' ELSE NULL END
 FROM generated g JOIN nodes n ON n.name = 'Perf-' || g.node_no`, nodeCount, samplesPerNode, start, ip)
 	if err != nil {
