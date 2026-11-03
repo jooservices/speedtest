@@ -17,6 +17,11 @@ def run(pkg):
     return subprocess.run(["go", "test", "-count=1", "-p", "1", "-tags", "integration", *pkg.split()], cwd=ROOT, capture_output=True, text=True).returncode
 
 def main():
+    # A mutant only counts as caught when the untouched code passes the same tests: otherwise a missing
+    # fixture or database would make every mutant look caught.
+    for pkg in sorted({m[4] for m in MUTATIONS}):
+        if run(pkg) != 0:
+            print(f"BASELINE FAILS for {pkg}: fix the environment before trusting mutation results"); return 2
     caught = 0
     for name, rel, old, new, pkg in MUTATIONS:
         path = ROOT / rel

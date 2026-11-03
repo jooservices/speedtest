@@ -26,8 +26,9 @@ up)
 	[ -f "$ENV_FILE" ] || { echo "missing $ENV_FILE (see docs/deployment.md)"; exit 1; }
 	[ "$(stat -c %a "$ENV_FILE")" = 600 ] || { echo "$ENV_FILE must have mode 0600"; exit 1; }
 	docker volume create "$VOLUME" >/dev/null
-	# Host networking: the shared PostgreSQL listens on the host loopback; the center binds to
-	# 127.0.0.1 only, so nothing is exposed beyond this machine.
+	# Host networking: the shared PostgreSQL listens on the host loopback. STAGING_BIND (default 0.0.0.0) makes the
+	# center reachable on the LAN for the owner review over plain HTTP (staging only: non-default owner
+	# password and do not route this port beyond the LAN); set STAGING_BIND=127.0.0.1 to keep it local.
 	docker run -d --name "$NAME" --restart unless-stopped --network host \
 		--env-file "$ENV_FILE" -v "$VOLUME":/var/lib/speedtest "$IMAGE"
 	;;

@@ -6,6 +6,7 @@
 # Keeps the newest $KEEP (default 14) dumps.
 set -euo pipefail
 dir="${1:-./backups}"; keep="${KEEP:-14}"
+case "$keep" in ''|*[!0-9]*) echo "KEEP must be a non-negative integer" >&2; exit 2;; esac
 : "${SPEEDTEST_DB_NAME:?set SPEEDTEST_DB_NAME}"
 export PGPASSWORD="${SPEEDTEST_DB_PASSWORD:-}"
 umask 077; mkdir -p "$dir"
@@ -15,5 +16,6 @@ pg_dump -h "${SPEEDTEST_DB_HOST:-127.0.0.1}" -p "${SPEEDTEST_DB_PORT:-5432}" -U 
   --format=custom --no-owner --file "$out.part" "$SPEEDTEST_DB_NAME"
 pg_restore --list "$out.part" >/dev/null   # the archive must be readable
 mv "$out.part" "$out"
-ls -1t "$dir"/"${SPEEDTEST_DB_NAME}"-*.dump 2>/dev/null | tail -n +"$((keep + 1))" | xargs -r rm --
+# NUL-delimited so directory and file names with spaces or newlines are safe; newest kept.
+find "$dir" -maxdepth 1 -type f -name "${SPEEDTEST_DB_NAME}-*.dump" -printf '%T@ %p\0' | sort -z -rn | tail -z -n +"$((keep + 1))" | cut -z -d' ' -f2- | xargs -0 -r rm --
 echo "backup ok: $out ($(stat -c %s "$out") bytes, $(( $(date +%s) - start ))s)"
