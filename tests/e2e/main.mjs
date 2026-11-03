@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import http from 'node:http';
 import { startStack, startAgent, stopAll, query, root } from './lib.mjs';
 import { steps } from './steps.mjs';
+import { recordContract } from './contract.mjs';
 
 const shots = join(root, '.tmp', 'e2e', 'shots');
 mkdirSync(shots, { recursive: true });
@@ -15,6 +16,7 @@ const browser = process.env.PW_TEST_CONNECT_WS_ENDPOINT ? await chromium.connect
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
 const page = await context.newPage();
 const problems = [];
+const contractRecorder = recordContract(page, stack.origin);
 page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') problems.push(`${m.type()}: ${m.text()}`); });
 page.on('pageerror', e => problems.push(`pageerror: ${e.message}`));
 
@@ -59,6 +61,10 @@ for (const [name, scenario] of scenarios) {
     console.log(`FAIL ${name}: ${error.message}`);
   }
 }
+const contractResult = contractRecorder.check();
+console.log(`contract: ${contractResult.responses} responses checked against docs/openapi.yaml, ${contractResult.violations.length} violations`);
+for (const v of contractResult.violations) console.log('  CONTRACT ' + v);
+if (contractResult.violations.length && !only) failed++;
 await browser.close();
 receiverServer.close();
 stopAll();

@@ -175,6 +175,22 @@ spooling, command progress, atomic configuration and signal behavior. The local
 The center's effective configuration supersedes these bootstrap measurement
 settings after a valid ETag update.
 
+## Integration, contract and mutation checks (JOOST-45)
+
+```bash
+make integration-e2e   # integration tests (-race, serial), browser E2E against a real center, mutation checks
+make test-matrix       # every docs/openapi.yaml operation must have a test (part of make ci)
+make mutation-check    # five deliberate breakages the suite must catch
+```
+
+`scripts/test-matrix.mjs` finds the test files that mention each operation's path and
+regenerates [test-matrix.md](test-matrix.md) (`node scripts/test-matrix.mjs --write`); CI fails on
+an untested operation or a stale matrix. The E2E run (`tests/e2e/contract.mjs`) validates every
+JSON response the browser receives from the real center against the OpenAPI schemas, including the
+envelope (`meta`, `errors: null`) and RFC 9457 problems, and fails on any violation. The browser
+needs `PLAYWRIGHT_CHROMIUM_EXECUTABLE` or an installed Playwright Chromium (see below).
+`scripts/mutation-check.py` lists its breakages at the top of the file; add one when a bug escapes.
+
 ## UI client and store checks (JOOST-37)
 
 The browser has no build step or production npm dependency. For the preview use

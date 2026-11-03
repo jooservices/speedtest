@@ -170,3 +170,21 @@ func TestJobRegistryRecordsAndReadsStatus(t *testing.T) {
 		t.Fatalf("unknown job = %v", err)
 	}
 }
+
+// A result just inside the window is kept and one just outside is deleted: guards against a cutoff
+// that is off by a day in either direction.
+func TestRetentionCutoffIsExactlyTheConfiguredDays(t *testing.T) {
+	pool, ctx := openPool(t)
+	seed(t, ctx, pool, 1, 1)
+	setRetention(t, ctx, pool, "30")
+	for name, age := range map[string]string{"inside": "29 days 23 hours", "outside": "30 days 1 hour"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO results (id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads)
+			VALUES (gen_random_uuid(),'00000000-0000-4000-8000-000000000a01',$1::timestamptz - $2::interval,'ok',1,1,1,1,'{"id":1,"name":"s","city":"c","sponsor":"p"}','203.0.113.5',4)`, now, age); err != nil {
+			t.Fatal(name, err)
+		}
+	}
+	res, err := (&Retention{DB: pool, Now: func() time.Time { return now }, BatchSize: 100}).Run(ctx)
+	if err != nil || res.Deleted != 1 || count(t, ctx, pool) != 2 {
+		t.Fatalf("deleted %d, %d left (want only the row older than 30 days gone): err %v", res.Deleted, count(t, ctx, pool), err)
+	}
+}
