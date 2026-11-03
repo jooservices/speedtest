@@ -33,7 +33,10 @@ type Pinger interface {
 
 // Options configures the HTTP handlers.
 type Options struct {
-	Pinger            Pinger
+	Pinger Pinger
+	// Metrics optionally serves GET /metrics; MetricsToken, when set, is the bearer token required.
+	Metrics           MetricsSource
+	MetricsToken      string
 	Auth              AuthService
 	RequireHTTPS      bool
 	TrustedProxyCIDRs string
@@ -168,6 +171,8 @@ func NewHandler(options Options) http.Handler {
 			options.Install.ServeHTTP(w, r)
 		case r.URL.Path == "/healthz":
 			serveGetRoute(w, r, http.HandlerFunc(healthz))
+		case options.Metrics != nil && r.URL.Path == "/metrics":
+			serveGetRoute(w, r, metricsHandler(options.Metrics, options.MetricsToken))
 		case r.URL.Path == "/readyz":
 			serveGetRoute(w, r, readinessHandler)
 		default:
@@ -176,6 +181,7 @@ func NewHandler(options Options) http.Handler {
 	})
 
 	var handler http.Handler = dispatch
+	handler = withSecurityHeaders(handler)
 	handler = recoverPanics(handler, logger)
 	handler = logRequests(handler, logger)
 	handler = withRequestID(handler)

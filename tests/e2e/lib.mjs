@@ -69,7 +69,7 @@ export async function startStack({ seed = true } = {}) {
     await new Promise(r => setTimeout(r, 100));
     if (i === 99) throw new Error('the center did not become ready');
   }
-  return { origin, db, env: centerEnv };
+  return { origin, db, env: centerEnv, pid: center.pid };
 }
 
 // Starts a real agent for an enrolment token and waits until the center has seen it.
