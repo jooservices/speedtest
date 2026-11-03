@@ -440,7 +440,7 @@ func TestStartupClosesListenerOnInstallerFailure(t *testing.T) {
 	}
 	if err = listener.Close(); err != nil {
 		t.Fatal(err)
-    }
+	}
 }
 
 func TestServeStartsBackgroundJobsAndStopsThem(t *testing.T) {

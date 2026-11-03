@@ -392,7 +392,9 @@ referenced result belongs to the same node. Terminal retry preserves `ackedAt`.
 `agentapi.ResultHook.AfterResultStored` runs only after a new result is inserted,
 inside that result's transaction. The center wires `ipwatch.Watcher` to maintain
 IP history and per-node/address counters atomically. Timelines use stored
-`(ts,result UUID)` measurement order, including failed results. Late observations
+`(ts,result UUID)` measurement order and include failed results with a known IP.
+Failed results with a NULL IP are stored but skipped by history, counters,
+geolocation and the change-signal outbox. Late observations
 repair adjacent transitions but emit no alerts; only a new newest result with a
 different IP emits a durable `ip_changed` signal for JOOST-29. Duplicate UUIDs
 never run the hook. Hook errors roll back the result and all derived state.

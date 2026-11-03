@@ -1,5 +1,5 @@
 -- +goose Up
-CREATE INDEX results_node_timeline_idx ON results(node_id, ts, id) INCLUDE (ip);
+CREATE INDEX results_node_timeline_idx ON results(node_id, ts, id) INCLUDE (ip) WHERE ip IS NOT NULL;
 CREATE TABLE node_ip_addresses (
     node_id uuid NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     ip inet NOT NULL REFERENCES ip_addresses(ip),
@@ -26,12 +26,12 @@ INSERT INTO node_ip_addresses
 SELECT node_id, ip, count(*), min(ts), max(ts), count(*) FILTER (WHERE status <> 'failed'),
        coalesce(sum(down_mbps::numeric) FILTER (WHERE status <> 'failed'),0),
        coalesce(sum(up_mbps::numeric) FILTER (WHERE status <> 'failed'),0)
-FROM results GROUP BY node_id, ip;
+FROM results WHERE ip IS NOT NULL GROUP BY node_id, ip;
 -- Rebuild the derived timeline deterministically, without replaying old alerts.
 DELETE FROM node_ip_history;
 INSERT INTO node_ip_history (id,node_id,ts,from_ip,to_ip)
 SELECT id,node_id,ts,previous_ip,ip FROM (
-    SELECT id,node_id,ts,ip,lag(ip) OVER (PARTITION BY node_id ORDER BY ts,id) AS previous_ip FROM results
+    SELECT id,node_id,ts,ip,lag(ip) OVER (PARTITION BY node_id ORDER BY ts,id) AS previous_ip FROM results WHERE ip IS NOT NULL
 ) timeline WHERE previous_ip IS DISTINCT FROM ip;
 
 -- +goose Down

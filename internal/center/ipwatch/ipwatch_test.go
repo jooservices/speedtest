@@ -79,6 +79,10 @@ func testTransaction(before, after *position, cached bool) *transaction {
 	tx.rows = append(tx.rows, row{values: []any{[]byte(`{"city":"fixture"}`), "fixture", cached}})
 	return tx
 }
+func hookResult() agentapi.Result {
+	ip := "203.0.113.2"
+	return agentapi.Result{ID: "result", Status: "failed", IP: &ip}
+}
 func TestTimelineBranches(t *testing.T) {
 	different := &position{id: "previous", ip: "203.0.113.1"}
 	same := &position{id: "same", ip: "203.0.113.2"}
@@ -94,7 +98,7 @@ func TestTimelineBranches(t *testing.T) {
 			tx := testTransaction(tc.before, tc.after, true)
 			var log bytes.Buffer
 			w := &Watcher{Logger: slog.New(slog.NewTextHandler(&log, nil))}
-			err := w.AfterResultStored(t.Context(), tx, "node", agentapi.Result{ID: "result", Status: "failed"})
+			err := w.AfterResultStored(t.Context(), tx, "node", hookResult())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -118,7 +122,7 @@ func TestTransactionFailures(t *testing.T) {
 		t.Run("query"+string(rune('0'+i)), func(t *testing.T) {
 			tx := testTransaction(different, nil, true)
 			tx.rows[i].err = errFailure
-			if err := (&Watcher{}).AfterResultStored(t.Context(), tx, "node", agentapi.Result{ID: "result"}); err == nil {
+			if err := (&Watcher{}).AfterResultStored(t.Context(), tx, "node", hookResult()); err == nil {
 				t.Fatal("query failure lost")
 			}
 		})
@@ -128,19 +132,19 @@ func TestTransactionFailures(t *testing.T) {
 			tx := testTransaction(different, nil, false)
 			tx.execErrAt = i
 			w := &Watcher{Offline: &lookup{}}
-			if err := w.AfterResultStored(t.Context(), tx, "node", agentapi.Result{ID: "result"}); err == nil {
+			if err := w.AfterResultStored(t.Context(), tx, "node", hookResult()); err == nil {
 				t.Fatal("write failure lost", tx.execs)
 			}
 		})
 	}
 	tx := testTransaction(nil, different, true)
 	tx.execErrAt = 2
-	if err := (&Watcher{}).AfterResultStored(t.Context(), tx, "node", agentapi.Result{ID: "result"}); !errors.Is(err, errFailure) {
+	if err := (&Watcher{}).AfterResultStored(t.Context(), tx, "node", hookResult()); !errors.Is(err, errFailure) {
 		t.Fatal(err)
 	}
 	tx = testTransaction(different, &position{id: "next", ip: "203.0.113.2"}, true)
 	tx.execErrAt = 2
-	if err := (&Watcher{}).AfterResultStored(t.Context(), tx, "node", agentapi.Result{ID: "result"}); !errors.Is(err, errFailure) {
+	if err := (&Watcher{}).AfterResultStored(t.Context(), tx, "node", hookResult()); !errors.Is(err, errFailure) {
 		t.Fatal(err)
 	}
 }
@@ -149,10 +153,14 @@ func TestGeoLookupAndDegradation(t *testing.T) {
 		tx := testTransaction(nil, nil, false)
 		source := &lookup{err: err}
 		w := &Watcher{Offline: source, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-		got := w.AfterResultStored(t.Context(), tx, "node", agentapi.Result{ID: "result"})
+		got := w.AfterResultStored(t.Context(), tx, "node", hookResult())
 		if (got != nil) != (err == errFailure) || source.calls != 1 {
 			t.Fatal(got, source.calls)
 		}
+	}
+	tx := &transaction{}
+	if err := (&Watcher{}).AfterResultStored(t.Context(), tx, "node", agentapi.Result{ID: "result"}); err != nil || len(tx.queries) != 0 || len(tx.execs) != 0 {
+		t.Fatal("NULL IP reached the watcher", err, tx.queries, tx.execs)
 	}
 	if (&Watcher{}).logger() != slog.Default() {
 		t.Fatal("default logger")

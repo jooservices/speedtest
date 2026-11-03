@@ -255,9 +255,15 @@ func verifyIPHistoryHTTP(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 	late := strings.ReplaceAll(strings.ReplaceAll(body, "000000000001", "000000000002"), "10:00:00Z", "10:05:00Z")
 	post(late, bearer, 207, 201)
 	post(newest, bearer, 207, 200)
+	lateUnknown := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(body, "000000000001", "000000000004"), "10:00:00Z", "10:07:00Z"), `"203.0.113.1"`, "null")
+	post(lateUnknown, bearer, 207, 201)
 	var tests, history, signals, locations int
 	if err := pool.QueryRow(ctx, `SELECT (SELECT sum(tests) FROM node_ip_addresses),(SELECT count(*) FROM node_ip_history),(SELECT count(*) FROM ip_change_signals),(SELECT count(*) FROM ip_addresses WHERE looked_up_at IS NOT NULL)`).Scan(&tests, &history, &signals, &locations); err != nil || tests != 3 || history != 2 || signals != 1 || locations != 2 {
 		t.Fatal("HTTP IP watch persistence", tests, history, signals, locations, err)
 	}
-	t.Log("PASS: executable HTTP ingestion rejects unauthorized bearer; 201/200 replay outcomes; 3 samples, 2 history openings/transitions, 1 newest-change signal, 2 cached locations; late sample emits no alert")
+	var unknownStored bool
+	if err := pool.QueryRow(ctx, `SELECT ip IS NULL FROM results WHERE id='10000000-0000-4000-8000-000000000004'`).Scan(&unknownStored); err != nil || !unknownStored {
+		t.Fatal("late failed NULL-IP result was not stored", err)
+	}
+	t.Log("PASS: executable HTTP ingestion rejects unauthorized bearer; 201/200 replay outcomes; 3 known-IP samples, 2 history openings/transitions, 1 newest-change signal, 2 cached locations; late known-IP and NULL-IP failures emit no signal")
 }

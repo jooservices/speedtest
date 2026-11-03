@@ -172,6 +172,9 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		if e := db.Migrate(ctx, pool, "down"); e != nil {
 			t.Fatal(e)
 		}
+		if e := db.Migrate(ctx, pool, "down"); e != nil {
+			t.Fatal(e)
+		}
 		var n int
 		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name <> 'goose_db_version'").Scan(&n); e != nil || n != 0 {
 			t.Fatal("rollback left application tables")
@@ -204,6 +207,9 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		}
 	})
 	t.Run("TransactionalRollbackFailure", func(t *testing.T) {
+		if e := db.Migrate(ctx, pool, "down"); e != nil {
+			t.Fatal(e)
+		}
 		if e := db.Migrate(ctx, pool, "down"); e != nil {
 			t.Fatal(e)
 		}

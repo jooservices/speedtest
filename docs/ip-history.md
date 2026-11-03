@@ -6,33 +6,39 @@ remain JOOST-36. Nodes stay independent, even when their addresses alternate.
 
 ## Timeline and counters
 
-The authoritative timeline is a node's results ordered by **stored `(ts,id)`**.
+The authoritative IP timeline is a node's known-IP results ordered by **stored `(ts,id)`**.
 PostgreSQL's microsecond timestamp precision and UUID ordering apply, including
-when two input timestamps differ only below that precision. The node's current
-IP is the last result's IP in this order, not the last received observation:
+when two input timestamps differ only below that precision. Failed results with
+a NULL IP are omitted. The node's current IP is the last known IP in this order,
+not the last received observation:
 
 ```sql
 SELECT host(ip) FROM results WHERE node_id = $1
-ORDER BY ts DESC, id DESC LIMIT 1;
+AND ip IS NOT NULL ORDER BY ts DESC, id DESC LIMIT 1;
 ```
 
 A `node_ip_history` row opens on the first observation (`from_ip IS NULL`) and
 on every consecutive IP difference. Its ID is the result ID at that boundary;
 its timestamp is the measurement timestamp. Read APIs representing actual changes
-should exclude the initial null-from baseline. Failed tests participate too. Late
+should exclude the initial null-from baseline. Failed tests with a known IP
+participate. Failed results with a NULL IP remain stored but do not enter the
+timeline, counters, geolocation cache, or change-signal outbox. Late known-IP
 results insert, split or merge boundaries: only the new position and its
 immediate successor can change. No full history scan occurs during ingestion.
-The covering `results_node_timeline_idx(node_id,ts,id)` bounds neighbor queries.
+The partial covering `results_node_timeline_idx(node_id,ts,id)` bounds neighbor
+queries while skipping NULL-IP results.
 
 `node_ip_addresses` stores per-node/per-IP `tests`, `first_seen`, `last_seen`,
-`speed_tests`, `down_sum`, and `up_sum`. All samples count as tests; failed samples
-are excluded from speed sums, matching the preview. Compute averages as
+`speed_tests`, `down_sum`, and `up_sum`. Results with known IPs count as tests;
+failed samples are excluded from speed sums, matching the preview. NULL-IP
+failures do not contribute. Compute averages as
 `down_sum / NULLIF(speed_tests,0)` and `up_sum / NULLIF(speed_tests,0)`; null means
 no usable speed, zero is a real speed. Numeric sums avoid float accumulation
 overflow. First/last are min/max measurement timestamps, including late samples.
 
-Ingestion locks the node row **before** inserting the IP placeholder/result.
-Duplicate UUID retries never invoke the hook; conflicting payloads remain 409.
+For a known IP, ingestion locks the node row **before** inserting the IP
+placeholder/result. NULL-IP results skip the IP watcher. Duplicate UUID retries
+never invoke the hook; conflicting payloads remain 409.
 History, counters, geolocation cache and change signals commit with the result,
 or all roll back. Successful locations are stored once in global `ip_addresses`
 and reused across nodes. The shared address uses `FOR NO KEY UPDATE` so cache
@@ -52,7 +58,8 @@ and may retry on later observations under the provider's rate limit/breaker.
 Database/cache errors and cancellation fail the hook, so the agent can retry.
 No engine payload, credential, provider token or SQL error is logged by ipwatch.
 Late observations log `late IP observation reconciled without change signal`
-at info level with node/result IDs; they never emit obsolete alerts.
+at info level with node/result IDs; they never emit obsolete alerts. A failed
+result with a NULL IP is stored without geolocation or derived IP state.
 
 ## Alert-engine handoff (JOOST-29)
 
@@ -88,16 +95,17 @@ A growing queue indicates an absent or failing consumer, not failed ingestion.
 
 ## Migration and verification
 
-Migration 3 creates the covering index, aggregates and outbox, backfills counters,
-and rebuilds history from existing results in measurement order. It generates
-no historical change signals. On large deployments, rehearse migration time and
-locking on an operator-approved database copy before deployment.
+Migration 4 creates the partial covering index, aggregates and outbox. It
+backfills counters and rebuilds history from existing results in measurement
+order, without generating historical change signals or including failed results
+with NULL IPs. On large deployments, rehearse migration time and locking on an
+operator-approved database copy before deployment.
 
 Stop ingestion for the migration/binary switch and keep it paused until every
 center process runs the new hook: an old binary accepting results after backfill
 would leave derived state incomplete. After verifying the worktree/test database
 identity, `make migrate` applies it.
-`make migrate-down` rolls back **one** version: at version 3 it removes the new
+`make migrate-down` rolls back **one** version: at version 4 it removes the new
 index, counters and outbox while retaining results, cached locations and derived
 history in the compatible previous schema. Stop ingestion before a rollback;
 otherwise the new binary cannot write its required tables. Rolling forward with

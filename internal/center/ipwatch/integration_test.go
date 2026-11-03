@@ -63,7 +63,7 @@ func setup(t *testing.T) (*pgxpool.Pool, *agentapi.Postgres, *locator) {
 func result(id, second int, ip string) agentapi.Result {
 	d, u, ping := float64(id), float64(id)/2, 3.0
 	server := 1
-	return agentapi.Result{ID: fmt.Sprintf("10000000-0000-4000-8000-%012d", id), TS: time.Date(2026, 11, 3, 0, 0, second, 0, time.UTC).Format(time.RFC3339Nano), Status: "ok", Down: &d, Up: &u, Ping: &ping, ServerID: &server, IP: ip, Threads: 1, Raw: []byte(`{}`), Warnings: []string{}}
+	return agentapi.Result{ID: fmt.Sprintf("10000000-0000-4000-8000-%012d", id), TS: time.Date(2026, 11, 3, 0, 0, second, 0, time.UTC).Format(time.RFC3339Nano), Status: "ok", Down: &d, Up: &u, Ping: &ping, ServerID: &server, IP: &ip, Threads: 1, Raw: []byte(`{}`), Server: &agentapi.Server{ID: &server, Name: "Server 1"}, Warnings: []string{}}
 }
 func save(t *testing.T, s *agentapi.Postgres, node string, r agentapi.Result) {
 	t.Helper()
@@ -83,7 +83,7 @@ func assertDerived(t *testing.T, p *pgxpool.Pool) {
 	t.Helper()
 	// Independent full recomputation is the test oracle; production repairs only
 	// the inserted position and its successor, with no timeline rescan.
-	q := `WITH ordered AS (SELECT id,node_id,ts,ip,lag(ip) OVER(PARTITION BY node_id ORDER BY ts,id) prev FROM results),
+	q := `WITH ordered AS (SELECT id,node_id,ts,ip,lag(ip) OVER(PARTITION BY node_id ORDER BY ts,id) prev FROM results WHERE ip IS NOT NULL),
  expected AS (SELECT id,node_id,ts,prev from_ip,ip to_ip FROM ordered WHERE prev IS DISTINCT FROM ip),
  differences AS ((SELECT * FROM expected EXCEPT SELECT id,node_id,ts,from_ip,to_ip FROM node_ip_history)
  UNION ALL (SELECT id,node_id,ts,from_ip,to_ip FROM node_ip_history EXCEPT SELECT * FROM expected)) SELECT count(*) FROM differences`
@@ -92,7 +92,7 @@ func assertDerived(t *testing.T, p *pgxpool.Pool) {
 	}
 	q = `WITH expected AS (SELECT node_id,ip,count(*) tests,min(ts) first_seen,max(ts) last_seen,
  count(*) FILTER(WHERE status<>'failed') speed_tests,coalesce(sum(down_mbps::numeric) FILTER(WHERE status<>'failed'),0) down_sum,
- coalesce(sum(up_mbps::numeric) FILTER(WHERE status<>'failed'),0) up_sum FROM results GROUP BY node_id,ip),
+ coalesce(sum(up_mbps::numeric) FILTER(WHERE status<>'failed'),0) up_sum FROM results WHERE ip IS NOT NULL GROUP BY node_id,ip),
  differences AS ((SELECT * FROM expected EXCEPT SELECT * FROM node_ip_addresses) UNION ALL
  (SELECT * FROM node_ip_addresses EXCEPT SELECT * FROM expected)) SELECT count(*) FROM differences`
 	if n := scalar(t, p, q); n != 0 {
@@ -163,7 +163,7 @@ func TestMeasurementTimelineIntegration(t *testing.T) {
 		t.Fatal("replay", duplicate, err)
 	}
 	conflict := sequence[7]
-	conflict.IP = b
+	conflict.IP = &b
 	if _, err = s.SaveResult(t.Context(), nodeA, conflict); err != agentapi.ErrConflict {
 		t.Fatal("conflicting replay", err)
 	}
@@ -172,16 +172,39 @@ func TestMeasurementTimelineIntegration(t *testing.T) {
 	}
 	assertDerived(t, p)
 	var current string
-	if err = p.QueryRow(t.Context(), `SELECT host(ip) FROM results WHERE node_id=$1 ORDER BY ts DESC,id DESC LIMIT 1`, nodeA).Scan(&current); err != nil || current != b {
+	if err = p.QueryRow(t.Context(), `SELECT host(ip) FROM results WHERE node_id=$1 AND ip IS NOT NULL ORDER BY ts DESC,id DESC LIMIT 1`, nodeA).Scan(&current); err != nil || current != b {
 		t.Fatal("current IP", current, err)
 	}
+	lateUnknown := result(14, 18, "203.0.113.99")
+	lateUnknown.IP = nil
+	lateUnknown.Status = "failed"
+	message = "speedtest: no_route"
+	lateUnknown.Error = &message
+	lateUnknown.Down = nil
+	lateUnknown.Up = nil
+	lateUnknown.Ping = nil
+	lateUnknown.ServerID = nil
+	historyBefore := scalar(t, p, "SELECT count(*) FROM node_ip_history")
+	addressesBefore := scalar(t, p, "SELECT count(*) FROM node_ip_addresses")
+	signalsBefore := scalar(t, p, "SELECT count(*) FROM ip_change_signals")
+	save(t, s, nodeA, lateUnknown)
+	if scalar(t, p, `SELECT count(*) FROM results WHERE id=$1 AND ip IS NULL AND status='failed'`, lateUnknown.ID) != 1 {
+		t.Fatal("late failed NULL-IP result was not stored")
+	}
+	if scalar(t, p, "SELECT count(*) FROM node_ip_history") != historyBefore || scalar(t, p, "SELECT count(*) FROM node_ip_addresses") != addressesBefore || scalar(t, p, "SELECT count(*) FROM ip_change_signals") != signalsBefore {
+		t.Fatal("late failed NULL-IP result changed derived IP state")
+	}
+	if l.calls.Load() != 3 {
+		t.Fatal("late failed NULL-IP result performed geolocation", l.calls.Load())
+	}
+	assertDerived(t, p)
 	// No pending notification was created for a late arrival or a duplicate.
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
 	defer cancel()
 	if n, e := listener.Conn().WaitForNotification(ctx); e == nil {
 		t.Fatal("unexpected notification", n)
 	}
-	t.Log("PASS: first/repeated/alternating IPs; late insert/split/merge; equal timestamps; failed sample; replay/conflict; cached IPv4/IPv6; only newest changes signal")
+	t.Log("PASS: first/repeated/alternating IPs; late insert/split/merge; equal timestamps; known-IP and NULL-IP failures; replay/conflict; cached IPv4/IPv6; only newest changes signal")
 }
 func TestConcurrentIngestionIntegration(t *testing.T) {
 	p, s, l := setup(t)
@@ -236,9 +259,19 @@ func TestMigrationBackfillAndRollbackIntegration(t *testing.T) {
 	if err := db.Migrate(t.Context(), p, "down"); err != nil {
 		t.Fatal(err)
 	}
-	// Populate version-2 data, including an obsolete history row, as a pre-upgrade fixture.
+	// Populate version-3 data, including an obsolete history row, as a pre-upgrade fixture.
 	s.Hook = nil
 	save(t, s, nodeA, result(20, 3, "203.0.113.3"))
+	unknown := result(21, 21, "203.0.113.4")
+	unknown.IP = nil
+	unknown.Status = "failed"
+	errorMessage := "speedtest: no_route"
+	unknown.Error = &errorMessage
+	unknown.Down = nil
+	unknown.Up = nil
+	unknown.Ping = nil
+	unknown.ServerID = nil
+	save(t, s, nodeA, unknown)
 	if err := db.Migrate(t.Context(), p, "up"); err != nil {
 		t.Fatal(err)
 	}
@@ -246,10 +279,13 @@ func TestMigrationBackfillAndRollbackIntegration(t *testing.T) {
 	if n := scalar(t, p, "SELECT count(*) FROM ip_change_signals"); n != 0 {
 		t.Fatal("upgrade replayed old alerts")
 	}
-	if n := scalar(t, p, "SELECT count(*) FROM results"); n != 9 {
+	if n := scalar(t, p, "SELECT count(*) FROM results"); n != 10 {
 		t.Fatal("rollback lost results")
 	}
-	t.Log("PASS: populated version-2 upgrade backfills exact timeline/counters without old alerts; down/up preserves results and cached locations")
+	if scalar(t, p, `SELECT count(*) FROM node_ip_history h JOIN results r USING(id) WHERE r.ip IS NULL`) != 0 || scalar(t, p, `SELECT count(*) FROM node_ip_addresses a JOIN results r ON a.node_id=r.node_id AND a.ip IS NOT DISTINCT FROM r.ip WHERE r.id=$1`, unknown.ID) != 0 {
+		t.Fatal("nullable result leaked into migration backfill")
+	}
+	t.Log("PASS: populated version-3 upgrade backfills exact non-NULL timeline/counters without old alerts; preserves NULL-IP results and cached locations")
 }
 func TestAtomicRollbackIntegration(t *testing.T) {
 	p, s, _ := setup(t)

@@ -62,7 +62,7 @@ func neighbor(ctx context.Context, tx pgx.Tx, node string, ts time.Time, id stri
 		op, order = ">", "ASC"
 	}
 	var p position
-	err := tx.QueryRow(ctx, `SELECT id::text,host(ip) FROM results WHERE node_id=$1 AND (ts,id) `+op+` ($2,$3::uuid) ORDER BY ts `+order+`,id `+order+` LIMIT 1`, node, ts, id).Scan(&p.id, &p.ip)
+	err := tx.QueryRow(ctx, `SELECT id::text,host(ip) FROM results WHERE node_id=$1 AND ip IS NOT NULL AND (ts,id) `+op+` ($2,$3::uuid) ORDER BY ts `+order+`,id `+order+` LIMIT 1`, node, ts, id).Scan(&p.id, &p.ip)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -87,9 +87,13 @@ func setBoundary(ctx context.Context, tx pgx.Tx, node, id, ip string, previous *
 // AfterResultStored repairs at most two boundaries. The result is already stored
 // and replays never reach this method. Every write uses the caller's transaction.
 func (w *Watcher) AfterResultStored(ctx context.Context, tx pgx.Tx, node string, r agentapi.Result) error {
+	if r.IP == nil {
+		return nil
+	}
 	// Read the stored timestamp, which has PostgreSQL microsecond precision.
 	var ts time.Time
-	if err := tx.QueryRow(ctx, `SELECT ts,host(ip) FROM results WHERE id=$1 AND node_id=$2`, r.ID, node).Scan(&ts, &r.IP); err != nil {
+	var ip string
+	if err := tx.QueryRow(ctx, `SELECT ts,host(ip) FROM results WHERE id=$1 AND node_id=$2 AND ip IS NOT NULL`, r.ID, node).Scan(&ts, &ip); err != nil {
 		return err
 	}
 	before, err := neighbor(ctx, tx, node, ts, r.ID, false)
@@ -100,28 +104,28 @@ func (w *Watcher) AfterResultStored(ctx context.Context, tx pgx.Tx, node string,
 	if err != nil {
 		return err
 	}
-	if err = setBoundary(ctx, tx, node, r.ID, r.IP, before); err != nil {
+	if err = setBoundary(ctx, tx, node, r.ID, ip, before); err != nil {
 		return err
 	}
 	if after != nil {
-		if err = setBoundary(ctx, tx, node, after.id, after.ip, &position{id: r.ID, ip: r.IP}); err != nil {
+		if err = setBoundary(ctx, tx, node, after.id, after.ip, &position{id: r.ID, ip: ip}); err != nil {
 			return err
 		}
 	}
 	if _, err = tx.Exec(ctx, `INSERT INTO node_ip_addresses(node_id,ip,tests,first_seen,last_seen,speed_tests,down_sum,up_sum)
  VALUES ($1,$2,1,$3,$3,CASE WHEN $4 THEN 1 ELSE 0 END,CASE WHEN $4 THEN $5::numeric ELSE 0 END,CASE WHEN $4 THEN $6::numeric ELSE 0 END)
  ON CONFLICT(node_id,ip) DO UPDATE SET tests=node_ip_addresses.tests+1,
- first_seen=least(node_ip_addresses.first_seen,EXCLUDED.first_seen), last_seen=greatest(node_ip_addresses.last_seen,EXCLUDED.last_seen),
- speed_tests=node_ip_addresses.speed_tests+EXCLUDED.speed_tests, down_sum=node_ip_addresses.down_sum+EXCLUDED.down_sum, up_sum=node_ip_addresses.up_sum+EXCLUDED.up_sum`, node, r.IP, ts, r.Status != "failed", r.Down, r.Up); err != nil {
+	first_seen=least(node_ip_addresses.first_seen,EXCLUDED.first_seen), last_seen=greatest(node_ip_addresses.last_seen,EXCLUDED.last_seen),
+	speed_tests=node_ip_addresses.speed_tests+EXCLUDED.speed_tests, down_sum=node_ip_addresses.down_sum+EXCLUDED.down_sum, up_sum=node_ip_addresses.up_sum+EXCLUDED.up_sum`, node, ip, ts, r.Status != "failed", r.Down, r.Up); err != nil {
 		return err
 	}
 	// Lock the shared address before using a transaction-local cache. A pool-backed
 	// cache would deadlock on the address placeholder inserted by this transaction.
-	if _, err = tx.Exec(ctx, `SELECT ip FROM ip_addresses WHERE ip=$1 FOR NO KEY UPDATE`, r.IP); err != nil {
+	if _, err = tx.Exec(ctx, `SELECT ip FROM ip_addresses WHERE ip=$1 FOR NO KEY UPDATE`, ip); err != nil {
 		return err
 	}
-	resolver := geo.NewResolver(boundCache{Cache: geo.NewPostgresCache(tx), ip: r.IP}, w.Offline, w.Fallbacks...)
-	if _, err = resolver.Lookup(ctx, r.IP); err != nil {
+	resolver := geo.NewResolver(boundCache{Cache: geo.NewPostgresCache(tx), ip: ip}, w.Offline, w.Fallbacks...)
+	if _, err = resolver.Lookup(ctx, ip); err != nil {
 		if !errors.Is(err, geo.ErrNotFound) {
 			return err
 		}
@@ -131,12 +135,12 @@ func (w *Watcher) AfterResultStored(ctx context.Context, tx pgx.Tx, node string,
 		w.logger().InfoContext(ctx, "late IP observation reconciled without change signal", "node_id", node, "result_id", r.ID)
 		return nil
 	}
-	if before == nil || before.ip == r.IP {
+	if before == nil || before.ip == ip {
 		return nil
 	}
 	// The outbox survives restarts; a notification only wakes the consumer. Both
 	// become visible at commit, and neither survives a rolled-back result.
-	if _, err = tx.Exec(ctx, `INSERT INTO ip_change_signals(result_id,node_id,ts,from_ip,to_ip) VALUES ($1,$2,$3,$4,$5)`, r.ID, node, ts, before.ip, r.IP); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO ip_change_signals(result_id,node_id,ts,from_ip,to_ip) VALUES ($1,$2,$3,$4,$5)`, r.ID, node, ts, before.ip, ip); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `SELECT pg_notify('ip_changed',$1)`, r.ID)
