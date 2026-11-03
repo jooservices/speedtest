@@ -479,13 +479,14 @@ func TestThirtyDayReplayMatchesApprovedUIPreviewIntegration(t *testing.T) {
 		result := agentapi.Result{ID: id, TS: time.UnixMilli(sample.TS).UTC().Format(time.RFC3339Nano), Status: sample.Status,
 			Down: sample.Down, Up: sample.Up, Ping: sample.Ping, Jitter: sample.Jitter, Loss: sample.Loss, IP: sample.IP,
 			Threads: 1, BytesDown: 1, BytesUp: 1, Duration: 1, Raw: []byte(`{}`), Warnings: []string{}}
-		if result.Status != "failed" {
+		switch {
+		case result.Status != "failed":
 			serverID := 1
 			result.ServerID = &serverID
 			result.Server = &agentapi.Server{ID: &serverID, Name: "Preview fixture", Host: "preview.example"}
-		} else if sample.Error != nil {
+		case sample.Error != nil:
 			result.Error = sample.Error
-		} else {
+		default:
 			message := "Preview fixture failure"
 			result.Error = &message
 		}

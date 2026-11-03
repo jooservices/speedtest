@@ -14,9 +14,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -384,6 +384,7 @@ func TestAgentIngestionLoad1000PerMinuteIntegration(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
+	cpuStarted := centerCPUSeconds(t, process.Process.Pid)
 	started := time.Now()
 	for batch := range 10 {
 		results := make([]string, 100)
@@ -417,6 +418,7 @@ func TestAgentIngestionLoad1000PerMinuteIntegration(t *testing.T) {
 		time.Sleep(time.Until(started.Add(time.Duration(batch+1) * 6 * time.Second)))
 	}
 	elapsed := time.Since(started).Seconds()
+	cpu := centerCPUSeconds(t, process.Process.Pid) - cpuStarted
 	if err = process.Process.Signal(os.Interrupt); err != nil {
 		t.Fatal(err)
 	}
@@ -425,14 +427,17 @@ func TestAgentIngestionLoad1000PerMinuteIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("center failed to stop cleanly", err)
 	}
-	usage := process.ProcessState.SysUsage().(*syscall.Rusage)
-	cpu := float64(usage.Utime.Nano()+usage.Stime.Nano()) / 1e9
 	percent := 100 * cpu / elapsed
 	var count int
 	if err = pool.QueryRow(ctx, `SELECT count(*) FROM results`).Scan(&count); err != nil || count != 1000 {
 		t.Fatal(count, err)
 	}
-	t.Logf("1000 committed results / %.3fs; production center CPU %.4fs = %.3f%% of one core (target <=5%%); shared PostgreSQL and load-generator CPU excluded", elapsed, cpu, percent)
+	t.Logf("1000 committed results / %.3fs; production center CPU %.4fs = %.3f%% of one core (target <=5%%); startup/shutdown, shared PostgreSQL and load-generator CPU excluded", elapsed, cpu, percent)
+	// One second allows scheduler/timer overhead, not an unbounded slow run.
+	if elapsed > 61 {
+		t.Fatalf("1000-result workload exceeded the one-minute pace: %.3fs", elapsed)
+	}
+	t.Logf("CPU before workload %.4fs; total process lifetime %.4fs (startup/shutdown excluded from gate)", cpuStarted, process.ProcessState.UserTime().Seconds()+process.ProcessState.SystemTime().Seconds())
 	if percent > 5 {
 		t.Fatalf("CPU %.3f%% exceeds 5%%", percent)
 	}
@@ -459,4 +464,38 @@ func TestAgentIngestionStoresEveryMeasurementIntegration(t *testing.T) {
 	if down != 123.4 || up != 56.7 || ping != 3 || jitter != 1.5 || dLat != 21.25 || uLat != 31.75 || loss != 0.5 || threads != 4 || bytesDown != 1024 {
 		t.Fatalf("stored %v %v %v %v %v %v %v %v %v", down, up, ping, jitter, dLat, uLat, loss, threads, bytesDown)
 	}
+}
+
+// Linux process accounting includes all center threads but excludes unrelated
+// test processes. Sampling after readiness and before shutdown isolates the
+// paced workload; Rusage at exit also charges startup and background teardown.
+func centerCPUSeconds(t *testing.T, pid int) float64 {
+	t.Helper()
+	ticksOutput, err := exec.Command("getconf", "CLK_TCK").Output()
+	if err != nil {
+		t.Fatal("read kernel clock tick rate", err)
+	}
+	ticks, err := strconv.ParseFloat(strings.TrimSpace(string(ticksOutput)), 64)
+	if err != nil || ticks <= 0 {
+		t.Fatal("invalid kernel clock tick rate")
+	}
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		t.Fatal("read center process accounting", err)
+	}
+	// comm is parenthesized and may contain spaces; fields after it start at 3.
+	_, rest, ok := strings.Cut(string(data), ") ")
+	fields := strings.Fields(rest)
+	if !ok || len(fields) < 13 {
+		t.Fatal("invalid center process accounting")
+	}
+	user, err := strconv.ParseFloat(fields[11], 64)
+	if err != nil {
+		t.Fatal("invalid center user CPU")
+	}
+	system, err := strconv.ParseFloat(fields[12], 64)
+	if err != nil {
+		t.Fatal("invalid center system CPU")
+	}
+	return (user + system) / ticks
 }

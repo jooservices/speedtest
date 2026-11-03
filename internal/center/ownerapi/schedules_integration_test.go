@@ -127,7 +127,6 @@ func TestReplaceScheduleClampsAndChecksPreconditions(t *testing.T) {
 func TestReplaceRulesStaggersAndAppliesQuietHours(t *testing.T) {
 	s, _ := scheduleStore(t)
 	ctx := t.Context()
-	_, tag, _ := s.Schedules(ctx)
 	// Put alpha and charlie 2 minutes apart so a clash exists.
 	if _, _, err := s.ReplaceSchedule(ctx, uid(3), ScheduleInput{Interval: 30, Offset: 4, Enabled: true}, `"schedule-1"`); err != nil {
 		t.Fatal(err)

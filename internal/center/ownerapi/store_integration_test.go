@@ -4,7 +4,6 @@ package ownerapi
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -151,7 +150,7 @@ func TestStoreUpdate(t *testing.T) {
 	s := &Store{DB: pool}
 	id := seedNode(t, ctx, pool, 1, "alpha", nil)
 	seedNode(t, ctx, pool, 2, "bravo", nil)
-	patch := func(kv map[string]string) map[string]json.RawMessage { return raw(kv) }
+	patch := raw
 
 	node, etag, err := s.Update(ctx, id, patch(map[string]string{"label": `"Home fiber"`, "expectedDown": `500`, "server": `33`, "enabled": `false`, "binding": `{"iface":"eth1","sourceIp":"192.0.2.7"}`}), ETag(1))
 	if err != nil || etag != ETag(2) || node["label"] != "Home fiber" || node["expectedDown"] != float64(500) || node["server"] != int64(33) || node["enabled"] != false || node["status"] != "paused" ||

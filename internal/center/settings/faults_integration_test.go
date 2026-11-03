@@ -88,7 +88,7 @@ func TestEveryDatabaseFailureIsReportedAndLeavesNoPartialWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Saved once so that the revision under test is stable and the secrets exist.
-	if _, etag, err = base.Replace(ctx, etag, validInputWithSecrets()); err != nil {
+	if _, _, err = base.Replace(ctx, etag, validInputWithSecrets()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := base.RotateEnrollmentKey(ctx); err != nil {
