@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
@@ -25,6 +26,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/geo"
 	"github.com/jooservices/speedtest/internal/center/install"
+	"github.com/jooservices/speedtest/internal/center/installer"
 	"github.com/jooservices/speedtest/internal/center/ipapi"
 	"github.com/jooservices/speedtest/internal/center/ipwatch"
 	"github.com/jooservices/speedtest/internal/center/jobs"
@@ -124,6 +126,15 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 	}
 	alertStore := &alerts.Store{DB: pool, AppKey: cfg.AppKey, Logger: logger}
 	retention := &jobs.Retention{DB: pool, Logger: logger}
+	var installerService *installer.Service
+	if cfg.PublicURL != "" && cfg.ReleaseDir != "" && len(cfg.AppKey) == 32 {
+		installerService, err = installer.NewService(ctx, installer.ServiceOptions{
+			Database: pool, Enrollment: nodeService, CenterURL: cfg.PublicURL, AppKey: cfg.AppKey, Logger: logger,
+		})
+		if err != nil {
+			return err
+		}
+	}
 	var notificationAPI server.OwnerNotificationsStore
 	if notifications != nil {
 		notificationAPI = notifications
@@ -150,6 +161,7 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 			go retention.Loop(ctx)
 			alertStore.Loop(ctx)
 		},
+		Installer: installerService,
 	})
 }
 
@@ -187,11 +199,19 @@ type services struct {
 	OwnerDashboard     server.OwnerDashboardStore
 	OwnerAlerts        server.OwnerAlertsStore
 	OwnerJobs          server.OwnerJobsStore
+	Installer          *installer.Service
 	// Background runs until the context ends, for example the daily retention job.
 	Background func(context.Context)
 }
 
 func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer, cfg config.CenterConfig, svc services) error {
+	if svc.Installer != nil {
+		defer func() {
+			closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = svc.Installer.Close(closeCtx)
+		}()
+	}
 
 	flags := flag.NewFlagSet("center", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -238,6 +258,7 @@ func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Wr
 		OwnerDashboard:     svc.OwnerDashboard,
 		OwnerAlerts:        svc.OwnerAlerts,
 		OwnerJobs:          svc.OwnerJobs,
+		Installer:          svc.Installer,
 		AgentAPI:           svc.Agent,
 		Logger:             logger,
 		UI:                 ui,

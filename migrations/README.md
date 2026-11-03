@@ -11,6 +11,10 @@ and durable change signals; it backfills history/counters without replaying aler
 keyed event deduplication and the event-keyed notification handoff to JOOST-30.
 Its down migration preserves results, cached locations and derived history; see
 [IP history rollback and consumer rules](../docs/ip-history.md).
+`00007_ssh_installations.sql` adds short-lived host-key probes, installation job
+state and replayable progress events, with hashed idempotency keys and an active
+installation limit per node. It stores no SSH credentials or enrollment tokens.
+
 `00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
@@ -88,6 +92,11 @@ that a subsequent up can reapply version 1.
 | `settings` | Public JSON or encrypted secret bytes, revision |
 | `api_idempotency` | Hashed request identity and encrypted one-time issuance responses, expiring after 24 hours |
 | `agent_commands` | Per-node command lifecycle and progress |
+| `installer_probes` | Expiring unauthenticated SSH host-key observations; one use per install |
+| `installer_probe_idempotency` | Probe replay identity and request digest, expiring after 24 hours |
+| `installer_jobs` | Owner-scoped installation state; at most one active job per node |
+| `installer_events` | Safe, replayable plain-language progress events |
+| `installer_idempotency` | HMAC-protected install request digest and job link, expiring after 24 hours |
 
 All IDs are UUIDs. A result ID has **no server default**, so retries cannot
 accidentally obtain another identity. The primary key rejects duplicate UUIDs;

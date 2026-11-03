@@ -61,6 +61,8 @@ type Options struct {
 	OwnerStats OwnerStatsStore
 	// OwnerAlerts optionally serves alert-rule and event APIs.
 	OwnerAlerts OwnerAlertsStore
+	// Installer serves SSH fingerprint probes, install jobs, and replayable progress.
+	Installer InstallerService
 	// Install optionally serves /install.sh and /download/<artifact>.
 	Install  http.Handler
 	AgentAPI agentapi.Store
@@ -130,10 +132,16 @@ func NewHandler(options Options) http.Handler {
 	if options.OwnerAlerts != nil {
 		ownerAlertsHandler = newOwnerAlertsHandler(options.OwnerAlerts, authHandler, options.AgentRateLimit)
 	}
+	var installerHandler http.Handler
+	if options.Installer != nil {
+		installerHandler = newInstallerHandler(options.Installer, authHandler, options.AgentRateLimit)
+	}
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/auth" || strings.HasPrefix(r.URL.Path, "/api/auth/"):
 			authHandler.serve(w, r)
+		case installerHandler != nil && installerRoute(r.URL.Path):
+			installerHandler.ServeHTTP(w, r)
 		case ownerNodesHandler != nil && ownerNodesRoute(r.URL.Path) && (r.Method != http.MethodPost || r.URL.Path != "/api/nodes"):
 			ownerNodesHandler.ServeHTTP(w, r)
 		case ownerSchedulesHandler != nil && ownerSchedulesRoute(r.URL.Path):

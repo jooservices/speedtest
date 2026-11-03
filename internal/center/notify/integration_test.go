@@ -291,11 +291,20 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	if _, err := worker.Consume(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Migrate(ctx, p, "down"); err != nil {
-		t.Fatal("version 6 down", err)
-	}
+	// Later migrations (for example the SSH installer) sit above this one; roll back until the delivery table is gone.
 	var exists bool
-	if err := p.QueryRow(ctx, `SELECT to_regclass('notification_deliveries') IS NOT NULL`).Scan(&exists); err != nil || exists {
+	for step := 0; step < 4; step++ {
+		if err := db.Migrate(ctx, p, "down"); err != nil {
+			t.Fatal("rollback step", step, err)
+		}
+		if err := p.QueryRow(ctx, `SELECT to_regclass('notification_deliveries') IS NOT NULL`).Scan(&exists); err != nil {
+			t.Fatal(err)
+		}
+		if !exists {
+			break
+		}
+	}
+	if exists {
 		t.Fatal("delivery table not dropped")
 	}
 	var consumed bool

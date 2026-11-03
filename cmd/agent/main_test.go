@@ -123,6 +123,45 @@ func TestRunEnrollSuccess(t *testing.T) {
 	}
 }
 
+func TestRunEnrollReadsTokenFromStandardInput(t *testing.T) {
+	version = "1.2.3"
+	t.Cleanup(func() { version = "dev" })
+	const token = "one-time-token-from-stdin"
+	const credential = "stdin-enrolled-credential"
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			Token string `json:"token"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("decode enroll body: %v", err)
+		}
+		if body.Token != token {
+			t.Errorf("enroll token = %q, want stdin token", body.Token)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"success":true,"code":201,"message":"enrolled","data":{"nodeId":"node-stdin","credential":"` + credential + `","config":{}},"meta":{},"errors":null}`))
+	}))
+	defer server.Close()
+
+	credentialPath := filepath.Join(t.TempDir(), "credential")
+	t.Setenv("SPEEDTEST_AGENT_CREDENTIAL", credentialPath)
+	var stdout, stderr bytes.Buffer
+	code := runEnrollWithInput(context.Background(), []string{
+		"--center", server.URL, "--token-stdin", "--name", "stdin-node",
+	}, strings.NewReader(token+"\n"), &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runEnrollWithInput() = %d, stderr=%q", code, stderr.String())
+	}
+	if strings.Contains(stdout.String()+stderr.String(), token) {
+		t.Fatal("enrollment token was written to command output")
+	}
+	stored, err := os.ReadFile(credentialPath)
+	if err != nil || string(stored) != credential {
+		t.Fatalf("stored credential = %q, err=%v", stored, err)
+	}
+}
+
 func TestRunEnrollBadCenter(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	code := run(context.Background(), []string{
@@ -410,4 +449,53 @@ func containsMsg(msgs []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func TestRepairEnrollmentPreservesValidCredential(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusUnauthorized, http.StatusServiceUnavailable, http.StatusFound} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var enrolled bool
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/agent/config" {
+					if r.Header.Get("Authorization") != "Bearer test-existing-credential" {
+						t.Error("missing existing bearer")
+					}
+					if status == http.StatusFound {
+						w.Header().Set("Location", "http://other.test")
+					}
+					w.WriteHeader(status)
+					return
+				}
+				enrolled = true
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(201)
+				_, _ = w.Write([]byte(`{"success":true,"code":201,"message":"enrolled","data":{"nodeId":"node","credential":"new-test-credential","config":{}},"meta":{},"errors":null}`))
+			}))
+			defer server.Close()
+			path := filepath.Join(t.TempDir(), "credential")
+			writeCredential(t, path, "test-existing-credential", 0600)
+			t.Setenv("SPEEDTEST_AGENT_CREDENTIAL", path)
+			var stdout, stderr bytes.Buffer
+			code := runEnrollWithInput(context.Background(), []string{"--center", server.URL, "--token-stdin", "--repair", "--name", "fixture"}, strings.NewReader("test-enrollment-token\n"), &stdout, &stderr)
+			switch status {
+			case http.StatusOK:
+				data, _ := os.ReadFile(path)
+				if code != 0 || enrolled || string(data) != "test-existing-credential" {
+					t.Fatalf("valid enrollment changed: %d %t %s", code, enrolled, data)
+				}
+			case http.StatusUnauthorized:
+				data, _ := os.ReadFile(path)
+				if code != 0 || !enrolled || string(data) != "new-test-credential" {
+					t.Fatalf("invalid enrollment not repaired: %d %s", code, stderr.String())
+				}
+			default:
+				if code != 1 || enrolled {
+					t.Fatalf("transient failure must preserve credential: %d %t", code, enrolled)
+				}
+			}
+			if strings.Contains(stdout.String()+stderr.String(), "test-enrollment-token") || strings.Contains(stdout.String()+stderr.String(), "test-existing-credential") {
+				t.Fatal("credential leaked")
+			}
+		})
+	}
 }

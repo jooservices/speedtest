@@ -89,6 +89,17 @@ are sent exactly once, after fingerprint confirmation, with the installation
 request; they remain in memory for that operation and never appear in progress
 events. Confirm/pin the host key before authentication; abort on change.
 
+The SSH installer is available only when `SPEEDTEST_PUBLIC_URL` and
+`SPEEDTEST_RELEASE_DIR` are configured and the center has a 32-byte `APP_KEY`.
+The probe expires after 10 minutes and can be consumed by one install request.
+SSH credentials are used only by the in-memory worker; database idempotency
+stores an APP_KEY-protected request digest, not a password or private key. The
+installer issues a fresh single-use enrollment token for the selected existing
+node, transfers it through a temporary FIFO, and removes temporary remote state
+after the first heartbeat or rollback. Progress is replayable for 30 days and
+uses plain-language messages that omit credentials and remote command output.
+See the [SSH installer runbook](ssh-installer.md) for operations, repair and rollback.
+
 ## Shared wire rules
 
 - Success JSON: `success`, `code` (actual HTTP status), `message`, `data`, `meta`,
