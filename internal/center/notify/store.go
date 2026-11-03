@@ -1,0 +1,246 @@
+package notify
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"time"
+
+	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jooservices/speedtest/internal/center/settings"
+)
+
+var (
+	ErrUnconfigured = errors.New("notification channel is not configured")
+	ErrNotFound     = errors.New("delivery not found")
+)
+
+// Preferences deliberately keeps credential access separate from public APIs.
+type Preferences interface {
+	NotificationConfig(context.Context, pgx.Tx, string) (settings.Settings, string, error)
+}
+
+// Delivery is safe metadata. Payloads, destinations and credentials are absent.
+type Delivery struct {
+	ID          string     `json:"id"`
+	EventID     *string    `json:"eventId"`
+	Channel     string     `json:"channel"`
+	Status      string     `json:"status"`
+	Attempts    int        `json:"attempts"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	LastAttempt *time.Time `json:"lastAttempt"`
+	Error       *string    `json:"error"`
+}
+
+const columns = `id::text,event_id::text,channel,status,attempts,created_at,last_attempt,error`
+
+// Store owns durable delivery creation and dispatch. Now is injectable for retry tests.
+type Store struct {
+	DB       *pgxpool.Pool
+	Settings Preferences
+	Sender   Sender
+	Now      func() time.Time
+	Logger   *slog.Logger
+}
+
+func (s *Store) now() time.Time {
+	if s.Now != nil {
+		return s.Now().UTC()
+	}
+	return time.Now().UTC()
+}
+
+func Channel(view settings.Settings, channel string) (settings.ChannelConfig, bool) {
+	switch channel {
+	case "email":
+		return view.Notify.Email, true
+	case "telegram":
+		return view.Notify.Telegram, true
+	case "slack":
+		return view.Notify.Slack, true
+	case "webhook":
+		return view.Notify.Webhook, true
+	}
+	return settings.ChannelConfig{}, false
+}
+func (s *Store) configuration(ctx context.Context, channel string) (settings.Settings, settings.ChannelConfig, string, error) {
+	return s.configurationTx(ctx, nil, channel)
+}
+func (s *Store) configurationTx(ctx context.Context, tx pgx.Tx, channel string) (settings.Settings, settings.ChannelConfig, string, error) {
+	view, secret, err := s.Settings.NotificationConfig(ctx, tx, channel)
+	if err != nil {
+		return view, settings.ChannelConfig{}, "", err
+	}
+	ch, ok := Channel(view, channel)
+	if !ok || !ch.On || ((channel == "email" || channel == "telegram") && ch.To == "") {
+		return view, ch, "", ErrUnconfigured
+	}
+	if channel != "email" && secret == "" {
+		return view, ch, "", ErrUnconfigured
+	}
+	return view, ch, secret, nil
+}
+
+// Test queues a test through the same retry path as an alert.
+func (s *Store) Test(ctx context.Context, channel string) (Delivery, error) {
+	if _, _, _, err := s.configuration(ctx, channel); err != nil {
+		return Delivery{}, err
+	}
+	id := uuid.NewString()
+	now := s.now()
+	_, err := s.DB.Exec(ctx, `INSERT INTO notification_deliveries(id,channel,created_at,next_attempt_at) VALUES($1,$2,$3,$3)`, id, channel, now)
+	if err != nil {
+		return Delivery{}, err
+	}
+	return s.Delivery(ctx, id)
+}
+func scanDelivery(row pgx.Row) (Delivery, error) {
+	var d Delivery
+	err := row.Scan(&d.ID, &d.EventID, &d.Channel, &d.Status, &d.Attempts, &d.CreatedAt, &d.LastAttempt, &d.Error)
+	return d, err
+}
+func (s *Store) Delivery(ctx context.Context, id string) (Delivery, error) {
+	d, err := scanDelivery(s.DB.QueryRow(ctx, `SELECT `+columns+` FROM notification_deliveries WHERE id=$1`, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		err = ErrNotFound
+	}
+	return d, err
+}
+func (s *Store) Deliveries(ctx context.Context, event string, page, size int) ([]Delivery, int, error) {
+	// Keep callers outside the HTTP layer from issuing an unbounded query.
+	if page < 1 || size < 1 || size > 100 || page > 1000000 {
+		return nil, 0, errors.New("invalid pagination")
+	}
+	var total int
+	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE ($1='' OR event_id=NULLIF($1,'')::uuid)`, event).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.DB.Query(ctx, `SELECT `+columns+` FROM notification_deliveries WHERE ($1='' OR event_id=NULLIF($1,'')::uuid) ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3`, event, size, (page-1)*size)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	items := []Delivery{}
+	for rows.Next() {
+		d, err := scanDelivery(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		items = append(items, d)
+	}
+	return items, total, rows.Err()
+}
+
+// Consume atomically creates all channel rows and marks one outbox event handled.
+func (s *Store) Consume(ctx context.Context) (bool, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	var event string
+	var channels []string
+	err = tx.QueryRow(ctx, `SELECT event_id::text,channels FROM alert_notification_outbox WHERE consumed_at IS NULL ORDER BY created_at,event_id FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&event, &channels)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	now := s.now()
+	for _, channel := range channels {
+		if _, err = tx.Exec(ctx, `INSERT INTO notification_deliveries(id,event_id,channel,created_at,next_attempt_at) VALUES($1,$2,$3,$4,$4) ON CONFLICT(event_id,channel) DO NOTHING`, uuid.NewString(), event, channel, now); err != nil {
+			return false, err
+		}
+	}
+	if _, err = tx.Exec(ctx, `UPDATE alert_notification_outbox SET consumed_at=$2 WHERE event_id=$1`, event, now); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
+// Dispatch locks one due row while sending, preventing concurrent worker attempts.
+// External providers cannot participate in the transaction: a crash after acceptance
+// can cause redelivery. Logical event/channel creation is exactly once.
+func (s *Store) Dispatch(ctx context.Context) (bool, error) {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	now := s.now()
+	d, err := scanDelivery(tx.QueryRow(ctx, `SELECT `+columns+` FROM notification_deliveries WHERE status='pending' AND next_attempt_at<=$1 ORDER BY next_attempt_at,id FOR UPDATE SKIP LOCKED LIMIT 1`, now))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	status := "failed"
+	var safeError *string
+	last := d.LastAttempt
+	next := now
+	attempts := d.Attempts
+	if !now.Before(d.CreatedAt.Add(24 * time.Hour)) {
+		text := "delivery expired after 24 hours"
+		safeError = &text
+	} else {
+		attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		view, ch, secret, sendErr := s.configurationTx(attemptCtx, tx, d.Channel)
+		if sendErr == nil {
+			what, node, since := "Test notification", "Command center", d.CreatedAt
+			if d.EventID != nil {
+				sendErr = tx.QueryRow(attemptCtx, `SELECT e.title,n.name,e.ts FROM alert_events e JOIN nodes n ON n.id=e.node_id WHERE e.id=$1`, *d.EventID).Scan(&what, &node, &since)
+			}
+			if sendErr == nil {
+				sendErr = s.Sender.Send(attemptCtx, d.Channel, ch.To, secret, Message(what, node, since, view.CenterURL))
+			}
+		}
+		cancel()
+		attempts++
+		last = &now
+		status = "sent"
+		if sendErr != nil {
+			status = "pending"
+			text := "notification attempt failed"
+			safeError = &text
+			next = now.Add(Backoff(attempts))
+			deadline := d.CreatedAt.Add(24 * time.Hour)
+			if next.After(deadline) {
+				next = deadline
+			}
+		}
+	}
+	if _, err = tx.Exec(ctx, `UPDATE notification_deliveries SET status=$2,attempts=$3,last_attempt=$4,error=$5,next_attempt_at=$6 WHERE id=$1`, d.ID, status, attempts, last, safeError, next); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
+// Loop drains bounded batches and stops promptly with the center context.
+func (s *Store) Loop(ctx context.Context) {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		for i := 0; i < 100 && ctx.Err() == nil; i++ {
+			consumed, e1 := s.Consume(ctx)
+			dispatched, e2 := s.Dispatch(ctx)
+			if e1 != nil || e2 != nil {
+				if s.Logger != nil && ctx.Err() == nil {
+					s.Logger.Error("notification worker iteration failed")
+				}
+				break
+			}
+			if !consumed && !dispatched {
+				break
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
