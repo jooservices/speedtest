@@ -161,6 +161,16 @@ func (s *fakeSSHServer) handleExec(channel ssh.Channel, command string, input []
 		s.exit(channel, 0)
 		return
 	}
+	if strings.Contains(string(input), "STP|stop|15") {
+		if s.options.mode == "uninstall-fails" {
+			_, _ = io.WriteString(channel, "STP|stop|15\n")
+			s.exit(channel, 3)
+			return
+		}
+		_, _ = io.WriteString(channel, "STP|stop|15\nSTP|files|50\nSTP|account|80\nSTP|removed|100\n")
+		s.exit(channel, 0)
+		return
+	}
 	if strings.Contains(string(input), "STP|detect|5") {
 		switch s.options.mode {
 		case "unsupported":

@@ -77,8 +77,8 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "      print the agent version")
 	_, _ = fmt.Fprintln(w, "  update-apply")
 	_, _ = fmt.Fprintln(w, "      install, confirm or roll back a self-update (run by the service unit as root)")
-	_, _ = fmt.Fprintln(w, "  uninstall")
-	_, _ = fmt.Fprintln(w, "      remove the agent configuration and credential")
+	_, _ = fmt.Fprintln(w, "  uninstall [--all]")
+	_, _ = fmt.Fprintln(w, "      remove the agent configuration and credential; with --all also the service, binary and state")
 }
 
 func runVersion(stdout io.Writer) int {
@@ -252,8 +252,22 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 func runUninstall(args []string, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("uninstall", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	all := fs.Bool("all", false, "also stop and remove the service, the binary, the state directories and the agent account (run as root)")
+	root := fs.String("root", "", "directory that holds the installation, for tests; empty means the real system")
+	keepUser := fs.Bool("keep-user", false, "with --all, keep the speedtest-agent account")
 	if err := fs.Parse(args); err != nil {
 		return 2
+	}
+	if *all {
+		if fs.NArg() != 0 {
+			_, _ = fmt.Fprintln(stderr, "agent uninstall: unexpected arguments:", fs.Args())
+			return 2
+		}
+		if !removeEverything(*root, *root == "", stdout, stderr, *keepUser) {
+			return 1
+		}
+		_, _ = fmt.Fprintln(stdout, "agent: uninstalled completely")
+		return 0
 	}
 	if fs.NArg() != 0 {
 		_, _ = fmt.Fprintln(stderr, "agent uninstall: unexpected arguments:", fs.Args())

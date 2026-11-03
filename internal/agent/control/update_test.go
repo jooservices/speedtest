@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jooservices/speedtest/internal/agent/update"
 )
@@ -141,5 +142,23 @@ func TestUpdateAgentCommand(t *testing.T) {
 	center.config = "{broken"
 	if ack := c.execute(context.Background(), Command{ID: "c3", Type: "update_agent", Version: &version}); ack.Status != "failed" || ack.Error == nil {
 		t.Fatalf("an unreadable configuration must fail the command: %+v", ack)
+	}
+}
+
+func TestPollCadenceIsShorterThanTheHeartbeatByDefaultOnly(t *testing.T) {
+	c := &Controller{interval: HeartbeatInterval}
+	if c.pollEvery() != CommandPollInterval || CommandPollInterval >= HeartbeatInterval {
+		t.Fatalf("production default = %v", c.pollEvery())
+	}
+	c = &Controller{interval: 40 * time.Millisecond}
+	if c.pollEvery() != 40*time.Millisecond {
+		t.Fatalf("a shortened heartbeat keeps one pass per interval: %v", c.pollEvery())
+	}
+	c = &Controller{interval: HeartbeatInterval, poll: time.Second}
+	if c.pollEvery() != time.Second {
+		t.Fatalf("explicit poll interval: %v", c.pollEvery())
+	}
+	if opt := WithPollInterval(time.Minute); opt == nil {
+		t.Fatal("option")
 	}
 }

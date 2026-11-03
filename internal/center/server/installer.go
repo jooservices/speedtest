@@ -20,6 +20,7 @@ const maxInstallerRequestBody = 48 << 10
 type InstallerService interface {
 	Probe(context.Context, string, string, installer.ProbeInput) (installer.SSHProbe, error)
 	Start(context.Context, string, string, string, installer.InstallInput) (installer.Installation, error)
+	StartUninstall(context.Context, string, string, string, installer.InstallInput) (installer.Installation, error)
 	Get(context.Context, string) (installer.Installation, error)
 	Events(context.Context, string, string) ([]installer.Event, installer.Installation, error)
 }
@@ -48,7 +49,7 @@ func installerRoute(path string) bool {
 		return true
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
-	if len(parts) == 4 && parts[0] == "api" && parts[1] == "nodes" && parts[3] == "installations" {
+	if len(parts) == 4 && parts[0] == "api" && parts[1] == "nodes" && (parts[3] == "installations" || parts[3] == "uninstallations") {
 		return true
 	}
 	return len(parts) == 3 && parts[0] == "api" && parts[1] == "installations" ||
@@ -81,7 +82,13 @@ func (h *installerAPI) serve(w http.ResponseWriter, r *http.Request) {
 			methodNotAllowed(w, r, http.MethodPost)
 			return
 		}
-		h.start(w, r)
+		h.start(w, r, false)
+	case strings.HasPrefix(r.URL.Path, "/api/nodes/") && strings.HasSuffix(r.URL.Path, "/uninstallations"):
+		if r.Method != http.MethodPost {
+			methodNotAllowed(w, r, http.MethodPost)
+			return
+		}
+		h.start(w, r, true)
 	case strings.HasPrefix(r.URL.Path, "/api/installations/") && strings.HasSuffix(r.URL.Path, "/events"):
 		if r.Method != http.MethodGet {
 			methodNotAllowed(w, r, http.MethodGet)
@@ -121,7 +128,7 @@ func (h *installerAPI) probe(w http.ResponseWriter, r *http.Request) {
 	writeEnvelope(w, http.StatusCreated, "SSH host fingerprint observed", result)
 }
 
-func (h *installerAPI) start(w http.ResponseWriter, r *http.Request) {
+func (h *installerAPI) start(w http.ResponseWriter, r *http.Request, uninstall bool) {
 	principal, err := ownerPrincipal(r)
 	if err != nil {
 		writeServiceError(w, r, err)
@@ -140,13 +147,17 @@ func (h *installerAPI) start(w http.ResponseWriter, r *http.Request) {
 	if !decodeInstallerJSON(w, r, &input) {
 		return
 	}
-	result, err := h.service.Start(r.Context(), principal, key, parts[2], input)
+	begin, message := h.service.Start, "Agent installation accepted"
+	if uninstall {
+		begin, message = h.service.StartUninstall, "Agent removal accepted"
+	}
+	result, err := begin(r.Context(), principal, key, parts[2], input)
 	if err != nil {
 		h.writeError(w, r, err, false)
 		return
 	}
 	w.Header().Set("Location", "/api/installations/"+result.ID)
-	writeEnvelope(w, http.StatusAccepted, "Agent installation accepted", result)
+	writeEnvelope(w, http.StatusAccepted, message, result)
 }
 
 func (h *installerAPI) get(w http.ResponseWriter, r *http.Request) {

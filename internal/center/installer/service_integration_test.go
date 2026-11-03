@@ -267,3 +267,89 @@ func (l *lockedTestLog) Write(p []byte) (int, error) {
 	return l.buffer.Write(p)
 }
 func (l *lockedTestLog) String() string { l.mu.Lock(); defer l.mu.Unlock(); return l.buffer.String() }
+
+func TestUninstallWorkflowIntegration(t *testing.T) {
+	pool, ctx, appKey := openInstallerIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	if _, err := pool.Exec(ctx, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES($1,'uninstall-node',300,100)`, installerIntegrationNode); err != nil {
+		t.Fatal(err)
+	}
+	var logs lockedTestLog
+	service, err := NewService(ctx, ServiceOptions{Database: pool, Enrollment: nodes.NewService(pool, appKey), CenterURL: "https://center.example.test", AppKey: appKey,
+		Logger: slog.New(slog.NewJSONHandler(&logs, nil))})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		closeCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = service.Close(closeCtx)
+	}()
+
+	target := newFakeSSHServer(t, fakeSSHOptions{password: "uninstall-ssh-password", sudo: true})
+	probe, err := service.Probe(ctx, "owner", "probe-1", targetProbe(target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := InstallInput{ProbeID: probe.ID, Fingerprint: probe.Fingerprint, SSH: target.input()}
+	job, err := service.StartUninstall(ctx, "owner", "key-1", installerIntegrationNode, input)
+	if err != nil {
+		t.Fatalf("StartUninstall: %v", err)
+	}
+	done := waitForInstallerState(t, ctx, service, job.ID, "succeeded")
+	if done.Error != nil {
+		t.Fatalf("error on success: %q", *done.Error)
+	}
+	events, _, err := service.Events(ctx, job.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var messages []string
+	for _, e := range events {
+		messages = append(messages, e.Message)
+	}
+	joined := strings.Join(messages, "|")
+	for _, want := range []string{"Stopping the agent service.", "Removing the agent files.", "Removing the agent account.", "The agent was removed from the node."} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("progress lacks %q: %v", want, messages)
+		}
+	}
+	if strings.Contains(joined+logs.String(), "uninstall-ssh-password") {
+		t.Fatal("the SSH password must never reach events or logs")
+	}
+	// An idempotency key used for an uninstallation is separate from the same key used for an installation.
+	probe2, err := service.Probe(ctx, "owner", "probe-2", targetProbe(target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input2 := InstallInput{ProbeID: probe2.ID, Fingerprint: probe2.Fingerprint, SSH: target.input()}
+	const otherNode = "00000000-0000-4000-8000-0000000000b9"
+	if _, err := pool.Exec(ctx, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES($1,'uninstall-other-node',300,100)`, otherNode); err != nil {
+		t.Fatal(err)
+	}
+	other, err := service.Start(ctx, "owner", "key-1", otherNode, input2)
+	if err != nil || other.ID == job.ID {
+		t.Fatalf("an install with the same key must not replay the uninstall: %+v %v", other, err)
+	}
+
+	// A removal that fails on the machine is reported plainly and never claims success.
+	broken := newFakeSSHServer(t, fakeSSHOptions{password: "broken-password", sudo: true, mode: "uninstall-fails"})
+	bp, err := service.Probe(ctx, "owner", "probe-3", targetProbe(broken))
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed, err := service.StartUninstall(ctx, "owner", "key-3", installerIntegrationNode, InstallInput{ProbeID: bp.ID, Fingerprint: bp.Fingerprint, SSH: broken.input()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	final := waitForInstallerState(t, ctx, service, failed.ID, "failed")
+	if final.Error == nil || !strings.Contains(*final.Error, "could not be fully removed") {
+		t.Fatalf("failure message = %v", final.Error)
+	}
+	// Invalid input is refused before anything is queued.
+	if _, err := service.StartUninstall(ctx, "", "k", installerIntegrationNode, input); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("empty principal = %v", err)
+	}
+}

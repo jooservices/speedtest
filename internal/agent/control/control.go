@@ -18,6 +18,11 @@ import (
 // and polls commands.
 const HeartbeatInterval = 30 * time.Second
 
+// CommandPollInterval is how often the agent asks for configuration changes and commands. It is shorter than the
+// heartbeat so that a manual "Run test" starts within seconds instead of up to half a minute; the requests are a
+// conditional GET (304 when nothing changed) and one small list, so the cost is negligible.
+const CommandPollInterval = 5 * time.Second
+
 // Scheduler is the control loop's view of the local scheduler. It applies new
 // schedules without restart and exposes the last test time for heartbeats.
 type Scheduler interface {
@@ -47,6 +52,7 @@ type Controller struct {
 	// UpdateAgent handles an owner's update_agent command against the freshly fetched configuration.
 	UpdateAgent func(Command, AgentConfig) CommandAck
 	interval    time.Duration
+	poll        time.Duration
 	now         func() time.Time
 	startedAt   time.Time
 
@@ -58,6 +64,21 @@ type Controller struct {
 
 // Option customizes a Controller created by New.
 type Option func(*Controller)
+
+// WithPollInterval replaces the configuration and command poll cadence, for tests.
+func WithPollInterval(d time.Duration) Option { return func(c *Controller) { c.poll = d } }
+
+// pollEvery is the poll cadence: the short production default when the heartbeat runs at its default, otherwise
+// the heartbeat interval itself (tests that shorten the heartbeat keep one pass per interval).
+func (c *Controller) pollEvery() time.Duration {
+	if c.poll > 0 {
+		return c.poll
+	}
+	if c.interval == HeartbeatInterval {
+		return CommandPollInterval
+	}
+	return c.interval
+}
 
 // WithInterval replaces the heartbeat/poll cadence, for tests.
 func WithInterval(d time.Duration) Option { return func(c *Controller) { c.interval = d } }
@@ -95,7 +116,7 @@ func (c *Controller) Run(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		t := time.NewTicker(c.interval)
+		t := time.NewTicker(c.pollEvery())
 		defer t.Stop()
 		for {
 			c.syncConfig(ctx)

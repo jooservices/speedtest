@@ -25,6 +25,9 @@ var rollbackRemoteScript string
 //go:embed commit_remote.sh
 var commitRemoteScript string
 
+//go:embed uninstall_remote.sh
+var uninstallRemoteScript string
+
 type progressFunc func(stage string, pct float64)
 
 func sudoPassword(input SSHInput) string {
@@ -99,6 +102,11 @@ func rollbackRemote(client *ssh.Client, id, pass string) error {
 	return nil
 }
 
+// runUninstallScript removes the agent with the fixed uninstall script and reports its stages.
+func runUninstallScript(ctx context.Context, client *ssh.Client, pass string, onProgress progressFunc) (string, error) {
+	return sshRunProgress(ctx, client, "sudo -S -p '' /bin/sh -s", pass, []byte(uninstallRemoteScript), onProgress)
+}
+
 func commitRemote(client *ssh.Client, id, pass string) error {
 	command := "sudo -S -p '' /bin/sh -s -- " + id
 	if err := sshRun(client, command, pass, []byte(commitRemoteScript)); err != nil {
@@ -165,7 +173,7 @@ func parseProgress(line string) (string, float64, bool) {
 		return "", 0, false
 	}
 	switch parts[1] {
-	case "detect", "download", "verify", "user", "enroll", "start", "prepared", "unsupported":
+	case "detect", "download", "verify", "user", "enroll", "start", "prepared", "unsupported", "stop", "files", "account", "removed":
 		return parts[1], pct, true
 	default:
 		return "", 0, false
