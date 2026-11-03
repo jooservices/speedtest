@@ -68,3 +68,15 @@ release:
 	cp deploy/speedtest-agent.service $(DIST)/speedtest-agent.service
 	cd $(DIST) && sha256sum speedtest-agent-linux-amd64 speedtest-agent-linux-arm64 speedtest-center-linux-amd64 speedtest-migrate-linux-amd64 speedtest-agent.service > SHA256SUMS
 	@echo "release $(VERSION) written to $(DIST)/"
+
+
+.PHONY: test-ui lint-ui
+
+## test-ui checks the contract-backed UI data layer without a database.
+test-ui:
+	npm test
+	npm run test:coverage
+
+## lint-ui checks syntax of the changed browser scripts.
+lint-ui:
+	npm run lint

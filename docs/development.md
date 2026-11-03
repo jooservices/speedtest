@@ -174,3 +174,75 @@ spooling, command progress, atomic configuration and signal behavior. The local
 `parallel_connections` (1–64 when set), alongside engine, interval and binding.
 The center's effective configuration supersedes these bootstrap measurement
 settings after a valid ETag update.
+
+## UI client and store checks (JOOST-37)
+
+The browser has no build step or production npm dependency. For the preview use
+`http://<your-preview-server>/?demo=1`, including when opening the HTML file
+locally. Without that flag, `api.js` talks only to relative `/api/` paths on the
+current origin; no service URL or credential is bundled into JavaScript.
+Configure the center through its existing `.env` variables. Demo persistence is
+isolated under `st.demo.v1`; remote snapshots, session/CSRF tokens and secrets
+are never written to local storage.
+
+The store's synchronous read functions are unchanged. In remote mode, await
+`ST.load()` before rendering and subscribe to `remote`/`settings` events.
+`ST.remote.status` is `idle`, `loading`, `ready` or `error`; the app shell shows
+loading and actionable errors with a Retry button on every route. An anonymous
+or expired session goes to `#/signin`; the full sign-in workflow is JOOST-40.
+`ST.cancelLoad()` aborts pending fetches; a replacement load cannot publish an
+older snapshot. Collection requests follow pagination (100 items per page,
+maximum 1,000 pages); excessive responses fail explicitly rather than silently
+showing partial data. Results are loaded for the configured time range.
+
+`ST.api.request(path, options)` returns `{data, meta, etag, status}`. Options are
+`method`, `body`, `signal`, `headers`, `contentType`, `ifMatch`,
+`idempotencyKey`, and opt-in `cacheMs` (clamped to five seconds, memory only).
+Errors carry `status`, problem `type`, `errors`, `traceId`, and `retryAfter`.
+Writes bootstrap CSRF when necessary, send cookies on the same origin, and are
+never automatically retried. Preserve `ST.api.key()` across an explicit retry
+of the same create operation. An expired session clears cache and CSRF; a 403
+invalidates CSRF before another explicit write. Auth responses bypass caching.
+The API store's mutation methods return promises; callers must await them and
+handle failures. Page-specific command polling, installation, notification,
+secret issuance and server analytics are wired in JOOST-38/39/40/41, rather than
+simulated by the data adapter.
+
+Run the optional development checks on the host (Node 22 or later):
+
+```bash
+npm ci
+npm run lint
+npm test
+npm run test:coverage
+# Use an installed Playwright Chromium, or install into this checkout:
+PLAYWRIGHT_BROWSERS_PATH="$PWD/.tmp/pw-browsers" npx playwright install chromium
+PLAYWRIGHT_BROWSERS_PATH="$PWD/.tmp/pw-browsers" npm run test:ui
+npm audit
+```
+
+For a preinstalled host Chromium, set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to its
+binary path when running `npm run test:ui`; the default uses Playwright's normal
+browser discovery. CI and supported local hosts need no VM or database. On a
+Workspaces machine, run the browser on vm-tools using the `e2e-dev-vm` skill's
+remote browser setup, then set `UI_TEST_PORT` to the reverse-forwarded local
+port and `PW_TEST_CONNECT_WS_ENDPOINT` to the forwarded Playwright websocket.
+The smoke runner connects to that browser when the endpoint is set. The HTTP
+fixture server binds only to loopback, serves `ui/`, and returns OpenAPI-shaped
+responses.
+Ajv checks every read operation's response against `docs/openapi.yaml`.
+Playwright runs every route three times in demo and contract-shaped fake-API
+modes in both themes at 390, 768 and 1440 px, then checks loading, empty,
+error/retry and 401 handoff. This exercises the API client and store against an
+isolated HTTP fixture, not the currently incomplete center read handlers; the
+real-center UI flows are covered by JOOST-48 after JOOST-38/39/40/41.
+Screenshots stay in `.tmp/ui-smoke/`; coverage stays in `.tmp/ui-coverage.json`.
+Istanbul maps actual V8 counters from the VM-loaded scripts; the coverage command
+requires at least 90% lines per changed data-layer file and 100% lines in the new
+API/remote-adapter feature regions. Playwright, Ajv/formats, YAML and the V8 to
+Istanbul mapper are development-only dependencies for these checks.
+
+Claude's decision in JOOST-37 comment 24579 defers real-backend browser E2E to
+JOOST-48. The fake API checks do not claim staging deployment, real-agent
+verification or a complete sign-in implementation. No migration is needed for
+this UI-only foundation.

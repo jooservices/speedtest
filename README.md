@@ -4,16 +4,16 @@ Monitor the real speed of every internet connection you own, around the clock.
 
 Small agents on your machines run a speed test on a schedule and report to one dashboard. The dashboard stores every result, remembers which public IP each machine used and where it is, and shows averages, trends and the best and worst hours.
 
-**Status: interface preview and backend foundation.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The command center serves the UI, checks database readiness, provides owner authentication and session endpoints, and supports node enrollment, credential lifecycle and authenticated agent ingestion endpoints (results, configuration, heartbeat, commands and observed IP). The agent can enroll, run scheduled speed tests, heartbeat every 30 s, sync its schedule with ETags, and handle `run_now`, `pause`, `resume` and `update_config`; results are committed to a private SQLite spool before background delivery. Other product API areas are still being implemented. PostgreSQL migrations, a connection pool, and geolocation modules are available.
+**Status: interface preview and backend foundation.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. In demo mode, everything you change is kept in the browser's local storage. The UI now includes a contract-backed API client and remote data store; product endpoints that do not exist yet are verified with a local fake API until backend integration in JOOST-48. The command center serves the UI, checks database readiness, provides owner authentication and session endpoints, and supports node enrollment, credential lifecycle and authenticated agent ingestion endpoints (results, configuration, heartbeat, commands and observed IP). The agent can enroll, run scheduled speed tests, heartbeat every 30 s, sync its schedule with ETags, and handle `run_now`, `pause`, `resume` and `update_config`; results are committed to a private SQLite spool before background delivery. Other product API areas are still being implemented. PostgreSQL migrations, a connection pool, and geolocation modules are available.
 
 ## View the preview
 
 ```bash
 python3 -m http.server 8765 --directory ui
-# open http://127.0.0.1:8765/
+# open http://127.0.0.1:8765/?demo=1
 ```
 
-Opening `ui/index.html` directly also works. Dark is the default theme; use the sun/moon button to switch. "Reset demo data" (sidebar or Settings → Data) restores the sample data.
+Opening `ui/index.html?demo=1` directly also works. Without `?demo=1`, the UI reads the same-origin command-center API and shows loading/error/retry states. Dark is the default theme; use the sun/moon button to switch. "Reset demo data" (sidebar or Settings → Data) restores the sample data.
 
 ## What is in the preview
 
@@ -71,7 +71,7 @@ internal/shared/config/ command-center configuration loaded from the environment
 migrations/             database migrations
 deploy/                 deployment artifacts
 docs/                   design and process documents
-ui/                     the interface preview (unchanged, no build step)
+ui/                     API-backed UI with explicit demo mode (no build step)
 ui.go                   embeds ui/ for the command center binary
 ```
 

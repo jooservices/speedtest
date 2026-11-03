@@ -96,7 +96,7 @@
       xt.ticks.forEach(function (t) {
         ax.appendChild(svg('text', { x: X(t), y: height - 6, 'text-anchor': 'middle' }, o.x.type === 'time' ? timeLabel(t, xt.step) : (o.x.format ? o.x.format(t) : t)));
       });
-      if (o.y.unit) ax.appendChild(svg('text', { x: M.l - 8, y: 10, 'text-anchor': 'end' }, o.y.unit));
+      if (o.y.unit) ax.appendChild(svg('text', { x: M.l, y: 10, 'text-anchor': 'start' }, o.y.unit));
       root.appendChild(ax);
       root.appendChild(svg('line', { class: 'axis-line', x1: M.l, x2: W - M.r, y1: M.t + plotH, y2: M.t + plotH }));
       (o.refLines || []).forEach(function (r) {
