@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"github.com/jooservices/speedtest/internal/center/jobs"
 	"io"
 	"log/slog"
 	"strings"
@@ -15,6 +14,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jooservices/speedtest/internal/center/jobs"
 )
 
 // DB is the subset of pgxpool.Pool used by the alert engine and API.
