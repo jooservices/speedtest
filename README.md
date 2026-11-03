@@ -242,3 +242,8 @@ Release packaging and the one-line agent installer: [`docs/release.md`](docs/rel
 See [reliable result reporting](docs/reporting.md) for the JOOST-17 SQLite spool,
 UUID replay contract, retention settings and integration API. `agent run` composes scheduling, path-bound measurement, control and durable reporting.
 See [the agent lifecycle runbook](docs/agent-lifecycle.md) for shutdown, recovery and verification.
+
+Remote SSH installation, repair, progress and rollback: [SSH installer runbook](docs/ssh-installer.md).
+
+See [notification delivery](docs/notifications.md) for SMTP, Telegram, Slack and
+JSON webhook configuration, delivery APIs, durable retries and verification.

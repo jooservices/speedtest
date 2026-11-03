@@ -89,6 +89,17 @@ are sent exactly once, after fingerprint confirmation, with the installation
 request; they remain in memory for that operation and never appear in progress
 events. Confirm/pin the host key before authentication; abort on change.
 
+The SSH installer is available only when `SPEEDTEST_PUBLIC_URL` and
+`SPEEDTEST_RELEASE_DIR` are configured and the center has a 32-byte `APP_KEY`.
+The probe expires after 10 minutes and can be consumed by one install request.
+SSH credentials are used only by the in-memory worker; database idempotency
+stores an APP_KEY-protected request digest, not a password or private key. The
+installer issues a fresh single-use enrollment token for the selected existing
+node, transfers it through a temporary FIFO, and removes temporary remote state
+after the first heartbeat or rollback. Progress is replayable for 30 days and
+uses plain-language messages that omit credentials and remote command output.
+See the [SSH installer runbook](ssh-installer.md) for operations, repair and rollback.
+
 ## Shared wire rules
 
 - Success JSON: `success`, `code` (actual HTTP status), `message`, `data`, `meta`,
@@ -513,3 +524,13 @@ Secrets (the location-service key, email/Telegram/Slack credentials and the webh
 Retention, default engine, quiet hours, the stagger flag and the concurrency limit are stored in their own `settings` rows (`retentionDays`, `engine`, `quietStart`, `quietEnd`, `stagger`, `maxConcurrent`), which are the rows the retention job, the agent configuration and the schedule rules read; the settings API and `PUT /api/schedules/rules` therefore always agree. Changing quiet hours, stagger, concurrency or the engine moves every schedule revision so agents refetch their configuration. A display time zone that is an IANA name is also stored as the quiet-hours zone; `browser` is a UI preference and never overwrites it.
 
 `POST /api/settings/enrolment-key` (session, CSRF, origin) generates a new enrolment key, stores only its SHA-256 and returns the key once as `enrollToken`; later reads only report `enrollKeyConfigured`.
+
+## Notification delivery (JOOST-30)
+
+The test-channel POST and delivery list/detail GETs are implemented, with session
+protection and CSRF/Origin checks for POST. Tests return 202 with a delivery
+Location, or 422 for an unconfigured/disabled channel. Delivery lists accept
+page/size and optional event UUID, newest first. No delivery response exposes a
+destination, payload, URL or credential. Notification pages are limited to
+1,000,000. See [notification delivery](notifications.md) for transport Settings,
+retry/expiry behavior, the exactly-once transaction boundary and verification.

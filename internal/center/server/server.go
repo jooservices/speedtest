@@ -51,7 +51,8 @@ type Options struct {
 	// OwnerDashboard optionally serves the dashboard snapshot and comparison series.
 	OwnerDashboard OwnerDashboardStore
 	// OwnerIP optionally serves the IP history, address, lookup and map views.
-	OwnerIP OwnerIPStore
+	OwnerIP            OwnerIPStore
+	OwnerNotifications OwnerNotificationsStore
 	// Settings optionally serves the settings API and enrolment-key rotation.
 	Settings settings.Store
 	// OwnerResults optionally serves the dashboard result API (list, detail, CSV export).
@@ -60,6 +61,8 @@ type Options struct {
 	OwnerStats OwnerStatsStore
 	// OwnerAlerts optionally serves alert-rule and event APIs.
 	OwnerAlerts OwnerAlertsStore
+	// Installer serves SSH fingerprint probes, install jobs, and replayable progress.
+	Installer InstallerService
 	// Install optionally serves /install.sh and /download/<artifact>.
 	Install  http.Handler
 	AgentAPI agentapi.Store
@@ -105,6 +108,10 @@ func NewHandler(options Options) http.Handler {
 	if options.OwnerDashboard != nil {
 		ownerDashboardHandler = newOwnerDashboardHandler(options.OwnerDashboard, authHandler)
 	}
+	var notificationHandler http.Handler
+	if options.OwnerNotifications != nil {
+		notificationHandler = newOwnerNotificationsHandler(options.OwnerNotifications, authHandler, options.AgentRateLimit)
+	}
 	var ownerIPHandler http.Handler
 	if options.OwnerIP != nil {
 		ownerIPHandler = newOwnerIPHandler(options.OwnerIP, authHandler)
@@ -125,10 +132,16 @@ func NewHandler(options Options) http.Handler {
 	if options.OwnerAlerts != nil {
 		ownerAlertsHandler = newOwnerAlertsHandler(options.OwnerAlerts, authHandler)
 	}
+	var installerHandler http.Handler
+	if options.Installer != nil {
+		installerHandler = newInstallerHandler(options.Installer, authHandler, options.AgentRateLimit)
+	}
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/auth" || strings.HasPrefix(r.URL.Path, "/api/auth/"):
 			authHandler.serve(w, r)
+		case installerHandler != nil && installerRoute(r.URL.Path):
+			installerHandler.ServeHTTP(w, r)
 		case ownerNodesHandler != nil && ownerNodesRoute(r.URL.Path) && (r.Method != http.MethodPost || r.URL.Path != "/api/nodes"):
 			ownerNodesHandler.ServeHTTP(w, r)
 		case ownerSchedulesHandler != nil && ownerSchedulesRoute(r.URL.Path):
@@ -137,6 +150,8 @@ func NewHandler(options Options) http.Handler {
 			ownerJobsHandler.ServeHTTP(w, r)
 		case ownerDashboardHandler != nil && ownerDashboardRoute(r.URL.Path):
 			ownerDashboardHandler.ServeHTTP(w, r)
+		case notificationHandler != nil && ownerNotificationsRoute(r.URL.Path):
+			notificationHandler.ServeHTTP(w, r)
 		case ownerIPHandler != nil && ownerIPRoute(r.URL.Path):
 			ownerIPHandler.ServeHTTP(w, r)
 		case settingsHandler != nil && ownerSettingsRoute(r.URL.Path):
