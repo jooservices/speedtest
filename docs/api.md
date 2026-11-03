@@ -209,7 +209,51 @@ unweighted means of node percentages; fleet latency is median of ok-only pings.
 Summary previous periods have equal adjacent duration. Missing chart buckets
 have null value/count=0. Timezone grouping uses IANA local calendar boundaries,
 including DST; heatmap is Monday=0..Sunday=6 × hour 0..23, last 30 days. Combined
-series require all selected nodes to have values; they do not persist topology.
+series sum the values available from selected nodes in each bucket; they do not
+persist topology.
+
+### Statistics endpoints (JOOST-26)
+
+All five endpoints require an authenticated UI session and return the standard
+success envelope. Omit `nodes` to include every node; `nodes=` selects none.
+Explicit `from` and `to` are an inclusive/exclusive RFC 3339 interval, must be
+given together, and cannot be combined with `range`. Analytics intervals are
+limited to 366 days. `range` accepts `6h`, `24h`, `7d` (default) or `30d` and
+ends at the request snapshot.
+
+```text
+GET /api/stats/summary?range=30d&nodes=<node-id>
+GET /api/stats/trend?from=<RFC3339>&to=<RFC3339>&metric=down&bucket=hour&timezone=Asia/Ho_Chi_Minh
+GET /api/stats/hour-of-day?range=7d&metric=ping&timezone=Asia/Ho_Chi_Minh
+GET /api/stats/heatmap?node=<node-id>&metric=down&timezone=Asia/Ho_Chi_Minh
+GET /api/stats/distribution?range=30d&metric=down&bins=12
+```
+
+`summary` returns current and immediately previous intervals of equal length.
+Its counts include failed tests; `ok` and success rate include both `ok` and
+`degraded` results. Each metric's `n` counts its non-null measurements from
+those nonfailed results. Download and upload expected percentages use that
+node's configured expected speed. Stability uses download's population standard
+deviation. Empty values are null, and a single value has standard deviation 0.
+
+Trend, hour-of-day, heatmap, and distribution use only status `ok`. Trend uses
+calendar `hour` or `day` buckets in the supplied IANA zone (`UTC` by default),
+with at most 300 points per node; missing values have `count: 0` and `value:
+null`. Spring-forward hours that do not exist are omitted and repeated fall-back
+hours are combined under the same local hour. The optional combined trend is
+only available for down/up: it sums selected node bucket averages wherever at
+least one selected node has a value, matching the preview. A bucket with no
+selected node values is null. Its count is the sum of contributing sample
+counts, and its summary covers non-null combined bucket totals. Per-node series
+summaries use raw source measurements rather than averages of buckets.
+Hour-of-day always returns all 24 hours. Heatmap requires one node and returns
+168 weekday/hour cells for the rolling 30 days ending at the request snapshot.
+
+Distribution accepts `bins` from 1 through 100 (default 15); the preview's
+current chart uses 12, so pass `bins=12` when comparing its histogram directly.
+Bin edges cover the sample minimum through maximum and the last upper edge is
+inclusive. Constant data uses a nonzero range centered on the value; no samples
+returns `bins: []` and `count: 0`.
 
 Settings defaults match the preview: dark, 7d, auto units, browser timezone,
 24-hour clock, one decimal, 365-day retention (0=forever), GeoLite2 + ip-api fallback,
