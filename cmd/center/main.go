@@ -23,7 +23,9 @@ import (
 	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/dashboard"
 	"github.com/jooservices/speedtest/internal/center/db"
+	"github.com/jooservices/speedtest/internal/center/geo"
 	"github.com/jooservices/speedtest/internal/center/install"
+	"github.com/jooservices/speedtest/internal/center/ipapi"
 	"github.com/jooservices/speedtest/internal/center/ipwatch"
 	"github.com/jooservices/speedtest/internal/center/jobs"
 	"github.com/jooservices/speedtest/internal/center/nodes"
@@ -115,6 +117,7 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 		OwnerResults:   owner,
 		OwnerSchedules: owner,
 		OwnerStats:     statsStore,
+		OwnerIP:        &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...)},
 		OwnerDashboard: &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore},
 		OwnerAlerts:    alertStore,
 		OwnerJobs:      &jobs.Registry{DB: pool},
@@ -153,6 +156,7 @@ type services struct {
 	OwnerResults   server.OwnerResultsStore
 	OwnerSchedules server.OwnerSchedulesStore
 	OwnerStats     server.OwnerStatsStore
+	OwnerIP        server.OwnerIPStore
 	OwnerDashboard server.OwnerDashboardStore
 	OwnerAlerts    server.OwnerAlertsStore
 	OwnerJobs      server.OwnerJobsStore
@@ -201,6 +205,7 @@ func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Wr
 		OwnerResults:      svc.OwnerResults,
 		OwnerSchedules:    svc.OwnerSchedules,
 		OwnerStats:        svc.OwnerStats,
+		OwnerIP:           svc.OwnerIP,
 		OwnerDashboard:    svc.OwnerDashboard,
 		OwnerAlerts:       svc.OwnerAlerts,
 		OwnerJobs:         svc.OwnerJobs,
