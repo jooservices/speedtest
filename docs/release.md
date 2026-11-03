@@ -71,3 +71,7 @@ Highlights: one or two sentences for a non-technical reader.
 ### Checksums
 Attach `SHA256SUMS`.
 ```
+
+## Self-update
+
+Installed agents can update themselves from an advertised release; see [agent-update.md](agent-update.md).
