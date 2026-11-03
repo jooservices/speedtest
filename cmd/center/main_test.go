@@ -427,3 +427,33 @@ func TestStartupAndSeedFailClosedOnMalformedEnvironmentFile(t *testing.T) {
 		t.Fatal("seed failure exit", status)
 	}
 }
+
+func TestServeStartsBackgroundJobsAndStopsThem(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	started := make(chan struct{})
+	stopped := make(chan struct{})
+	background := func(jobCtx context.Context) {
+		close(started)
+		<-jobCtx.Done()
+		close(stopped)
+	}
+	cfg := config.CenterConfig{AppEnv: "local", HTTPAddr: "127.0.0.1:0"}
+	done := make(chan error, 1)
+	go func() {
+		done <- serve(ctx, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), io.Discard, cfg, nil, nil, nil, nil, nil, nil, nil, background)
+	}()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background job was not started")
+	}
+	cancel()
+	select {
+	case <-stopped:
+	case <-time.After(5 * time.Second):
+		t.Fatal("background job was not stopped with the server")
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("serve = %v", err)
+	}
+}

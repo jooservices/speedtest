@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -204,4 +205,60 @@ func TestOwnerResultsRouteMatching(t *testing.T) {
 	if neutralise("-1") != "'-1" || neutralise("plain") != "plain" || neutralise("") != "" {
 		t.Fatal("neutralise")
 	}
+}
+
+func TestOwnerResultsFullExports(t *testing.T) {
+	rows := []ownerapi.ResultRow{
+		{NodeName: "VM1", Result: map[string]any{"id": "a", "ts": "2026-11-01T00:00:00Z", "status": "ok", "down": 10.5, "geo": nil, "raw": map[string]any{"k": "v"}}},
+		{NodeName: "VM2", Result: map[string]any{"id": "b", "ts": "2026-11-02T00:00:00Z", "status": "failed", "down": nil, "error": "boom"}},
+	}
+	store := &fakeOwnerResults{rows: rows}
+	h := resultsHandlerFor(store)
+	for _, path := range []string{"/api/export/results.csv", "/api/export/results.json"} {
+		if rec := do(h, http.MethodGet, path, "", nil); rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s without a session = %d", path, rec.Code)
+		}
+	}
+	// Query parameters are ignored: the full export always covers every stored result, oldest first.
+	rec := do(h, http.MethodGet, "/api/export/results.csv?range=6h&status=failed", "", ownerRead)
+	records, err := csv.NewReader(rec.Body).ReadAll()
+	if rec.Code != http.StatusOK || err != nil || len(records) != 3 || store.filter.Sort != "ts" || store.filter.Dir != "asc" ||
+		!store.filter.From.IsZero() || store.filter.Status != "" {
+		t.Fatalf("csv = %d %v %v filter %+v", rec.Code, records, err, store.filter)
+	}
+	rec = do(h, http.MethodGet, "/api/export/results.json", "", ownerRead)
+	var decoded []map[string]any
+	if rec.Code != http.StatusOK || !strings.HasPrefix(rec.Header().Get("Content-Type"), "application/json") ||
+		!strings.HasPrefix(rec.Header().Get("Content-Disposition"), `attachment; filename="speedtest-results-`) ||
+		json.Unmarshal(rec.Body.Bytes(), &decoded) != nil || len(decoded) != 2 || decoded[0]["id"] != "a" || decoded[1]["error"] != "boom" {
+		t.Fatalf("json = %d %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), `"success"`) {
+		t.Fatal("the export is a bare array, not an envelope")
+	}
+	empty := do(resultsHandlerFor(&fakeOwnerResults{}), http.MethodGet, "/api/export/results.json", "", ownerRead)
+	if empty.Code != http.StatusOK || strings.TrimSpace(empty.Body.String()) != "[]" {
+		t.Fatalf("empty json = %d %q", empty.Code, empty.Body.String())
+	}
+	failing := do(resultsHandlerFor(&fakeOwnerResults{exportErr: errors.New("db down")}), http.MethodGet, "/api/export/results.json", "", ownerRead)
+	if failing.Code != http.StatusInternalServerError || strings.Contains(failing.Body.String(), "db down") {
+		t.Fatalf("json failure before the first row = %d %s", failing.Code, failing.Body.String())
+	}
+	if rec := do(h, http.MethodPost, "/api/export/results.json", "", ownerWriteWith(nil)); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("POST = %d", rec.Code)
+	}
+}
+
+func TestOwnerResultsJSONExportAbortsOnMidStreamFailure(t *testing.T) {
+	rows := []ownerapi.ResultRow{{Result: map[string]any{"id": "a"}}, {Result: map[string]any{"id": "b"}}}
+	h := resultsHandlerFor(&fakeOwnerResults{rows: rows, exportErr: errors.New("db down"), failAfter: 1})
+	req := httptest.NewRequest(http.MethodGet, "http://center.test/api/export/results.json", nil)
+	ownerRead(req)
+	defer func() {
+		if recovered := recover(); recovered != http.ErrAbortHandler {
+			t.Fatalf("a truncated JSON array must abort the connection, recovered %v", recovered)
+		}
+	}()
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	t.Fatal("handler returned normally")
 }
