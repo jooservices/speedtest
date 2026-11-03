@@ -236,7 +236,36 @@
 
   /* ---------- Illustrative map of Vietnam ---------- */
   var OUTLINE = [[102.15,22.40],[102.70,22.75],[103.30,22.70],[104.00,22.80],[104.60,23.10],[105.40,23.30],[106.10,22.95],[106.75,22.85],[107.35,22.00],[108.05,21.50],[107.40,21.00],[106.80,20.65],[106.35,20.25],[106.10,19.75],[105.70,19.05],[105.80,18.55],[106.35,18.00],[106.85,17.40],[107.20,16.85],[107.65,16.40],[108.20,16.10],[108.70,15.55],[109.00,15.10],[109.25,14.20],[109.25,13.50],[109.30,12.60],[109.20,11.80],[108.90,11.30],[108.15,10.85],[107.55,10.45],[107.05,10.35],[106.75,10.40],[106.60,9.90],[106.20,9.55],[105.65,9.05],[105.15,8.65],[104.80,8.62],[104.80,9.20],[105.05,9.80],[104.85,10.15],[104.45,10.40],[104.95,10.70],[105.30,11.25],[105.85,11.60],[106.15,11.15],[106.60,11.55],[106.90,12.05],[107.50,12.35],[107.55,13.40],[107.60,14.15],[107.55,14.90],[107.15,15.40],[106.65,15.85],[106.55,16.50],[105.95,17.20],[105.45,17.95],[104.70,18.45],[104.15,19.10],[104.55,19.70],[103.90,20.35],[103.00,21.15],[102.30,21.75]];
+  /* Real map (Leaflet, vendored). Tiles come from the map-tiles meta tag; empty means a plain background. */
+  function leafletMap(host, o) {
+    U.clear(host); host.classList.add('map', 'map-live');
+    var el = h('div', { class: 'map-canvas', role: 'region', 'aria-label': 'Map of connection locations' });
+    host.appendChild(el);
+    var pins = o.pins || [];
+    var map = L.map(el, { zoomControl: true, attributionControl: true, worldCopyJump: false, minZoom: 2 });
+    var meta = document.querySelector('meta[name="map-tiles"]'), url = meta ? meta.getAttribute('content') : '';
+    if (url) L.tileLayer(url, { maxZoom: 18, attribution: '© <a href="https://www.openstreetmap.org/copyright" rel="noopener noreferrer" target="_blank">OpenStreetMap</a> contributors' }).addTo(map);
+    map.attributionControl.setPrefix(false); // the OpenStreetMap credit stays; the Leaflet prefix only crowds the corner
+    var bounds = [];
+    pins.forEach(function (pin) {
+      var colors = pin.colors && pin.colors.length ? pin.colors : ['var(--accent)'];
+      var dot = h('span', { class: 'map-pin' }, colors.map(function (c) { return h('i', { style: { background: c } }); }));
+      var icon = L.divIcon({ html: dot.outerHTML, className: 'map-pin-wrap', iconSize: [14 + colors.length * 6, 20], iconAnchor: [(14 + colors.length * 6) / 2, 10] });
+      var marker = L.marker([pin.lat, pin.lon], { icon: icon, keyboard: true, title: pin.label + ': ' + pin.names, alt: pin.label }).addTo(map);
+      var body = h('div', { class: 'map-tip' }, h('b', null, pin.label), (pin.tip || []).map(function (t) { return h('div', null, h('span', { class: 'dot', style: { background: t.color } }), ' ' + t.label + ' ', h('span', { class: 'mono' }, t.value)); }));
+      marker.bindTooltip(body, { direction: 'top', offset: [0, -8] });
+      marker.on('keypress', function () { marker.openTooltip(); });
+      marker.on('focus', function () { marker.openTooltip(); });
+      bounds.push([pin.lat, pin.lon]);
+    });
+    if (bounds.length === 1) map.setView(bounds[0], 9);
+    else if (bounds.length) map.fitBounds(bounds, { paddingTopLeft: [40, 40], paddingBottomRight: [40, 60], maxZoom: 9 });
+    else map.setView([16.2, 106.2], 5);
+    host._map = map;
+    return map;
+  }
   C.map = function (host, o) {
+    if (!ST.demo && window.L) return leafletMap(host, o);
     U.clear(host); host.classList.add('map');
     var W = 360, H = 620, lon0 = 101.5, lon1 = 110.2, lat0 = 8, lat1 = 23.8;
     var P = function (lat, lon) { return [(lon - lon0) / (lon1 - lon0) * W, (lat1 - lat) / (lat1 - lat0) * H]; };

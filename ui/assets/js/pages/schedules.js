@@ -10,11 +10,15 @@
     return Math.ceil((from - off) / iv) * iv + off;
   }
 
+  // The half-typed pause window survives a redraw (a reload of the data); it resets when the center's values change.
+  var quietDraft = null;
+
   function failed(error) { U.toast(error.message, 'error'); }
 
   ST.pages.schedules = function (root) {
     var nodes = ST.nodes(), s = ST.settings(), real = !ST.demo, info = real ? ST.scheduleInfo() : null;
     if (real) s = Object.assign({}, s, { stagger: info.rules.stagger, maxConcurrent: info.rules.maxConcurrent, quietStart: info.rules.quiet.quietStart, quietEnd: info.rules.quiet.quietEnd });
+    if (!quietDraft || quietDraft.serverStart !== s.quietStart || quietDraft.serverEnd !== s.quietEnd) quietDraft = { start: s.quietStart, end: s.quietEnd, serverStart: s.quietStart, serverEnd: s.quietEnd };
     var byNode = {};
     if (real) info.nodes.forEach(function (x) { byNode[x.nodeId] = x; });
     root.appendChild(U.pageHead('Schedules', 'Decide how often each node measures its connection.', [U.btn('Run all now', { icon: 'play', onClick: function () { U.runTestDialog(nodes.filter(function (n) { return n.enabled; }).map(function (n) { return n.id; })); } })]));
@@ -31,10 +35,9 @@
       }, 'Keep tests from overlapping')),
       settingRow('Maximum tests at the same time', 'Used when overlapping is allowed.', U.select([1, 2, 3, 4, 5].map(function (x) { return { value: x, label: String(x) }; }), s.maxConcurrent, function (v) { if (real) { ST.saveScheduleRules({ maxConcurrent: +v }).then(function () { U.toast('Saved'); }, failed); return; } ST.setSettings({ maxConcurrent: +v }, true); U.toast('Saved'); })),
       settingRow('Pause tests during these hours', 'Leave empty to test around the clock.', h('div', { class: 'row' },
-        U.input(s.quietStart, function (v) { if (!real) ST.setSettings({ quietStart: v }, true); }, { type: 'time', 'aria-label': 'Pause from', onChange: function (e) { quiet(e.target.value, undefined); } }), h('span', { class: 'muted' }, 'to'),
-        U.input(s.quietEnd, function (v) { if (!real) ST.setSettings({ quietEnd: v }, true); }, { type: 'time', 'aria-label': 'Pause until', onChange: function (e) { quiet(undefined, e.target.value); } }))))));
+        U.input(quietDraft.start, function (v) { if (!real) ST.setSettings({ quietStart: v }, true); }, { type: 'time', 'aria-label': 'Pause from', onChange: function (e) { quiet(e.target.value, undefined); } }), h('span', { class: 'muted' }, 'to'),
+        U.input(quietDraft.end, function (v) { if (!real) ST.setSettings({ quietEnd: v }, true); }, { type: 'time', 'aria-label': 'Pause until', onChange: function (e) { quiet(undefined, e.target.value); } }))))));
     // Both ends must be empty or both set; the center refuses anything else, so wait until the pair is complete.
-    var quietDraft = { start: s.quietStart, end: s.quietEnd };
     function quiet(start, end) {
       if (!real) return;
       if (start !== undefined) quietDraft.start = start;

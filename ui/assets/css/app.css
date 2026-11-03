@@ -386,3 +386,14 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
   .speeds { grid-template-columns: 1fr 1fr; }
   .kv { grid-template-columns: 1fr; }
 }
+
+/* Live map (Leaflet) */
+.map-live { background: var(--surface-2); }
+.map-live .map-canvas { height: 460px; width: 100%; border-radius: var(--radius); z-index: 0; }
+.map-pin-wrap { background: none; border: 0; }
+.map-pin { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--surface); box-shadow: 0 1px 4px rgb(0 0 0 / .45); }
+.map-pin i { display: block; width: 12px; height: 12px; border-radius: 50%; }
+.map-tip .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.leaflet-container { font: inherit; }
+.leaflet-container a { color: var(--accent); }
+@media (max-width: 640px) { .map-live .map-canvas { height: 340px; } }
