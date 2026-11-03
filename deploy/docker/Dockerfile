@@ -3,10 +3,10 @@
 # entrypoint migrates, bootstraps and supervises everything.
 FROM ubuntu:24.04
 
-# speedtest-cli (the Python tool from Ubuntu) is the engine used on staging; Ookla's CLI can be added later by
-# building with --build-arg OOKLA_VERSION/OOKLA_SHA256 and switching a node's engine to ookla.
-ARG OOKLA_VERSION=""
-ARG OOKLA_SHA256=""
+# Ookla's official CLI (pinned, checksum verified) is the staging engine. Ubuntu's Python speedtest-cli stays
+# installed as a fallback (engine: speedtestcli) but picks distant servers from this network and fails.
+ARG OOKLA_VERSION="1.2.0"
+ARG OOKLA_SHA256="5690596c54ff9bed63fa3732f818a05dbc2db19ad36ed68f21ca5f64d5cfeeb7"
 
 RUN apt-get update \
  && apt-get install -y --no-install-recommends ca-certificates curl tini postgresql-client jq procps tzdata speedtest-cli \

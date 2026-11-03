@@ -81,7 +81,7 @@ for spec in $NODES; do
       speedtest-agent enroll --center "$CENTER" --token "$token" --name "$name" --host "docker-staging"
     psql_run -c "UPDATE schedules SET interval_minutes=${INTERVAL}, offset_minutes=${offset}, revision=revision+1 WHERE node_id='${node_id}'" \
              -c "UPDATE nodes SET config_revision=config_revision+1 WHERE id='${node_id}'"
-    printf 'name: %s\nengine: speedtestcli\ninterval: %sm\nexpected_download_mbps: %s\nexpected_upload_mbps: %s\n' "$name" "$INTERVAL" "$EXPECTED_DOWN" "$EXPECTED_UP" > "$dir/config.yaml"
+    printf 'name: %s\nengine: %s\ninterval: %sm\nexpected_download_mbps: %s\nexpected_upload_mbps: %s\n' "$name" "${STAGING_ENGINE:-ookla}" "$INTERVAL" "$EXPECTED_DOWN" "$EXPECTED_UP" > "$dir/config.yaml"
     touch "$dir/enrolled"
   fi
   log "starting agent ${name}"
