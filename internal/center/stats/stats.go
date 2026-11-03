@@ -332,7 +332,7 @@ func (s *Store) Trend(ctx context.Context, q Query) ([]Series, error) {
 		return nil, fmt.Errorf("read statistics trend: %w", err)
 	}
 
-	summaries, err := s.metricSummaries(ctx, q, column, "ok")
+	summaries, err := s.metricSummaries(ctx, q, column, "r.status = 'ok'")
 	if err != nil {
 		return nil, err
 	}
@@ -369,13 +369,13 @@ LEFT JOIN grouped g ON g.node_id = n.id AND g.local_bucket = c.local_bucket
 ORDER BY n.name, n.id, c.local_bucket`
 }
 
-func (s *Store) metricSummaries(ctx context.Context, q Query, column, status string) (map[string]MetricSummary, error) {
+func (s *Store) metricSummaries(ctx context.Context, q Query, column, statusCondition string) (map[string]MetricSummary, error) {
 	if q.NodesSet && len(q.NodeIDs) == 0 {
 		return map[string]MetricSummary{}, nil
 	}
 	query := `WITH selected_nodes AS (` + selectedNodes + `)
 SELECT n.id::text, ` + joinSQL(metricAggregate(column)) + `
-FROM selected_nodes n LEFT JOIN results r ON r.node_id = n.id AND r.ts >= $2 AND r.ts < $3 AND r.status = '` + status + `'
+FROM selected_nodes n LEFT JOIN results r ON r.node_id = n.id AND r.ts >= $2 AND r.ts < $3 AND ` + statusCondition + `
 GROUP BY n.id ORDER BY n.id`
 	rows, err := s.DB.Query(ctx, query, q.nodeIDs(), q.From, q.To)
 	if err != nil {

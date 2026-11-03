@@ -43,8 +43,8 @@ func openIntegrationDB(t *testing.T) (*pgxpool.Pool, context.Context) {
 		t.Setenv(key, value)
 	}
 	cfg, err := config.LoadCenter()
-	if err != nil || cfg.Database.Name != "speedtest_wt29" || db.CheckTestDatabase(cfg.Database.Name) != nil {
-		t.Fatal("integration tests require the configured speedtest_wt29 database")
+	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
+		t.Fatal("integration tests require a configured worktree test database")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Minute)
 	t.Cleanup(cancel)
@@ -54,10 +54,10 @@ func openIntegrationDB(t *testing.T) (*pgxpool.Pool, context.Context) {
 	}
 	t.Cleanup(pool.Close)
 	var name, marker string
-	if err := pool.QueryRow(ctx, `SELECT current_database(),shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()`).Scan(&name, &marker); err != nil || name != "speedtest_wt29" || marker != "workspaces-project:speedtest" {
+	if err := pool.QueryRow(ctx, `SELECT current_database(),shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()`).Scan(&name, &marker); err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
 		t.Fatal("worktree database identity/ownership marker verification failed")
 	}
-	t.Log("PASS: speedtest_wt29 identity and ownership marker verified")
+	t.Log("PASS: worktree test database identity and ownership marker verified")
 	return pool, ctx
 }
 

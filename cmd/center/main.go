@@ -21,6 +21,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/alerts"
 	"github.com/jooservices/speedtest/internal/center/auth"
+	"github.com/jooservices/speedtest/internal/center/dashboard"
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/install"
 	"github.com/jooservices/speedtest/internal/center/ipwatch"
@@ -102,6 +103,7 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 	defer func() { _ = closeGeo() }()
 	nodeService := nodes.NewService(pool, cfg.AppKey)
 	owner := &ownerapi.Store{DB: pool}
+	statsStore := &stats.Store{DB: pool}
 	alertStore := &alerts.Store{DB: pool, AppKey: cfg.AppKey, Logger: logger}
 	retention := &jobs.Retention{DB: pool, Logger: logger}
 	return serve(ctx, args, logger, stderr, cfg, services{
@@ -112,7 +114,8 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 		OwnerNodes:     owner,
 		OwnerResults:   owner,
 		OwnerSchedules: owner,
-		OwnerStats:     &stats.Store{DB: pool},
+		OwnerStats:     statsStore,
+		OwnerDashboard: &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore},
 		OwnerAlerts:    alertStore,
 		OwnerJobs:      &jobs.Registry{DB: pool},
 		Background: func(ctx context.Context) {
@@ -150,6 +153,7 @@ type services struct {
 	OwnerResults   server.OwnerResultsStore
 	OwnerSchedules server.OwnerSchedulesStore
 	OwnerStats     server.OwnerStatsStore
+	OwnerDashboard server.OwnerDashboardStore
 	OwnerAlerts    server.OwnerAlertsStore
 	OwnerJobs      server.OwnerJobsStore
 	// Background runs until the context ends, for example the daily retention job.
@@ -197,6 +201,7 @@ func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Wr
 		OwnerResults:      svc.OwnerResults,
 		OwnerSchedules:    svc.OwnerSchedules,
 		OwnerStats:        svc.OwnerStats,
+		OwnerDashboard:    svc.OwnerDashboard,
 		OwnerAlerts:       svc.OwnerAlerts,
 		OwnerJobs:         svc.OwnerJobs,
 		AgentAPI:          svc.Agent,
