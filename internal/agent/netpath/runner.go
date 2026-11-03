@@ -61,16 +61,12 @@ func (r *Runner) Run(ctx context.Context, opts engine.Options) (RunResult, error
 		opts.SourceIP = path.SourceIP.String()
 	}
 
-	measurement, err := r.engine.Run(ctx, opts)
+	measurement, runErr := r.engine.Run(ctx, opts)
 	result := RunResult{Measurement: measurement}
-	if err != nil {
-		return result, err
-	}
-
 	publicIP, err := r.centerPublicIP(ctx, path)
 	if err != nil {
 		result.Warnings = append(result.Warnings, "public IP detection failed: command center echo endpoint was unavailable")
-		return result, nil
+		return result, runErr
 	}
 	result.PublicIP = publicIP.String()
 	if measurement.ExternalIP != "" {
@@ -82,5 +78,5 @@ func (r *Runner) Run(ctx context.Context, opts engine.Options) (RunResult, error
 			result.Warnings = append(result.Warnings, fmt.Sprintf("external IP mismatch: engine reported %s; command center observed %s", reported, publicIP))
 		}
 	}
-	return result, nil
+	return result, runErr
 }

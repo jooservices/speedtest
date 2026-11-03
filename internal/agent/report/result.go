@@ -35,7 +35,7 @@ type LoadedLatency struct {
 // engine's location string and Sponsor is empty because the engine does not
 // expose a distinct sponsor value.
 type Server struct {
-	ID      int64  `json:"id"`
+	ID      int64  `json:"id,omitempty"`
 	Name    string `json:"name"`
 	City    string `json:"city"`
 	Sponsor string `json:"sponsor"`
@@ -90,7 +90,7 @@ func (r Result) Validate() error {
 	if _, err := time.Parse(time.RFC3339, r.TS); err != nil || !strings.HasSuffix(r.TS, "Z") {
 		return fmt.Errorf("result ts must be RFC 3339 UTC, got %q", r.TS)
 	}
-	if _, err := netip.ParseAddr(r.IP); err != nil {
+	if _, err := netip.ParseAddr(r.IP); err != nil && (r.IP != "" || r.Status != StatusFailed) {
 		return fmt.Errorf("result ip must be an IP literal, got %q", r.IP)
 	}
 	if r.Threads < 1 || r.Threads > 64 {
@@ -143,7 +143,7 @@ func (r Result) Validate() error {
 	if r.ServerID != nil && *r.ServerID <= 0 {
 		return errors.New("serverId must be positive")
 	}
-	if r.Server != nil && (r.Server.ID <= 0 || len([]rune(r.Server.Host)) > 255) {
+	if r.Server != nil && (r.Server.ID < 0 || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || len([]rune(r.Server.Host)) > 255) {
 		return errors.New("invalid server identity")
 	}
 	if r.EngineIP != "" {
@@ -169,8 +169,8 @@ func (r Result) Validate() error {
 		if r.Down == nil || r.Up == nil || r.Ping == nil {
 			return errors.New("an ok or degraded result requires down, up and ping")
 		}
-		if r.ServerID == nil || *r.ServerID <= 0 {
-			return errors.New("an ok or degraded result requires a positive serverId")
+		if r.Server == nil {
+			return errors.New("an ok or degraded result requires a server identity")
 		}
 	default:
 		return fmt.Errorf("result status must be ok, degraded or failed, got %q", r.Status)
@@ -185,4 +185,17 @@ func isUUID(id string) bool {
 	}
 	decoded, err := hex.DecodeString(strings.ReplaceAll(id, "-", ""))
 	return err == nil && len(decoded) == 16
+}
+
+// MarshalJSON emits an unknown failed-test IP as null, never an invented address.
+func (r Result) MarshalJSON() ([]byte, error) {
+	type wire Result
+	var ip *string
+	if r.IP != "" {
+		ip = &r.IP
+	}
+	return json.Marshal(struct {
+		wire
+		IP *string `json:"ip"`
+	}{wire(r), ip})
 }

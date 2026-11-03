@@ -1,6 +1,7 @@
 package report
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -15,9 +16,8 @@ type Options struct {
 	Manual bool
 	// Threads is the connection count; zero selects DefaultThreads.
 	Threads int
-	// IP is the node's public IP used when the engine reports none (for
-	// example a failed test before the external IP was learned). Empty keeps
-	// the engine-reported IP.
+	// IP is the center-observed address and overrides the engine value when
+	// available. The engine address is preserved separately for cross-checking.
 	IP string
 	// ID is a pre-allocated result UUID; empty allocates a fresh one.
 	ID string
@@ -61,7 +61,9 @@ func FromEngine(e engine.Result, o Options) (Result, error) {
 	}
 	if e.Server != nil {
 		id := e.Server.ID
-		r.ServerID = &id
+		if id > 0 {
+			r.ServerID = &id
+		}
 		r.Server = &Server{
 			ID:      e.Server.ID,
 			Name:    e.Server.Name,
@@ -71,9 +73,8 @@ func FromEngine(e engine.Result, o Options) (Result, error) {
 		}
 	}
 
-	if e.ExternalIP != "" {
-		r.IP = e.ExternalIP
-	} else {
+	r.IP = e.ExternalIP
+	if o.IP != "" {
 		r.IP = o.IP
 	}
 	r.BytesDown, r.BytesUp, r.Duration = e.BytesDown, e.BytesUp, e.Duration
@@ -82,6 +83,13 @@ func FromEngine(e engine.Result, o Options) (Result, error) {
 
 	if len(e.Raw) > 0 {
 		r.Raw = append(json.RawMessage(nil), e.Raw...)
+		if bytes.HasPrefix(bytes.TrimSpace(r.Raw), []byte("[")) {
+			wrapped, err := json.Marshal(map[string]json.RawMessage{"reports": r.Raw})
+			if err != nil {
+				return Result{}, err
+			}
+			r.Raw = wrapped
+		}
 	}
 
 	if o.ID != "" {

@@ -24,6 +24,7 @@ func okResult(id string) Result {
 		Up:       &up,
 		Ping:     &ping,
 		ServerID: i64p(42),
+		Server:   &Server{ID: 42, Name: "test"},
 		IP:       "203.0.113.10",
 		Threads:  DefaultThreads,
 	}

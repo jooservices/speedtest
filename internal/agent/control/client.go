@@ -43,6 +43,13 @@ type QuietHours struct {
 // GET /api/agent/config. Only the fields the scheduler needs are decoded; the
 // rest are ignored.
 type AgentConfig struct {
+	Engine  string          `json:"engine"`
+	Threads int             `json:"threads"`
+	Server  json.RawMessage `json:"server"`
+	Binding *struct {
+		Interface string  `json:"iface"`
+		SourceIP  *string `json:"sourceIp"`
+	} `json:"binding"`
 	Revision     string        `json:"revision"`
 	Name         string        `json:"name"`
 	ExpectedDown float64       `json:"expectedDown"`
@@ -69,8 +76,11 @@ type Command struct {
 
 // CommandAck is the POST /api/agent/commands/{id}/ack body.
 type CommandAck struct {
-	Status string  `json:"status"`
-	Error  *string `json:"error,omitempty"`
+	Status   string  `json:"status"`
+	Phase    string  `json:"phase,omitempty"`
+	Pct      float64 `json:"pct"`
+	ResultID *string `json:"resultId,omitempty"`
+	Error    *string `json:"error,omitempty"`
 }
 
 // successEnvelope is the shared Success wrapper around the data field.

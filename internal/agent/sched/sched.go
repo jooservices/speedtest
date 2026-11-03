@@ -147,10 +147,11 @@ type Scheduler struct {
 	clock  Clock
 	jitter func(time.Duration) time.Duration
 
+	manualID string
 	mu       sync.Mutex
 	schedule Schedule
 	lastRun  time.Time
-	manual   chan struct{}
+	manual   chan string
 	wake     chan struct{}
 }
 
@@ -173,7 +174,7 @@ func New(runner Runner, logger *slog.Logger, opts ...Option) *Scheduler {
 		logger: logger,
 		clock:  SystemClock{},
 		jitter: defaultJitterFunc,
-		manual: make(chan struct{}, 1),
+		manual: make(chan string, 100),
 		wake:   make(chan struct{}, 1),
 	}
 	if s.logger == nil {
@@ -229,7 +230,7 @@ func (s *Scheduler) Resume() {
 // running.
 func (s *Scheduler) RunNow() {
 	select {
-	case s.manual <- struct{}{}:
+	case s.manual <- "":
 	default:
 	}
 }
@@ -283,7 +284,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			case wakeCancel:
 				return nil
 			case wakeManual:
-				s.runOne(ctx)
+				s.runOne(ctx, s.manualID)
 			}
 			continue
 		}
@@ -299,7 +300,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			case wakeCancel:
 				return nil
 			case wakeManual:
-				s.runOne(ctx)
+				s.runOne(ctx, s.manualID)
 			}
 			continue
 		}
@@ -311,7 +312,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 			case wakeCancel:
 				return nil
 			case wakeManual:
-				s.runOne(ctx)
+				s.runOne(ctx, s.manualID)
 				continue
 			case wakeConfig:
 				continue
@@ -345,7 +346,8 @@ func (s *Scheduler) wait(ctx context.Context, d time.Duration) wake {
 		select {
 		case <-ctx.Done():
 			return wakeCancel
-		case <-s.manual:
+		case id := <-s.manual:
+			s.manualID = id
 			return wakeManual
 		case <-s.wake:
 			return wakeConfig
@@ -355,7 +357,8 @@ func (s *Scheduler) wait(ctx context.Context, d time.Duration) wake {
 	select {
 	case <-ctx.Done():
 		return wakeCancel
-	case <-s.manual:
+	case id := <-s.manual:
+		s.manualID = id
 		return wakeManual
 	case <-s.wake:
 		return wakeConfig
@@ -367,7 +370,7 @@ func (s *Scheduler) wait(ctx context.Context, d time.Duration) wake {
 // runScheduled runs one test and logs any slot skipped because the test
 // overran its own slot.
 func (s *Scheduler) runScheduled(ctx context.Context, slot time.Time, sch Schedule) {
-	s.runOne(ctx)
+	s.runOne(ctx, "")
 	finish := s.clock.Now()
 	next := nextSlot(finish, sch.Offset, sch.Interval)
 	skipped := int64(next.Sub(slot)/sch.Interval) - 1
@@ -381,14 +384,22 @@ func (s *Scheduler) runScheduled(ctx context.Context, slot time.Time, sch Schedu
 
 // runOne runs a single test, recording its start time. The run loop calls it
 // synchronously, so tests never overlap.
-func (s *Scheduler) runOne(ctx context.Context) {
+func (s *Scheduler) runOne(ctx context.Context, id string) {
 	start := s.clock.Now()
 	s.mu.Lock()
 	s.lastRun = start
 	s.mu.Unlock()
 
 	s.logger.Info("speed test started", "at", start.UTC().Format(time.RFC3339))
-	if err := s.runner.Run(ctx); err != nil {
+	var err error
+	if manual, ok := s.runner.(interface {
+		RunCommand(context.Context, string) error
+	}); ok && id != "" {
+		err = manual.RunCommand(ctx, id)
+	} else {
+		err = s.runner.Run(ctx)
+	}
+	if err != nil && ctx.Err() == nil {
 		s.logger.Warn("speed test failed", "error", err.Error())
 	}
 	s.logger.Info("speed test finished", "at", s.clock.Now().UTC().Format(time.RFC3339))
@@ -405,4 +416,15 @@ func parseHM(s string) (int, bool) {
 		return 0, false
 	}
 	return h*60 + m, true
+}
+
+// RequestRun queues a distinct command without coalescing operator requests.
+// A full queue leaves the command pending at the center for the next poll.
+func (s *Scheduler) RequestRun(id string) bool {
+	select {
+	case s.manual <- id:
+		return true
+	default:
+		return false
+	}
 }

@@ -1,7 +1,8 @@
 # Reliable agent result reporting
 
-`internal/agent/report` is the JOOST-17 library. It does not add scheduling,
-agent lifecycle wiring or the JOOST-23 center endpoint. The demo UI is unchanged.
+`internal/agent/report` provides durable storage and delivery. `agent run` composes
+it with scheduling, control and measurement in `internal/agent/runloop`; see
+[the lifecycle runbook](agent-lifecycle.md). The demo UI is unchanged.
 
 ## Composition
 
@@ -16,8 +17,11 @@ the destination of the bearer credential.
 
 1. Convert an engine measurement with `FromEngine`. This allocates a UUIDv4
    before any storage or HTTP call; `Options.ID` can retain an existing UUID.
-   Failed tests require a known public IP supplied through `Options.IP` when the
-   engine did not learn one. Measurements preserve null versus zero.
+   Failed tests may have an unknown IP (encoded as null); successful tests require
+   an IP. `Options.IP` is the authoritative center-observed IP when available;
+   the engine address is retained separately as `engineIp`. Measurements preserve null versus zero. Server identity requires a name or
+   host for successful tests; the numeric server ID can be absent. Array-shaped
+   LibreSpeed raw JSON is preserved under `raw.reports` to keep raw an object.
 2. Call `Enqueue(result)` to commit without waiting for connectivity. Retain the
    result UUID on enqueue errors and retry that same result. Identical pending
    UUID/content is a no-op; conflicting content fails.
@@ -97,3 +101,10 @@ SQLite files and `httptest` HTTP servers; no external database is required.
 The outage clock advances six hours without sleeping. Tests cover lost response,
 restart, duplicate delivery, FIFO and byte-bounded batches, concurrent producers,
 invalid outcomes, size/count/age eviction and storage/HTTP failure paths.
+
+The private `command_state` table retains bounded lifecycle progress. A manual
+result and its command association commit in one transaction (`AppendWithState`).
+After the entire batch response is validated, the delivery observer commits the
+terminal acknowledgement before removing the result. A crash in between replays
+the same UUID; terminal acknowledgements remain idempotent. The journal contains
+no credentials. Preserve it with the spool when backing up or restoring.

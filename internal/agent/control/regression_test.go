@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/agent/sched"
 	"github.com/jooservices/speedtest/internal/agent/testutil"
 )
 
@@ -320,4 +321,42 @@ func TestUnacknowledgedHistoryNeverEvicted(t *testing.T) {
 	if runs != 1 || len(ctl.commands.store) != 1 {
 		t.Fatal("unacknowledged command evicted or new command executed while full")
 	}
+}
+
+func TestCompositionHooksRejectAtomicallyAndRetryETag(t *testing.T) {
+	center := testutil.NewCenter(testutil.WithCommands(testutil.Command{ID: "manual", Type: "run_now"}))
+	defer center.Close()
+	fake := &fakeScheduler{}
+	ctl := newController(t, center, fake)
+	fail := true
+	applied := 0
+	ctl.ApplyConfig = func(AgentConfig, sched.Schedule) error {
+		if fail {
+			return errors.New("invalid measurement config")
+		}
+		applied++
+		return nil
+	}
+	ctl.RunCommand = func(context.Context, Command) CommandAck {
+		return CommandAck{Status: "running", Phase: "testing", Pct: 20}
+	}
+	ctl.Once(t.Context())
+	if ctl.etag != "" {
+		t.Fatal("invalid config cached its ETag")
+	}
+	if ack := ctl.updateConfig(t.Context()); ack.Status != "failed" {
+		t.Fatal(ack)
+	}
+	fail = false
+	ctl.Once(t.Context())
+	if ctl.etag == "" || applied != 1 {
+		t.Fatal("valid config not retried")
+	}
+	if ack := ctl.updateConfig(t.Context()); ack.Status != "succeeded" || ack.Pct != 100 {
+		t.Fatal(ack)
+	}
+	// An async acknowledgement failure must remain retryable, with no fallback execution.
+	ctl.Client.BaseURL = baseURL(t, center.Server)
+	center.Close()
+	ctl.handleCommand(t.Context(), Command{ID: "manual", Type: "run_now"})
 }

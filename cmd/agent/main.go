@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -17,16 +18,15 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
-	"sync"
 	"syscall"
 	"time"
 
+	"github.com/joho/godotenv"
+
 	agentconfig "github.com/jooservices/speedtest/internal/agent/config"
-	"github.com/jooservices/speedtest/internal/agent/control"
-	"github.com/jooservices/speedtest/internal/agent/engine"
 	"github.com/jooservices/speedtest/internal/agent/enroll"
 	"github.com/jooservices/speedtest/internal/agent/netpath"
-	"github.com/jooservices/speedtest/internal/agent/sched"
+	"github.com/jooservices/speedtest/internal/agent/runloop"
 )
 
 // version is the agent version, overridable at build time with
@@ -141,6 +141,10 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	}
 
 	logger := slog.New(slog.NewJSONHandler(stdout, nil))
+	if err := godotenv.Load(".env"); err != nil && !errors.Is(err, os.ErrNotExist) {
+		logger.Error("invalid environment file")
+		return 1
+	}
 
 	configPath := getenv("SPEEDTEST_AGENT_CONFIG", agentconfig.DefaultPath)
 	credentialPath := getenv("SPEEDTEST_AGENT_CREDENTIAL", enroll.DefaultCredentialPath)
@@ -171,28 +175,11 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return 1
 	}
 
-	runner, err := cfg.NewEngine()
+	loop, err := runloop.New(cfg, centerURL, credential, version, logger)
 	if err != nil {
-		logger.Error("invalid engine configuration", "error", err.Error())
+		logger.Error("agent initialization failed")
 		return 1
 	}
-
-	// The local config.yaml only carries the bootstrap interval; offset, quiet
-	// hours and the enabled flag come from the center once configuration syncs.
-	scheduler := sched.New(engineRunner{
-		engine: runner,
-		binding: netpath.Binding{
-			Interface: cfg.NetworkInterface,
-			SourceIP:  cfg.SourceIP,
-		},
-	}, logger)
-	scheduler.SetSchedule(sched.Schedule{Interval: cfg.Interval, Offset: 0, Enabled: true})
-
-	ctl := control.New(control.Client{
-		BaseURL:    centerURL,
-		Credential: credential,
-		Agent:      "speedtest-agent/" + version,
-	}, scheduler, control.WithLogger(logger))
 
 	logger.Info("agent started",
 		"version", version,
@@ -203,39 +190,15 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		"network_path", path.Description(),
 	)
 
-	var wg sync.WaitGroup
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		_ = scheduler.Run(ctx)
-	}()
-	go func() {
-		defer wg.Done()
-		_ = ctl.Run(ctx)
-	}()
-	wg.Wait()
+	err = loop.Serve(ctx)
+	closeErr := loop.Close()
+	if err != nil || closeErr != nil {
+		logger.Error("agent stopped after lifecycle failure; inspect spool and configuration")
+		return 1
+	}
 
 	logger.Info("agent stopped", "name", cfg.Name)
 	return 0
-}
-
-// engineRunner adapts the speed-test engine to the scheduler's runner.
-type engineRunner struct {
-	engine  engine.Engine
-	binding netpath.Binding
-}
-
-func (r engineRunner) Run(ctx context.Context) error {
-	path, err := netpath.Resolve(r.binding)
-	if err != nil {
-		return err
-	}
-	opts := engine.Options{InterfaceName: path.Interface}
-	if path.SourceIP != nil {
-		opts.SourceIP = path.SourceIP.String()
-	}
-	_, err = r.engine.Run(ctx, opts)
-	return err
 }
 
 func runUninstall(args []string, stdout, stderr io.Writer) int {
