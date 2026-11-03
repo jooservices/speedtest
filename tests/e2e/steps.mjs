@@ -78,7 +78,7 @@ export function steps({ page, stack, startAgent, query, problems }) {
               const wide = [];
               for (const el of document.querySelectorAll('.content *')) {
                 const box = el.getBoundingClientRect();
-                if (box.width && box.right > document.documentElement.clientWidth + 1 && !el.closest('.table-wrap, .tabs, .seg, pre, .legend')) wide.push(el.tagName + '.' + el.className);
+                if (box.width && box.right > document.documentElement.clientWidth + 1 && !el.closest('.table-wrap, .tabs, .seg, pre, .legend, .leaflet-container')) wide.push(el.tagName + '.' + el.className);
               }
               return { page: document.documentElement.scrollWidth - document.documentElement.clientWidth, wide: wide.slice(0, 3) };
             });
@@ -164,6 +164,9 @@ export function steps({ page, stack, startAgent, query, problems }) {
       await toast('Start times spread out').waitFor();
       const offsets = query(stack.db, "select count(distinct offset_minutes) from schedules");
       assert.ok(Number(offsets) > 1, 'staggering gives different start minutes');
+      // The spread-out request reloads the data and redraws the page; type only after that has settled.
+      await page.waitForLoadState('networkidle');
+      await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
       await page.getByLabel('Pause from').fill('23:00');
       await page.getByLabel('Pause from').blur();
       await page.getByLabel('Pause until').fill('05:00');
@@ -222,6 +225,7 @@ export function steps({ page, stack, startAgent, query, problems }) {
       await page.getByLabel('Address for Email').fill('ops@example.com');
       await page.getByLabel('Enable Email').check({ force: true });
       await toast('Saved').waitFor();
+      await page.waitForLoadState('networkidle'); // the earlier 'Saved' toast may still be showing; wait for every save to finish
       const settings = await (await page.request.get(stack.origin + '/api/settings')).text();
       assert.ok(!settings.includes('e2e-secret-path'), 'secrets are never returned');
       assert.ok(settings.includes('"configured":true'), 'the read model says a secret is configured');
@@ -254,6 +258,14 @@ export function steps({ page, stack, startAgent, query, problems }) {
     async ipPage() {
       await S.open('#/network', 'IP & location');
       await page.getByRole('heading', { name: 'Every address seen' }).waitFor();
+      // The live map shows one marker per location; hovering it names the nodes there.
+      await page.locator('.leaflet-container').waitFor();
+      const markers = page.locator('.leaflet-marker-icon');
+      await markers.first().waitFor();
+      assert.ok(await markers.count() >= 1, 'the map shows the node locations');
+      await markers.first().hover();
+      await page.locator('.leaflet-tooltip').first().waitFor();
+      await page.getByRole('link', { name: 'OpenStreetMap' }).waitFor();
       await page.getByRole('cell', { name: '203.0.113.11' }).first().waitFor();
       await page.getByLabel('IP address to look up').fill('not an address');
       await page.getByRole('button', { name: 'Look up' }).click();

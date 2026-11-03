@@ -72,3 +72,11 @@ fleet grows beyond ~50 nodes on a 30-minute schedule.
 | Agent offline for hours | The node shows offline (`speedtest_nodes_offline`), the offline alert fires, backlog uploads on return. |
 | Clock skew on an agent | Results carry the agent timestamp; keep NTP running on nodes. Large skew shows as results in the future/past on charts. |
 | Notification target down | Deliveries retry with backoff and end `failed` (see gauge); the alert itself is still recorded. |
+
+## Map tiles
+
+The IP & location page uses Leaflet (vendored in `ui/assets/vendor/leaflet`, BSD-2-Clause, no CDN) with
+OpenStreetMap tiles. The tile URL is the `map-tiles` meta tag in `ui/index.html`; set `content=""` to draw pins
+on a plain background with no outside request, or point it at your own tile server (then allow that host in
+`img-src` in `internal/center/server/headers.go`). Respect the OpenStreetMap tile usage policy; a single owner's
+traffic is well within it. The demo preview keeps the illustrative drawn map.

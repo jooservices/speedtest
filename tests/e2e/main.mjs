@@ -16,6 +16,9 @@ const browser = process.env.PW_TEST_CONNECT_WS_ENDPOINT ? await chromium.connect
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
 const page = await context.newPage();
 const problems = [];
+// Map tiles come from the internet in production; the suite answers them locally with a blank tile.
+const BLANK_TILE = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+await context.route('https://tile.openstreetmap.org/**', route => route.fulfill({ status: 200, contentType: 'image/png', body: BLANK_TILE }));
 const contractRecorder = recordContract(page, stack.origin);
 page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') problems.push(`${m.type()}: ${m.text()}`); });
 page.on('pageerror', e => problems.push(`pageerror: ${e.message}`));
@@ -42,7 +45,7 @@ const scenarios = [
   ['a test notification reaches the configured channel', () => S.notificationTest(receiver)],
   ['signing out ends the session', S.signOut]
 ];
-if (process.env.E2E_TRACE) page.on('response', r => { if (r.url().includes('/api/') && r.request().method() !== 'GET') console.log('  ', r.request().method(), r.url().replace(stack.origin, ''), r.status()); });
+if (process.env.E2E_TRACE) page.on('response', r => {  if (r.url().includes('/api/') && r.request().method() !== 'GET') console.log('  ', r.request().method(), r.url().replace(stack.origin, ''), r.status()); });
 let failed = 0;
 const only = process.env.E2E_ONLY;
 for (const [name, scenario] of scenarios) {
