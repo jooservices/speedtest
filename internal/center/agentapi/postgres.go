@@ -52,8 +52,10 @@ func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool,
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
-	if _, err = tx.Exec(ctx, `INSERT INTO ip_addresses(ip) VALUES ($1) ON CONFLICT DO NOTHING`, r.IP); err != nil {
-		return false, err
+	if r.IP != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO ip_addresses(ip) VALUES ($1) ON CONFLICT DO NOTHING`, r.IP); err != nil {
+			return false, err
+		}
 	}
 	columns, args := r.values(node)
 	params := make([]string, len(columns))
@@ -80,7 +82,7 @@ func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool,
 		}
 		return true, nil
 	}
-	if s.Hook != nil {
+	if s.Hook != nil && r.IP != nil {
 		if err = s.Hook.AfterResultStored(ctx, tx, node, r); err != nil {
 			return false, err
 		}

@@ -106,7 +106,7 @@ func TestMigrations(t *testing.T) {
 	const node = "00000000-0000-4000-8000-000000000001"
 	exec(t, ctx, pool, "INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES ('"+node+"','fixture',300.5,150.25)")
 	exec(t, ctx, pool, "INSERT INTO ip_addresses(ip) VALUES ('203.0.113.1'),('2001:db8::1')")
-	resultSQL := "INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,ip,threads,server_id) VALUES ('00000000-0000-4000-8000-000000000002','" + node + "','2026-11-03T07:00:00+07:00','ok',123.456,78.125,3.5,'203.0.113.1',4,1)"
+	resultSQL := "INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,ip,threads,server_id,server) VALUES ('00000000-0000-4000-8000-000000000002','" + node + "','2026-11-03T07:00:00+07:00','ok',123.456,78.125,3.5,'203.0.113.1',4,1,'{\"name\":\"fixture\"}')"
 	exec(t, ctx, pool, resultSQL)
 	t.Run("Constraints", func(t *testing.T) {
 		cases := []struct{ name, sql, code string }{
@@ -169,6 +169,9 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		if e := db.Migrate(ctx, pool, "down"); e != nil {
 			t.Fatal(e)
 		}
+		if e := db.Migrate(ctx, pool, "down"); e != nil {
+			t.Fatal(e)
+		}
 		var n int
 		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name <> 'goose_db_version'").Scan(&n); e != nil || n != 0 {
 			t.Fatal("rollback left application tables")
@@ -201,6 +204,9 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		}
 	})
 	t.Run("TransactionalRollbackFailure", func(t *testing.T) {
+		if e := db.Migrate(ctx, pool, "down"); e != nil {
+			t.Fatal(e)
+		}
 		if e := db.Migrate(ctx, pool, "down"); e != nil {
 			t.Fatal(e)
 		}

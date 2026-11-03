@@ -225,6 +225,7 @@ func TestRunAgentWorldReadableCredential(t *testing.T) {
 }
 
 func TestRunAgentSuccess(t *testing.T) {
+	t.Setenv("SPEEDTEST_SPOOL_DIR", filepath.Join(t.TempDir(), "spool"))
 	version = "1.2.3"
 	t.Cleanup(func() { version = "dev" })
 

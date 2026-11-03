@@ -86,6 +86,7 @@ func Open(cfg SpoolConfig, logger *slog.Logger) (*Spool, error) {
 	}
 	db.SetMaxOpenConns(1)
 	_, err = db.Exec(`PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL; PRAGMA journal_mode=DELETE;
+ CREATE TABLE IF NOT EXISTS command_state(id TEXT PRIMARY KEY, payload BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS pending(seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, ts INTEGER NOT NULL, payload BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS quarantine(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,ts INTEGER NOT NULL,payload BLOB NOT NULL);`)
 	if err != nil {
@@ -105,7 +106,11 @@ func (s *Spool) Close() error { s.mu.Lock(); defer s.mu.Unlock(); return s.db.Cl
 
 // Append commits a validated result before any sender can see it. Reusing an
 // ID with identical content is harmless; conflicting content is rejected.
-func (s *Spool) Append(r Result) error {
+func (s *Spool) Append(r Result) error { return s.AppendWithState(r, "", nil) }
+
+// AppendWithState commits a result and its composing command state together.
+// State is private local metadata, never part of the wire result.
+func (s *Spool) AppendWithState(r Result, key string, state json.RawMessage) error {
 	if err := r.Validate(); err != nil {
 		return err
 	}
@@ -139,6 +144,11 @@ func (s *Spool) Append(r Result) error {
 		}
 	}
 
+	if key != "" {
+		if _, err = tx.Exec(`INSERT INTO command_state(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload`, key, []byte(state)); err != nil {
+			return err
+		}
+	}
 	dropped, err := s.prune(tx, "pending")
 	if err != nil {
 		return err
@@ -297,4 +307,41 @@ func (s *Spool) Quarantine(id, reason string) error {
 	}
 	s.logger.Warn("center rejected result; quarantined", "id", id, "reason", reason)
 	return nil
+}
+
+// SaveCommand durably records a bounded lifecycle command journal.
+func (s *Spool) SaveCommand(id string, state json.RawMessage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`INSERT INTO command_state(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload`, id, []byte(state))
+	return err
+}
+
+// DeleteCommand removes a terminal command evicted by the bounded history.
+func (s *Spool) DeleteCommand(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, err := s.db.Exec(`DELETE FROM command_state WHERE id=?`, id)
+	return err
+}
+
+// Commands returns independent lifecycle journal entries at startup.
+func (s *Spool) Commands() (map[string]json.RawMessage, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT id,payload FROM command_state`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	out := make(map[string]json.RawMessage)
+	for rows.Next() {
+		var id string
+		var data []byte
+		if err := rows.Scan(&id, &data); err != nil {
+			return nil, err
+		}
+		out[id] = json.RawMessage(data)
+	}
+	return out, rows.Err()
 }

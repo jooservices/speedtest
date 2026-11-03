@@ -34,9 +34,13 @@ type Controller struct {
 	Scheduler Scheduler
 	Logger    *slog.Logger
 
-	interval  time.Duration
-	now       func() time.Time
-	startedAt time.Time
+	// ApplyConfig atomically applies measurement settings and schedule when composed.
+	ApplyConfig func(AgentConfig, sched.Schedule) error
+	// RunCommand returns current asynchronous run_now progress on redelivery.
+	RunCommand func(context.Context, Command) CommandAck
+	interval   time.Duration
+	now        func() time.Time
+	startedAt  time.Time
 
 	etag     string
 	commands *commandStore
@@ -127,7 +131,7 @@ func (c *Controller) heartbeat(ctx context.Context) {
 		Uptime:   uptime,
 		LastTest: lastTest,
 	})
-	if err != nil {
+	if err != nil && ctx.Err() == nil {
 		c.Logger.Warn("heartbeat failed", "error", err.Error())
 	}
 }
@@ -135,6 +139,9 @@ func (c *Controller) heartbeat(ctx context.Context) {
 func (c *Controller) syncConfig(ctx context.Context) {
 	cfg, etag, notModified, err := c.Client.Config(ctx, c.etag)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		c.Logger.Warn("config sync failed; keeping last known schedule", "error", err.Error())
 		return
 	}
@@ -146,13 +153,23 @@ func (c *Controller) syncConfig(ctx context.Context) {
 		c.Logger.Error("invalid schedule from center; keeping last known schedule", "error", err.Error())
 		return
 	}
+	if c.ApplyConfig != nil {
+		if err := c.ApplyConfig(cfg, sch); err != nil {
+			c.Logger.Error("invalid effective configuration; retaining previous configuration")
+			return
+		}
+	} else {
+		c.Scheduler.SetSchedule(sch)
+	}
 	c.etag = etag
-	c.Scheduler.SetSchedule(sch)
 }
 
 func (c *Controller) pollCommands(ctx context.Context) {
 	cmds, err := c.Client.PollCommands(ctx)
 	if err != nil {
+		if ctx.Err() != nil {
+			return
+		}
 		c.Logger.Warn("command poll failed", "error", err.Error())
 		return
 	}
@@ -165,6 +182,13 @@ func (c *Controller) pollCommands(ctx context.Context) {
 // Redelivered commands whose id is already known are not re-executed, only
 // re-acknowledged.
 func (c *Controller) handleCommand(ctx context.Context, cmd Command) {
+	if cmd.Type == "run_now" && c.RunCommand != nil {
+		ack := c.RunCommand(ctx, cmd)
+		if err := c.Client.Ack(ctx, cmd.ID, ack); err != nil {
+			c.Logger.Warn("command ack failed", "id", cmd.ID)
+		}
+		return
+	}
 	if rec, ok := c.commands.get(cmd.ID); ok {
 		if rec.acked {
 			return
@@ -196,13 +220,13 @@ func (c *Controller) execute(ctx context.Context, cmd Command) CommandAck {
 	switch cmd.Type {
 	case "run_now":
 		c.Scheduler.RunNow()
-		return CommandAck{Status: "succeeded"}
+		return CommandAck{Status: "succeeded", Phase: "done", Pct: 100}
 	case "pause":
 		c.Scheduler.Pause()
-		return CommandAck{Status: "succeeded"}
+		return CommandAck{Status: "succeeded", Phase: "done", Pct: 100}
 	case "resume":
 		c.Scheduler.Resume()
-		return CommandAck{Status: "succeeded"}
+		return CommandAck{Status: "succeeded", Phase: "done", Pct: 100}
 	case "update_config":
 		return c.updateConfig(ctx)
 	default:
@@ -220,9 +244,15 @@ func (c *Controller) updateConfig(ctx context.Context) CommandAck {
 	if err != nil {
 		return CommandAck{Status: "failed", Error: strPtr(err.Error())}
 	}
+	if c.ApplyConfig != nil {
+		if err := c.ApplyConfig(cfg, sch); err != nil {
+			return CommandAck{Status: "failed", Error: strPtr("invalid effective configuration")}
+		}
+	} else {
+		c.Scheduler.SetSchedule(sch)
+	}
 	c.etag = etag
-	c.Scheduler.SetSchedule(sch)
-	return CommandAck{Status: "succeeded"}
+	return CommandAck{Status: "succeeded", Phase: "done", Pct: 100}
 }
 
 // schedule converts the center configuration into the local schedule, honoring

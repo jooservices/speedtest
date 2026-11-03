@@ -166,3 +166,11 @@ For another OS/architecture, select its archive from the same release and
 replace `linux-amd64` in the download and extraction commands. Verify against
 the same published checksums file (on macOS, use `shasum -a 256 -c` with the
 matching archive line). Windows uses the release ZIP and SHA-256 verification.
+
+The composed agent loads the current directory's `.env` on `agent run` (exported
+values take precedence). See [agent lifecycle](agent-lifecycle.md) for durable
+spooling, command progress, atomic configuration and signal behavior. The local
+`config.yaml` accepts optional `server_id: 0` (automatic selection) and
+`parallel_connections` (1–64 when set), alongside engine, interval and binding.
+The center's effective configuration supersedes these bootstrap measurement
+settings after a valid ETag update.

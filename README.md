@@ -4,7 +4,7 @@ Monitor the real speed of every internet connection you own, around the clock.
 
 Small agents on your machines run a speed test on a schedule and report to one dashboard. The dashboard stores every result, remembers which public IP each machine used and where it is, and shows averages, trends and the best and worst hours.
 
-**Status: interface preview and backend foundation.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The command center serves the UI, checks database readiness, provides owner authentication and session endpoints, and supports node enrollment, credential lifecycle and authenticated agent ingestion endpoints (results, configuration, heartbeat, commands and observed IP). The agent can enroll, run scheduled speed tests, heartbeat every 30 s, sync its schedule with ETags, and handle `run_now`, `pause`, `resume` and `update_config`; spooled result reporting is being added. Other product API areas are still being implemented. PostgreSQL migrations, a connection pool, and geolocation modules are available.
+**Status: interface preview and backend foundation.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. Everything you change is kept in the browser's local storage. The command center serves the UI, checks database readiness, provides owner authentication and session endpoints, and supports node enrollment, credential lifecycle and authenticated agent ingestion endpoints (results, configuration, heartbeat, commands and observed IP). The agent can enroll, run scheduled speed tests, heartbeat every 30 s, sync its schedule with ETags, and handle `run_now`, `pause`, `resume` and `update_config`; results are committed to a private SQLite spool before background delivery. Other product API areas are still being implemented. PostgreSQL migrations, a connection pool, and geolocation modules are available.
 
 ## View the preview
 
@@ -237,6 +237,5 @@ See [`docs/engine.md`](docs/engine.md) for the Ookla engine API, environment con
 Release packaging and the one-line agent installer: [`docs/release.md`](docs/release.md).
 
 See [reliable result reporting](docs/reporting.md) for the JOOST-17 SQLite spool,
-UUID replay contract, retention settings and integration API. This library is
-available for lifecycle composition; `agent run` does not schedule or submit
-measurements yet.
+UUID replay contract, retention settings and integration API. `agent run` composes scheduling, path-bound measurement, control and durable reporting.
+See [the agent lifecycle runbook](docs/agent-lifecycle.md) for shutdown, recovery and verification.

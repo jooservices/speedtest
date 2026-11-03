@@ -227,14 +227,14 @@ func TestRunnerEchoFailuresPreserveMeasurementAsWarnings(t *testing.T) {
 	}
 }
 
-func TestRunnerDoesNotEchoAfterEngineFailure(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-		t.Error("center IP endpoint called after failed measurement")
+func TestRunnerDetectsIPAfterEngineFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeEcho(w, http.StatusOK, "198.51.100.25")
 	}))
 	t.Cleanup(server.Close)
 	measurement := &recordingEngine{err: errors.New("engine failed")}
 	result, err := newTestRunner(t, measurement, server.URL, Binding{}).Run(context.Background(), engine.Options{})
-	if err == nil || result.Measurement.Error != "" {
+	if err == nil || result.Measurement.Error != "" || result.PublicIP != "198.51.100.25" {
 		t.Fatalf("Run() = %+v, %v; want engine error", result, err)
 	}
 }

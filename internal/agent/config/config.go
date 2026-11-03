@@ -24,7 +24,8 @@ const DefaultPath = "/etc/speedtest-agent/config.yaml"
 // Config is everything a single node needs to run.
 type Config struct {
 	// Engine selects the measurement CLI used by this node.
-	Engine string
+	Engine   string
+	ServerID int64
 	// Name is the human-readable node name shown in the command center.
 	Name string
 	// ExpectedDownloadMbps and ExpectedUploadMbps are the speeds the node is
@@ -47,6 +48,7 @@ type Config struct {
 // fileConfig is the YAML shape. Pointer fields tell a missing key apart from
 // an explicit zero value, so a file can override only some of the defaults.
 type fileConfig struct {
+	ServerID             *int64  `yaml:"server_id"`
 	Engine               *string `yaml:"engine"`
 	Name                 *string `yaml:"name"`
 	ExpectedDownloadMbps *int    `yaml:"expected_download_mbps"`
@@ -96,6 +98,9 @@ func applyFile(path string, cfg *Config) error {
 		return fmt.Errorf("parse config %s: %w", path, err)
 	}
 
+	if f.ServerID != nil {
+		cfg.ServerID = *f.ServerID
+	}
 	if f.Name != nil {
 		cfg.Name = strings.TrimSpace(*f.Name)
 	}
@@ -131,6 +136,9 @@ func (c Config) validate() error {
 	if c.Engine != "ookla" && c.Engine != "librespeed" {
 		return fmt.Errorf("engine must be ookla or librespeed, got %q", c.Engine)
 	}
+	if c.ServerID < 0 {
+		return errors.New("server_id must be nonnegative")
+	}
 	if c.Name == "" {
 		return errors.New("name must not be blank")
 	}
@@ -143,7 +151,7 @@ func (c Config) validate() error {
 	if c.Interval <= 0 {
 		return fmt.Errorf("interval must be greater than 0, got %s", c.Interval)
 	}
-	if c.ParallelConnections < 0 {
+	if c.ParallelConnections < 0 || c.ParallelConnections > 64 {
 		return fmt.Errorf("parallel_connections must be greater than 0 when set, got %d", c.ParallelConnections)
 	}
 	if err := (netpath.Binding{Interface: c.NetworkInterface, SourceIP: c.SourceIP}).Validate(); err != nil {

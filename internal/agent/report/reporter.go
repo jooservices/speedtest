@@ -18,13 +18,14 @@ const DefaultBatchSize = 100
 // backlog to the command center in order and in batches, retrying transient
 // failures with exponential backoff and jitter. It is safe for concurrent use.
 type Reporter struct {
-	mu      sync.Mutex
-	spool   *Spool
-	sender  Sender
-	backoff Backoff
-	batch   int
-	logger  *slog.Logger
-	sleep   func(context.Context, time.Duration) error
+	mu        sync.Mutex
+	spool     *Spool
+	sender    Sender
+	backoff   Backoff
+	batch     int
+	logger    *slog.Logger
+	delivered func(Result, bool) error
+	sleep     func(context.Context, time.Duration) error
 }
 
 // Option customizes a Reporter.
@@ -145,13 +146,25 @@ func (r *Reporter) flush(ctx context.Context) error {
 			out := byIndex[i]
 			switch out.Outcome {
 			case "accepted", "duplicate":
+				if r.delivered != nil {
+					if err := r.delivered(res, true); err != nil {
+						return err
+					}
+				}
 				if err := r.spool.Ack(res.ID); err != nil {
 					return err
 				}
+
 			default:
+				if r.delivered != nil {
+					if err := r.delivered(res, false); err != nil {
+						return err
+					}
+				}
 				if err := r.spool.Quarantine(res.ID, fmt.Sprintf("HTTP %d", out.Status)); err != nil {
 					return err
 				}
+
 			}
 		}
 	}
@@ -229,4 +242,10 @@ func boundedBatch(batch []Result) ([]Result, error) {
 		size += extra
 	}
 	return batch, nil
+}
+
+// WithDeliveryObserver observes validated durable acknowledgements or quarantine.
+// The observer must not block or call Flush.
+func WithDeliveryObserver(fn func(Result, bool) error) Option {
+	return func(r *Reporter) { r.delivered = fn }
 }

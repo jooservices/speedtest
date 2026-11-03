@@ -151,11 +151,12 @@ replay by the same node is `duplicate` (200) and cannot create another row.
 Changed content for that UUID, or a UUID already owned by another node, is a
 per-item 409 conflict with a generic diagnostic that reveals no other-node data. Retry transport failures/429/5xx with backoff and jitter;
 never discard unacknowledged spool entries. Failed results require an error and
-allow null measurements; ok/degraded require down/up/ping/serverId and `error: null`. Engines may omit
+allow null measurements and `ip: null` when the address is unavailable. Never invent an IP or reuse a stale one. IP history hooks skip null-IP results; consumers display "unavailable".
+Successful/degraded results require down/up/ping, a non-null IP, a server object with a nonblank name or host, and `error: null`. Numeric `serverId` is optional for every status, positive when present (LibreSpeed automatic selection has no numeric ID). Engines may omit
 loss/jitter/loaded latency even on success; preserve those as null. Optional
 loadedDown/loadedUp retain low/iqm/high; engine details retain ISP, result ID/URL,
 external IP and mismatch warnings, with remaining original fields in raw.
-After each successful measurement, the agent calls `GET /api/agent/ip` over the
+After each measurement, including engine failures, the agent calls `GET /api/agent/ip` over the
 same selected interface/source IP. The center-observed `data.ip` is the result's
 public IP; preserve the engine-reported address as `engineIp` and add a `warnings`
 entry when the two addresses differ.
@@ -273,8 +274,9 @@ for (const source of ST.state.results) {
   const r = plain(source);
   r.id = '00000000-0000-4000-8000-000000000001';
   r.ts = new Date(r.ts).toISOString(); r.manual = !!r.manual; r.error ??= null;
+  r.server = plain(ST.server(r.serverId));
   check('ResultInput', select(r, 'ResultInput'));
-  r.raw = {}; r.server = plain(ST.server(r.serverId)); r.geo = plain(ST.geo(r.ip));
+  r.raw = {}; r.geo = plain(ST.geo(r.ip));
   check('Result', r); check('Geo', r.geo);
   r.status === 'failed' ? failed++ : good++;
 }
@@ -282,6 +284,7 @@ assert(failed > 0 && good > 0);
 const sample = plain(ST.state.results.find(r => r.status === 'ok'));
 sample.id = '00000000-0000-4000-8000-000000000001';
 sample.ts = new Date(sample.ts).toISOString(); sample.error = null; sample.manual = false;
+sample.server = plain(ST.server(sample.serverId));
 const input = select(sample, 'ResultInput');
 check('ResultInput', { ...input, loss: 101 }, false);
 check('ResultInput', { ...input, down: -1 }, false);
@@ -289,6 +292,12 @@ check('ResultInput', { ...input, down: null }, false);
 check('ResultInput', { ...input, loss: null, jitter: null, dLat: null, uLat: null });
 check('ResultInput', { ...input, ts: '2026-11-03T07:00:00+07:00' }, false);
 check('ResultInput', { ...input, status: 'failed', error: '' }, false);
+check('ResultInput', { ...input, status: 'failed', error: 'speedtest: no_route', ip: null });
+check('ResultInput', { ...input, ip: null }, false);
+check('ResultInput', { ...input, serverId: null, server: { name: 'LibreSpeed', host: 'speed.example' } });
+check('ResultInput', { ...input, serverId: null, server: {} }, false);
+check('ResultInput', { ...input, server: { name: '   ' } }, false);
+check('ResultInput', { ...input, server: { name: 'valid', id: 0 } }, false);
 check('ResultBatch', { results: [] }, false);
 check('ResultBatch', { results: Array(101).fill(input) }, false);
 check('ScheduleInput', { interval: 4, offset: 0, enabled: true }, false);
@@ -333,11 +342,12 @@ console.log(`PASS: ${operations.length} operations; ${Object.keys(schemas).lengt
 JS
 ```
 
-Contract-only changes have no changed Go package, SQL boundary, running endpoint
-or browser flow: Go coverage/vet, database integration, three browser runs,
-staging/agent soak and migrations are inapplicable here. Claude reviews this
-contract and UI coverage; implementation tickets must prove runtime behavior.
-No push is requested, so pre-push Sonar/Gitleaks gates are not invoked here.
+The schema and fixture checks above validate contract examples against
+deterministic UI data; they do not exercise running handlers, PostgreSQL,
+migrations, browser behavior or a real agent. Implementation work must run the
+unit and integration suites for each changed boundary, and UI-flow changes must
+run browser E2E. Staging and real-agent soak are separate owner-authorized
+verification. Follow the workspace Sonar/Gitleaks gates before any push.
 
 Compatibility: `/api` is the initial v1 surface fixed by the backlog; do not add
 an incompatible prefix for these consumers. Optional response fields/endpoints

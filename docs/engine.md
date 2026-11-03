@@ -1,7 +1,8 @@
 # Speed test engines
 
 `internal/agent/engine` implements `Engine.Run(ctx, Options) (Result, error)`.
-`cmd/agent` runs this library through the local scheduler. JOOST-16 adds per-run interface/source-IP options to this engine and the
+`cmd/agent` composes this library through the local scheduler, network coordinator
+and durable reporter; see [agent lifecycle](agent-lifecycle.md). JOOST-16 adds per-run interface/source-IP options to this engine and the
 `internal/agent/netpath` coordinator, which also calls the center's existing
 `GET /api/agent/ip` endpoint on the same path. JOOST-17 owns result reporting.
 
@@ -35,7 +36,7 @@ out, err := run.Run(ctx, engine.Options{ServerID: 12345})
 The binding fields are mutually exclusive. The coordinator validates the
 selected local interface/address before invoking the engine, passes
 `--interface <name>` or `--ip <address>`, then fetches the center-observed IP on
-that same interface/source address. `out.PublicIP` is the center-observed run
+that same interface/source address, including after engine failure. `out.PublicIP` is the center-observed run
 address; `out.Measurement.ExternalIP` preserves Ookla's value. Differences are
 reported in `out.Warnings`. If the echo request fails, the measurement remains
 available with a public-IP detection warning.

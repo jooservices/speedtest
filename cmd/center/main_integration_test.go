@@ -115,7 +115,7 @@ func TestSeedAndStartupGuardsIntegration(t *testing.T) {
 		t.Setenv(key, value)
 	}
 	cfg, err := config.LoadCenter()
-	if err != nil || cfg.Database.Name != "speedtest_wt23" {
+	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
 		t.Fatal("worktree database required")
 	}
 	pool, err := db.Open(t.Context(), cfg.Database)

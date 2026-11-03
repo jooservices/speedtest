@@ -116,3 +116,25 @@ and fake executable without a database or external speed measurement:
 go test -race -v ./cmd/agent -run TestRunAgentControlAndEngine
 go test -race -cover ./internal/agent/control ./internal/agent/sched
 ```
+
+## Composed agent lifecycle
+
+`internal/agent/runloop` tests run the real scheduler, fake Ookla executable,
+center HTTP double and private SQLite spool together. They cover enrollment,
+scheduled execution, outage/FIFO recovery, restart with pending results and
+command associations, observed IP changes, manual commands and progress,
+pause/resume, ETags, atomic measurement configuration, LibreSpeed source binding,
+unknown-IP failures and cancellation. The HTTP boundary validates results and
+acknowledgements through the production ingestion parsers. CLI subprocess tests
+send both SIGTERM and SIGINT during a measurement, check exit 0, then reopen the
+spool and verify the interrupted result remains durable. No PostgreSQL is used
+by these tests.
+
+```sh
+TMPDIR="$PWD/.tmp" GOTMPDIR="$PWD/.tmp" go test -race -v ./internal/agent/runloop ./cmd/agent
+```
+
+`TestNullableResultIdentityIntegration` additionally proves real HTTP ingestion
+and PostgreSQL storage for failed null-IP results and automatic LibreSpeed server
+identity, hook skipping, replay, and populated up/down migration behavior. Run
+serially on the verified task database, as described in development.md.
