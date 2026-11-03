@@ -29,6 +29,7 @@ type fakeInstallerService struct {
 	install    installer.InstallInput
 	installKey string
 	installFor string
+	uninstalls int
 }
 
 func (f *fakeInstallerService) Probe(_ context.Context, principal, key string, input installer.ProbeInput) (installer.SSHProbe, error) {
@@ -43,6 +44,15 @@ func (f *fakeInstallerService) Start(_ context.Context, principal, key, nodeID s
 	if f.serviceErr != nil {
 		return installer.Installation{}, f.serviceErr
 	}
+	f.install, f.installKey, f.installFor = input, key, nodeID
+	return installer.Installation{ID: installerTestJobID, NodeID: nodeID, Status: "pending", Step: "queued"}, nil
+}
+
+func (f *fakeInstallerService) StartUninstall(_ context.Context, _, key, nodeID string, input installer.InstallInput) (installer.Installation, error) {
+	if f.serviceErr != nil {
+		return installer.Installation{}, f.serviceErr
+	}
+	f.uninstalls++
 	f.install, f.installKey, f.installFor = input, key, nodeID
 	return installer.Installation{ID: installerTestJobID, NodeID: nodeID, Status: "pending", Step: "queued"}, nil
 }
@@ -272,5 +282,50 @@ func TestInstallerAPIReadRateLimit(t *testing.T) {
 	handler.ServeHTTP(response, req)
 	if response.Code != 429 || response.Header().Get("Retry-After") == "" {
 		t.Fatalf("missing read rate limit: %d", response.Code)
+	}
+}
+
+func TestInstallerAPIUninstallRoute(t *testing.T) {
+	fake := &fakeInstallerService{}
+	handler := newInstallerHTTPTestHandler(t, fake)
+	cookie, csrf := loginInstallerHTTPTestOwner(t, handler)
+	body := `{"probeId":"` + installerTestEvent + `","fingerprint":"SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","ssh":{"host":"node.example.test","port":22,"user":"root","auth":"password","secret":"fixture-ssh-password"}}`
+	path := "http://center.test/api/nodes/" + installerTestNodeID + "/uninstallations"
+	post := func(prepare func(*http.Request)) *httptest.ResponseRecorder {
+		request := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
+		prepare(request)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, request)
+		return rec
+	}
+	if rec := post(func(r *http.Request) {}); rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
+		t.Fatalf("without credentials = %d", rec.Code)
+	}
+	signed := func(r *http.Request) {
+		r.AddCookie(cookie)
+		r.Header.Set("Origin", "http://center.test")
+		r.Header.Set("X-CSRF-Token", csrf)
+		r.Header.Set("Idempotency-Key", "uninstall-key")
+	}
+	if rec := post(func(r *http.Request) { signed(r); r.Header.Del("X-CSRF-Token") }); rec.Code != http.StatusForbidden {
+		t.Fatalf("without CSRF = %d", rec.Code)
+	}
+	rec := post(signed)
+	if rec.Code != http.StatusAccepted || rec.Header().Get("Location") != "/api/installations/"+installerTestJobID || fake.uninstalls != 1 || fake.installKey != "uninstall-key" || fake.installFor != installerTestNodeID {
+		t.Fatalf("uninstall = %d %v (%d calls) %s", rec.Code, rec.Header(), fake.uninstalls, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `"meta":{}`) || strings.Contains(rec.Body.String(), "fixture-ssh-password") || !strings.Contains(rec.Body.String(), "removal") {
+		t.Fatalf("envelope = %s", rec.Body.String())
+	}
+	get := httptest.NewRequest(http.MethodGet, path, nil)
+	get.AddCookie(cookie)
+	wrong := httptest.NewRecorder()
+	handler.ServeHTTP(wrong, get)
+	if wrong.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("GET = %d", wrong.Code)
+	}
+	fake.serviceErr = installer.ErrInvalid
+	if rec := post(signed); rec.Code != http.StatusUnprocessableEntity && rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid input = %d", rec.Code)
 	}
 }

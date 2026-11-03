@@ -244,3 +244,49 @@ test('the idle refresh reloads only when nothing is being typed, no dialog is op
   set({ querySelector: () => ({}) }); assert.equal(ST.refreshWhenIdle(), null); assert.equal(reloads(), before, 'dialog open');
   set({ visibilityState: 'hidden' }); assert.equal(ST.refreshWhenIdle(), null); assert.equal(reloads(), before, 'hidden tab');
 });
+
+test('installation helpers probe, start, follow progress and fall back to the final state when the stream drops', async t => {
+  const { ST, control, context, data } = await setup(t);
+  await ST.load();
+  const probe = await ST.probeMachine('192.0.2.7', 22);
+  assert.equal(probe.fingerprint, 'SHA256:fixtureFingerprint0123456789');
+  assert.deepEqual(control.requests.find(r => r.path === '/api/installer/probes').body, { host: '192.0.2.7', port: 22 });
+  const job = await ST.startInstallation(data.node.id, 'uninstallations', probe, { host: '192.0.2.7', port: 22, user: 'u', auth: 'password', secret: 's' });
+  assert.equal(job.status, 'pending');
+  assert.ok(control.requests.some(r => r.path.endsWith('/uninstallations') && r.headers['idempotency-key']));
+
+  const sources = [];
+  context.EventSource = class { constructor(url) { this.url = url; this.listeners = {}; sources.push(this); } addEventListener(name, fn) { this.listeners[name] = fn; } close() { this.closed = true; } };
+  const seen = [];
+  const follow = ST.followInstallation(job.id, event => seen.push(event));
+  const source = sources[0];
+  assert.equal(source.url, '/api/installations/' + job.id + '/events');
+  source.listeners.progress({ data: 'not json' });
+  source.listeners.progress({ data: JSON.stringify({ id: '1', status: 'running', message: 'Working', pct: 20 }) });
+  source.listeners.progress({ data: JSON.stringify({ id: '2', status: 'succeeded', message: 'Done', pct: 100 }) });
+  assert.deepEqual(seen.map(e => e.id), ['1', '2']); assert.equal(source.closed, true);
+  source.onerror(); // after the end the error handler stays quiet
+  await new Promise(r => setTimeout(r, 20));
+  assert.equal(seen.length, 2);
+  follow.close();
+
+  // A dropped stream: the final state is read from the job instead.
+  const dropped = [];
+  ST.followInstallation(job.id, event => dropped.push(event));
+  sources[1].onerror();
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal(dropped[0].status, 'succeeded'); assert.equal(dropped[0].id, 'final'); assert.equal(sources[1].closed, true);
+  control.installFails = true;
+  const failed = [];
+  ST.followInstallation(job.id, event => failed.push(event));
+  sources[2].onerror();
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal(failed[0].status, 'failed'); assert.match(failed[0].message, /Sudo is not allowed/);
+  // A job that is still running leaves the stream to reconnect by itself.
+  control.status = 500;
+  const quiet = [];
+  ST.followInstallation(job.id, event => quiet.push(event));
+  sources[3].onerror();
+  await new Promise(r => setTimeout(r, 50));
+  assert.equal(quiet.length, 0);
+});

@@ -39,6 +39,8 @@ type ServiceOptions struct {
 type jobRequest struct {
 	installation Installation
 	input        InstallInput
+	// uninstall removes the agent instead of installing it.
+	uninstall bool
 }
 
 // Service coordinates short-lived host-key probes and asynchronous installs.
@@ -129,6 +131,16 @@ func (s *Service) Probe(ctx context.Context, principal, key string, input ProbeI
 // Start accepts an explicitly confirmed fingerprint and queues a secret-free
 // persistent job; SSH credentials remain only in the bounded in-memory queue.
 func (s *Service) Start(ctx context.Context, principal, key, nodeID string, input InstallInput) (Installation, error) {
+	return s.start(ctx, principal, key, nodeID, input, false)
+}
+
+// StartUninstall removes the agent from the node's machine over the same confirmed, pinned SSH connection. It never
+// deletes the node itself: the owner does that afterwards, and only when the machine is clean.
+func (s *Service) StartUninstall(ctx context.Context, principal, key, nodeID string, input InstallInput) (Installation, error) {
+	return s.start(ctx, principal, key, nodeID, input, true)
+}
+
+func (s *Service) start(ctx context.Context, principal, key, nodeID string, input InstallInput, uninstall bool) (Installation, error) {
 	if principal == "" || key == "" || len(key) > 128 || !validID(nodeID) ||
 		!validID(input.ProbeID) || !validFingerprint(input.Fingerprint) {
 		return Installation{}, ErrInvalid
@@ -142,7 +154,11 @@ func (s *Service) Start(ctx context.Context, principal, key, nodeID string, inpu
 	if err != nil {
 		return Installation{}, err
 	}
-	job, replay, err := s.store.createInstallation(ctx, principal, key, id, nodeID, input)
+	storeKey := key
+	if uninstall {
+		storeKey = "uninstall:" + key // a key used for an installation never replays an uninstallation
+	}
+	job, replay, err := s.store.createInstallation(ctx, principal, storeKey, id, nodeID, input)
 	if err != nil {
 		return Installation{}, err
 	}
@@ -156,7 +172,7 @@ func (s *Service) Start(ctx context.Context, principal, key, nodeID string, inpu
 		return job, nil
 	}
 	select {
-	case s.jobs <- jobRequest{installation: job, input: input}:
+	case s.jobs <- jobRequest{installation: job, input: input, uninstall: uninstall}:
 		s.queueMu.Unlock()
 	case <-ctx.Done():
 		s.queueMu.Unlock()
@@ -202,6 +218,10 @@ func (s *Service) run(job jobRequest) {
 		job.input.SSH.Secret = ""
 		job.input.SSH.SudoPassword = ""
 	}()
+	if job.uninstall {
+		s.runUninstall(job)
+		return
+	}
 	ctx, cancel := context.WithTimeout(s.ctx, installTimeout)
 	defer cancel()
 	input := job.input
@@ -283,6 +303,45 @@ func (s *Service) run(job jobRequest) {
 	}
 	_ = s.complete(job.installation.ID)
 	s.logger.Info("SSH installation succeeded", "installation_id", job.installation.ID)
+}
+
+// runUninstall connects exactly like an installation (pinned host key, sudo check) and runs the fixed removal script.
+func (s *Service) runUninstall(job jobRequest) {
+	ctx, cancel := context.WithTimeout(s.ctx, installTimeout)
+	defer cancel()
+	input := job.input
+	pass := sudoPassword(input.SSH)
+	_ = s.progress(ctx, job.installation.ID, "connect", generatedMessage("connect"), 1)
+	client, closeClient, err := connectSSH(ctx, input.SSH, input.Fingerprint)
+	if err != nil {
+		message := messageForFailure(err, "connect")
+		s.fail(job.installation.ID, message)
+		s.logger.Warn("SSH uninstallation failed", "installation_id", job.installation.ID, "reason", message)
+		return
+	}
+	defer closeClient()
+	if err := sudoPreflight(client, pass); err != nil {
+		message := messageForFailure(ErrSudo, "connect")
+		s.fail(job.installation.ID, message)
+		s.logger.Warn("SSH uninstallation failed", "installation_id", job.installation.ID, "reason", message)
+		return
+	}
+	stage, err := runUninstallScript(ctx, client, pass, func(stage string, pct float64) {
+		_ = s.progress(ctx, job.installation.ID, stage, generatedMessage(stage), pct)
+	})
+	if err != nil {
+		message := "The program could not be fully removed. Check the machine and retry, or run the uninstall command on it."
+		if errors.Is(err, ErrDisconnect) {
+			message = messageForFailure(err, stage)
+		}
+		s.fail(job.installation.ID, message)
+		s.logger.Warn("SSH uninstallation failed", "installation_id", job.installation.ID, "reason", message)
+		return
+	}
+	completeCtx, completeCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer completeCancel()
+	_ = s.store.appendEvent(completeCtx, job.installation.ID, "complete", generatedMessage("removed"), 100, "succeeded", nil)
+	s.logger.Info("SSH uninstallation succeeded", "installation_id", job.installation.ID)
 }
 
 func (s *Service) waitHeartbeat(ctx context.Context, nodeID string, baseline *time.Time) error {

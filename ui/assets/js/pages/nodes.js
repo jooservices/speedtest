@@ -135,23 +135,14 @@
         log.appendChild(li);
       }
       function done(event) {
-        if (finished) return; finished = true; if (source) source.close();
+        if (finished) return; finished = true;
         if (event.status === 'succeeded') { ST.load().then(function () { step = 3; render(); }); return; }
         U.clear(resultBox);
         resultBox.appendChild(U.callout(event.message || 'The installation did not finish.', 'crit', 'alert'));
         resultBox.appendChild(h('p', { class: 'hint', style: 'margin-top:8px' }, 'Nothing was left half-installed. Go back, fix the problem and try again.'));
         layer.setFoot([U.btn('Back', { onClick: function () { probe = null; installation = null; step = 1; render(); } })]);
       }
-      function handle(raw) { var event; try { event = JSON.parse(raw); } catch (e) { return; } line(event); if (event.status === 'succeeded' || event.status === 'failed') done(event); }
-      source = new EventSource('/api/installations/' + encodeURIComponent(installation.id) + '/events');
-      source.addEventListener('progress', function (e) { handle(e.data); });
-      source.onerror = function () {
-        // The browser reconnects by itself with Last-Event-ID; if the job already ended, read its final state.
-        ST.api.request('/api/installations/' + encodeURIComponent(installation.id)).then(function (reply) {
-          var job = reply.data;
-          if (job.status === 'succeeded' || job.status === 'failed') done({ status: job.status, message: job.error || (job.status === 'succeeded' ? 'Installed.' : 'The installation failed.'), pct: 100, id: 'final' });
-        }, function () {});
-      };
+      source = ST.followInstallation(installation.id, function (event) { line(event); if (event.status === 'succeeded' || event.status === 'failed') done(event); });
       timers.push(function () { if (source) source.close(); });
     }
     function runInstall() {
@@ -175,12 +166,25 @@
       });
       // runTest emits data events that refresh the page behind the dialog; keep the dialog as-is until the result is in.
     }
+    function firstResult(res) {
+      return res && res.status !== 'failed' ? 'First result: ' + F.speed(res.down) + ' down, ' + F.speed(res.up) + ' up, ' + F.ms(res.ping) + ' ping.' : null;
+    }
+    var firstRun = null;
     function s3() {
-      var res = real ? ST.latest(created.id) : ST.latest(created.id);
+      var res = ST.latest(created.id);
+      var line = h('p', { class: 'text-2', 'aria-live': 'polite' });
+      if (real && !res) {
+        // The node is up; run its first test right away so the owner sees a real result before closing the window.
+        line.textContent = 'Running the first speed test…';
+        if (!firstRun) firstRun = ST.runTest(created.id);
+        firstRun.then(function (result) {
+          line.textContent = firstResult(result) || 'The first test did not finish' + (result.error ? ': ' + result.error : '') + '. You can run it again from the node page.';
+        }, function () { line.textContent = 'The node is connected. Its first scheduled test will run shortly.'; });
+      } else line.textContent = firstResult(res) || 'The node is connected. Its first scheduled test will run shortly.';
       return h('div', { class: 'stack', style: 'text-align:center;padding:6px 0' },
         h('div', { class: 'ev-ico good', style: 'width:48px;height:48px;margin:0 auto;border-radius:14px' }, U.icon('check', 26)),
         h('h2', null, created.name + ' is online'),
-        res && res.status !== 'failed' ? h('p', { class: 'text-2' }, 'First result: ' + F.speed(res.down) + ' down, ' + F.speed(res.up) + ' up, ' + F.ms(res.ping) + ' ping.') : h('p', { class: 'text-2' }, 'The node is connected. Its first scheduled test will run shortly.'),
+        line,
         h('p', { class: 'hint' }, 'It will now test every ' + (ST.node(created.id) || created).interval + ' minutes. You can change that under Schedules.'));
     }
 
@@ -222,10 +226,9 @@
       }
       if (step === 2) runInstall();
     }
-    function sshApi(path, body) { return ST.api.request(path, { method: 'POST', idempotencyKey: ST.api.key(), body: body }); }
     function checkMachine(button) {
       button.disabled = true; error(null);
-      sshApi('/api/installer/probes', { host: d.host.trim(), port: +d.port }).then(function (reply) { probe = reply.data; render(); }, function (failure) {
+      ST.probeMachine(d.host.trim(), +d.port).then(function (reply) { probe = reply; render(); }, function (failure) {
         button.disabled = false;
         error(failure.status === 0 ? failure.message : 'The dashboard could not reach ' + d.host.trim() + ':' + d.port + ' over SSH. Check the address and that SSH is running there.');
       });
@@ -234,8 +237,8 @@
       button.disabled = true; error(null);
       var ssh = { host: d.host.trim(), port: +d.port, user: d.user.trim(), auth: d.auth, secret: d.secret };
       if (d.sudoSecret) ssh.sudoPassword = d.sudoSecret;
-      sshApi('/api/nodes/' + encodeURIComponent(created.id) + '/installations', { probeId: probe.id, fingerprint: probe.fingerprint, ssh: ssh }).then(function (reply) {
-        d.secret = ''; d.sudoSecret = ''; installation = reply.data; step = 2; render();
+      ST.startInstallation(created.id, 'installations', probe, ssh).then(function (reply) {
+        d.secret = ''; d.sudoSecret = ''; installation = reply; step = 2; render();
       }, function (failure) {
         button.disabled = false;
         error(failure.status === 409 ? 'An installation is already running on this node, or the confirmation expired. Go back and check the machine again.' : failure.message);
@@ -260,6 +263,98 @@
     render();
   }
   ST.openAddNode = openWizard;
+
+  /* ---------- Remove a node (real mode): optionally uninstall the program from the machine first ---------- */
+  var UNINSTALL_COMMAND = 'sudo speedtest-agent uninstall --all';
+  function removeNodeDialog(n) {
+    var d = { method: 'machine', host: n.host || '', port: '22', user: '', auth: 'password', secret: '', sudo: '' };
+    var probe = null, jobId = null, follow = null;
+    var body = h('div', { class: 'stack' }), errBox = h('div'), layer;
+    function error(msg) { U.clear(errBox); if (msg) errBox.appendChild(U.callout(msg, 'crit', 'alert')); }
+    function deleteNode(done) {
+      Promise.resolve(ST.removeNode(n.id)).then(function () { layer.close(); location.hash = '#/nodes'; U.toast(n.name + ' removed'); if (done) done(); }, function (failure) {
+        error(failure.status === 412 ? 'This node was changed elsewhere. Reload the page and try again.' : failure.message);
+      });
+    }
+    function field(label, control, hint) { return U.field(label, control, hint); }
+    function draw() {
+      U.clear(body); error(null);
+      body.appendChild(h('p', null, 'This deletes ' + n.name + ' and all of its ' + ST.nodeResults(n.id).length + ' results from the dashboard. It cannot be undone.'));
+      body.appendChild(h('div', { class: 'grid cols-2' },
+        h('button', { type: 'button', class: 'choice ' + (d.method === 'machine' ? 'on' : ''), onClick: function () { d.method = 'machine'; probe = null; draw(); layer.setFoot(footer()); } }, h('b', null, U.icon('terminal', 16), 'Also remove the program'), h('span', { class: 'muted' }, 'We connect to the machine and remove it for you.')),
+        h('button', { type: 'button', class: 'choice ' + (d.method === 'dashboard' ? 'on' : ''), onClick: function () { d.method = 'dashboard'; probe = null; draw(); layer.setFoot(footer()); } }, h('b', null, U.icon('copy', 16), 'Only remove from the dashboard'), h('span', { class: 'muted' }, 'The program stays on the machine until you remove it.'))));
+      if (d.method === 'dashboard') {
+        body.appendChild(h('p', null, 'To remove the program from the machine yourself, run this one line there:'));
+        body.appendChild(U.code(UNINSTALL_COMMAND));
+        body.appendChild(h('span', { class: 'hint' }, 'It stops the service and deletes the program, its settings and its saved results from that machine. Nothing else is touched.'));
+      } else if (probe) {
+        body.appendChild(h('p', null, 'The machine ', h('b', null, d.host.trim() + ':' + d.port), ' introduced itself with this fingerprint. Continue only if it is the machine you meant.'));
+        body.appendChild(U.code(probe.fingerprint));
+        body.appendChild(h('span', { class: 'hint' }, 'The removal stops if the machine ever shows a different fingerprint.'));
+      } else {
+        body.appendChild(h('div', { class: 'field-row' },
+          field('Machine address', U.input(d.host, function (v) { d.host = v; }, { placeholder: '192.168.10.36', 'aria-label': 'Machine address' })),
+          field('Port', U.input(d.port, function (v) { d.port = v; }, { type: 'number', 'aria-label': 'Port' }))));
+        body.appendChild(field('User name', U.input(d.user, function (v) { d.user = v; }, { placeholder: 'ubuntu', autocomplete: 'off', 'aria-label': 'User name' }), 'Needs permission to use sudo.'));
+        body.appendChild(field('Sign in with', U.seg([{ value: 'password', label: 'Password' }, { value: 'key', label: 'Private key' }], d.auth, function (v) { d.auth = v; d.secret = ''; draw(); })));
+        body.appendChild(d.auth === 'password' ? field('Password', U.input(d.secret, function (v) { d.secret = v; }, { type: 'password', autocomplete: 'new-password', 'aria-label': 'Password' }), 'Used once and never stored.')
+          : field('Private key', h('textarea', { class: 'input', rows: 4, placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----', 'aria-label': 'Private key', onInput: function (e) { d.secret = e.target.value; } }), 'Used once and never stored.'));
+        body.appendChild(field('Sudo password (only if it differs)', U.input(d.sudo, function (v) { d.sudo = v; }, { type: 'password', autocomplete: 'new-password', 'aria-label': 'Sudo password' })));
+      }
+      body.appendChild(errBox);
+    }
+    function validate() {
+      if (!validHost(d.host.trim())) return 'Enter a valid IP address or host name for the machine.';
+      if (!(+d.port >= 1 && +d.port <= 65535)) return 'The port must be between 1 and 65535.';
+      if (!d.user.trim()) return 'Enter the user name to sign in with.';
+      if (!d.secret.trim()) return d.auth === 'password' ? 'Enter the password.' : 'Paste the private key.';
+      return null;
+    }
+    function progress() {
+      U.clear(body); error(null);
+      var bar = h('div', { class: 'progress', style: 'margin:10px 0' }, h('i', { style: 'width:0%' })), log = h('ul', { class: 'checklist' }), result = h('div');
+      body.appendChild(h('p', { class: 'muted' }, 'Removing the program from ' + d.host.trim() + '. This usually takes a few seconds.')); body.appendChild(bar); body.appendChild(log); body.appendChild(result); body.appendChild(errBox);
+      layer.setFoot([U.btn('Cancel', { onClick: function () { if (follow) follow.close(); layer.close(); } })]);
+      var shown = {};
+      follow = ST.followInstallation(jobId, function (event) {
+        bar.firstChild.style.width = Math.max(0, Math.min(100, event.pct || 0)) + '%';
+        if (event.status === 'failed') {
+          result.appendChild(U.callout(event.message || 'The program could not be removed.', 'crit', 'alert'));
+          result.appendChild(h('p', { class: 'hint', style: 'margin-top:8px' }, 'You can try again, or remove the node from the dashboard and run ' + UNINSTALL_COMMAND + ' on the machine yourself.'));
+          layer.setFoot([U.btn('Try again', { onClick: function () { probe = null; jobId = null; draw(); layer.setFoot(footer()); } }),
+            U.btn('Remove from the dashboard anyway', { variant: 'danger', onClick: function () { deleteNode(); } })]);
+          return;
+        }
+        if (!shown[event.id]) { shown[event.id] = true; log.appendChild(h('li', { class: event.status === 'succeeded' ? 'ok' : 'run' }, h('span', { style: 'width:16px;display:inline-grid' }, U.icon('check', 14)), event.message)); }
+        if (event.status === 'succeeded') deleteNode();
+      });
+    }
+    function footer() {
+      if (d.method === 'dashboard') {
+        return [U.btn('Cancel', { onClick: function () { layer.close(); } }), U.btn('Remove ' + n.name, { variant: 'danger', icon: 'trash', onClick: function (e) { e.currentTarget.disabled = true; deleteNode(); } })];
+      }
+      if (probe) {
+        return [U.btn('Back', { onClick: function () { probe = null; draw(); layer.setFoot(footer()); } }),
+          U.btn('Trust it and remove', { variant: 'danger', onClick: function (e) {
+            var button = e.currentTarget; button.disabled = true; error(null);
+            var ssh = { host: d.host.trim(), port: +d.port, user: d.user.trim(), auth: d.auth, secret: d.secret };
+            if (d.sudo) ssh.sudoPassword = d.sudo;
+            ST.startInstallation(n.id, 'uninstallations', probe, ssh).then(function (job) { d.secret = ''; d.sudo = ''; jobId = job.id; progress(); }, function (failure) {
+              button.disabled = false; error(failure.status === 409 ? 'A job is already running on this node, or the confirmation expired. Go back and check the machine again.' : failure.message);
+            });
+          } })];
+      }
+      return [U.btn('Cancel', { onClick: function () { layer.close(); } }), U.btn('Check the machine', { variant: 'primary', onClick: function (e) {
+        var problem = validate(); if (problem) { error(problem); return; }
+        var button = e.currentTarget; button.disabled = true; error(null);
+        ST.probeMachine(d.host.trim(), +d.port).then(function (found) { probe = found; draw(); layer.setFoot(footer()); }, function (failure) {
+          button.disabled = false; error(failure.status === 0 ? failure.message : 'The dashboard could not reach ' + d.host.trim() + ':' + d.port + ' over SSH. Check the address and that SSH is running there.');
+        });
+      } })];
+    }
+    layer = U.modal({ title: 'Remove ' + n.name, body: body, sticky: true, onClose: function () { if (follow) follow.close(); }, actions: function () { return footer(); } });
+    draw();
+  }
 
   /* ---------- Detail ---------- */
   ST.pages.nodeDetail = function (root, params) {
@@ -327,6 +422,7 @@
       root.appendChild(h('div', { class: 'mt' }, U.card('Remove this node', 'Stops testing and removes the program from the machine.', h('div', null,
         h('p', { class: 'text-2', style: 'margin-bottom:10px' }, 'The results already collected for this node are deleted from the dashboard.'),
         U.btn('Remove ' + n.name, { variant: 'danger', icon: 'trash', onClick: function () {
+          if (!ST.demo) { removeNodeDialog(n); return; }
           U.confirm({ title: 'Remove ' + n.name + '?', text: ST.demo ? 'This deletes ' + ST.nodeResults(n.id).length + ' results and uninstalls the program from the machine. This cannot be undone.' : 'This deletes the node and all of its results from the dashboard. This cannot be undone. The program on the machine stops reporting; remove it there as well if you no longer need it.', confirm: 'Remove node', danger: true }).then(function (ok) {
             if (!ok) return;
             Promise.resolve(ST.removeNode(n.id)).then(function () { location.hash = '#/nodes'; U.toast(n.name + ' removed'); }, function (error) { U.toast(error.status === 412 ? 'This node was changed elsewhere. Reload and try again.' : error.message, 'error'); });

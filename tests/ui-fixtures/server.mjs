@@ -77,8 +77,8 @@ export async function startServer() {
         if (url.pathname === '/api/installer/probes') {
           send(201, envelope({ id: 'c0ffee00-0000-4000-8000-000000000001', fingerprint: 'SHA256:fixtureFingerprint0123456789', expiresAt: new Date(Date.now() + 600000).toISOString() }, {}, 201)); return;
         }
-        if (url.pathname.endsWith('/installations')) {
-          control.lastInstall = input; // kept for assertions
+        if (url.pathname.endsWith('/installations') || url.pathname.endsWith('/uninstallations')) {
+          control.lastInstall = input; control.lastInstallKind = url.pathname.endsWith('/uninstallations') ? 'uninstall' : 'install'; // kept for assertions
           control.responses.push({ path: url.pathname, method: 'post', status: 202, value: null });
           res.writeHead(202, { 'Content-Type': 'application/json', Location: '/api/installations/9b0f2c3e-1111-4222-8333-444455556666' });
           res.end(JSON.stringify(envelope({ id: '9b0f2c3e-1111-4222-8333-444455556666', nodeId: data.node.id, status: 'pending', step: 'queued', error: null }, {}, 202))); return;

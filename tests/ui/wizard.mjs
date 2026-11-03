@@ -59,8 +59,57 @@ try {
   await dialog.getByLabel('Machine address').fill('not a host!');
   await dialog.getByRole('button', { name: 'Check the machine' }).click();
   await dialog.getByText('Enter a valid IP address or host name for the machine.').waitFor();
+  await page.keyboard.press('Escape');
+
+  // Removing a node: uninstall the program first, then delete the node, only after the machine confirms.
+  server.control.installFails = false;
+  const deletes = () => server.control.requests.filter(r => r.method === 'DELETE' && r.path.startsWith('/api/nodes/'));
+  async function openRemoval() {
+    await page.goto(`${server.origin}/#/nodes/node-contract`);
+    await page.waitForFunction(() => ST.remote.status === 'ready');
+    await page.getByRole('tab', { name: 'Settings' }).click();
+    await page.getByRole('button', { name: /^Remove / }).click();
+    return page.getByRole('dialog', { name: /^Remove / });
+  }
+  let removal = await openRemoval();
+  await removal.getByLabel('Machine address').fill('192.0.2.7');
+  await removal.getByLabel('User name').fill('ubuntu');
+  await removal.getByLabel('Password', { exact: true }).fill('correct horse battery');
+  await removal.getByRole('button', { name: 'Check the machine' }).click();
+  await removal.getByText('SHA256:fixtureFingerprint0123456789').waitFor();
+  assert.equal(deletes().length, 0, 'nothing is deleted before the machine is clean');
+  await removal.getByRole('button', { name: 'Trust it and remove' }).click();
+  await page.waitForFunction(() => location.hash === '#/nodes', null, { timeout: 10000 });
+  assert.equal(server.control.lastInstallKind, 'uninstall');
+  assert.equal(deletes().length, 1, 'the node is deleted once the removal succeeded');
+  assert.ok(deletes()[0].query.get('confirm') === 'true');
+  assert.ok(!(await page.content()).includes('correct horse battery'));
+
+  // A removal that fails keeps the node and says how to finish by hand.
+  server.control.installFails = true;
+  removal = await openRemoval();
+  await removal.getByLabel('Machine address').fill('192.0.2.7');
+  await removal.getByLabel('User name').fill('ubuntu');
+  await removal.getByLabel('Password', { exact: true }).fill('x');
+  await removal.getByRole('button', { name: 'Check the machine' }).click();
+  await removal.getByRole('button', { name: 'Trust it and remove' }).click();
+  await removal.getByText('Sudo is not allowed for this account.').waitFor();
+  await removal.getByText(/sudo speedtest-agent uninstall --all/).waitFor();
+  assert.equal(deletes().length, 1, 'a failed removal must not delete the node');
+  await removal.getByRole('button', { name: 'Remove from the dashboard anyway' }).click();
+  await page.waitForFunction(() => location.hash === '#/nodes');
+  assert.equal(deletes().length, 2);
+
+  // Dashboard only: the one-line command is shown instead of any SSH step.
+  server.control.installFails = false;
+  removal = await openRemoval();
+  await removal.getByRole('button', { name: /Only remove from the dashboard/ }).click();
+  await removal.getByText('sudo speedtest-agent uninstall --all').waitFor();
+  await removal.getByRole('button', { name: /^Remove Contract node/ }).click();
+  await page.waitForFunction(() => location.hash === '#/nodes');
+  assert.equal(deletes().length, 3);
   assert.deepEqual(problems, [], 'no console problems');
-  console.log('PASS wizard: SSH install with confirmation, live progress, failure and validation');
+  console.log('PASS wizard: SSH install with confirmation, live progress, failure and validation; node removal with uninstall');
 } finally {
   await browser.close();
   await server.close();

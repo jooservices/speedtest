@@ -131,6 +131,7 @@ export function steps({ page, stack, startAgent, query, problems }) {
       await dialog.getByRole('button', { name: 'I ran the command' }).click();
       await startAgent(stack, { name: 'E2E-1', token });
       await dialog.getByText('E2E-1 is online').waitFor({ timeout: 90000 });
+      await dialog.getByText(/First result: .* down, .* up, .* ping\./).waitFor({ timeout: 90000 });
       await dialog.getByRole('button', { name: 'Open node' }).click();
       await page.getByRole('heading', { name: /E2E-1/, level: 1 }).waitFor();
 

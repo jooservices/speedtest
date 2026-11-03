@@ -533,6 +533,37 @@
         });
       });
     };
+    // Follows an installation or removal job. Progress arrives as server-sent events; if the stream drops after the job has
+    // ended, its final state is read instead. onEvent receives {id, message, pct, status}; the last call has a terminal status.
+    ST.followInstallation = function (id, onEvent) {
+      var finished = false, source;
+      function finish() { finished = true; if (source) source.close(); }
+      function handle(raw) {
+        var event; try { event = JSON.parse(raw); } catch (e) { return; }
+        onEvent(event);
+        if (event.status === 'succeeded' || event.status === 'failed') finish();
+      }
+      source = new EventSource('/api/installations/' + encodeURIComponent(id) + '/events');
+      source.addEventListener('progress', function (e) { handle(e.data); });
+      source.onerror = function () {
+        if (finished) return;
+        API.request('/api/installations/' + encodeURIComponent(id)).then(function (reply) {
+          var job = reply.data;
+          if (!finished && (job.status === 'succeeded' || job.status === 'failed')) {
+            onEvent({ id: 'final', status: job.status, message: job.error || (job.status === 'succeeded' ? 'Done.' : 'It did not finish.'), pct: 100 });
+            finish();
+          }
+        }, function () {});
+      };
+      return { close: finish };
+    };
+    // Probes the machine (no credential is sent), then returns the fingerprint to confirm.
+    ST.probeMachine = function (host, port) {
+      return API.request('/api/installer/probes', { method: 'POST', idempotencyKey: API.key(), body: { host: host, port: port } }).then(function (reply) { return reply.data; });
+    };
+    ST.startInstallation = function (nodeId, kind, probe, ssh) {
+      return API.request('/api/nodes/' + encodeURIComponent(nodeId) + '/' + kind, { method: 'POST', idempotencyKey: API.key(), body: { probeId: probe.id, fingerprint: probe.fingerprint, ssh: ssh } }).then(function (reply) { return reply.data; });
+    };
     ST.updateAgent = function (id, version) {
       return mutation('/api/nodes/' + encodeURIComponent(id) + '/commands', 'POST', { type: 'update_agent', version: version }, { idempotencyKey: API.key() });
     };

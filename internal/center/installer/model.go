@@ -160,6 +160,14 @@ func generatedMessage(stage string) string {
 		return "Waiting for the first heartbeat."
 	case "cleanup":
 		return "Removing temporary installer files."
+	case "stop":
+		return "Stopping the agent service."
+	case "files":
+		return "Removing the agent files."
+	case "account":
+		return "Removing the agent account."
+	case "removed":
+		return "The agent was removed from the node."
 	default:
 		return fmt.Sprintf("Installation is working on step %s.", stage)
 	}

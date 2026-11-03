@@ -64,8 +64,26 @@ owner must submit credentials again. Job history is retained for thirty days,
 with pruning on subsequent installation requests. Unused enrollment tokens are
 revoked after the attempt.
 
-Remote uninstallation is a separate lifecycle in JOOST-44. The installation
-worker does not implement `/api/nodes/{id}/uninstallations` or delete nodes.
+## Removing the agent (uninstall)
+
+`POST /api/nodes/{id}/uninstallations` takes the same body as an installation (a freshly confirmed probe plus SSH
+credentials, used once and never stored) and an `Idempotency-Key`; it answers `202` with `Location: /api/installations/{id}`.
+The job connects with the same pinned host key and sudo check, then runs a fixed script that stops the service and
+deletes only the agent's own files: `/etc/systemd/system/speedtest-agent.service`, `/usr/local/bin/speedtest-agent` (and
+`.prev`), `/etc/speedtest-agent`, `/var/lib/speedtest-agent`, `/var/lib/speedtest-agent-update` and the
+`speedtest-agent` account. Progress arrives as the same SSE events (stop, files, account, removed). The job never
+deletes the node: the dashboard deletes it only after the removal succeeded, or when the owner chooses to remove it from
+the dashboard anyway. An idempotency key used for an installation never replays an uninstallation.
+
+When SSH is not possible, run this on the machine instead (as root):
+
+```sh
+sudo speedtest-agent uninstall --all
+```
+
+`agent uninstall` alone keeps the old behaviour (credential and configuration only); `--all` also stops the service and
+removes the binary, state directories and account, `--keep-user` keeps the account. Both are idempotent and restricted to
+the paths above; `--root <dir>` runs against a scratch directory for tests.
 
 ## Verification
 
