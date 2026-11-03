@@ -41,6 +41,8 @@ type Options struct {
 	ReadinessTimeout  time.Duration
 	NodeCredentials   NodeCredentialService
 	AgentRateLimit    int
+	// OwnerNodes optionally serves the dashboard node API (list, detail, update, delete, commands).
+	OwnerNodes OwnerNodesStore
 	// Install optionally serves /install.sh and /download/<artifact>.
 	Install  http.Handler
 	AgentAPI agentapi.Store
@@ -70,10 +72,16 @@ func NewHandler(options Options) http.Handler {
 	readinessHandler := readyz(options.Pinger, readinessTimeout)
 	authHandler := &serverAuth{service: options.Auth, requireHTTPS: options.RequireHTTPS, trustedProxyCIDRs: options.TrustedProxyCIDRs}
 	apiHandler := newAPIHandler(options.NodeCredentials, options.AgentRateLimit, authHandler, options.AgentAPI)
+	var ownerNodesHandler http.Handler
+	if options.OwnerNodes != nil {
+		ownerNodesHandler = newOwnerNodesHandler(options.OwnerNodes, authHandler, options.AgentRateLimit)
+	}
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/auth" || strings.HasPrefix(r.URL.Path, "/api/auth/"):
 			authHandler.serve(w, r)
+		case ownerNodesHandler != nil && ownerNodesRoute(r.URL.Path) && (r.Method != http.MethodPost || r.URL.Path != "/api/nodes"):
+			ownerNodesHandler.ServeHTTP(w, r)
 		case r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/"):
 			apiHandler.ServeHTTP(w, r)
 		case options.Install != nil && (r.URL.Path == "/install.sh" || strings.HasPrefix(r.URL.Path, "/download/")):

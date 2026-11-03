@@ -23,6 +23,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/install"
 	"github.com/jooservices/speedtest/internal/center/nodes"
+	"github.com/jooservices/speedtest/internal/center/ownerapi"
 	"github.com/jooservices/speedtest/internal/center/server"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
@@ -57,7 +58,7 @@ func run(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writ
 	if err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
-	return serve(ctx, args, logger, stderr, cfg, nil, nil, nil, nil)
+	return serve(ctx, args, logger, stderr, cfg, nil, nil, nil, nil, nil)
 }
 
 func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer) error {
@@ -91,7 +92,7 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 		return err
 	}
 	nodeService := nodes.NewService(pool, cfg.AppKey)
-	return serve(ctx, args, logger, stderr, cfg, service, nodeService, poolPinger{pool: pool}, &agentapi.Postgres{Pool: pool})
+	return serve(ctx, args, logger, stderr, cfg, service, nodeService, poolPinger{pool: pool}, &agentapi.Postgres{Pool: pool}, &ownerapi.Store{DB: pool})
 }
 
 func validateCenterArguments(args []string, cfg config.CenterConfig, stderr io.Writer) error {
@@ -112,7 +113,7 @@ type poolPinger struct{ pool *pgxpool.Pool }
 
 func (p poolPinger) PingContext(ctx context.Context) error { return p.pool.Ping(ctx) }
 
-func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer, cfg config.CenterConfig, authService *auth.Service, nodeService server.NodeCredentialService, pinger server.Pinger, agentStore agentapi.Store) error {
+func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer, cfg config.CenterConfig, authService *auth.Service, nodeService server.NodeCredentialService, pinger server.Pinger, agentStore agentapi.Store, ownerNodes server.OwnerNodesStore) error {
 
 	flags := flag.NewFlagSet("center", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -147,6 +148,7 @@ func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Wr
 
 	handler := server.NewHandler(server.Options{
 		Install:           installHandler,
+		OwnerNodes:        ownerNodes,
 		AgentAPI:          agentStore,
 		Logger:            logger,
 		UI:                ui,
