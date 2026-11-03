@@ -26,7 +26,10 @@ const rows = ops.map(op => {
   // A parameter is a literal segment, a template placeholder, or a string concatenation such as "/api/x/"+id+"/ack".
   const param = '(?:[^"\'`\\s/?]+|["\'`]\\s*\\+\\s*[\\w.\\[\\]()]+\\s*\\+?\\s*["\'`]?)';
   const rx = new RegExp(esc(op.path).replace(/\\\{[^}]+\\\}/g, param) + '(?![A-Za-z/_-])');
-  const hits = files.filter(([, text]) => rx.test(text)).map(([f]) => f);
+  // Reading is the default verb; a write operation additionally needs its method named in the same file
+  // (http.MethodPost, "POST", .post( ...), so one GET mention cannot cover POST/PUT/PATCH/DELETE on the same path.
+  const verb = op.method === 'GET' ? null : new RegExp(`Method${op.method[0]}${op.method.slice(1).toLowerCase()}\\b|["'\`]${op.method}["'\`]|\\.${op.method.toLowerCase()}\\(|method:\\s*["'\`]${op.method}`, 'i');
+  const hits = files.filter(([, text]) => rx.test(text) && (!verb || verb.test(text))).map(([f]) => f);
   return { ...op, hits };
 });
 

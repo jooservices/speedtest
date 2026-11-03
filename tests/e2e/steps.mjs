@@ -270,10 +270,17 @@ export function steps({ page, stack, startAgent, query, problems }) {
       await page.getByRole('cell', { name: '203.0.113.11' }).first().waitFor();
       await page.getByLabel('IP address to look up').fill('not an address');
       await page.getByRole('button', { name: 'Look up' }).click();
-      await page.getByText('Enter a valid IPv4 address').waitFor();
+      await page.getByText('Enter a valid IP address').waitFor();
       await page.getByLabel('IP address to look up').fill('203.0.113.11');
+      const lookup = page.waitForResponse(r => r.url().includes('/api/ip/lookup?ip=203.0.113.11') && r.status() === 200);
       await page.getByRole('button', { name: 'Look up' }).click();
-      await page.getByText('Hanoi').first().waitFor();
+      const found = await (await lookup).json();
+      assert.equal(found.data.city, 'Hanoi', 'the center answered the lookup');
+      await page.locator('.card').filter({ hasText: 'Look up an address' }).getByText('Hanoi').first().waitFor();
+      // An address the center does not know is reported honestly, not silently ignored.
+      await page.getByLabel('IP address to look up').fill('2001:db8::1');
+      await page.getByRole('button', { name: 'Look up' }).click();
+      await page.getByText('No location is known for this address.').waitFor();
       await page.getByRole('cell', { name: '203.0.113.11' }).first().click();
       await page.getByRole('heading', { name: 'IP address details' }).waitFor();
     },

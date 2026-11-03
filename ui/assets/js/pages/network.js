@@ -4,7 +4,15 @@
   var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
   var q = { more: false, node: 'all', lookup: '', lookupRes: null };
 
-  function geoLine(g) { return g ? g.city + ', ' + g.country : 'Unknown location'; }
+  function geoLine(g) { return (g && [g.city, g.country].filter(Boolean).join(', ')) || 'Unknown location'; }
+  function validIp(v) {
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(v)) return v.split('.').every(function (p) { return +p <= 255; });
+    return v.indexOf(':') >= 0 && /^[0-9a-fA-F:.]{2,45}$/.test(v) && (v.match(/::/g) || []).length <= 1; // the center makes the final decision
+  }
+  function has(v) { return v != null && v !== ''; }
+  function finite(v) { return v != null && v !== '' && Number.isFinite(+v); }
+  function row(label, v) { return has(v) ? [label, v] : null; }
+  function rows(list) { return list.filter(Boolean); }
 
   function openIp(entry, node) {
     var g = entry.geo;
@@ -13,8 +21,9 @@
       h('div', { class: 'row' }, U.dot(ST.nodeColor(node)), node.name + ' · ' + node.label),
       U.kv([['First seen', F.date(entry.first, 'full')], ['Last seen', F.date(entry.last, 'full')], ['Held for', F.dur(entry.last - entry.first)], ['Tests on this address', F.num(entry.tests)],
         ['Average download', F.speed(entry.avgDown)], ['Average upload', F.speed(entry.avgUp)]]),
-      g ? h('div', null, h('h3', { style: 'margin:6px 0' }, 'Location'), U.kv([['City', g.city], ['Region', g.region], ['Country', g.country + ' (' + g.countryCode + ')'], ['Coordinates', g.lat + ', ' + g.lon],
-        ['Accuracy', 'About ' + g.radiusKm + ' km'], ['Time zone', g.timezone], ['Provider', g.isp], ['Network', 'AS' + g.asn + ' · ' + g.asnOrg], ['Connection', g.connection], ['Looked up with', g.source]]))
+      g ? h('div', null, h('h3', { style: 'margin:6px 0' }, 'Location'), U.kv(rows([row('City', g.city), row('Region', g.region), row('Country', has(g.country) ? g.country + (has(g.countryCode) ? ' (' + g.countryCode + ')' : '') : null),
+        finite(g.lat) && finite(g.lon) ? ['Coordinates', g.lat + ', ' + g.lon] : null, finite(g.radiusKm) ? ['Accuracy', 'About ' + g.radiusKm + ' km'] : null, row('Time zone', g.timezone), row('Provider', g.isp),
+        has(g.asn) ? ['Network', 'AS' + g.asn + (has(g.asnOrg) ? ' · ' + g.asnOrg : '')] : null, row('Connection', g.connection), row('Looked up with', g.source)])))
         : U.callout('No location data is available for this address.', 'warn', 'alert')) });
   }
 
@@ -39,8 +48,9 @@
     var cities = {};
     sel.forEach(function (n) {
       var cur = ST.latest(n.id); if (!cur) return;
-      var g = ST.geo(cur.ip); if (!g) return;
-      var c = cities[g.city] || (cities[g.city] = { lat: g.lat, lon: g.lon, label: g.city, colors: [], nodes: [], ips: [] });
+      var g = ST.geo(cur.ip); if (!g || !finite(g.lat) || !finite(g.lon)) return;
+      var key = g.city || g.country || 'Unknown location';
+      var c = cities[key] || (cities[key] = { lat: +g.lat, lon: +g.lon, label: key, colors: [], nodes: [], ips: [] });
       c.colors.push(ST.nodeColor(n)); c.nodes.push(n.name); c.ips.push(cur.ip);
     });
     var pins = Object.keys(cities).map(function (k) { var c = cities[k]; return { lat: c.lat, lon: c.lon, label: c.label, colors: c.colors, names: c.nodes.join(', '), tip: c.nodes.map(function (nm, i) { return { label: nm, value: c.ips[i], color: c.colors[i] }; }) }; });
@@ -79,13 +89,13 @@
     var resBox = h('div', { class: 'mt' });
     function showGeo(g) {
       resBox.appendChild(g ? h('div', { class: 'card card-pad' }, h('div', { class: 'row between' }, h('b', { class: 'mono' }, g.ip), U.chip(g.source || 'database', 'info')),
-        U.kv([['Location', geoLine(g) + ' (' + g.lat + ', ' + g.lon + ')'], ['Provider', g.isp + ' · AS' + g.asn], ['Accuracy', 'About ' + g.radiusKm + ' km']]))
+        U.kv(rows([['Location', geoLine(g) + (finite(g.lat) && finite(g.lon) ? ' (' + g.lat + ', ' + g.lon + ')' : '')], has(g.isp) || has(g.asn) ? ['Provider', [g.isp, has(g.asn) ? 'AS' + g.asn : ''].filter(Boolean).join(' · ')] : null, finite(g.radiusKm) ? ['Accuracy', 'About ' + g.radiusKm + ' km'] : null])))
         : U.callout(ST.demo ? 'This preview only knows the sample addresses used by the demo nodes. The real service looks up any public address.' : 'No location is known for this address.', 'warn', 'info'));
     }
     function doLookup(v) {
       U.clear(resBox);
       v = v.trim();
-      if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(v) || v.split('.').some(function (p) { return +p > 255; })) { resBox.appendChild(U.callout('Enter a valid IPv4 address, for example 203.0.113.57.', 'crit', 'alert')); return; }
+      if (!validIp(v)) { resBox.appendChild(U.callout('Enter a valid IP address, for example 203.0.113.57 or 2001:db8::1.', 'crit', 'alert')); return; }
       if (ST.demo) { showGeo(ST.geo(v)); return; }
       var asked = v;
       resBox.appendChild(h('p', { class: 'hint', role: 'status' }, 'Looking up…'));

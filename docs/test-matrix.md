@@ -11,20 +11,20 @@ Operations: 65. Without a test: 0.
 | logout | POST | `/api/auth/logout` | `internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go` |
 | changePassword | POST | `/api/auth/password` | `internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go` |
 | listNodes | GET | `/api/nodes` | `internal/center/server/auth_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>+8 more |
-| createNode | POST | `/api/nodes` | `internal/center/server/auth_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>+8 more |
+| createNode | POST | `/api/nodes` | `internal/center/server/auth_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>+7 more |
 | createEnrollmentToken | POST | `/api/agent/tokens` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go` |
 | enroll | POST | `/api/agent/enroll` | `cmd/center/main_integration_test.go`<br>`internal/agent/enroll/enroll_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/server/installer_integration_test.go`<br>+3 more |
 | getNode | GET | `/api/nodes/{id}` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>+3 more |
-| updateNode | PATCH | `/api/nodes/{id}` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>+3 more |
-| deleteNode | DELETE | `/api/nodes/{id}` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>+3 more |
+| updateNode | PATCH | `/api/nodes/{id}` | `internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>`tests/ui/store.test.mjs` |
+| deleteNode | DELETE | `/api/nodes/{id}` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go` |
 | runNode | POST | `/api/nodes/{id}/run` | `internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go` |
 | createCommand | POST | `/api/nodes/{id}/commands` | `internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go` |
 | getCommand | GET | `/api/nodes/{id}/commands/{commandId}` | `internal/center/server/ownernodes_test.go` |
 | rotateCredential | POST | `/api/nodes/{id}/credential` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_test.go` |
 | revokeCredential | DELETE | `/api/nodes/{id}/credential` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_test.go` |
-| ingestResults | POST | `/api/agent/results` | `cmd/center/main_integration_test.go`<br>`internal/agent/report/reporter_test.go`<br>`internal/agent/runloop/runloop_test.go`<br>`internal/agent/testutil/center_test.go`<br>+6 more |
+| ingestResults | POST | `/api/agent/results` | `cmd/center/main_integration_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>`internal/center/server/agentapi_integration_test.go`<br>+4 more |
 | getAgentConfig | GET | `/api/agent/config` | `cmd/agent/main_test.go`<br>`cmd/agent/update_test.go`<br>`internal/agent/control/regression_test.go`<br>`internal/agent/control/update_test.go`<br>+5 more |
-| heartbeat | POST | `/api/agent/heartbeat` | `internal/agent/control/control_test.go`<br>`internal/agent/control/regression_test.go`<br>`internal/agent/control/update_test.go`<br>`internal/agent/testutil/center_test.go`<br>+5 more |
+| heartbeat | POST | `/api/agent/heartbeat` | `internal/agent/control/control_test.go`<br>`internal/agent/control/regression_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>+4 more |
 | pollCommands | GET | `/api/agent/commands` | `internal/agent/control/update_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>`internal/center/server/agentapi_integration_test.go`<br>+2 more |
 | ackCommand | POST | `/api/agent/commands/{id}/ack` | `internal/agent/control/control_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>`internal/center/server/agentapi_integration_test.go`<br>+1 more |
 | getAgentIP | GET | `/api/agent/ip` | `internal/agent/netpath/netpath_test.go`<br>`internal/agent/runloop/runloop_test.go`<br>`internal/center/agentapi/http_test.go`<br>`internal/center/server/agentapi_integration_test.go`<br>+1 more |
@@ -42,11 +42,11 @@ Operations: 65. Without a test: 0.
 | getSeries | GET | `/api/series` | `internal/center/server/ownerdashboard_integration_test.go`<br>`internal/center/server/ownerdashboard_test.go` |
 | getSchedules | GET | `/api/schedules` | `internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/perf/dashboard.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | getSchedule | GET | `/api/schedules/{node}` | `internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/e2e/contract.mjs`<br>`tests/ui/store.test.mjs`<br>+1 more |
-| replaceSchedule | PUT | `/api/schedules/{node}` | `internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/e2e/contract.mjs`<br>`tests/ui/store.test.mjs`<br>+1 more |
-| replaceScheduleRules | PUT | `/api/schedules/rules` | `internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/e2e/contract.mjs`<br>`tests/ui/store.test.mjs`<br>+1 more |
+| replaceSchedule | PUT | `/api/schedules/{node}` | `internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
+| replaceScheduleRules | PUT | `/api/schedules/rules` | `internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | staggerSchedules | POST | `/api/schedules/stagger` | `internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | listRules | GET | `/api/alerts/rules` | `internal/center/server/owneralerts_integration_test.go`<br>`internal/center/server/owneralerts_test.go`<br>`tests/ui/contract.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
-| createRule | POST | `/api/alerts/rules` | `internal/center/server/owneralerts_integration_test.go`<br>`internal/center/server/owneralerts_test.go`<br>`tests/ui/contract.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
+| createRule | POST | `/api/alerts/rules` | `internal/center/server/owneralerts_integration_test.go`<br>`internal/center/server/owneralerts_test.go`<br>`tests/ui-fixtures/server.mjs` |
 | getRule | GET | `/api/alerts/rules/{id}` | `internal/center/server/owneralerts_test.go` |
 | replaceRule | PUT | `/api/alerts/rules/{id}` | `internal/center/server/owneralerts_test.go` |
 | deleteRule | DELETE | `/api/alerts/rules/{id}` | `internal/center/server/owneralerts_test.go` |
@@ -58,14 +58,14 @@ Operations: 65. Without a test: 0.
 | listDeliveries | GET | `/api/notifications/deliveries` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/ownernotifications_test.go` |
 | getDelivery | GET | `/api/notifications/deliveries/{id}` | `internal/center/server/ownernotifications_test.go` |
 | getSettings | GET | `/api/settings` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>`tests/e2e/steps.mjs`<br>+5 more |
-| replaceSettings | PUT | `/api/settings` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>`tests/e2e/steps.mjs`<br>+5 more |
+| replaceSettings | PUT | `/api/settings` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>`tests/ui/api.test.mjs`<br>+2 more |
 | rotateEnrollmentKey | POST | `/api/settings/enrolment-key` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>+1 more |
 | listIPChanges | GET | `/api/ip/history` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go`<br>`tests/ui/contract.test.mjs`<br>`tests/ui/store.test.mjs`<br>+1 more |
 | listIPAddresses | GET | `/api/ip/addresses` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go`<br>`tests/ui/contract.test.mjs`<br>`tests/ui/store.test.mjs`<br>+1 more |
 | lookupIP | GET | `/api/ip/lookup` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go` |
 | getMap | GET | `/api/ip/map` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go` |
 | getJob | GET | `/api/jobs/{id}` | `internal/center/server/owneralerts_test.go`<br>`internal/center/server/ownerjobs_test.go` |
-| probeSSH | POST | `/api/installer/probes` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui/wizard.mjs`<br>+1 more |
+| probeSSH | POST | `/api/installer/probes` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | installAgent | POST | `/api/nodes/{id}/installations` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go` |
 | getInstallation | GET | `/api/installations/{id}` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | streamInstallEvents | GET | `/api/installations/{id}/events` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |

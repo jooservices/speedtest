@@ -41,7 +41,7 @@ await Promise.all(cookies.map(async cookie => {
       const res = await fetch(origin + p, { headers: { cookie } });
       await res.arrayBuffer();
       const d = performance.now() - t; lat.push(d); (byPath[p] ||= []).push(d);
-      if (res.status >= 400 && res.status !== 404) errors[`${p} ${res.status}`] = (errors[`${p} ${res.status}`] || 0) + 1;
+      if (res.status >= 400) errors[`${p} ${res.status}`] = (errors[`${p} ${res.status}`] || 0) + 1;
     }
     await new Promise(r => setTimeout(r, 1000));
   }
