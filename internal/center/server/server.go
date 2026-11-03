@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jooservices/speedtest/internal/center/agentapi"
+	"github.com/jooservices/speedtest/internal/center/settings"
 )
 
 const (
@@ -51,6 +52,8 @@ type Options struct {
 	OwnerDashboard OwnerDashboardStore
 	// OwnerIP optionally serves the IP history, address, lookup and map views.
 	OwnerIP OwnerIPStore
+	// Settings optionally serves the settings API and enrolment-key rotation.
+	Settings settings.Store
 	// OwnerResults optionally serves the dashboard result API (list, detail, CSV export).
 	OwnerResults OwnerResultsStore
 	// OwnerStats optionally serves the owner statistics API.
@@ -106,6 +109,10 @@ func NewHandler(options Options) http.Handler {
 	if options.OwnerIP != nil {
 		ownerIPHandler = newOwnerIPHandler(options.OwnerIP, authHandler, options.AgentRateLimit)
 	}
+	var settingsHandler http.Handler
+	if options.Settings != nil {
+		settingsHandler = newOwnerSettingsHandler(options.Settings, authHandler, options.AgentRateLimit)
+	}
 	var ownerResultsHandler http.Handler
 	if options.OwnerResults != nil {
 		ownerResultsHandler = newOwnerResultsHandler(options.OwnerResults, authHandler, options.AgentRateLimit)
@@ -132,6 +139,8 @@ func NewHandler(options Options) http.Handler {
 			ownerDashboardHandler.ServeHTTP(w, r)
 		case ownerIPHandler != nil && ownerIPRoute(r.URL.Path):
 			ownerIPHandler.ServeHTTP(w, r)
+		case settingsHandler != nil && ownerSettingsRoute(r.URL.Path):
+			settingsHandler.ServeHTTP(w, r)
 		case ownerResultsHandler != nil && ownerResultsRoute(r.URL.Path):
 			ownerResultsHandler.ServeHTTP(w, r)
 		case ownerStatsHandler != nil && ownerStatsRoute(r.URL.Path):
@@ -257,6 +266,8 @@ type problemResponse struct {
 	Status  int    `json:"status"`
 	Detail  string `json:"detail"`
 	TraceID string `json:"trace_id"`
+	// Errors lists field-level validation messages keyed by JSON path; it is omitted when empty.
+	Errors map[string][]string `json:"errors,omitempty"`
 }
 
 func writePanicProblem(w http.ResponseWriter, requestID string) {
