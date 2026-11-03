@@ -1,0 +1,45 @@
+# Speedtest command center: systemd user unit (template).
+#
+# Runs the center permanently as a per-user service, restarted automatically,
+# reading its configuration from an environment file. Install it with:
+#
+#   mkdir -p ~/.config/systemd/user
+#   cp deploy/speedtest-center.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now speedtest-center
+#
+# Lay out the release directory first (see docs/deployment.md):
+#
+#   ~/.local/opt/speedtest-center/speedtest-center   the built binary
+#   ~/.local/opt/speedtest-center/.env               environment (mode 0600)
+#
+# The same .env is loaded by `make migrate` when it runs from that directory,
+# so the service and migrations always agree on the database. The center
+# listens on SPEEDTEST_HTTP_ADDR (default 127.0.0.1:8080) and serves /healthz
+# and /readyz; front it with a reverse proxy (speedtest-center.nginx.conf)
+# instead of exposing it to the network directly.
+
+[Unit]
+Description=Speedtest command center
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/.local/opt/speedtest-center
+EnvironmentFile=%h/.local/opt/speedtest-center/.env
+ExecStart=%h/.local/opt/speedtest-center/speedtest-center
+Restart=always
+RestartSec=5
+
+# Structured JSON logs go to the journal via standard output.
+StandardOutput=journal
+StandardError=journal
+
+# Run without extra privileges. The working directory must be writable by the
+# user so the geolocation updater can store its databases under data/geoip.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=default.target
