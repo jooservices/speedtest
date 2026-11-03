@@ -52,7 +52,7 @@
           { key: 'ping', label: 'Ping', sort: true, num: true, render: function (r) { return F.ms(r.ping); } },
           { key: 'jitter', label: 'Jitter', sort: true, num: true, render: function (r) { return F.ms(r.jitter); } },
           { key: 'loss', label: 'Loss', sort: true, num: true, render: function (r) { return r.loss == null ? '—' : F.num(r.loss, 1) + '%'; } },
-          { key: 'server', label: 'Server', sort: true, render: function (r) { var s = ST.server(r.serverId); return s.name + ', ' + s.city; } },
+          { key: 'server', label: 'Server', sort: true, render: function (r) { if (r.serverId == null && !r.server) return '—'; var s = r.server || ST.server(r.serverId); return s.name + (s.city ? ', ' + s.city : ''); } },
           { key: 'ip', label: 'Public IP', sort: true, render: function (r) { return h('span', { class: 'mono' }, r.ip); } },
           { key: 'status', label: 'Status', sort: true, render: function (r) { return U.statusChip(r.status); } }],
         rows: slice, sortKey: q.sort, sortDir: q.dir, onSort: function (k) { if (q.sort === k) q.dir = q.dir === 'asc' ? 'desc' : 'asc'; else { q.sort = k; q.dir = k === 'ts' ? 'desc' : 'asc'; } draw(); },

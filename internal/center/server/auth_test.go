@@ -825,3 +825,18 @@ func TestAuthCookieHTTPSAndExpiryBounds(t *testing.T) {
 		t.Fatal("TLS request was not detected as HTTPS")
 	}
 }
+
+// The shared envelope of the contract requires a meta object on every success; the browser client refuses a response
+// without it, so a missing meta makes the whole dashboard show "invalid response".
+func TestAuthSuccessEnvelopeCarriesAMetaObject(t *testing.T) {
+	handler := newAuthHandler(t, 5)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "http://center.test/api/auth/me", nil))
+	var body map[string]json.RawMessage
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &body) != nil {
+		t.Fatalf("me = %d %s", rec.Code, rec.Body.String())
+	}
+	if string(body["meta"]) != "{}" || string(body["errors"]) != "null" || string(body["success"]) != "true" {
+		t.Fatalf("envelope = %s", rec.Body.String())
+	}
+}

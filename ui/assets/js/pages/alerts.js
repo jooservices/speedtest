@@ -1,6 +1,17 @@
 /* Alerts: rules and events. */
 (function () {
   'use strict';
+  // Real mode returns promises that settle when the center has confirmed the change; demo mode returns nothing.
+  function friendly(error) {
+    if (error.status === 412) return 'This was changed elsewhere. Reload the page and try again.';
+    if (error.status === 409) return 'This conflicts with the current state. Reload the page and try again.';
+    if (error.status === 422) return 'Some values are not valid. Check them and try again.';
+    return error.message;
+  }
+  function settle(result, ok, fail) {
+    if (result && typeof result.then === 'function') return result.then(ok, fail || function (error) { window.ST.ui.toast(friendly(error), 'error'); });
+    return ok(result);
+  }
   var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt;
   var q = { tab: 'events', show: 'open', sev: 'all' };
   var METRICS = [
@@ -46,14 +57,15 @@
       U.clear(err);
       var problem = !r.name.trim() ? 'Give the rule a name.' : r.nodes !== 'all' && !r.nodes.length ? 'Choose at least one node.' : !r.channels.length ? 'Choose at least one way to be notified.' : (METRICS.filter(function (x) { return x.value === r.metric; })[0].ops.length && !(r.value >= 0)) ? 'Enter a threshold.' : null;
       if (problem) { err.appendChild(U.callout(problem, 'crit', 'alert')); return; }
-      r.name = r.name.trim(); ST.saveRule(r); l.close(); U.toast(isNew ? 'Rule created' : 'Rule saved');
+      r.name = r.name.trim();
+      settle(ST.saveRule(r), function () { l.close(); U.toast(isNew ? 'Rule created' : 'Rule saved'); }, function (error) { err.appendChild(U.callout(friendly(error), 'crit', 'alert')); });
     } })]; } });
   }
 
   ST.pages.alerts = function (root) {
     var events = ST.events(), rules = ST.rules(), open = events.filter(function (e) { return !e.acked; });
     root.appendChild(U.pageHead('Alerts', 'Get told when a connection slows down, drops, or changes address.', [
-      q.tab === 'rules' ? U.btn('New rule', { icon: 'plus', variant: 'primary', onClick: function () { ruleDialog(null); } }) : U.btn('Acknowledge all', { icon: 'check', disabled: !open.length, onClick: function () { ST.ackAll(); U.toast('All alerts acknowledged'); } })]));
+      q.tab === 'rules' ? U.btn('New rule', { icon: 'plus', variant: 'primary', onClick: function () { ruleDialog(null); } }) : U.btn('Acknowledge all', { icon: 'check', disabled: !open.length, onClick: function () { settle(ST.ackAll(), function () { U.toast('All alerts acknowledged'); }); } })]));
     root.appendChild(U.tabs([{ value: 'events', label: 'Activity', count: open.length }, { value: 'rules', label: 'Rules', count: rules.length }], q.tab, function (v) { q.tab = v; ST.refresh(); }));
 
     if (q.tab === 'events') {
@@ -72,7 +84,7 @@
             h('div', { class: 'row wrap', style: 'gap:8px' }, h('b', null, e.title), U.chip(si.label, si.cls), e.resolvedAt ? U.chip('Resolved', 'good', 'check') : (e.severity !== 'info' ? U.chip('Ongoing', 'warn') : null)),
             h('div', { class: 'muted' }, (n ? n.name + ' · ' : '') + F.date(e.ts, 'full') + (e.resolvedAt ? ' · lasted ' + F.dur(e.resolvedAt - e.ts) : '')),
             h('div', { class: 'text-2' }, e.detail)),
-          e.acked ? U.btn('Reopen', { size: 'sm', onClick: function () { ST.ack(e.id, false); } }) : U.btn('Acknowledge', { size: 'sm', icon: 'check', onClick: function () { ST.ack(e.id); U.toast('Alert acknowledged'); } })));
+          e.acked ? U.btn('Reopen', { size: 'sm', onClick: function () { settle(ST.ack(e.id, false), function () {}); } }) : U.btn('Acknowledge', { size: 'sm', icon: 'check', onClick: function () { settle(ST.ack(e.id), function () { U.toast('Alert acknowledged'); }); } })));
       });
       if (list.length > 60) card.appendChild(h('p', { class: 'hint', style: 'padding-top:10px' }, 'Showing the 60 most recent of ' + list.length + '.'));
       root.appendChild(card);
@@ -81,13 +93,13 @@
       if (!rules.length) rc.appendChild(U.empty('No rules', 'Create a rule to be alerted automatically.', U.btn('New rule', { icon: 'plus', variant: 'primary', onClick: function () { ruleDialog(null); } })));
       rules.forEach(function (r) {
         var si = ST.sevInfo(r.severity), scope = r.nodes === 'all' ? 'All nodes' : r.nodes.map(function (id) { var n = ST.node(id); return n ? n.name : id; }).join(', ');
-        rc.appendChild(h('div', { class: 'list-row' }, U.toggle(r.enabled, function (v) { r.enabled = v; ST.saveRule(r); U.toast(r.name + (v ? ' turned on' : ' turned off')); }, 'Enable ' + r.name),
+        rc.appendChild(h('div', { class: 'list-row' }, U.toggle(r.enabled, function (v) { r.enabled = v; settle(ST.saveRule(r), function () { U.toast(r.name + (v ? ' turned on' : ' turned off')); }); }, 'Enable ' + r.name),
           h('div', { class: 'grow' }, h('div', { class: 'row wrap', style: 'gap:8px' }, h('b', null, r.name), U.chip(si.label, si.cls)), h('div', { class: 'text-2' }, ST.ruleText(r)), h('div', { class: 'muted' }, scope + ' · ' + r.channels.join(', '))),
           U.btn('Edit', { size: 'sm', icon: 'edit', onClick: function () { ruleDialog(r); } }),
-          U.btn('', { size: 'sm', icon: 'trash', title: 'Delete ' + r.name, onClick: function () { U.confirm({ title: 'Delete this rule?', text: '“' + r.name + '” stops alerting. Past alerts from it disappear.', confirm: 'Delete rule', danger: true }).then(function (ok) { if (ok) { ST.deleteRule(r.id); U.toast('Rule deleted'); } }); } })));
+          U.btn('', { size: 'sm', icon: 'trash', title: 'Delete ' + r.name, onClick: function () { U.confirm({ title: 'Delete this rule?', text: '“' + r.name + '” stops alerting. Past alerts from it disappear.', confirm: 'Delete rule', danger: true }).then(function (ok) { if (ok) settle(ST.deleteRule(r.id), function () { U.toast('Rule deleted'); }); }); } })));
       });
       root.appendChild(rc);
-      root.appendChild(h('div', { class: 'mt' }, U.callout('Rules are checked against every new result. Alerts in this preview are worked out from the sample data, so editing a rule changes the Activity tab immediately.', null, 'info')));
+      root.appendChild(h('div', { class: 'mt' }, U.callout(ST.demo ? 'Rules are checked against every new result. Alerts in this preview are worked out from the sample data, so editing a rule changes the Activity tab immediately.' : 'Rules are checked against every new result as it arrives. Alerts open when the streak is reached and close by themselves when it breaks.', null, 'info')));
     }
   };
 })();

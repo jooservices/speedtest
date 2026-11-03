@@ -299,7 +299,12 @@
         big.textContent = p.value == null ? '…' : p.unit === 'ms' ? ST.fmt.ms(p.value) : ST.fmt.speed(p.value);
       }).then(function (res) {
         it.li.className = 'ok'; U.clear(it.ic); it.ic.appendChild(U.icon(res.status === 'failed' ? 'x' : 'check', 14));
-        it.li.lastChild.textContent = res.status === 'failed' ? 'Failed' : ST.fmt.speed(res.down) + ' ↓  ' + ST.fmt.speed(res.up) + ' ↑';
+        it.li.lastChild.textContent = res.status === 'failed' ? 'Failed' + (res.error ? ': ' + res.error : '') : ST.fmt.speed(res.down) + ' ↓  ' + ST.fmt.speed(res.up) + ' ↑';
+        if (!cancelled) next();
+      }, function (error) {
+        // The test could not even be queued, for example because the node is paused or already has a test waiting.
+        it.li.className = 'ok'; U.clear(it.ic); it.ic.appendChild(U.icon('x', 14));
+        it.li.lastChild.textContent = error.status === 409 ? 'Not started: the node is paused or already has a test waiting' : 'Not started: ' + error.message;
         if (!cancelled) next();
       });
     })();

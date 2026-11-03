@@ -23,8 +23,12 @@ export function fixture() {
     nodes: 'all', severity: 'warn', channels: ['email'], enabled: true };
   const event = { id: 'event-fixture', ruleId: rule.id, nodeId: node.id, severity: 'warn', ts, resolvedAt: null,
     title: rule.name, detail: 'Fixture alert', acked: false };
-  return { node, result, settings, rule, event };
+  const schedules = { rules: { stagger: true, maxConcurrent: 1, quiet: { quietStart: '', quietEnd: '', timezone: 'UTC' } },
+    nodes: [{ nodeId: node.id, config: { interval: 30, offset: 0, enabled: true }, nextRun: ts, upcoming: [ts], bytesPerDay: 72000, bytesPerMonth: 2160000 }],
+    clashes: [] };
+  return { node, result, settings, rule, event, schedules };
 }
+const ts0 = () => new Date().toISOString();
 export const envelope = (data, meta = {}, code = 200) => ({ success: true, code, message: 'OK', data, meta, errors: null });
 export const problem = status => ({ type: `/problems/test-${status}`, title: `HTTP ${status}`, status,
   detail: status === 403 ? 'CSRF token invalid. Retry the request.' : `Fixture failure ${status}. Retry the request.` });
@@ -83,6 +87,12 @@ export async function startServer() {
         send(status, envelope(output, {}, status)); return;
       }
       if (url.pathname === '/api/settings') { send(200, envelope(data.settings)); return; }
+      if (url.pathname === '/api/schedules') { send(200, envelope(data.schedules)); return; }
+      if (/\/commands\/[^/]+$/.test(url.pathname)) {
+        send(200, envelope({ id: 'command-fixture', nodeId: data.node.id, type: 'run_now', version: null, status: 'succeeded', createdAt: ts0(),
+          ackedAt: ts0(), phase: 'done', pct: 100, resultId: data.result.id, error: null })); return;
+      }
+      if (url.pathname.startsWith('/api/results/')) { send(200, envelope(data.result)); return; }
       if (url.pathname.startsWith('/api/nodes/')) { send(200, envelope(data.node)); return; }
       if (url.pathname.startsWith('/api/alerts/rules/')) { send(200, envelope(data.rule)); return; }
       if (url.pathname.startsWith('/api/alerts/events/')) { send(200, envelope(data.event)); return; }

@@ -168,7 +168,7 @@ func writeSuccess(w http.ResponseWriter, r *http.Request, code int, message stri
 		Code:    code,
 		Message: message,
 		Data:    data,
-		Meta:    nil,
+		Meta:    map[string]any{},
 		Errors:  nil,
 	})
 }
