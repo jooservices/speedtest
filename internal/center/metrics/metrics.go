@@ -68,7 +68,7 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 // Write renders the snapshot in the Prometheus text exposition format.
 func (s Snapshot) Write(w io.Writer) {
 	g := func(name, help string, v any) {
-		fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n%s %v\n", name, help, name, name, v)
+		_, _ = fmt.Fprintf(w, "# HELP %s %s\n# TYPE %s gauge\n%s %v\n", name, help, name, name, v)
 	}
 	g("speedtest_nodes_enabled", "Enabled nodes.", s.NodesEnabled)
 	g("speedtest_nodes_offline", "Enabled nodes without a recent heartbeat.", s.NodesOffline)
