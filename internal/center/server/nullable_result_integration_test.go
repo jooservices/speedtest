@@ -56,7 +56,7 @@ func TestNullableResultIdentityIntegration(t *testing.T) {
 		t.Fatal("known IP hook not invoked")
 	}
 	// Roll back the alert engine and the history migrations, then refuse to lose the nullable-IP contract.
-	for _, name := range []string{"alert engine", "history"} {
+	for _, name := range []string{"SSH installer", "alert engine", "history"} {
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(name+" migration rollback failed", err)
 		}

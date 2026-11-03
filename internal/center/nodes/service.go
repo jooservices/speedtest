@@ -194,6 +194,55 @@ func (s *Service) createNodeTx(ctx context.Context, tx pgx.Tx, input Input) (any
 	}, nil
 }
 
+// IssueInstallToken creates a new one-time token for an existing node. The
+// installer keeps the plaintext only in its worker and transfers it over SSH.
+func (s *Service) IssueInstallToken(ctx context.Context, nodeID string) (string, string, error) {
+	if !validUUID(nodeID) {
+		return "", "", ErrNotFound
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return "", "", err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	var nodeName string
+	err = tx.QueryRow(ctx, "SELECT name FROM nodes WHERE id=$1 FOR UPDATE", nodeID).Scan(&nodeName)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", "", ErrNotFound
+	}
+	if err != nil {
+		return "", "", err
+	}
+	token, err := s.secret("enr_")
+	if err != nil {
+		return "", "", err
+	}
+	credentialID, err := s.uuid()
+	if err != nil {
+		return "", "", err
+	}
+	if _, err := tx.Exec(ctx, "UPDATE node_credentials SET revoked_at=now() WHERE node_id=$1 AND kind='enrollment' AND consumed_at IS NULL AND revoked_at IS NULL", nodeID); err != nil {
+		return "", "", err
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO node_credentials(id,node_id,kind,token_hash,expires_at) VALUES($1,$2,'enrollment',$3,now()+$4*interval '1 second')", credentialID, nodeID, hashSecret(token), enrollmentLifetime.Seconds()); err != nil {
+		return "", "", translateDBError(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", "", err
+	}
+	return token, nodeName, nil
+}
+
+// RevokeInstallToken makes an unused installer-issued token unusable. A
+// consumed token is left as a historical record and cannot authenticate again.
+func (s *Service) RevokeInstallToken(ctx context.Context, token string) error {
+	if token == "" {
+		return nil
+	}
+	_, err := s.db.Exec(ctx, "UPDATE node_credentials SET revoked_at=now() WHERE token_hash=$1 AND kind='enrollment' AND consumed_at IS NULL AND revoked_at IS NULL", hashSecret(token))
+	return err
+}
+
 // Enroll atomically consumes a valid one-time token and replaces any existing bearer credential.
 func (s *Service) Enroll(ctx context.Context, token, name, host, agent string) (map[string]any, error) {
 	if token == "" || !validText(strings.TrimSpace(name), 1, 100) || !validText(host, 0, 255) || !validText(agent, 1, 64) {

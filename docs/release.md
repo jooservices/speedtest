@@ -20,6 +20,7 @@ Set both variables in the center's `.env` (see `.env.example`):
 ```bash
 SPEEDTEST_PUBLIC_URL=https://speedtest.example.com   # the address agents use
 SPEEDTEST_RELEASE_DIR=/opt/speedtest/dist            # the directory made by make release
+APP_KEY=...                                           # private base64 encoding of 32 random bytes
 ```
 
 The center then serves `GET /install.sh` and `GET /download/<artifact>` (only the agent
@@ -27,6 +28,10 @@ binaries, the unit and `SHA256SUMS`; nothing else in the directory is reachable)
 public URL is written into the script from configuration, never from the request, so a
 forged `Host` header cannot redirect a download. Without these variables both routes are
 absent.
+
+The owner-authenticated SSH installer also requires a valid `APP_KEY`, since its
+idempotency record covers an in-memory SSH credential request without storing an
+offline-guessable credential digest.
 
 ## Install an agent
 
@@ -39,8 +44,9 @@ curl -fsSL https://speedtest.example.com/install.sh | sudo sh -s -- --token TOKE
 The script detects the architecture (x86_64 or aarch64), downloads the agent and
 `SHA256SUMS`, **refuses to install on a checksum mismatch**, creates the `speedtest-agent`
 system user, enrols the node with the token, installs the systemd unit and starts it. The
-token is single use and short lived; it is briefly visible in the process list while
-enrolling.
+token is single use and short lived; this public bootstrap script accepts it as a
+command-line argument. The owner-authenticated SSH installer passes its fresh
+enrollment token to the agent through standard input instead.
 
 ## Tests
 

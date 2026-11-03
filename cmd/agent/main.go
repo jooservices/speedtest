@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
@@ -86,10 +87,16 @@ func runVersion(stdout io.Writer) int {
 }
 
 func runEnroll(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	return runEnrollWithInput(ctx, args, os.Stdin, stdout, stderr)
+}
+
+func runEnrollWithInput(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	fs := flag.NewFlagSet("enroll", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	center := fs.String("center", "", "command-center URL")
 	token := fs.String("token", "", "one-time enrollment token")
+	tokenStdin := fs.Bool("token-stdin", false, "read the one-time enrollment token from standard input")
+	repair := fs.Bool("repair", false, "keep an existing valid credential; replace a missing or rejected credential")
 	name := fs.String("name", "", "node name")
 	host := fs.String("host", "", "optional node host")
 	if err := fs.Parse(args); err != nil {
@@ -99,6 +106,18 @@ func runEnroll(ctx context.Context, args []string, stdout, stderr io.Writer) int
 		_, _ = fmt.Fprintln(stderr, "agent enroll: unexpected arguments:", fs.Args())
 		return 2
 	}
+	if *tokenStdin {
+		if *token != "" {
+			_, _ = fmt.Fprintln(stderr, "agent enroll: use either --token or --token-stdin")
+			return 2
+		}
+		var err error
+		*token, err = readEnrollmentToken(stdin)
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, "agent enroll: could not read enrollment token from standard input")
+			return 2
+		}
+	}
 
 	baseURL, err := url.Parse(*center)
 	if err != nil || (baseURL.Scheme != "http" && baseURL.Scheme != "https") || baseURL.Host == "" {
@@ -107,6 +126,18 @@ func runEnroll(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	}
 
 	credentialPath := getenv("SPEEDTEST_AGENT_CREDENTIAL", enroll.DefaultCredentialPath)
+
+	if *repair {
+		valid, err := existingEnrollmentValid(ctx, baseURL, credentialPath)
+		if err != nil {
+			_, _ = fmt.Fprintln(stderr, "agent enroll: could not verify existing enrollment")
+			return 1
+		}
+		if valid {
+			_, _ = fmt.Fprintln(stdout, "agent: existing enrollment is valid")
+			return 0
+		}
+	}
 
 	client := enroll.Client{
 		BaseURL: baseURL,
@@ -131,6 +162,19 @@ func runEnroll(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	_, _ = fmt.Fprintf(stdout, "agent: enrolled node %q (%s)\n", *name, result.NodeID)
 	_, _ = fmt.Fprintf(stdout, "agent: credential stored at %s\n", credentialPath)
 	return 0
+}
+
+func readEnrollmentToken(reader io.Reader) (string, error) {
+	raw, err := io.ReadAll(io.LimitReader(reader, 4097))
+	if err != nil || len(raw) == 0 || len(raw) > 4096 {
+		return "", errors.New("invalid token input")
+	}
+	token := strings.TrimSuffix(string(raw), "\n")
+	token = strings.TrimSuffix(token, "\r")
+	if token == "" || strings.TrimSpace(token) != token || strings.ContainsAny(token, "\r\n\x00") {
+		return "", errors.New("invalid token input")
+	}
+	return token, nil
 }
 
 func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int {
@@ -260,4 +304,34 @@ func getenv(key, def string) string {
 		return v
 	}
 	return def
+}
+
+// existingEnrollmentValid never places credentials in diagnostics or URLs.
+func existingEnrollmentValid(ctx context.Context, center *url.URL, path string) (bool, error) {
+	credential, err := enroll.LoadCredential(path)
+	if err != nil {
+		return false, nil
+	}
+	endpoint := *center
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/api/agent/config"
+	endpoint.RawQuery = ""
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	if err != nil {
+		return false, errors.New("invalid center address")
+	}
+	req.Header.Set("Authorization", "Bearer "+credential)
+	client := &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}
+	response, err := client.Do(req)
+	if err != nil {
+		return false, errors.New("center connection failed")
+	}
+	defer func() { _ = response.Body.Close() }()
+	switch response.StatusCode {
+	case http.StatusOK:
+		return true, nil
+	case http.StatusUnauthorized, http.StatusForbidden:
+		return false, nil
+	default:
+		return false, errors.New("center verification unavailable")
+	}
 }

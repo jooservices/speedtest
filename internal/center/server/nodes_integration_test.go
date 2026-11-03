@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -153,6 +154,23 @@ func TestNodeCredentialHTTPFlowIntegration(t *testing.T) {
 	handler.ServeHTTP(revokedResponse, revokedAgent)
 	if revokedResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked bearer status = %d", revokedResponse.Code)
+	}
+	installToken, installNodeName, err := service.IssueInstallToken(ctx, nodeID)
+	if err != nil || installNodeName != "http-integration-edge" {
+		t.Fatalf("IssueInstallToken() = node %q, err %v", installNodeName, err)
+	}
+	if _, err := service.Enroll(ctx, installToken, installNodeName, "integration-host", "speedtest-agent/installer-test"); err != nil {
+		t.Fatalf("Enroll() with installer token: %v", err)
+	}
+	revokedInstallToken, _, err := service.IssueInstallToken(ctx, nodeID)
+	if err != nil {
+		t.Fatalf("IssueInstallToken() for revoke: %v", err)
+	}
+	if err := service.RevokeInstallToken(ctx, revokedInstallToken); err != nil {
+		t.Fatalf("RevokeInstallToken(): %v", err)
+	}
+	if _, err := service.Enroll(ctx, revokedInstallToken, installNodeName, "integration-host", "speedtest-agent/installer-test"); !errors.Is(err, nodes.ErrInvalidToken) {
+		t.Fatalf("Enroll() with revoked installer token error = %v, want ErrInvalidToken", err)
 	}
 	t.Log("PASS: anonymous auth bootstrap, login, session+CSRF protected node calls, one-time enrollment, per-node bearer auth, rotation and immediate revocation")
 }
