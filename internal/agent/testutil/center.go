@@ -29,6 +29,12 @@ type Center struct {
 	enrollments []EnrollRequest
 	results     []ResultInput
 	heartbeats  []Heartbeat
+
+	configETag     string
+	config         AgentConfigFull
+	commands       []Command
+	configRequests []string
+	acks           []AckRecord
 }
 
 // Option customizes a Center created by NewCenter.
@@ -51,6 +57,20 @@ func WithNodeID(nodeID string) Option {
 	return func(c *Center) { c.nodeID = nodeID }
 }
 
+// WithConfig sets the effective configuration (and its ETag) served by
+// GET /api/agent/config.
+func WithConfig(etag string, cfg AgentConfigFull) Option {
+	return func(c *Center) {
+		c.configETag = etag
+		c.config = cfg
+	}
+}
+
+// WithCommands queues commands to be returned by GET /api/agent/commands.
+func WithCommands(cmds ...Command) Option {
+	return func(c *Center) { c.commands = append(c.commands, cmds...) }
+}
+
 // NewCenter starts an in-process HTTP server implementing the agent endpoints.
 // Callers must Close it when done.
 func NewCenter(opts ...Option) *Center {
@@ -58,6 +78,15 @@ func NewCenter(opts ...Option) *Center {
 		token:      "test-enrollment-token",
 		credential: "test-node-credential",
 		nodeID:     "test-node-1",
+		configETag: "1",
+		config: AgentConfigFull{
+			Revision:     "1",
+			Name:         "node",
+			ExpectedDown: 300,
+			ExpectedUp:   150,
+			Schedule:     ScheduleInput{Interval: 30, Offset: 0, Enabled: true},
+			Quiet:        QuietHours{Timezone: "UTC"},
+		},
 	}
 	for _, o := range opts {
 		o(c)
@@ -67,6 +96,9 @@ func NewCenter(opts ...Option) *Center {
 	mux.HandleFunc("POST /api/agent/enroll", c.handleEnroll)
 	mux.HandleFunc("POST /api/agent/results", c.handleResults)
 	mux.HandleFunc("POST /api/agent/heartbeat", c.handleHeartbeat)
+	mux.HandleFunc("GET /api/agent/config", c.handleConfig)
+	mux.HandleFunc("GET /api/agent/commands", c.handlePollCommands)
+	mux.HandleFunc("POST /api/agent/commands/{id}/ack", c.handleAck)
 
 	c.Server = httptest.NewServer(mux)
 	c.URL = c.Server.URL
@@ -107,6 +139,33 @@ func (c *Center) Heartbeats() []Heartbeat {
 	out := make([]Heartbeat, len(c.heartbeats))
 	copy(out, c.heartbeats)
 	return out
+}
+
+// ConfigRequests returns a snapshot of every If-None-Match header value the
+// double saw on GET /api/agent/config, in order.
+func (c *Center) ConfigRequests() []string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]string, len(c.configRequests))
+	copy(out, c.configRequests)
+	return out
+}
+
+// Acks returns a snapshot of every command acknowledgement the double received,
+// in order.
+func (c *Center) Acks() []AckRecord {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]AckRecord, len(c.acks))
+	copy(out, c.acks)
+	return out
+}
+
+// QueueCommand appends a command to be returned by GET /api/agent/commands.
+func (c *Center) QueueCommand(cmd Command) {
+	c.mu.Lock()
+	c.commands = append(c.commands, cmd)
+	c.mu.Unlock()
 }
 
 func (c *Center) handleEnroll(w http.ResponseWriter, r *http.Request) {
@@ -202,6 +261,62 @@ func (c *Center) authorized(r *http.Request) bool {
 	return r.Header.Get("Authorization") == "Bearer "+c.credential
 }
 
+func (c *Center) handleConfig(w http.ResponseWriter, r *http.Request) {
+	if !c.authorized(r) {
+		writeProblem(w, http.StatusUnauthorized, "missing or invalid node credential")
+		return
+	}
+
+	c.mu.Lock()
+	c.configRequests = append(c.configRequests, r.Header.Get("If-None-Match"))
+	etag := c.configETag
+	cfg := c.config
+	c.mu.Unlock()
+
+	if etag != "" && r.Header.Get("If-None-Match") == etag {
+		w.Header().Set("ETag", etag)
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	w.Header().Set("ETag", etag)
+	writeSuccess(w, http.StatusOK, cfg)
+}
+
+func (c *Center) handlePollCommands(w http.ResponseWriter, r *http.Request) {
+	if !c.authorized(r) {
+		writeProblem(w, http.StatusUnauthorized, "missing or invalid node credential")
+		return
+	}
+
+	c.mu.Lock()
+	out := make([]Command, len(c.commands))
+	copy(out, c.commands)
+	c.mu.Unlock()
+
+	writeSuccess(w, http.StatusOK, out)
+}
+
+func (c *Center) handleAck(w http.ResponseWriter, r *http.Request) {
+	if !c.authorized(r) {
+		writeProblem(w, http.StatusUnauthorized, "missing or invalid node credential")
+		return
+	}
+
+	var ack CommandAck
+	if err := json.NewDecoder(r.Body).Decode(&ack); err != nil {
+		writeProblem(w, http.StatusBadRequest, "invalid command acknowledgement")
+		return
+	}
+
+	id := r.PathValue("id")
+	c.mu.Lock()
+	c.acks = append(c.acks, AckRecord{CommandID: id, Ack: ack})
+	c.mu.Unlock()
+
+	writeSuccess(w, http.StatusOK, Command{ID: id})
+}
+
 // hasResultID reports whether a result with the same id has already been
 // recorded. Callers must hold the lock.
 func (c *Center) hasResultID(id string) bool {
@@ -256,6 +371,58 @@ type Heartbeat struct {
 // Receipt is the data of the heartbeat response.
 type Receipt struct {
 	ReceivedAt string `json:"receivedAt"`
+}
+
+// ScheduleInput is the schedule part of the effective agent configuration.
+type ScheduleInput struct {
+	Interval int  `json:"interval"`
+	Offset   int  `json:"offset"`
+	Enabled  bool `json:"enabled"`
+}
+
+// QuietHours is the daily quiet window in the effective agent configuration.
+type QuietHours struct {
+	QuietStart string `json:"quietStart"`
+	QuietEnd   string `json:"quietEnd"`
+	Timezone   string `json:"timezone"`
+}
+
+// AgentConfigFull is the effective configuration served by GET
+// /api/agent/config. Only the fields the scheduler needs are represented.
+type AgentConfigFull struct {
+	Revision     string        `json:"revision"`
+	Name         string        `json:"name"`
+	ExpectedDown float64       `json:"expectedDown"`
+	ExpectedUp   float64       `json:"expectedUp"`
+	Schedule     ScheduleInput `json:"schedule"`
+	Quiet        QuietHours    `json:"quiet"`
+}
+
+// Command is one queued control command.
+type Command struct {
+	ID        string  `json:"id"`
+	NodeID    string  `json:"nodeId"`
+	Type      string  `json:"type"`
+	Version   *string `json:"version"`
+	Status    string  `json:"status"`
+	CreatedAt string  `json:"createdAt"`
+	AckedAt   *string `json:"ackedAt"`
+	Phase     string  `json:"phase"`
+	Pct       float64 `json:"pct"`
+	ResultID  *string `json:"resultId"`
+	Error     *string `json:"error"`
+}
+
+// CommandAck is the acknowledgement body.
+type CommandAck struct {
+	Status string  `json:"status"`
+	Error  *string `json:"error,omitempty"`
+}
+
+// AckRecord is one received command acknowledgement, tagged with its command id.
+type AckRecord struct {
+	CommandID string
+	Ack       CommandAck
 }
 
 // ResultBatch is the POST /api/agent/results body.

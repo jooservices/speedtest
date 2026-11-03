@@ -10,6 +10,8 @@
 # Configuration is read by the agent from SPEEDTEST_AGENT_CONFIG and
 # SPEEDTEST_AGENT_CREDENTIAL (defaults in the program); override them in an
 # Environment= line or a drop-in rather than editing the binary.
+# Set SPEEDTEST_AGENT_CENTER to the enrollment origin in the private .env below
+# (or a drop-in). Missing/invalid center configuration refuses startup.
 # Update ReadWritePaths below if the credential is moved outside the default
 # agent directory.
 
@@ -23,6 +25,7 @@ After=network-online.target
 Type=simple
 User=speedtest-agent
 Group=speedtest-agent
+EnvironmentFile=-/etc/speedtest-agent/.env
 ExecStart=/usr/local/bin/speedtest-agent run
 Restart=always
 RestartSec=5

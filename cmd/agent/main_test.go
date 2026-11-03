@@ -235,6 +235,7 @@ func TestRunAgentSuccess(t *testing.T) {
 
 	t.Setenv("SPEEDTEST_AGENT_CONFIG", filepath.Join(dir, "config.yaml"))
 	t.Setenv("SPEEDTEST_AGENT_CREDENTIAL", credPath)
+	t.Setenv("SPEEDTEST_AGENT_CENTER", "http://127.0.0.1:1")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -274,6 +275,26 @@ func TestRunAgentMissingInterfaceFailsClearly(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "invalid network path") || !strings.Contains(stdout.String(), "missing0") || !strings.Contains(stdout.String(), "does not exist") {
 		t.Fatalf("stdout = %q, want clear missing-interface error", stdout.String())
+	}
+}
+
+func TestRunAgentMissingCenter(t *testing.T) {
+	dir := t.TempDir()
+	writeConfig(t, filepath.Join(dir, "config.yaml"), "name: n\n")
+	credPath := filepath.Join(dir, "credential")
+	writeCredential(t, credPath, "secret", 0o600)
+
+	t.Setenv("SPEEDTEST_AGENT_CONFIG", filepath.Join(dir, "config.yaml"))
+	t.Setenv("SPEEDTEST_AGENT_CREDENTIAL", credPath)
+	t.Setenv("SPEEDTEST_AGENT_CENTER", "")
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"run"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run() = %d, want 1", code)
+	}
+	if !strings.Contains(stdout.String(), "invalid center URL") {
+		t.Fatalf("stdout = %q, want invalid center URL log", stdout.String())
 	}
 }
 

@@ -1,8 +1,7 @@
 # Speed test engines
 
 `internal/agent/engine` implements `Engine.Run(ctx, Options) (Result, error)`.
-This is a library for the agent scheduler; `cmd/agent` still does not schedule
-tests. JOOST-16 adds per-run interface/source-IP options to this engine and the
+`cmd/agent` runs this library through the local scheduler. JOOST-16 adds per-run interface/source-IP options to this engine and the
 `internal/agent/netpath` coordinator, which also calls the center's existing
 `GET /api/agent/ip` endpoint on the same path. JOOST-17 owns result reporting.
 

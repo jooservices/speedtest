@@ -17,12 +17,16 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
 	agentconfig "github.com/jooservices/speedtest/internal/agent/config"
+	"github.com/jooservices/speedtest/internal/agent/control"
+	"github.com/jooservices/speedtest/internal/agent/engine"
 	"github.com/jooservices/speedtest/internal/agent/enroll"
 	"github.com/jooservices/speedtest/internal/agent/netpath"
+	"github.com/jooservices/speedtest/internal/agent/sched"
 )
 
 // version is the agent version, overridable at build time with
@@ -140,6 +144,7 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 
 	configPath := getenv("SPEEDTEST_AGENT_CONFIG", agentconfig.DefaultPath)
 	credentialPath := getenv("SPEEDTEST_AGENT_CREDENTIAL", enroll.DefaultCredentialPath)
+	centerRaw := getenv("SPEEDTEST_AGENT_CENTER", "")
 
 	cfg, err := agentconfig.Load(configPath)
 	if err != nil {
@@ -147,8 +152,10 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return 1
 	}
 
-	// LoadCredential also refuses to start when the file is world-readable.
-	if _, err := enroll.LoadCredential(credentialPath); err != nil {
+	// LoadCredential also refuses to start when the file is world-readable. The
+	// value is a secret and is only handed to the control client.
+	credential, err := enroll.LoadCredential(credentialPath)
+	if err != nil {
 		logger.Error("invalid credential", "credential", credentialPath, "error", err.Error())
 		return 1
 	}
@@ -157,6 +164,35 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		logger.Error("invalid network path", "error", err.Error())
 		return 1
 	}
+
+	centerURL, err := url.Parse(centerRaw)
+	if err != nil || centerRaw == "" || (centerURL.Scheme != "http" && centerURL.Scheme != "https") || centerURL.Host == "" || centerURL.User != nil || centerURL.RawQuery != "" || centerURL.Fragment != "" {
+		logger.Error("invalid center URL", "error", "SPEEDTEST_AGENT_CENTER must be an absolute http or https URL without userinfo, query or fragment")
+		return 1
+	}
+
+	runner, err := cfg.NewEngine()
+	if err != nil {
+		logger.Error("invalid engine configuration", "error", err.Error())
+		return 1
+	}
+
+	// The local config.yaml only carries the bootstrap interval; offset, quiet
+	// hours and the enabled flag come from the center once configuration syncs.
+	scheduler := sched.New(engineRunner{
+		engine: runner,
+		binding: netpath.Binding{
+			Interface: cfg.NetworkInterface,
+			SourceIP:  cfg.SourceIP,
+		},
+	}, logger)
+	scheduler.SetSchedule(sched.Schedule{Interval: cfg.Interval, Offset: 0, Enabled: true})
+
+	ctl := control.New(control.Client{
+		BaseURL:    centerURL,
+		Credential: credential,
+		Agent:      "speedtest-agent/" + version,
+	}, scheduler, control.WithLogger(logger))
 
 	logger.Info("agent started",
 		"version", version,
@@ -167,9 +203,39 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		"network_path", path.Description(),
 	)
 
-	<-ctx.Done()
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_ = scheduler.Run(ctx)
+	}()
+	go func() {
+		defer wg.Done()
+		_ = ctl.Run(ctx)
+	}()
+	wg.Wait()
+
 	logger.Info("agent stopped", "name", cfg.Name)
 	return 0
+}
+
+// engineRunner adapts the speed-test engine to the scheduler's runner.
+type engineRunner struct {
+	engine  engine.Engine
+	binding netpath.Binding
+}
+
+func (r engineRunner) Run(ctx context.Context) error {
+	path, err := netpath.Resolve(r.binding)
+	if err != nil {
+		return err
+	}
+	opts := engine.Options{InterfaceName: path.Interface}
+	if path.SourceIP != nil {
+		opts.SourceIP = path.SourceIP.String()
+	}
+	_, err = r.engine.Run(ctx, opts)
+	return err
 }
 
 func runUninstall(args []string, stdout, stderr io.Writer) int {
