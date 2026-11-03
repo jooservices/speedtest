@@ -41,6 +41,12 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, direction string) error {
 	if direction != "up" && direction != "down" {
 		return errors.New("migration direction must be up or down")
 	}
+	if direction == "down" {
+		var applied bool
+		if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM goose_db_version WHERE is_applied AND version_id>0)`).Scan(&applied); err != nil || !applied {
+			return errors.New("PostgreSQL migration failed; no migration is applied")
+		}
+	}
 	sqlDB := stdlib.OpenDBFromPool(pool)
 	defer func() { _ = sqlDB.Close() }()
 	locker, lockErr := lock.NewPostgresSessionLocker()

@@ -3,9 +3,9 @@
 [openapi.yaml](openapi.yaml) is the OpenAPI 3.1 source of truth for JOOST-9.
 It defines the product API endpoints; the static `ui/` preview still runs on
 local demo state. The command center also exposes the operational `/healthz`
-and `/readyz` checks outside that product API contract. Readiness currently
-reports the database as not configured because the server has not injected a
-database pinger.
+and `/readyz` checks outside that product API contract. When database settings
+are configured, readiness pings PostgreSQL and reports `ok` or `unavailable`;
+without database settings it reports `not configured`.
 See the [OpenAPI specification](https://spec.openapis.org/oas/v3.1.0) and
 [Redocly lint command](https://redocly.com/docs/cli/commands/lint).
 
@@ -58,11 +58,23 @@ revoked credentials on every request. Rotation revokes the old credential
 immediately; the owner securely delivers the new credential to the node.
 A lost enrollment response requires a newly issued one-time token.
 
-The Settings enrollment key is a different bearer secret. It is accepted **only**
-by `POST /api/agent/tokens`, allowing the install script to create a node and
-single-use token without a UI session. Rotating this key does not revoke already
-issued single-use tokens or existing node credentials. Long-lived keys and
-credentials are disclosed only at issuance, never through a general GET.
+Node creation and credential issuance require an `Idempotency-Key`. The center
+replays the same response for the same owner, operation, key and request body
+for 24 hours; reusing the key with a different body returns 409. Replay payloads
+are encrypted with the 32-byte base64 `APP_KEY`; the enrollment token and node
+credentials remain hashed in `node_credentials`. Set `APP_KEY` in the center's
+private `.env` before enabling issuance. The Settings enrollment key is issued
+once by `POST /api/settings/enrolment-key`, stored as a hash in the private
+Settings secret slot, and accepted only
+by `POST /api/agent/tokens`. The latter can create a node and one-time token
+without a UI session, for install-script bootstrap. It cannot read or modify
+existing nodes. The node bearer middleware checks revocation on each agent API
+request and applies a process-local token bucket per node (default 120 requests
+per minute with a burst of 20; configure `SPEEDTEST_AGENT_REQUESTS_PER_MINUTE`).
+
+Rotating the Settings enrollment key does not revoke already issued single-use
+tokens or existing node credentials. Long-lived keys and credentials are
+disclosed only at issuance, never through a general GET.
 The public `/install.sh` contains no credentials. All other endpoints require
 session or node authentication as declared in OpenAPI; public login/bootstrap
 and token exchange are explicit exceptions.

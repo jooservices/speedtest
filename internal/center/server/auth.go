@@ -55,6 +55,8 @@ type retryAfterError interface {
 	RetryAfter() time.Duration
 }
 
+type ownerIdentityContextKey struct{}
+
 // serveAuth dispatches the four owner auth operations. All mutating methods
 // validate same-origin requests, the session cookie and its CSRF token.
 func (s *serverAuth) serve(w http.ResponseWriter, r *http.Request) {
@@ -107,12 +109,13 @@ func (s *serverAuth) serve(w http.ResponseWriter, r *http.Request) {
 }
 
 type serverAuth struct {
-	service           authService
+	service           AuthService
 	requireHTTPS      bool
 	trustedProxyCIDRs string
 }
 
-type authService interface {
+// AuthService is the session and owner authentication contract used by the server.
+type AuthService interface {
 	Bootstrap(context.Context) (auth.SessionView, error)
 	Session(context.Context, string) (auth.SessionView, error)
 	Login(context.Context, string, string, string, string) (auth.SessionView, error)
@@ -126,6 +129,41 @@ func (s *serverAuth) isHTTPS(r *http.Request) bool {
 
 func (s *serverAuth) sameOrigin(r *http.Request) bool {
 	return sameOriginWithScheme(r, s.isHTTPS(r))
+}
+
+// requireOwner applies the same origin, session and CSRF checks used by the
+// owner authentication routes to session-protected node operations.
+func (s *serverAuth) requireOwner(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.service == nil {
+			writeProblemResponse(w, http.StatusServiceUnavailable, problemResponse{
+				Type: "/problems/servererror", Title: "Service unavailable", Status: http.StatusServiceUnavailable,
+				Detail: "Authentication service is not configured.", TraceID: requestIDFromContext(r.Context()),
+			})
+			return
+		}
+		if s.requireHTTPS && !s.isHTTPS(r) {
+			writeProblemResponse(w, http.StatusForbidden, problemResponse{
+				Type: "/problems/forbidden", Title: "HTTPS required", Status: http.StatusForbidden,
+				Detail: "HTTPS is required outside local and test environments.", TraceID: requestIDFromContext(r.Context()),
+			})
+			return
+		}
+		if !s.sameOrigin(r) {
+			writeForbidden(w, r)
+			return
+		}
+		_, session, ok := s.validSessionAndCSRF(w, r)
+		if !ok {
+			return
+		}
+		if session.Identity == nil || session.Identity.ID == "" {
+			writeUnauthorized(w, r)
+			return
+		}
+		ctx := context.WithValue(r.Context(), ownerIdentityContextKey{}, session.Identity.ID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
 }
 
 func (s *serverAuth) setCookie(w http.ResponseWriter, r *http.Request, session auth.SessionView) {
@@ -398,7 +436,8 @@ func requestIsHTTPS(r *http.Request, trustedProxyCIDRs string) bool {
 	if peer == nil || !containsIP(trustedProxyNetworks(trustedProxyCIDRs), peer) {
 		return false
 	}
-	return strings.EqualFold(strings.TrimSpace(r.Header.Get("X-Forwarded-Proto")), "https")
+	forwardedProto := r.Header.Values("X-Forwarded-Proto")
+	return len(forwardedProto) == 1 && strings.EqualFold(strings.TrimSpace(forwardedProto[0]), "https")
 }
 
 func sameOrigin(r *http.Request) bool {

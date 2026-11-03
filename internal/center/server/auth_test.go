@@ -345,7 +345,7 @@ func TestAuthHTTPHandlesMalformedAndUnknownRequests(t *testing.T) {
 	}{
 		{method: http.MethodPatch, path: "/api/auth/me", want: http.StatusMethodNotAllowed, allow: http.MethodGet},
 		{method: http.MethodGet, path: "/api/auth/unknown", want: http.StatusNotFound},
-		{method: http.MethodGet, path: "/api/nodes", want: http.StatusNotFound},
+		{method: http.MethodGet, path: "/api/nodes", want: http.StatusMethodNotAllowed, allow: http.MethodPost},
 	} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest(tc.method, "http://speedtest.local"+tc.path, nil))
@@ -539,7 +539,7 @@ func (e rateLimitWithRetry) Error() string             { return "rate limited" }
 func (e rateLimitWithRetry) Unwrap() error             { return auth.ErrRateLimited }
 func (e rateLimitWithRetry) RetryAfter() time.Duration { return e.wait }
 
-func serveAuthTestRequest(service authService, method, path, body string, withCookie bool) *httptest.ResponseRecorder {
+func serveAuthTestRequest(service AuthService, method, path, body string, withCookie bool) *httptest.ResponseRecorder {
 	response := httptest.NewRecorder()
 	request := httptest.NewRequest(method, "http://speedtest.local"+path, strings.NewReader(body))
 	if withCookie {

@@ -1,6 +1,8 @@
 package config
 
 import (
+	"encoding/base64"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +22,8 @@ var allEnvVars = []string{
 	"SPEEDTEST_DB_USER",
 	"SPEEDTEST_DB_PASSWORD",
 	"SPEEDTEST_DB_SSLMODE",
+	"APP_KEY",
+	"SPEEDTEST_AGENT_REQUESTS_PER_MINUTE",
 }
 
 // resetEnv clears every known variable so the documented defaults apply.
@@ -54,8 +58,9 @@ func TestLoadCenterDefaults(t *testing.T) {
 			Password: "",
 			SSLMode:  "disable",
 		},
+		AgentRequestsPerMinute: 120,
 	}
-	if cfg != want {
+	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("LoadCenter() = %+v, want %+v", cfg, want)
 	}
 }
@@ -75,6 +80,9 @@ func TestLoadCenterOverrides(t *testing.T) {
 	t.Setenv("SPEEDTEST_DB_USER", "speedtest_app")
 	t.Setenv("SPEEDTEST_DB_PASSWORD", "s3cret")
 	t.Setenv("SPEEDTEST_DB_SSLMODE", "require")
+	t.Setenv("SPEEDTEST_AGENT_REQUESTS_PER_MINUTE", "240")
+	encodedKey := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
+	t.Setenv("APP_KEY", "base64:"+encodedKey)
 
 	cfg, err := LoadCenter()
 	if err != nil {
@@ -97,8 +105,10 @@ func TestLoadCenterOverrides(t *testing.T) {
 			Password: "s3cret",
 			SSLMode:  "require",
 		},
+		AppKey:                 []byte(strings.Repeat("k", 32)),
+		AgentRequestsPerMinute: 240,
 	}
-	if cfg != want {
+	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("LoadCenter() = %+v, want %+v", cfg, want)
 	}
 }
@@ -133,6 +143,16 @@ func TestLoadCenterInvalid(t *testing.T) {
 			name:    "sslmode unknown",
 			env:     map[string]string{"SPEEDTEST_DB_SSLMODE": "enabled"},
 			wantErr: "SPEEDTEST_DB_SSLMODE must be one of disable, allow, prefer, require, verify-ca, verify-full",
+		},
+		{
+			name:    "agent rate limit invalid",
+			env:     map[string]string{"SPEEDTEST_AGENT_REQUESTS_PER_MINUTE": "0"},
+			wantErr: "SPEEDTEST_AGENT_REQUESTS_PER_MINUTE must be between",
+		},
+		{
+			name:    "app key invalid",
+			env:     map[string]string{"APP_KEY": "not-base64"},
+			wantErr: "APP_KEY must be base64 encoding of exactly 32 bytes",
 		},
 		{
 			name:    "unknown app environment",

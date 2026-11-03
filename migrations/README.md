@@ -1,6 +1,8 @@
 # PostgreSQL migrations
 
-`00001_initial.sql` creates the initial schema. SQL files are embedded by
+`00001_initial.sql` creates the initial schema. `00002_node_enrollment_idempotency.sql`
+adds encrypted response replay records used by retryable credential issuance.
+SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file
 with `-- +goose Up` and `-- +goose Down` sections for each schema change; never
@@ -70,6 +72,7 @@ that a subsequent up can reapply version 1.
 | `alert_events` | Alert history, resolution and acknowledgement |
 | `alert_state` | Per-rule/per-node evaluation state |
 | `settings` | Public JSON or encrypted secret bytes, revision |
+| `api_idempotency` | Hashed request identity and encrypted one-time issuance responses, expiring after 24 hours |
 | `agent_commands` | Per-node command lifecycle and progress |
 
 All IDs are UUIDs. A result ID has **no server default**, so retries cannot

@@ -19,6 +19,7 @@ import (
 	"github.com/jooservices/speedtest"
 	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/db"
+	"github.com/jooservices/speedtest/internal/center/nodes"
 	"github.com/jooservices/speedtest/internal/center/server"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
@@ -53,7 +54,7 @@ func run(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writ
 	if err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
-	return serve(ctx, args, logger, stderr, cfg, nil, nil)
+	return serve(ctx, args, logger, stderr, cfg, nil, nil, nil)
 }
 
 func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer) error {
@@ -86,7 +87,8 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 	if err != nil {
 		return err
 	}
-	return serve(ctx, args, logger, stderr, cfg, service, poolPinger{pool: pool})
+	nodeService := nodes.NewService(pool, cfg.AppKey)
+	return serve(ctx, args, logger, stderr, cfg, service, nodeService, poolPinger{pool: pool})
 }
 
 func validateCenterArguments(args []string, cfg config.CenterConfig, stderr io.Writer) error {
@@ -107,7 +109,7 @@ type poolPinger struct{ pool *pgxpool.Pool }
 
 func (p poolPinger) PingContext(ctx context.Context) error { return p.pool.Ping(ctx) }
 
-func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer, cfg config.CenterConfig, authService *auth.Service, pinger server.Pinger) error {
+func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer, cfg config.CenterConfig, authService *auth.Service, nodeService server.NodeCredentialService, pinger server.Pinger) error {
 
 	flags := flag.NewFlagSet("center", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -139,6 +141,8 @@ func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Wr
 		Auth:              authService,
 		RequireHTTPS:      cfg.AppEnv != "local" && cfg.AppEnv != "test",
 		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
+		NodeCredentials:   nodeService,
+		AgentRateLimit:    cfg.AgentRequestsPerMinute,
 	})
 	logger.Info("command center listening",
 		"address", listener.Addr().String(),
