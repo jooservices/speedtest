@@ -74,6 +74,7 @@ export function steps({ page, stack, startAgent, query, problems }) {
             await S.open(hash, title);
             await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
             await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+            if (process.env.E2E_SHOTS) { await page.evaluate(() => new Promise(r => setTimeout(r, 700))); await page.screenshot({ path: `${process.env.E2E_SHOTS}/${theme}-${width}-${title.replaceAll(/\W+/g, '_')}.png`, fullPage: false }); }
             const overflow = await page.evaluate(() => {
               const wide = [];
               for (const el of document.querySelectorAll('.content *')) {
@@ -293,6 +294,30 @@ export function steps({ page, stack, startAgent, query, problems }) {
       await page.getByRole('button', { name: 'Toggle theme' }).click();
       await page.waitForFunction(t => document.documentElement.getAttribute('data-theme') !== t, flipped);
       await page.waitForLoadState('networkidle');
+    },
+
+    // Keyboard and screen-reader basics on every page: controls have names, the keyboard reaches them, one h1.
+    async accessibilityBasics() {
+      for (const [hash, title] of [['#/', 'Dashboard'], ['#/nodes', 'Nodes'], ['#/history', 'Results'], ['#/stats', 'Statistics'], ['#/network', 'IP & location'], ['#/schedules', 'Schedules'], ['#/alerts', 'Alerts'], ['#/settings', 'Settings']]) {
+        await S.open(hash, title);
+        await page.waitForLoadState('networkidle');
+        const problems = await page.evaluate(() => {
+          const out = [];
+          const name = el => (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || el.textContent || '').trim()
+            || (el.labels && el.labels.length ? 'label' : '') || (el.querySelector && el.querySelector('img[alt]:not([alt=""])') ? 'img' : '');
+          for (const el of document.querySelectorAll('button, a[href], input:not([type=hidden]), select, textarea, [role=button], [role=tab]')) {
+            if (el.closest('.leaflet-control-container, [hidden]')) continue;
+            if (!name(el)) out.push(`${el.tagName.toLowerCase()}.${el.className} has no accessible name`);
+          }
+          if (document.querySelectorAll('h1').length !== 1) out.push(`${document.querySelectorAll('h1').length} h1 elements`);
+          if (!document.documentElement.lang) out.push('html has no lang');
+          return out;
+        });
+        assert.deepEqual(problems, [], `${title}: ${problems.join('; ')}`);
+        await page.keyboard.press('Tab'); await page.keyboard.press('Tab'); await page.keyboard.press('Tab');
+        const focused = await page.evaluate(() => document.activeElement && document.activeElement !== document.body ? document.activeElement.tagName : '');
+        assert.ok(focused, `${title}: Tab does not move focus into the page`);
+      }
     },
 
     // The center sends a test message through the channel and the owner sees the outcome.
