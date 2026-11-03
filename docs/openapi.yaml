@@ -449,10 +449,7 @@ paths:
         - SessionCookie: []
       responses:
         "204":
-          description: No content; session cookie is rotated.
-          headers:
-            Set-Cookie:
-              $ref: "#/components/headers/SetCookie"
+          description: No content.
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
