@@ -38,12 +38,22 @@ type Controller struct {
 	ApplyConfig func(AgentConfig, sched.Schedule) error
 	// RunCommand returns current asynchronous run_now progress on redelivery.
 	RunCommand func(context.Context, Command) CommandAck
-	interval   time.Duration
-	now        func() time.Time
-	startedAt  time.Time
+	// UpdateResult supplies the latest self-update outcome for the heartbeat.
+	UpdateResult func() *UpdateResult
+	// HeartbeatOK is called after each successful heartbeat; a freshly updated agent uses it to confirm itself.
+	HeartbeatOK func()
+	// OfferUpdate is called with the latest configuration so the agent can start a self-update.
+	OfferUpdate func(AgentConfig)
+	// UpdateAgent handles an owner's update_agent command against the freshly fetched configuration.
+	UpdateAgent func(Command, AgentConfig) CommandAck
+	interval    time.Duration
+	now         func() time.Time
+	startedAt   time.Time
 
-	etag     string
-	commands *commandStore
+	etag       string
+	lastConfig AgentConfig
+	haveConfig bool
+	commands   *commandStore
 }
 
 // Option customizes a Controller created by New.
@@ -126,13 +136,19 @@ func (c *Controller) heartbeat(ctx context.Context) {
 		s := t.UTC().Format(time.RFC3339)
 		lastTest = &s
 	}
-	err := c.Client.Heartbeat(ctx, Heartbeat{
-		Agent:    c.Client.Agent,
-		Uptime:   uptime,
-		LastTest: lastTest,
-	})
-	if err != nil && ctx.Err() == nil {
-		c.Logger.Warn("heartbeat failed", "error", err.Error())
+	hb := Heartbeat{Agent: c.Client.Agent, Uptime: uptime, LastTest: lastTest}
+	if c.UpdateResult != nil {
+		hb.UpdateResult = c.UpdateResult()
+	}
+	err := c.Client.Heartbeat(ctx, hb)
+	if err != nil {
+		if ctx.Err() == nil {
+			c.Logger.Warn("heartbeat failed", "error", err.Error())
+		}
+		return
+	}
+	if c.HeartbeatOK != nil {
+		c.HeartbeatOK()
 	}
 }
 
@@ -146,6 +162,9 @@ func (c *Controller) syncConfig(ctx context.Context) {
 		return
 	}
 	if notModified {
+		if c.OfferUpdate != nil && c.haveConfig {
+			c.OfferUpdate(c.lastConfig)
+		}
 		return
 	}
 	sch, err := cfg.schedule()
@@ -162,6 +181,10 @@ func (c *Controller) syncConfig(ctx context.Context) {
 		c.Scheduler.SetSchedule(sch)
 	}
 	c.etag = etag
+	c.lastConfig, c.haveConfig = cfg, true
+	if c.OfferUpdate != nil {
+		c.OfferUpdate(cfg)
+	}
 }
 
 func (c *Controller) pollCommands(ctx context.Context) {
@@ -229,6 +252,15 @@ func (c *Controller) execute(ctx context.Context, cmd Command) CommandAck {
 		return CommandAck{Status: "succeeded", Phase: "done", Pct: 100}
 	case "update_config":
 		return c.updateConfig(ctx)
+	case "update_agent":
+		if c.UpdateAgent == nil {
+			return CommandAck{Status: "failed", Error: strPtr("self-update is not available on this agent")}
+		}
+		cfg, _, _, err := c.Client.Config(ctx, "")
+		if err != nil {
+			return CommandAck{Status: "failed", Error: strPtr("could not read the advertised release")}
+		}
+		return c.UpdateAgent(cmd, cfg)
 	default:
 		return CommandAck{Status: "failed", Error: strPtr("unsupported command: " + cmd.Type)}
 	}

@@ -377,7 +377,7 @@ func TestControllerRedeliveredCommandNotReexecuted(t *testing.T) {
 }
 
 func TestControllerUnsupportedCommandAckFailed(t *testing.T) {
-	center := testutil.NewCenter(testutil.WithCommands(testutil.Command{ID: "c9", Type: "update_agent"}))
+	center := testutil.NewCenter(testutil.WithCommands(testutil.Command{ID: "c9", Type: "reboot"}))
 	t.Cleanup(center.Close)
 
 	fake := &fakeScheduler{}
