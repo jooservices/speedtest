@@ -702,48 +702,6 @@ paths:
           schema:
             $ref: "#/components/schemas/ID"
         - $ref: "#/components/parameters/CSRF"
-  /api/nodes/{id}/enrolment-token:
-    post:
-      operationId: reissueToken
-      tags:
-        - Nodes
-      summary: Issue replacement one-time enrollment token
-      description: Invalidates previous unused token; expires in 24h. Successful exchange replaces any
-        existing credential.
-      security:
-        - SessionCookie: []
-      responses:
-        "201":
-          description: Created
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/reissueTokenResponse"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "404":
-          $ref: "#/components/responses/NotFound"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        "422":
-          $ref: "#/components/responses/Validation"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-        "500":
-          $ref: "#/components/responses/ServerError"
-      parameters:
-        - name: id
-          in: path
-          required: true
-          description: Resource identifier.
-          schema:
-            $ref: "#/components/schemas/ID"
-        - $ref: "#/components/parameters/CSRF"
-        - $ref: "#/components/parameters/Idempotency"
   /api/agent/results:
     post:
       operationId: ingestResults
@@ -2424,106 +2382,6 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Node"
-  /api/ip/service:
-    get:
-      operationId: getGeoStatus
-      tags:
-        - IP
-      summary: Read location service health metadata
-      description: Read location service health metadata.
-      security:
-        - SessionCookie: []
-      responses:
-        "200":
-          description: Success
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/getGeoStatusResponse"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "422":
-          $ref: "#/components/responses/Validation"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-        "500":
-          $ref: "#/components/responses/ServerError"
-  /api/ip/database-updates:
-    post:
-      operationId: updateGeoDatabase
-      tags:
-        - IP
-      summary: Queue location database update
-      description: Queue location database update.
-      security:
-        - SessionCookie: []
-      responses:
-        "202":
-          description: Accepted; poll Location
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/updateGeoDatabaseResponse"
-          headers:
-            Location:
-              $ref: "#/components/headers/Location"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        "422":
-          $ref: "#/components/responses/Validation"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-        "500":
-          $ref: "#/components/responses/ServerError"
-      parameters:
-        - $ref: "#/components/parameters/CSRF"
-        - $ref: "#/components/parameters/Idempotency"
-  /api/ip/refreshes:
-    post:
-      operationId: refreshLocations
-      tags:
-        - IP
-      summary: Queue refresh of remembered locations
-      description: Refresh configured cache chain with bounded provider rate limits; poll /api/jobs/{id}.
-      security:
-        - SessionCookie: []
-      responses:
-        "202":
-          description: Accepted; poll Location
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/refreshLocationsResponse"
-          headers:
-            Location:
-              $ref: "#/components/headers/Location"
-        "400":
-          $ref: "#/components/responses/BadRequest"
-        "401":
-          $ref: "#/components/responses/Unauthorized"
-        "403":
-          $ref: "#/components/responses/Forbidden"
-        "409":
-          $ref: "#/components/responses/Conflict"
-        "422":
-          $ref: "#/components/responses/Validation"
-        "429":
-          $ref: "#/components/responses/RateLimited"
-        "500":
-          $ref: "#/components/responses/ServerError"
-      parameters:
-        - $ref: "#/components/parameters/CSRF"
-        - $ref: "#/components/parameters/Idempotency"
   /api/jobs/{id}:
     get:
       operationId: getJob
@@ -5248,8 +5106,13 @@ components:
           default: ""
         centerUrl:
           type: string
-          description: Configured public HTTPS origin; HTTP permitted only for local/test.
-          format: uri
+          description: Configured public HTTPS origin (empty when not configured); HTTP permitted only
+            for local/test.
+          anyOf:
+            - type: string
+              format: uri
+            - type: string
+              const: ""
         geoKeyConfigured:
           type: boolean
         enrollKeyConfigured:
@@ -5376,8 +5239,13 @@ components:
           default: ""
         centerUrl:
           type: string
-          description: Configured public HTTPS origin; HTTP permitted only for local/test.
-          format: uri
+          description: Configured public HTTPS origin (empty when not configured); HTTP permitted only
+            for local/test.
+          anyOf:
+            - type: string
+              format: uri
+            - type: string
+              const: ""
         geoKey:
           $ref: "#/components/schemas/Secret"
         notify:
