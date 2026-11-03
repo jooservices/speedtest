@@ -73,7 +73,7 @@ export function steps({ page, stack, startAgent, query, problems }) {
           for (const [hash, title] of routes) {
             await S.open(hash, title);
             await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
-            await page.waitForTimeout(150);
+            await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
             const overflow = await page.evaluate(() => {
               const wide = [];
               for (const el of document.querySelectorAll('.content *')) {
@@ -237,6 +237,52 @@ export function steps({ page, stack, startAgent, query, problems }) {
       assert.ok(!(await page.content()).includes(key.trim()), 'the key is not shown again after a reload');
     },
 
+    // Statistics: every section draws from the loaded results and the metric switch changes the table.
+    async statisticsPage() {
+      await S.open('#/stats', 'Statistics');
+      await page.getByRole('heading', { name: 'Summary by node' }).waitFor();
+      await page.getByRole('columnheader', { name: 'Average' }).waitFor();
+      const before = await page.locator('table').first().innerText();
+      await page.getByRole('tab', { name: 'Upload' }).first().click();
+      await page.getByRole('heading', { name: 'Summary by node' }).waitFor();
+      assert.notEqual(await page.locator('table').first().innerText(), before, 'switching to upload changes the figures');
+      for (const section of ['Trend', 'Time of day', 'Week at a glance', 'Distribution']) await page.getByRole('heading', { name: section }).waitFor();
+      await S.expectNoLoadError();
+    },
+
+    // IP & location: the recorded addresses are listed and the lookup asks the center.
+    async ipPage() {
+      await S.open('#/network', 'IP & location');
+      await page.getByRole('heading', { name: 'Every address seen' }).waitFor();
+      await page.getByRole('cell', { name: '203.0.113.11' }).first().waitFor();
+      await page.getByLabel('IP address to look up').fill('not an address');
+      await page.getByRole('button', { name: 'Look up' }).click();
+      await page.getByText('Enter a valid IPv4 address').waitFor();
+      await page.getByLabel('IP address to look up').fill('203.0.113.11');
+      await page.getByRole('button', { name: 'Look up' }).click();
+      await page.getByText('Hanoi').first().waitFor();
+      await page.getByRole('cell', { name: '203.0.113.11' }).first().click();
+      await page.getByRole('heading', { name: 'IP address details' }).waitFor();
+    },
+
+    // The top-bar button flips the theme and the choice survives a reload (stored on the center).
+    async themeSwitch() {
+      await S.open('#/', 'Dashboard');
+      const theme = () => page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+      const start = await theme();
+      await page.getByRole('button', { name: 'Toggle theme' }).click();
+      await page.waitForFunction(t => document.documentElement.getAttribute('data-theme') !== t, start);
+      const flipped = await theme();
+      assert.notEqual(flipped, start);
+      await page.waitForLoadState('networkidle');
+      await page.reload();
+      await heading('Dashboard').waitFor();
+      assert.equal(await theme(), flipped, 'the theme survives a reload');
+      await page.getByRole('button', { name: 'Toggle theme' }).click();
+      await page.waitForFunction(t => document.documentElement.getAttribute('data-theme') !== t, flipped);
+      await page.waitForLoadState('networkidle');
+    },
+
     // The center sends a test message through the channel and the owner sees the outcome.
     async notificationTest(receiver) {
       await S.open('#/settings', 'Settings');
@@ -245,7 +291,7 @@ export function steps({ page, stack, startAgent, query, problems }) {
       await page.getByLabel('URL for Webhook').blur();
       await toast('Saved').waitFor();
       await page.getByLabel('Enable Webhook').check({ force: true });
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle');
       await page.locator('.setting').filter({ hasText: 'Webhook' }).getByRole('button', { name: 'Send a test' }).click();
       await toast('Test message sent to Webhook').waitFor({ timeout: 30000 });
       assert.ok(receiver.bodies.length >= 1, 'the receiver got the message');

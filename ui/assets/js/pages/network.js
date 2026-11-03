@@ -77,23 +77,36 @@
 
     /* ---- lookup + provider ---- */
     var resBox = h('div', { class: 'mt' });
+    function showGeo(g) {
+      resBox.appendChild(g ? h('div', { class: 'card card-pad' }, h('div', { class: 'row between' }, h('b', { class: 'mono' }, g.ip), U.chip(g.source || 'database', 'info')),
+        U.kv([['Location', geoLine(g) + ' (' + g.lat + ', ' + g.lon + ')'], ['Provider', g.isp + ' · AS' + g.asn], ['Accuracy', 'About ' + g.radiusKm + ' km']]))
+        : U.callout(ST.demo ? 'This preview only knows the sample addresses used by the demo nodes. The real service looks up any public address.' : 'No location is known for this address.', 'warn', 'info'));
+    }
     function doLookup(v) {
       U.clear(resBox);
       v = v.trim();
       if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(v) || v.split('.').some(function (p) { return +p > 255; })) { resBox.appendChild(U.callout('Enter a valid IPv4 address, for example 203.0.113.57.', 'crit', 'alert')); return; }
-      var g = ST.geo(v);
-      resBox.appendChild(g ? h('div', { class: 'card card-pad' }, h('div', { class: 'row between' }, h('b', { class: 'mono' }, g.ip), U.chip(g.source, 'info')),
-        U.kv([['Location', geoLine(g) + ' (' + g.lat + ', ' + g.lon + ')'], ['Provider', g.isp + ' · AS' + g.asn], ['Accuracy', 'About ' + g.radiusKm + ' km']]))
-        : U.callout('This preview only knows the sample addresses used by the demo nodes. The real service looks up any public address.', 'warn', 'info'));
+      if (ST.demo) { showGeo(ST.geo(v)); return; }
+      var asked = v;
+      resBox.appendChild(h('p', { class: 'hint', role: 'status' }, 'Looking up…'));
+      ST.api.request('/api/ip/lookup?ip=' + encodeURIComponent(v)).then(function (res) {
+        if (q.lookup.trim() !== asked) return;
+        U.clear(resBox); showGeo(res.data);
+      }, function (err) {
+        if (q.lookup.trim() !== asked) return;
+        U.clear(resBox); resBox.appendChild(U.callout(err.message || 'The lookup failed. Try again.', 'crit', 'alert'));
+      });
     }
     var inp = U.input(q.lookup, function (v) { q.lookup = v; }, { placeholder: '203.0.113.57', 'aria-label': 'IP address to look up', onKeydown: function (e) { if (e.key === 'Enter') doLookup(q.lookup); } });
     var known = {}; nodes.forEach(function (n) { hist[n.id] = hist[n.id] || ST.ipHistory(n.id); hist[n.id].ips.forEach(function (e) { known[e.ip] = 1; }); });
-    var providerCard = U.card('Location service', 'Addresses are looked up once, then remembered, so a repeated address never costs another lookup.', h('div', { class: 'stack' },
+    var lookupBox = h('div', null, h('div', { class: 'label', style: 'margin-bottom:6px' }, 'Look up an address'), h('div', { class: 'row' }, inp, U.btn('Look up', { icon: 'search', onClick: function () { doLookup(q.lookup); } })), resBox);
+    var providerCard = ST.demo ? U.card('Location service', 'Addresses are looked up once, then remembered, so a repeated address never costs another lookup.', h('div', { class: 'stack' },
       U.kv([['Primary', 'MaxMind GeoLite2 City + ASN (offline database)'], ['Database updated', '28 Oct 2026'], ['Fallback', 'ip-api.com (used when the database has no answer)'], ['Addresses remembered', F.num(Object.keys(known).length)]]),
       h('div', { class: 'row wrap' },
         U.btn('Update database', { icon: 'refresh', onClick: function (e) { var b = e.currentTarget; b.disabled = true; setTimeout(function () { b.disabled = false; U.toast('Location database is up to date'); }, 1100); } }),
         U.btn('Refresh all locations', { onClick: function (e) { var b = e.currentTarget; b.disabled = true; setTimeout(function () { b.disabled = false; U.toast('Re-checked ' + Object.keys(known).length + ' addresses'); }, 1300); } })),
-      h('div', null, h('div', { class: 'label', style: 'margin-bottom:6px' }, 'Look up an address'), h('div', { class: 'row' }, inp, U.btn('Look up', { icon: 'search', onClick: function () { doLookup(q.lookup); } })), resBox)));
+      lookupBox))
+      : U.card('Look up an address', 'Addresses are looked up once, then remembered (' + F.num(Object.keys(known).length) + ' so far), so a repeated address never costs another lookup.', lookupBox);
     root.appendChild(h('div', { class: 'mt' }, providerCard));
     if (q.lookup) doLookup(q.lookup);
   };
