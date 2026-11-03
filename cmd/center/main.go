@@ -137,6 +137,8 @@ func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Wr
 		return fmt.Errorf("listen on configured address: %w", err)
 	}
 
+	defer func() { _ = listener.Close() }()
+
 	var installHandler http.Handler
 	if cfg.PublicURL != "" {
 		installHandler, err = install.Handler(install.Config{PublicURL: cfg.PublicURL, ReleaseDir: cfg.ReleaseDir})

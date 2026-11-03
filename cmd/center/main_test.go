@@ -427,3 +427,18 @@ func TestStartupAndSeedFailClosedOnMalformedEnvironmentFile(t *testing.T) {
 		t.Fatal("seed failure exit", status)
 	}
 }
+
+func TestStartupClosesListenerOnInstallerFailure(t *testing.T) {
+	address := freeTCPAddress(t)
+	cfg := config.CenterConfig{HTTPAddr: address, PublicURL: "https://speedtest.example.test", ReleaseDir: filepath.Join(t.TempDir(), "missing")}
+	if err := serve(t.Context(), nil, slog.Default(), io.Discard, cfg, nil, nil, nil, nil); err == nil {
+		t.Fatal("missing release directory accepted")
+	}
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatal("startup failure leaked HTTP listener", err)
+	}
+	if err = listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
