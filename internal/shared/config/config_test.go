@@ -9,6 +9,7 @@ import (
 )
 
 var allEnvVars = []string{
+	"SPEEDTEST_SMTP_ADDR", "SPEEDTEST_SMTP_FROM", "SPEEDTEST_SMTP_USER", "SPEEDTEST_TELEGRAM_URL",
 	"APP_ENV",
 	"SPEEDTEST_HTTP_ADDR",
 	"SPEEDTEST_UI_DIR",
@@ -45,6 +46,7 @@ func TestLoadCenterDefaults(t *testing.T) {
 	}
 
 	want := CenterConfig{
+		SMTPAddr: "127.0.0.1:11025", SMTPFrom: "speedtest@example.com", TelegramURL: "https://api.telegram.org",
 		HTTPAddr:          "127.0.0.1:8080",
 		AppEnv:            "local",
 		UIDir:             "",
@@ -92,6 +94,7 @@ func TestLoadCenterOverrides(t *testing.T) {
 	}
 
 	want := CenterConfig{
+		SMTPAddr: "127.0.0.1:11025", SMTPFrom: "speedtest@example.com", TelegramURL: "https://api.telegram.org",
 		HTTPAddr:          "0.0.0.0:9000",
 		AppEnv:            "test",
 		UIDir:             "./ui",
@@ -308,5 +311,17 @@ func TestLoadCenterInstallerSettings(t *testing.T) {
 	}
 	if cfg.PublicURL != "https://speedtest.example.com" || cfg.ReleaseDir != "/opt/speedtest/dist" {
 		t.Fatalf("installer settings = %q, %q", cfg.PublicURL, cfg.ReleaseDir)
+	}
+}
+
+func TestNotificationTransportOverrides(t *testing.T) {
+	resetEnv(t)
+	t.Setenv("SPEEDTEST_SMTP_ADDR", "smtp.test:587")
+	t.Setenv("SPEEDTEST_SMTP_FROM", "alerts@example.test")
+	t.Setenv("SPEEDTEST_SMTP_USER", "smtp-user")
+	t.Setenv("SPEEDTEST_TELEGRAM_URL", "https://telegram-gateway.test")
+	cfg, err := LoadCenter()
+	if err != nil || cfg.SMTPAddr != "smtp.test:587" || cfg.SMTPFrom != "alerts@example.test" || cfg.SMTPUser != "smtp-user" || cfg.TelegramURL != "https://telegram-gateway.test" {
+		t.Fatal("notification environment overrides")
 	}
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/ipwatch"
 	"github.com/jooservices/speedtest/internal/center/jobs"
 	"github.com/jooservices/speedtest/internal/center/nodes"
+	"github.com/jooservices/speedtest/internal/center/notify"
 	"github.com/jooservices/speedtest/internal/center/ownerapi"
 	"github.com/jooservices/speedtest/internal/center/server"
 	"github.com/jooservices/speedtest/internal/center/settings"
@@ -109,32 +110,43 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 	statsStore := &stats.Store{DB: pool}
 	// Without APP_KEY nothing secret can be stored, so the settings API stays off, like node issuance.
 	var settingsStore settings.Store
+	var notifications *notify.Store
 	if len(cfg.AppKey) == 32 {
 		cipher, err := settings.NewCipherFromKey(cfg.AppKey)
 		if err != nil {
 			return fmt.Errorf("invalid APP_KEY: %w", err)
 		}
-		settingsStore = settings.NewPostgresStore(pool, cipher, settings.Defaults(cfg.PublicURL))
+		preferences := settings.NewPostgresStore(pool, cipher, settings.Defaults(cfg.PublicURL))
+		settingsStore = preferences
+		notifications = &notify.Store{DB: pool, Settings: preferences, Logger: logger, Sender: &notify.Transport{SMTPAddr: cfg.SMTPAddr, SMTPFrom: cfg.SMTPFrom, SMTPUser: cfg.SMTPUser, TelegramURL: cfg.TelegramURL}}
 	} else {
-		logger.Warn("APP_KEY is not set; the settings API is disabled")
+		logger.Warn("APP_KEY is not set; the settings and notification APIs are disabled")
 	}
 	alertStore := &alerts.Store{DB: pool, AppKey: cfg.AppKey, Logger: logger}
 	retention := &jobs.Retention{DB: pool, Logger: logger}
+	var notificationAPI server.OwnerNotificationsStore
+	if notifications != nil {
+		notificationAPI = notifications
+	}
 	return serve(ctx, args, logger, stderr, cfg, services{
-		Auth:           service,
-		NodeCredential: nodeService,
-		Pinger:         poolPinger{pool: pool},
-		Agent:          &agentapi.Postgres{Pool: pool, Hook: agentapi.ResultHookChain{watcher, alertStore}},
-		OwnerNodes:     owner,
-		OwnerResults:   owner,
-		OwnerSchedules: owner,
-		OwnerStats:     statsStore,
-		Settings:       settingsStore,
-		OwnerIP:        &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...)},
-		OwnerDashboard: &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore},
-		OwnerAlerts:    alertStore,
-		OwnerJobs:      &jobs.Registry{DB: pool},
+		OwnerNotifications: notificationAPI,
+		Auth:               service,
+		NodeCredential:     nodeService,
+		Pinger:             poolPinger{pool: pool},
+		Agent:              &agentapi.Postgres{Pool: pool, Hook: agentapi.ResultHookChain{watcher, alertStore}},
+		OwnerNodes:         owner,
+		OwnerResults:       owner,
+		OwnerSchedules:     owner,
+		OwnerStats:         statsStore,
+		Settings:           settingsStore,
+		OwnerIP:            &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...)},
+		OwnerDashboard:     &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore},
+		OwnerAlerts:        alertStore,
+		OwnerJobs:          &jobs.Registry{DB: pool},
 		Background: func(ctx context.Context) {
+			if notifications != nil {
+				go notifications.Loop(ctx)
+			}
 			go retention.Loop(ctx)
 			alertStore.Loop(ctx)
 		},
@@ -161,19 +173,20 @@ func (p poolPinger) PingContext(ctx context.Context) error { return p.pool.Ping(
 
 // services are the database-backed collaborators of the server; any may be nil in tests.
 type services struct {
-	Auth           *auth.Service
-	NodeCredential server.NodeCredentialService
-	Pinger         server.Pinger
-	Agent          agentapi.Store
-	OwnerNodes     server.OwnerNodesStore
-	OwnerResults   server.OwnerResultsStore
-	OwnerSchedules server.OwnerSchedulesStore
-	OwnerStats     server.OwnerStatsStore
-	Settings       settings.Store
-	OwnerIP        server.OwnerIPStore
-	OwnerDashboard server.OwnerDashboardStore
-	OwnerAlerts    server.OwnerAlertsStore
-	OwnerJobs      server.OwnerJobsStore
+	Auth               *auth.Service
+	NodeCredential     server.NodeCredentialService
+	Pinger             server.Pinger
+	Agent              agentapi.Store
+	OwnerNodes         server.OwnerNodesStore
+	OwnerResults       server.OwnerResultsStore
+	OwnerSchedules     server.OwnerSchedulesStore
+	OwnerStats         server.OwnerStatsStore
+	Settings           settings.Store
+	OwnerIP            server.OwnerIPStore
+	OwnerNotifications server.OwnerNotificationsStore
+	OwnerDashboard     server.OwnerDashboardStore
+	OwnerAlerts        server.OwnerAlertsStore
+	OwnerJobs          server.OwnerJobsStore
 	// Background runs until the context ends, for example the daily retention job.
 	Background func(context.Context)
 }
@@ -214,25 +227,26 @@ func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Wr
 	}
 
 	handler := server.NewHandler(server.Options{
-		Install:           installHandler,
-		OwnerNodes:        svc.OwnerNodes,
-		OwnerResults:      svc.OwnerResults,
-		OwnerSchedules:    svc.OwnerSchedules,
-		OwnerStats:        svc.OwnerStats,
-		Settings:          svc.Settings,
-		OwnerIP:           svc.OwnerIP,
-		OwnerDashboard:    svc.OwnerDashboard,
-		OwnerAlerts:       svc.OwnerAlerts,
-		OwnerJobs:         svc.OwnerJobs,
-		AgentAPI:          svc.Agent,
-		Logger:            logger,
-		UI:                ui,
-		Pinger:            svc.Pinger,
-		Auth:              svc.Auth,
-		RequireHTTPS:      cfg.AppEnv != "local" && cfg.AppEnv != "test",
-		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
-		NodeCredentials:   svc.NodeCredential,
-		AgentRateLimit:    cfg.AgentRequestsPerMinute,
+		Install:            installHandler,
+		OwnerNodes:         svc.OwnerNodes,
+		OwnerResults:       svc.OwnerResults,
+		OwnerSchedules:     svc.OwnerSchedules,
+		OwnerStats:         svc.OwnerStats,
+		Settings:           svc.Settings,
+		OwnerIP:            svc.OwnerIP,
+		OwnerNotifications: svc.OwnerNotifications,
+		OwnerDashboard:     svc.OwnerDashboard,
+		OwnerAlerts:        svc.OwnerAlerts,
+		OwnerJobs:          svc.OwnerJobs,
+		AgentAPI:           svc.Agent,
+		Logger:             logger,
+		UI:                 ui,
+		Pinger:             svc.Pinger,
+		Auth:               svc.Auth,
+		RequireHTTPS:       cfg.AppEnv != "local" && cfg.AppEnv != "test",
+		TrustedProxyCIDRs:  cfg.TrustedProxyCIDRs,
+		NodeCredentials:    svc.NodeCredential,
+		AgentRateLimit:     cfg.AgentRequestsPerMinute,
 	})
 	if svc.Background != nil {
 		go svc.Background(ctx)
