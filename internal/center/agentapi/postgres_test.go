@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,6 +54,7 @@ func (d testDB) Query(context.Context, string, ...any) (pgx.Rows, error) { retur
 type testTx struct {
 	pgx.Tx
 	execErrors []error
+	execs      []string
 	execIndex  int
 	inserted   bool
 	row        pgx.Row
@@ -60,7 +62,8 @@ type testTx struct {
 	rollback   bool
 }
 
-func (t *testTx) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+func (t *testTx) Exec(_ context.Context, query string, _ ...any) (pgconn.CommandTag, error) {
+	t.execs = append(t.execs, query)
 	index := t.execIndex
 	t.execIndex++
 	if index < len(t.execErrors) && t.execErrors[index] != nil {
@@ -103,8 +106,9 @@ func TestPostgresSaveFailuresAndHook(t *testing.T) {
 		duplicate bool
 	}{
 		{"begin", testDB{beginErr: failure}, nil, failure, false},
-		{"ip insert", testDB{tx: &testTx{execErrors: []error{failure}}}, nil, failure, false},
-		{"result insert", testDB{tx: &testTx{execErrors: []error{nil, failure}}}, nil, failure, false},
+		{"node lock", testDB{tx: &testTx{execErrors: []error{failure}}}, nil, failure, false},
+		{"ip insert", testDB{tx: &testTx{execErrors: []error{nil, failure}}}, nil, failure, false},
+		{"result insert", testDB{tx: &testTx{execErrors: []error{nil, nil, failure}}}, nil, failure, false},
 		{"compare query", testDB{tx: &testTx{row: testRow{err: failure}}}, nil, failure, false},
 		{"conflict", testDB{tx: &testTx{row: testRow{values: []any{false}}}}, nil, ErrConflict, false},
 		{"duplicate", testDB{tx: &testTx{row: testRow{values: []any{true}}}}, &testHook{}, nil, true},
@@ -135,6 +139,23 @@ func TestPostgresSaveFailuresAndHook(t *testing.T) {
 	}
 	if jsonValue(nil) != nil {
 		t.Fatal("nil JSON")
+	}
+}
+func TestPostgresSaveNullIPSkipsIPHistoryWork(t *testing.T) {
+	errorMessage := "speedtest: no_route"
+	tx := &testTx{inserted: true}
+	hook := &testHook{}
+	store := &Postgres{Pool: testDB{tx: tx}, Hook: hook}
+	r := Result{ID: "00000000-0000-4000-8000-000000000001", TS: "2026-11-03T10:00:00Z", Status: "failed", Error: &errorMessage, Threads: 1, Raw: []byte(`{}`)}
+	duplicate, err := store.SaveResult(t.Context(), "node", r)
+	if err != nil || duplicate {
+		t.Fatal(duplicate, err)
+	}
+	if len(tx.execs) != 1 || !strings.HasPrefix(tx.execs[0], "INSERT INTO results") {
+		t.Fatal("NULL IP performed address or node-lock work", tx.execs)
+	}
+	if hook.called != 0 {
+		t.Fatal("NULL IP invoked the history hook", hook.called)
 	}
 }
 func TestPostgresConfigAndHeartbeat(t *testing.T) {

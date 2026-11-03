@@ -428,6 +428,21 @@ func TestStartupAndSeedFailClosedOnMalformedEnvironmentFile(t *testing.T) {
 	}
 }
 
+func TestStartupClosesListenerOnInstallerFailure(t *testing.T) {
+	address := freeTCPAddress(t)
+	cfg := config.CenterConfig{HTTPAddr: address, PublicURL: "https://speedtest.example.test", ReleaseDir: filepath.Join(t.TempDir(), "missing")}
+	if err := serve(t.Context(), nil, slog.Default(), io.Discard, cfg, services{}); err == nil {
+		t.Fatal("missing release directory accepted")
+	}
+	listener, err := net.Listen("tcp", address)
+	if err != nil {
+		t.Fatal("startup failure leaked HTTP listener", err)
+	}
+	if err = listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestServeStartsBackgroundJobsAndStopsThem(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	started := make(chan struct{})
@@ -440,7 +455,7 @@ func TestServeStartsBackgroundJobsAndStopsThem(t *testing.T) {
 	cfg := config.CenterConfig{AppEnv: "local", HTTPAddr: "127.0.0.1:0"}
 	done := make(chan error, 1)
 	go func() {
-		done <- serve(ctx, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), io.Discard, cfg, nil, nil, nil, nil, nil, nil, nil, nil, background)
+		done <- serve(ctx, nil, slog.New(slog.NewTextHandler(io.Discard, nil)), io.Discard, cfg, services{Background: background})
 	}()
 	select {
 	case <-started:

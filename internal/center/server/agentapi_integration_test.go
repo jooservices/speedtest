@@ -319,6 +319,13 @@ func TestAgentIngestionLoad1000PerMinuteIntegration(t *testing.T) {
 	dbtest.MigrateUp(t, pool)
 	service := nodes.NewService(pool, key)
 	_, token := enrollIngestionNode(t, ctx, service, "load-edge")
+	// The executable now wires IP watching. Use a deterministic warm geo cache
+	// and disable public fallbacks so the load test never contacts real providers.
+	if _, err := pool.Exec(ctx, `INSERT INTO ip_addresses(ip,geo,source,looked_up_at) VALUES ('203.0.113.1','{"city":"fixture"}','fixture',clock_timestamp())`); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "false")
+	t.Setenv("SPEEDTEST_GEO_IPINFO_ENABLED", "false")
 	root, err := filepath.Abs("../../..")
 	if err != nil {
 		t.Fatal(err)

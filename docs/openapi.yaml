@@ -757,7 +757,12 @@ paths:
         replay=duplicate; changed payload or a UUID belonging to another node=409 for that item,
         without disclosing other-node data. Commit accepted items before
         responding; agent drops accepted/duplicate items, quarantines rejected items, retries
-        transport/5xx/429 with exponential backoff and jitter."
+        transport/5xx/429 with exponential backoff and jitter. IP history and address counters
+        commit atomically with each result in measurement order (ts, result UUID), including
+        failed results with a known IP. Failed results with NULL IP remain stored but are
+        excluded from history, counters, geolocation and signals. Late observations repair
+        history without new change signals; only a new newest result with a different IP emits
+        ip_changed. Replays have no side effects."
       security:
         - NodeBearer: []
       responses:

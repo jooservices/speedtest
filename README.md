@@ -66,6 +66,7 @@ internal/center/auth/   Argon2id password hashes, owner sessions and login limit
 internal/center/server/ command center HTTP handlers and lifecycle
 internal/center/db/     PostgreSQL pool and migration helpers
 internal/center/geo/    offline and online geolocation
+internal/center/ipwatch/ measurement-ordered IP history, counters and change signals
 internal/shared/config/ command-center configuration loaded from the environment
 migrations/             database migrations
 deploy/                 deployment artifacts
@@ -228,9 +229,11 @@ pull request using the same pinned version.
 
 `internal/center/geo` provides offline GeoLite2 City/ASN lookups, a weekly,
 checksum-verified updater, an `ip_addresses` result cache and optional ip-api /
-IPinfo Lite fallbacks. The resolver is not yet wired to command-center handlers.
+IPinfo Lite fallbacks. The resolver is wired to result ingestion through
+transactional IP watching.
 This does not change the demo UI. See
-[configuration, lifecycle and verification](docs/geolocation.md).
+[configuration, lifecycle and verification](docs/geolocation.md) and
+[IP history and alert handoff](docs/ip-history.md).
 
 See [`docs/engine.md`](docs/engine.md) for the Ookla engine API, environment configuration, units, errors and offline runner tests.
 

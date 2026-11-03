@@ -14,7 +14,7 @@ import (
 
 // ResultHook runs after insertion in the same transaction. Implementations must
 // use tx so a hook failure rolls back the result too. Replays never invoke it.
-// JOOST-35 can implement IP history without changing the ingestion protocol.
+// IP history and alert hooks must preserve this transactional/replay contract.
 type ResultHook interface {
 	AfterResultStored(context.Context, pgx.Tx, string, Result) error
 }
@@ -53,6 +53,11 @@ func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool,
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 	if r.IP != nil {
+		// Lock before inserting results or addresses: locking later can deadlock
+		// with another ingestion holding an address lock and waiting for this node.
+		if _, err = tx.Exec(ctx, `SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE`, node); err != nil {
+			return false, err
+		}
 		if _, err = tx.Exec(ctx, `INSERT INTO ip_addresses(ip) VALUES ($1) ON CONFLICT DO NOTHING`, r.IP); err != nil {
 			return false, err
 		}
