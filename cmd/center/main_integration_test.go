@@ -13,6 +13,7 @@ import (
 
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/db"
+	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
 
@@ -37,7 +38,7 @@ func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
 	var name, marker string
 	if err := pool.QueryRow(ctx, `SELECT current_database(),shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()`).Scan(&name, &marker); err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
 		t.Fatal("integration database identity and ownership marker verification failed")
@@ -103,4 +104,70 @@ func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
 		t.Fatal("database-backed command center did not stop after cancellation")
 	}
 	t.Log("PASS: database readiness and node API service wiring are active in the executable")
+}
+
+func TestSeedAndStartupGuardsIntegration(t *testing.T) {
+	values, err := godotenv.Read("../../.env")
+	if err != nil {
+		t.Fatal("worktree configuration required")
+	}
+	for key, value := range values {
+		t.Setenv(key, value)
+	}
+	cfg, err := config.LoadCenter()
+	if err != nil || cfg.Database.Name != "speedtest_wt23" {
+		t.Fatal("worktree database required")
+	}
+	pool, err := db.Open(t.Context(), cfg.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	t.Setenv("APP_ENV", "test")
+	if err = runSeedAdmin(t.Context(), nil, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if err = runSeedAdmin(t.Context(), nil, io.Discard); err != nil {
+		t.Fatal("seed not idempotent", err)
+	}
+	if err = runSeedAdmin(t.Context(), []string{"unexpected"}, io.Discard); err == nil {
+		t.Fatal("seed args accepted")
+	}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	for _, args := range [][]string{{"--unknown"}, {"unexpected"}, {"--ui-dir", "does-not-exist"}} {
+		if err = runWithDatabase(t.Context(), args, logger, io.Discard); err == nil {
+			t.Fatal("invalid args accepted", args)
+		}
+	}
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err = runWithDatabase(canceled, nil, logger, io.Discard); err == nil {
+		t.Fatal("canceled startup succeeded")
+	}
+	if err = runSeedAdmin(canceled, nil, io.Discard); err == nil {
+		t.Fatal("canceled seed succeeded")
+	}
+	if err = verifyLocalDatabaseIdentity(canceled, pool, cfg); err == nil {
+		t.Fatal("canceled identity check succeeded")
+	}
+	cfg.AppEnv = "production"
+	if err = verifyLocalDatabaseIdentity(canceled, pool, cfg); err != nil {
+		t.Fatal("production identity path", err)
+	}
+	t.Setenv("APP_ENV", "production")
+	if err = runSeedAdmin(t.Context(), nil, io.Discard); err == nil {
+		t.Fatal("production seed allowed")
+	}
+	t.Setenv("APP_ENV", "test")
+	t.Setenv("SPEEDTEST_DB_NAME", "speedtest")
+	if err = runSeedAdmin(t.Context(), nil, io.Discard); err == nil {
+		t.Fatal("live seed allowed")
+	}
+	t.Setenv("SPEEDTEST_DB_PORT", "invalid")
+	if err = runSeedAdmin(t.Context(), nil, io.Discard); err == nil {
+		t.Fatal("invalid config accepted")
+	}
 }

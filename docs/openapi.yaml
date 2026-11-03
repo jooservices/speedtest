@@ -756,8 +756,9 @@ paths:
       description: "Always returns 207 for a syntactically valid batch, even if all items are rejected.
         Each outcome includes original index; invalid/missing UUID yields id=null. Schema/range
         validation is PER ITEM, not whole batch. Malformed JSON/invalid top-level container returns
-        400/422; oversized body returns 413. UUID scoped to authenticated node: identical
-        replay=duplicate, different content=409 for that item. Commit accepted items before
+        400/422; oversized body returns 413. UUID is globally unique: identical same-node
+        replay=duplicate; changed payload or a UUID belonging to another node=409 for that item,
+        without disclosing other-node data. Commit accepted items before
         responding; agent drops accepted/duplicate items, quarantines rejected items, retries
         transport/5xx/429 with exponential backoff and jitter."
       security:
@@ -3876,7 +3877,7 @@ components:
         - duration
         - error
         - manual
-      description: UUID allocated before spooling. Failed results require a nonempty error and allow null
+      description: Globally unique UUID allocated before spooling. Failed results require a nonempty error and allow null
         metrics/serverId; ok/degraded require down, up, ping and serverId, and error=null. down/up
         are Mbps; ping/jitter/dLat/uLat are ms. Missing measurements remain null. Engine-specific
         loss/jitter/loaded metrics may be null even on success when unavailable; never invent zero.

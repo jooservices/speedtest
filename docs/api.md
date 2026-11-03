@@ -146,8 +146,10 @@ and one `BatchOutcome` per input index, including invalid items. `accepted` (201
 and `duplicate` (200) can leave the spool; `rejected` (422 or conflicting UUID
 409) must be quarantined with a safe diagnostic. Missing/invalid UUID returns
 `id: null`. A malformed container gets 400/422 rather than a partial response.
-Deduplication is by node and preallocated result UUID; an identical replay cannot
-create another result. Retry transport failures/429/5xx with backoff and jitter;
+Result UUIDs are globally unique and preallocated by the agent. An identical
+replay by the same node is `duplicate` (200) and cannot create another row.
+Changed content for that UUID, or a UUID already owned by another node, is a
+per-item 409 conflict with a generic diagnostic that reveals no other-node data. Retry transport failures/429/5xx with backoff and jitter;
 never discard unacknowledged spool entries. Failed results require an error and
 allow null measurements; ok/degraded require down/up/ping/serverId and `error: null`. Engines may omit
 loss/jitter/loaded latency even on success; preserve those as null. Optional
@@ -342,3 +344,67 @@ an incompatible prefix for these consumers. Optional response fields/endpoints
 may be added. Renames, removals, type/meaning changes, tighter accepted inputs or
 changed status semantics require a coordinated migration and a new major prefix
 (e.g. `/api/v2`), with a documented consumer transition/deprecation window.
+
+## Agent ingestion implementation and operations
+
+The center wires `internal/center/agentapi` behind the node credential middleware.
+Every operation checks bearer revocation and the per-node request limit. HTTP
+methods follow the contract (wrong methods return 405 with `Allow`). Results
+commit in independent transactions, so a later database/transport error may
+follow earlier commits; replay the whole unacknowledged batch safely.
+An identical payload means the same stored values, including all nullable
+metrics, engine details and JSON objects (object key order is irrelevant).
+UUID letter case, UTC timestamp precision and IP spelling normalize through
+PostgreSQL; omission of optional raw/warnings means `{}`/`[]`. Unknown keys,
+case-mismatched property names, null nonnullable properties and invalid items
+are rejected independently. No raw engine JSON or bearer value is logged.
+
+Configuration joins the authenticated node and its schedule. Shared public
+settings use individual `settings.key` rows: `engine` (default `ookla`),
+`quietStart`/`quietEnd` (default empty), `timezone` (default `UTC`), and
+`agentRelease` (default null, otherwise the contract's AgentRelease object).
+Settings writers must validate these values against the contract. No peer-node
+configuration is returned. The strong ETag hashes the complete effective
+configuration, including shared settings and release metadata; weak validators,
+validator lists and `*` work for `If-None-Match`. `revision` combines node and
+schedule revisions. Update node/schedule revisions in their owning mutation
+transactions; shared settings changes also change the ETag without relying on
+those revisions. No new environment variables or migrations are required.
+
+Heartbeat records the center receive time and agent version; uptime, lastTest
+and optional updateResult are validated protocol observations, not additional
+persistent node fields. Polling returns up to 100 oldest pending/running commands
+in `(created_at,id)` order without claiming them. Agents deduplicate execution by
+command ID. Acknowledgements lock the owned command, preserve omitted progress,
+refuse decreasing progress or changes after a terminal state, and verify that a
+referenced result belongs to the same node. Terminal retry preserves `ackedAt`.
+
+`agentapi.ResultHook.AfterResultStored` is the JOOST-35 extension point. It runs
+only after a new result is inserted, inside that result's transaction, using the
+provided transaction. Hook errors roll back the result and address insertion.
+Duplicates never run the hook. IP history and alert evaluation are not implemented
+by ingestion; inserting `ip_addresses` only satisfies the existing result foreign
+key. `/api/agent/ip` uses the socket peer, or the existing trusted proxy policy
+configured by `SPEEDTEST_TRUSTED_PROXY_CIDRS`; it performs no hostname lookup.
+
+Verification (native Go; database suites must run serially on a verified worktree
+DB, never `speedtest`):
+
+```bash
+python3 scripts/geo-test-fixtures.py
+go test -race ./...
+go test -race -p 1 -tags integration ./cmd/center ./internal/center/db/... ./internal/center/geo ./internal/center/nodes ./internal/center/server
+# Dedicated paced HTTP + authentication + storage CPU measurement:
+go test -p 1 -tags integration ./internal/center/server -run '^TestAgentIngestionLoad1000PerMinuteIntegration$' -count=1 -v
+```
+
+The load test commits 1,000 distinct full-field results over one minute and
+builds/runs the production center executable and reports its process CPU seconds
+/ elapsed seconds as a percentage of one CPU core (including startup/shutdown).
+It includes HTTP handling, credential authentication and database client work;
+CPU of the separate shared PostgreSQL service and load generator is excluded.
+The test driver may use race/coverage instrumentation; the measured production
+executable uses the normal build. Target: at most 5%.
+Use structured access logs (path, request ID, status, duration) with `/readyz` to
+distinguish authentication/rate limits (401/429), rejected input (item 422/409),
+and storage failures (500). An item failure contains only a safe generic problem.

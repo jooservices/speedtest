@@ -395,3 +395,35 @@ func resetCenterEnvironment(t *testing.T) {
 		t.Setenv(key, value)
 	}
 }
+
+func TestStartupAndSeedFailClosedOnMalformedEnvironmentFile(t *testing.T) {
+	root, err := filepath.Abs("../../.tmp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.MkdirAll(root, 0700); err != nil {
+		t.Fatal(err)
+	}
+	dir, err := os.MkdirTemp(root, "center-env-test-")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	t.Chdir(dir)
+	if err = os.WriteFile(".env", []byte("INVALID ENV KEY = value\ninvalid[syntax\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	if err = loadDotEnv(); err == nil {
+		t.Fatal("malformed dotenv accepted")
+	}
+	if err = runWithDatabase(t.Context(), nil, logger, io.Discard); err == nil {
+		t.Fatal("startup accepted malformed dotenv")
+	}
+	if err = runSeedAdmin(t.Context(), nil, io.Discard); err == nil {
+		t.Fatal("seed accepted malformed dotenv")
+	}
+	if status := mainRun([]string{"seed-admin", "unexpected"}, io.Discard, io.Discard); status != 1 {
+		t.Fatal("seed failure exit", status)
+	}
+}
