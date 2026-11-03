@@ -8,7 +8,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -31,7 +30,6 @@ type NodeCredentialService interface {
 	AuthenticateAgent(context.Context, string) (string, error)
 	ValidateEnrollmentKey(context.Context, string) (string, error)
 	RotateEnrollmentKey(context.Context, string, string) (json.RawMessage, bool, error)
-	VerifyOwnerSession(context.Context, string, string) (string, error)
 }
 
 type apiEnvelope struct {
@@ -173,11 +171,15 @@ func (l *nodeRateLimiter) allow(key string) (bool, time.Duration) {
 	return true, 0
 }
 
-func newAPIHandler(service NodeCredentialService, perMinute int) http.Handler {
+func newAPIHandler(service NodeCredentialService, perMinute int, ownerAuth *serverAuth) http.Handler {
 	limiter := newNodeRateLimiter(perMinute, defaultAgentBurst)
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !isCredentialAPIPath(r.URL.Path) {
 			writeNotFoundProblem(w, r)
+			return
+		}
+		if methods := allowedNodeMethods(r.URL.Path); !hasAllowedMethod(methods, r.Method) {
+			methodNotAllowed(w, r, methods...)
 			return
 		}
 		if service == nil {
@@ -203,6 +205,43 @@ func newAPIHandler(service NodeCredentialService, perMinute int) http.Handler {
 			writeNotFoundProblem(w, r)
 		}
 	})
+	protected := ownerAuth.requireOwner(dispatch)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isOwnerMutation(r) {
+			protected.ServeHTTP(w, r)
+			return
+		}
+		dispatch.ServeHTTP(w, r)
+	})
+}
+
+func allowedNodeMethods(path string) []string {
+	switch path {
+	case "/api/nodes", "/api/agent/tokens", "/api/agent/enroll", "/api/settings/enrolment-key":
+		return []string{http.MethodPost}
+	}
+	if strings.HasPrefix(path, "/api/agent/") {
+		return []string{http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete}
+	}
+	return []string{http.MethodPost, http.MethodDelete}
+}
+
+func hasAllowedMethod(methods []string, method string) bool {
+	for _, allowed := range methods {
+		if method == allowed {
+			return true
+		}
+	}
+	return false
+}
+
+func isOwnerMutation(r *http.Request) bool {
+	if r.URL.Path == "/api/nodes" || r.URL.Path == "/api/settings/enrolment-key" {
+		return r.Method == http.MethodPost
+	}
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	return len(parts) == 4 && parts[0] == "api" && parts[1] == "nodes" && parts[3] == "credential" &&
+		(r.Method == http.MethodPost || r.Method == http.MethodDelete)
 }
 
 func isCredentialAPIPath(path string) bool {
@@ -221,7 +260,7 @@ func handleCreateNode(service NodeCredentialService, limiter *nodeRateLimiter, w
 		methodNotAllowed(w, r, http.MethodPost)
 		return
 	}
-	principal, err := ownerPrincipal(service, r)
+	principal, err := ownerPrincipal(r)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -316,7 +355,7 @@ func handleRotateEnrollmentKey(service NodeCredentialService, w http.ResponseWri
 		methodNotAllowed(w, r, http.MethodPost)
 		return
 	}
-	principal, err := ownerPrincipal(service, r)
+	principal, err := ownerPrincipal(r)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -343,7 +382,7 @@ func handleNodeCredential(service NodeCredentialService, limiter *nodeRateLimite
 		methodNotAllowed(w, r, http.MethodPost, http.MethodDelete)
 		return
 	}
-	principal, err := ownerPrincipal(service, r)
+	principal, err := ownerPrincipal(r)
 	if err != nil {
 		writeServiceError(w, r, err)
 		return
@@ -396,44 +435,12 @@ func handleAgentProtected(service NodeCredentialService, limiter *nodeRateLimite
 	writeNotFoundProblem(w, r)
 }
 
-func ownerPrincipal(service NodeCredentialService, r *http.Request) (string, error) {
-	if r.Method != http.MethodPost && r.Method != http.MethodDelete {
-		return "", nodes.ErrForbidden
-	}
-	if !sameOrigin(r) {
-		return "", nodes.ErrForbidden
-	}
-	var sessionToken string
-	count := 0
-	for _, cookie := range r.Cookies() {
-		if cookie.Name == "speedtest_session" {
-			sessionToken = cookie.Value
-			count++
-		}
-	}
-	if count != 1 {
+func ownerPrincipal(r *http.Request) (string, error) {
+	principal, ok := r.Context().Value(ownerIdentityContextKey{}).(string)
+	if !ok || principal == "" {
 		return "", nodes.ErrUnauthorized
 	}
-	return service.VerifyOwnerSession(r.Context(), sessionToken, r.Header.Get("X-CSRF-Token"))
-}
-
-func sameOrigin(r *http.Request) bool {
-	values := r.Header.Values("Origin")
-	if len(values) != 1 || r.Host == "" {
-		return false
-	}
-	origin, err := url.Parse(values[0])
-	if err != nil || origin.User != nil || origin.RawQuery != "" || origin.Fragment != "" || (origin.Scheme != "http" && origin.Scheme != "https") || origin.Host == "" {
-		return false
-	}
-	requestScheme := "http"
-	if r.TLS != nil {
-		requestScheme = "https"
-	}
-	if forwarded := r.Header.Values("X-Forwarded-Proto"); len(forwarded) == 1 && (forwarded[0] == "http" || forwarded[0] == "https") {
-		requestScheme = forwarded[0]
-	}
-	return strings.EqualFold(origin.Host, r.Host) && origin.Scheme == requestScheme && (origin.Path == "" || origin.Path == "/")
+	return principal, nil
 }
 
 func bearerValue(r *http.Request) (string, bool) {

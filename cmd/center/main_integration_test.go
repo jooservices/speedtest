@@ -50,7 +50,7 @@ func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	runCtx, stop := context.WithCancel(t.Context())
 	runDone := make(chan error, 1)
-	go func() { runDone <- run(runCtx, nil, logger, io.Discard) }()
+	go func() { runDone <- runWithDatabase(runCtx, nil, logger, io.Discard) }()
 	client := &http.Client{Timeout: time.Second}
 	baseURL := "http://" + address
 	deadline := time.Now().Add(3 * time.Second)

@@ -275,33 +275,13 @@ func TestEnrollmentCredentialLifecycleIntegration(t *testing.T) {
 		t.Fatalf("wrong Settings key error = %v", err)
 	}
 
-	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES ('00000000-0000-4000-8000-000000000777','owner@example.test','argon2id-test')`); err != nil {
-		t.Fatal(err)
-	}
-	session := "session-secret"
-	csrf := "csrf-secret"
-	if _, err := pool.Exec(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_token_hash,expires_at) VALUES ($1,'00000000-0000-4000-8000-000000000777',$2,now()+interval '1 hour')`, testHash(session), testHash(csrf)); err != nil {
-		t.Fatal(err)
-	}
-	if userID, err := service.VerifyOwnerSession(ctx, session, csrf); err != nil || userID != "00000000-0000-4000-8000-000000000777" {
-		t.Fatalf("VerifyOwnerSession() = %q, %v", userID, err)
-	}
-	if _, err := service.VerifyOwnerSession(ctx, session, "wrong-csrf"); !errors.Is(err, ErrForbidden) {
-		t.Fatalf("wrong CSRF error = %v", err)
-	}
-	if _, err := service.VerifyOwnerSession(ctx, "missing-session", csrf); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("missing session error = %v", err)
-	}
-	if _, err := service.VerifyOwnerSession(ctx, "", csrf); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("empty session error = %v", err)
-	}
 	if _, _, err := service.CreateNode(ctx, input, "owner:test-user", ""); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("missing idempotency key error = %v", err)
 	}
 	if _, _, err := NewService(pool, nil).CreateNode(ctx, input, "owner:test-user", "no-app-key"); !errors.Is(err, ErrCryptoKeyUnset) {
 		t.Fatalf("missing APP_KEY error = %v", err)
 	}
-	t.Log("PASS: enrollment reuse/expiry/name binding, hashed storage, credential rotation/revocation, Settings bootstrap key, session/CSRF and encrypted idempotent replay")
+	t.Log("PASS: enrollment reuse/expiry/name binding, hashed storage, credential rotation/revocation, Settings bootstrap key and encrypted idempotent replay")
 }
 
 func testHash(value string) string {

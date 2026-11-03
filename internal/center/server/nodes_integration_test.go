@@ -5,8 +5,6 @@ package server
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -17,6 +15,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/center/nodes"
@@ -60,16 +59,35 @@ func TestNodeCredentialHTTPFlowIntegration(t *testing.T) {
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	dbtest.MigrateUp(t, pool)
 	service := nodes.NewService(pool, appKey)
-	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES ('00000000-0000-4000-8000-000000000901','owner@example.test','test-hash')`); err != nil {
+	passwordHash, err := auth.HashPassword("integration test owner password")
+	if err != nil {
+		t.Fatal("could not prepare integration owner")
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES ('00000000-0000-4000-8000-000000000901','owner@example.test',$1)`, passwordHash); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO sessions(token_hash,user_id,csrf_token_hash,expires_at) VALUES ($1,'00000000-0000-4000-8000-000000000901',$2,now()+interval '1 hour')`, testSecretHash("session"), testSecretHash("csrf")); err != nil {
+	authStore, err := auth.NewPostgresStore(pool)
+	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewHandler(Options{NodeCredentials: service})
+	authService, err := auth.NewService(authStore, auth.Config{SessionTTL: time.Hour, LoginMaxAttempts: 5, LoginWindow: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(Options{NodeCredentials: service, Auth: authService})
+	session, csrf := loginIntegrationOwner(t, handler)
+
+	withoutSession := httptest.NewRequest(http.MethodPost, "http://center.test/api/settings/enrolment-key", nil)
+	withoutSession.Header.Set("Origin", "http://center.test")
+	withoutSession.Header.Set("Idempotency-Key", "missing-owner-session")
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, withoutSession)
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("Settings key without owner session status = %d, want 401", unauthorized.Code)
+	}
 
 	rotateKey := httptest.NewRequest(http.MethodPost, "http://center.test/api/settings/enrolment-key", nil)
-	ownerHTTPWrite(rotateKey)
+	ownerHTTPWrite(rotateKey, session, csrf)
 	rotateKey.Header.Set("Idempotency-Key", "api-key-rotation")
 	keyResponse := httptest.NewRecorder()
 	handler.ServeHTTP(keyResponse, rotateKey)
@@ -106,7 +124,7 @@ func TestNodeCredentialHTTPFlowIntegration(t *testing.T) {
 	}
 
 	rotate := httptest.NewRequest(http.MethodPost, "http://center.test/api/nodes/"+nodeID+"/credential", nil)
-	ownerHTTPWrite(rotate)
+	ownerHTTPWrite(rotate, session, csrf)
 	rotate.Header.Set("Idempotency-Key", "api-credential-rotation")
 	rotateResponse := httptest.NewRecorder()
 	handler.ServeHTTP(rotateResponse, rotate)
@@ -123,7 +141,7 @@ func TestNodeCredentialHTTPFlowIntegration(t *testing.T) {
 	}
 
 	revoke := httptest.NewRequest(http.MethodDelete, "http://center.test/api/nodes/"+nodeID+"/credential", nil)
-	ownerHTTPWrite(revoke)
+	ownerHTTPWrite(revoke, session, csrf)
 	revokeResponse := httptest.NewRecorder()
 	handler.ServeHTTP(revokeResponse, revoke)
 	if revokeResponse.Code != http.StatusNoContent {
@@ -136,12 +154,51 @@ func TestNodeCredentialHTTPFlowIntegration(t *testing.T) {
 	if revokedResponse.Code != http.StatusUnauthorized {
 		t.Fatalf("revoked bearer status = %d", revokedResponse.Code)
 	}
-	t.Log("PASS: HTTP bootstrap, one-time enrollment, per-node bearer auth, rotation and immediate revocation")
+	t.Log("PASS: anonymous auth bootstrap, login, session+CSRF protected node calls, one-time enrollment, per-node bearer auth, rotation and immediate revocation")
 }
 
-func ownerHTTPWrite(request *http.Request) {
-	request.AddCookie(&http.Cookie{Name: "speedtest_session", Value: "session"})
-	request.Header.Set("X-CSRF-Token", "csrf")
+func loginIntegrationOwner(t *testing.T, handler http.Handler) (string, string) {
+	t.Helper()
+	bootstrap := httptest.NewRecorder()
+	handler.ServeHTTP(bootstrap, httptest.NewRequest(http.MethodGet, "http://center.test/api/auth/me", nil))
+	if bootstrap.Code != http.StatusOK {
+		t.Fatalf("anonymous GET /api/auth/me status = %d", bootstrap.Code)
+	}
+	var anonymousCookie *http.Cookie
+	for _, cookie := range bootstrap.Result().Cookies() {
+		if cookie.Name == sessionCookieName {
+			anonymousCookie = cookie
+		}
+	}
+	if anonymousCookie == nil {
+		t.Fatal("anonymous auth bootstrap did not set a session cookie")
+	}
+	anonymousCSRF := responseString(t, bootstrap.Body.Bytes(), "data", "csrfToken")
+	login := httptest.NewRequest(http.MethodPost, "http://center.test/api/auth/login", strings.NewReader(`{"email":"owner@example.test","password":"integration test owner password"}`))
+	login.AddCookie(anonymousCookie)
+	login.Header.Set("Origin", "http://center.test")
+	login.Header.Set("X-CSRF-Token", anonymousCSRF)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, login)
+	if response.Code != http.StatusOK {
+		t.Fatalf("owner login status = %d", response.Code)
+	}
+	var ownerCookie *http.Cookie
+	for _, cookie := range response.Result().Cookies() {
+		if cookie.Name == sessionCookieName {
+			ownerCookie = cookie
+		}
+	}
+	if ownerCookie == nil {
+		t.Fatal("owner login did not set an authenticated session cookie")
+	}
+	csrf := responseString(t, response.Body.Bytes(), "data", "csrfToken")
+	return ownerCookie.Value, csrf
+}
+
+func ownerHTTPWrite(request *http.Request, session, csrf string) {
+	request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session})
+	request.Header.Set("X-CSRF-Token", csrf)
 	request.Header.Set("Origin", "http://center.test")
 	request.Host = "center.test"
 }
@@ -167,9 +224,4 @@ func responseString(t *testing.T, body []byte, path ...string) string {
 		t.Fatalf("response path %v is not a non-empty string", path)
 	}
 	return result
-}
-
-func testSecretHash(value string) string {
-	hash := sha256.Sum256([]byte(value))
-	return hex.EncodeToString(hash[:])
 }

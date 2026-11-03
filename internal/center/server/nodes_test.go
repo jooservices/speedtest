@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/nodes"
 )
 
@@ -30,7 +31,6 @@ type fakeNodeCredentialService struct {
 	authErr          error
 	validateKeyErr   error
 	rotateKeyErr     error
-	sessionErr       error
 }
 
 func (f *fakeNodeCredentialService) CreateNode(_ context.Context, input nodes.Input, principal, key string) (json.RawMessage, bool, error) {
@@ -89,22 +89,38 @@ func (f *fakeNodeCredentialService) RotateEnrollmentKey(_ context.Context, princ
 	}
 	return json.RawMessage(`{"enrollToken":"issued-key","createdAt":"2026-11-03T00:00:00Z"}`), false, nil
 }
-func (f *fakeNodeCredentialService) VerifyOwnerSession(_ context.Context, session, csrf string) (string, error) {
-	if f.sessionErr != nil {
-		return "", f.sessionErr
+
+type nodeTestAuth struct{ scriptedAuthService }
+
+func (nodeTestAuth) Session(_ context.Context, token string) (auth.SessionView, error) {
+	if token != "owner-session" {
+		return auth.SessionView{}, auth.ErrInvalidSession
 	}
-	if session != "owner-session" {
-		return "", nodes.ErrUnauthorized
+	return auth.SessionView{
+		Token: token, Identity: &auth.Identity{ID: "owner-id", Email: "owner@example.test"},
+		CSRFToken: "csrf-value", ExpiresAt: time.Now().Add(time.Hour),
+	}, nil
+}
+
+type anonymousNodeTestAuth struct{ nodeTestAuth }
+
+func (anonymousNodeTestAuth) Session(_ context.Context, token string) (auth.SessionView, error) {
+	if token != "owner-session" {
+		return auth.SessionView{}, auth.ErrInvalidSession
 	}
-	if csrf != "csrf-value" {
-		return "", nodes.ErrForbidden
+	return auth.SessionView{Token: token, CSRFToken: "csrf-value", ExpiresAt: time.Now().Add(time.Hour)}, nil
+}
+
+func newNodeHandler(options Options) http.Handler {
+	if options.Auth == nil {
+		options.Auth = nodeTestAuth{}
 	}
-	return "owner-id", nil
+	return NewHandler(options)
 }
 
 func TestCreateNodeAuthenticatedAndAppliesDefaults(t *testing.T) {
 	service := &fakeNodeCredentialService{}
-	handler := NewHandler(Options{NodeCredentials: service})
+	handler := newNodeHandler(Options{NodeCredentials: service})
 	req := httptest.NewRequest(http.MethodPost, "/api/nodes", strings.NewReader(`{"name":"edge","expectedDown":300,"expectedUp":100}`))
 	ownerWrite(req)
 	req.Header.Set("Idempotency-Key", "node-create-1")
@@ -139,7 +155,7 @@ func TestOwnerEndpointsFailClosedWithoutValidSessionCSRFAndOrigin(t *testing.T) 
 		{name: "scheme mismatch", cookie: "owner-session", csrf: "csrf-value", origin: "https://center.test", want: http.StatusForbidden},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			handler := NewHandler(Options{NodeCredentials: &fakeNodeCredentialService{}})
+			handler := newNodeHandler(Options{NodeCredentials: &fakeNodeCredentialService{}})
 			req := httptest.NewRequest(http.MethodPost, "/api/nodes", strings.NewReader(`{"name":"edge","expectedDown":300,"expectedUp":100}`))
 			if test.cookie != "" {
 				req.AddCookie(&http.Cookie{Name: "speedtest_session", Value: test.cookie})
@@ -161,15 +177,25 @@ func TestOwnerEndpointsFailClosedWithoutValidSessionCSRFAndOrigin(t *testing.T) 
 	ownerWrite(duplicate)
 	duplicate.Header.Set("Idempotency-Key", "create")
 	response := httptest.NewRecorder()
-	NewHandler(Options{NodeCredentials: &fakeNodeCredentialService{}}).ServeHTTP(response, duplicate)
+	newNodeHandler(Options{NodeCredentials: &fakeNodeCredentialService{}}).ServeHTTP(response, duplicate)
 	if response.Code != http.StatusUnauthorized {
 		t.Fatalf("duplicate session cookie status = %d", response.Code)
 	}
 }
 
+func TestOwnerEndpointsRejectAnonymousAuthSession(t *testing.T) {
+	request := httptest.NewRequest(http.MethodPost, "http://center.test/api/settings/enrolment-key", nil)
+	ownerWrite(request)
+	response := httptest.NewRecorder()
+	NewHandler(Options{Auth: anonymousNodeTestAuth{}, NodeCredentials: &fakeNodeCredentialService{}}).ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("owner endpoint with anonymous session status = %d, want 401", response.Code)
+	}
+}
+
 func TestBootstrapEnrollmentAndCredentialEndpoints(t *testing.T) {
 	service := &fakeNodeCredentialService{}
-	handler := NewHandler(Options{NodeCredentials: service})
+	handler := newNodeHandler(Options{NodeCredentials: service})
 	bootstrap := httptest.NewRequest(http.MethodPost, "/api/agent/tokens", strings.NewReader(`{"node":{"name":"edge","expectedDown":300,"expectedUp":100}}`))
 	bootstrap.Header.Set("Authorization", "Bearer settings-key")
 	bootstrap.Header.Set("Idempotency-Key", "bootstrap-create")
@@ -215,7 +241,7 @@ func TestBootstrapEnrollmentAndCredentialEndpoints(t *testing.T) {
 
 func TestAgentMiddlewareRejectsWrongAndRevokedAndRateLimitsByNode(t *testing.T) {
 	service := &fakeNodeCredentialService{}
-	handler := NewHandler(Options{NodeCredentials: service, AgentRateLimit: 1})
+	handler := newNodeHandler(Options{NodeCredentials: service, AgentRateLimit: 1})
 	for _, token := range []string{"wrong", "revoked"} {
 		req := httptest.NewRequest(http.MethodGet, "/api/agent/heartbeat", nil)
 		req.Header.Set("Authorization", "Bearer "+token)
@@ -245,7 +271,7 @@ func TestAgentMiddlewareRejectsWrongAndRevokedAndRateLimitsByNode(t *testing.T) 
 
 func TestCredentialAPIValidationAndFailClosedDispatch(t *testing.T) {
 	service := &fakeNodeCredentialService{}
-	handler := NewHandler(Options{NodeCredentials: service})
+	handler := newNodeHandler(Options{NodeCredentials: service})
 	for _, body := range []string{`{`, `{"name":"edge","expectedDown":1,"expectedUp":1,"extra":true}`, `{} {}`} {
 		req := httptest.NewRequest(http.MethodPost, "/api/agent/enroll", strings.NewReader(body))
 		response := httptest.NewRecorder()
@@ -268,13 +294,13 @@ func TestCredentialAPIValidationAndFailClosedDispatch(t *testing.T) {
 	}
 	unknown := httptest.NewRequest(http.MethodGet, "/api/unknown", nil)
 	response = httptest.NewRecorder()
-	NewHandler(Options{}).ServeHTTP(response, unknown)
+	newNodeHandler(Options{}).ServeHTTP(response, unknown)
 	if response.Code != http.StatusNotFound {
 		t.Errorf("unknown path without service status = %d", response.Code)
 	}
 	known := httptest.NewRequest(http.MethodPost, "/api/agent/enroll", nil)
 	response = httptest.NewRecorder()
-	NewHandler(Options{}).ServeHTTP(response, known)
+	newNodeHandler(Options{}).ServeHTTP(response, known)
 	if response.Code != http.StatusServiceUnavailable {
 		t.Errorf("known path without service status = %d", response.Code)
 	}
@@ -320,11 +346,12 @@ func TestSameOriginAndBearerParsing(t *testing.T) {
 	forwarded := httptest.NewRequest(http.MethodPost, "http://center.test/api/nodes", nil)
 	forwarded.Header.Set("Origin", "https://center.test")
 	forwarded.Header.Set("X-Forwarded-Proto", "https")
-	if !sameOrigin(forwarded) {
+	trustedAuth := &serverAuth{trustedProxyCIDRs: "192.0.2.0/24"}
+	if !trustedAuth.sameOrigin(forwarded) {
 		t.Fatal("trusted HTTPS forwarded origin rejected")
 	}
 	forwarded.Header.Add("X-Forwarded-Proto", "http")
-	if sameOrigin(forwarded) {
+	if trustedAuth.sameOrigin(forwarded) {
 		t.Fatal("ambiguous forwarded scheme accepted")
 	}
 	for _, value := range []string{"Bearer token", "bearer token"} {
@@ -405,7 +432,7 @@ func TestNodeInputWireOptionalFieldsAndValidation(t *testing.T) {
 
 func TestCredentialHandlerValidationErrorsAndLimits(t *testing.T) {
 	t.Run("owner create method and request validation", func(t *testing.T) {
-		handler := NewHandler(Options{NodeCredentials: &fakeNodeCredentialService{}})
+		handler := newNodeHandler(Options{NodeCredentials: &fakeNodeCredentialService{}})
 		for _, test := range []struct {
 			name, method, body string
 			withKey            bool
@@ -453,7 +480,7 @@ func TestCredentialHandlerValidationErrorsAndLimits(t *testing.T) {
 					req.Header.Set("Idempotency-Key", test.key)
 				}
 				response := httptest.NewRecorder()
-				NewHandler(Options{NodeCredentials: service}).ServeHTTP(response, req)
+				newNodeHandler(Options{NodeCredentials: service}).ServeHTTP(response, req)
 				if response.Code != test.want {
 					t.Fatalf("status = %d body=%s, want %d", response.Code, response.Body.String(), test.want)
 				}
@@ -490,7 +517,7 @@ func TestCredentialHandlerValidationErrorsAndLimits(t *testing.T) {
 					req.Header.Set("Idempotency-Key", test.key)
 				}
 				response := httptest.NewRecorder()
-				NewHandler(Options{NodeCredentials: test.service}).ServeHTTP(response, req)
+				newNodeHandler(Options{NodeCredentials: test.service}).ServeHTTP(response, req)
 				if response.Code != test.want {
 					t.Fatalf("status = %d body=%s, want %d", response.Code, response.Body.String(), test.want)
 				}
@@ -514,7 +541,7 @@ func TestCredentialHandlerValidationErrorsAndLimits(t *testing.T) {
 					req.Header.Set("Authorization", test.auth)
 				}
 				response := httptest.NewRecorder()
-				NewHandler(Options{NodeCredentials: test.service}).ServeHTTP(response, req)
+				newNodeHandler(Options{NodeCredentials: test.service}).ServeHTTP(response, req)
 				if response.Code != test.want {
 					t.Fatalf("status = %d body=%s, want %d", response.Code, response.Body.String(), test.want)
 				}
@@ -525,7 +552,7 @@ func TestCredentialHandlerValidationErrorsAndLimits(t *testing.T) {
 
 func TestOwnerRateLimitIdempotencyHeadersAndOriginBoundaries(t *testing.T) {
 	service := &fakeNodeCredentialService{}
-	handler := NewHandler(Options{NodeCredentials: service, AgentRateLimit: 1})
+	handler := newNodeHandler(Options{NodeCredentials: service, AgentRateLimit: 1})
 	for i := 0; i < defaultAgentBurst; i++ {
 		req := httptest.NewRequest(http.MethodPost, "/api/nodes", strings.NewReader(`{"name":"edge","expectedDown":1,"expectedUp":1}`))
 		ownerWrite(req)
@@ -552,7 +579,7 @@ func TestOwnerRateLimitIdempotencyHeadersAndOriginBoundaries(t *testing.T) {
 			req.Header.Add("Idempotency-Key", value)
 		}
 		response := httptest.NewRecorder()
-		NewHandler(Options{NodeCredentials: &fakeNodeCredentialService{}}).ServeHTTP(response, req)
+		newNodeHandler(Options{NodeCredentials: &fakeNodeCredentialService{}}).ServeHTTP(response, req)
 		if response.Code != http.StatusBadRequest {
 			t.Errorf("Idempotency-Key values %q status = %d", headers, response.Code)
 		}
@@ -625,14 +652,14 @@ func TestCredentialHandlerServiceAndSessionBoundaries(t *testing.T) {
 		ownerWrite(req)
 		req.Header.Set("Idempotency-Key", "owner-create")
 		response := httptest.NewRecorder()
-		NewHandler(Options{NodeCredentials: &fakeNodeCredentialService{createErr: nodes.ErrConflict}}).ServeHTTP(response, req)
+		newNodeHandler(Options{NodeCredentials: &fakeNodeCredentialService{createErr: nodes.ErrConflict}}).ServeHTTP(response, req)
 		if response.Code != http.StatusConflict {
 			t.Fatalf("owner create status = %d", response.Code)
 		}
 	})
 	t.Run("bootstrap malformed JSON and rate limit", func(t *testing.T) {
 		service := &fakeNodeCredentialService{}
-		handler := NewHandler(Options{NodeCredentials: service, AgentRateLimit: 1})
+		handler := newNodeHandler(Options{NodeCredentials: service, AgentRateLimit: 1})
 		bad := httptest.NewRequest(http.MethodPost, "/api/agent/tokens", strings.NewReader("{"))
 		bad.Header.Set("Authorization", "Bearer settings-key")
 		bad.Header.Set("Idempotency-Key", "bad-json")
@@ -661,7 +688,7 @@ func TestCredentialHandlerServiceAndSessionBoundaries(t *testing.T) {
 		}
 	})
 	t.Run("enrollment rate limit", func(t *testing.T) {
-		handler := NewHandler(Options{NodeCredentials: &fakeNodeCredentialService{}, AgentRateLimit: 1})
+		handler := newNodeHandler(Options{NodeCredentials: &fakeNodeCredentialService{}, AgentRateLimit: 1})
 		for i := 0; i < defaultAgentBurst; i++ {
 			req := httptest.NewRequest(http.MethodPost, "/api/agent/enroll", strings.NewReader(`{"token":"one-time","name":"edge","agent":"agent"}`))
 			response := httptest.NewRecorder()
@@ -678,7 +705,7 @@ func TestCredentialHandlerServiceAndSessionBoundaries(t *testing.T) {
 		}
 	})
 	t.Run("credential management rate limit", func(t *testing.T) {
-		handler := NewHandler(Options{NodeCredentials: &fakeNodeCredentialService{}, AgentRateLimit: 1})
+		handler := newNodeHandler(Options{NodeCredentials: &fakeNodeCredentialService{}, AgentRateLimit: 1})
 		for i := 0; i < defaultAgentBurst; i++ {
 			req := httptest.NewRequest(http.MethodPost, "/api/nodes/node-id/credential", nil)
 			ownerWrite(req)
@@ -707,7 +734,7 @@ func TestCredentialHandlerServiceAndSessionBoundaries(t *testing.T) {
 				req.Header.Set("Idempotency-Key", "rotate")
 			}
 			response := httptest.NewRecorder()
-			NewHandler(Options{NodeCredentials: &fakeNodeCredentialService{}}).ServeHTTP(response, req)
+			newNodeHandler(Options{NodeCredentials: &fakeNodeCredentialService{}}).ServeHTTP(response, req)
 			if response.Code != http.StatusUnauthorized {
 				t.Errorf("%s without session status = %d", path, response.Code)
 			}
@@ -720,8 +747,8 @@ func TestCredentialHandlerServiceAndSessionBoundaries(t *testing.T) {
 		if response.Code != http.StatusNotFound {
 			t.Fatalf("direct malformed node path status = %d", response.Code)
 		}
-		if _, err := ownerPrincipal(&fakeNodeCredentialService{}, httptest.NewRequest(http.MethodGet, "/api/nodes", nil)); !errors.Is(err, nodes.ErrForbidden) {
-			t.Fatalf("ownerPrincipal wrong method error = %v", err)
+		if _, err := ownerPrincipal(httptest.NewRequest(http.MethodGet, "/api/nodes", nil)); !errors.Is(err, nodes.ErrUnauthorized) {
+			t.Fatalf("ownerPrincipal without authenticated context error = %v", err)
 		}
 	})
 	t.Run("TLS origin", func(t *testing.T) {

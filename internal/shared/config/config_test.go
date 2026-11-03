@@ -5,11 +5,17 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 var allEnvVars = []string{
+	"APP_ENV",
 	"SPEEDTEST_HTTP_ADDR",
 	"SPEEDTEST_UI_DIR",
+	"SPEEDTEST_SESSION_TTL",
+	"SPEEDTEST_LOGIN_MAX_ATTEMPTS",
+	"SPEEDTEST_LOGIN_WINDOW",
+	"SPEEDTEST_TRUSTED_PROXY_CIDRS",
 	"SPEEDTEST_DB_HOST",
 	"SPEEDTEST_DB_PORT",
 	"SPEEDTEST_DB_NAME",
@@ -37,12 +43,17 @@ func TestLoadCenterDefaults(t *testing.T) {
 	}
 
 	want := CenterConfig{
-		HTTPAddr: "127.0.0.1:8080",
-		UIDir:    "",
+		HTTPAddr:          "127.0.0.1:8080",
+		AppEnv:            "local",
+		UIDir:             "",
+		SessionTTL:        12 * time.Hour,
+		LoginMaxAttempts:  5,
+		LoginWindow:       15 * time.Minute,
+		TrustedProxyCIDRs: "",
 		Database: DatabaseConfig{
 			Host:     "127.0.0.1",
 			Port:     5432,
-			Name:     "speedtest",
+			Name:     "speedtest_test",
 			User:     "speedtest",
 			Password: "",
 			SSLMode:  "disable",
@@ -57,7 +68,12 @@ func TestLoadCenterDefaults(t *testing.T) {
 func TestLoadCenterOverrides(t *testing.T) {
 	resetEnv(t)
 	t.Setenv("SPEEDTEST_HTTP_ADDR", "0.0.0.0:9000")
+	t.Setenv("APP_ENV", "test")
 	t.Setenv("SPEEDTEST_UI_DIR", "./ui")
+	t.Setenv("SPEEDTEST_SESSION_TTL", "6h")
+	t.Setenv("SPEEDTEST_LOGIN_MAX_ATTEMPTS", "8")
+	t.Setenv("SPEEDTEST_LOGIN_WINDOW", "10m")
+	t.Setenv("SPEEDTEST_TRUSTED_PROXY_CIDRS", "127.0.0.1/32,10.0.0.0/8")
 	t.Setenv("SPEEDTEST_DB_HOST", "db.internal")
 	t.Setenv("SPEEDTEST_DB_PORT", "6543")
 	t.Setenv("SPEEDTEST_DB_NAME", "speedtest_test")
@@ -74,8 +90,13 @@ func TestLoadCenterOverrides(t *testing.T) {
 	}
 
 	want := CenterConfig{
-		HTTPAddr: "0.0.0.0:9000",
-		UIDir:    "./ui",
+		HTTPAddr:          "0.0.0.0:9000",
+		AppEnv:            "test",
+		UIDir:             "./ui",
+		SessionTTL:        6 * time.Hour,
+		LoginMaxAttempts:  8,
+		LoginWindow:       10 * time.Minute,
+		TrustedProxyCIDRs: "127.0.0.1/32,10.0.0.0/8",
 		Database: DatabaseConfig{
 			Host:     "db.internal",
 			Port:     6543,
@@ -132,6 +153,36 @@ func TestLoadCenterInvalid(t *testing.T) {
 			name:    "app key invalid",
 			env:     map[string]string{"APP_KEY": "not-base64"},
 			wantErr: "APP_KEY must be base64 encoding of exactly 32 bytes",
+		},
+		{
+			name:    "unknown app environment",
+			env:     map[string]string{"APP_ENV": "preview"},
+			wantErr: "APP_ENV must be local, test, staging or production",
+		},
+		{
+			name:    "invalid session duration",
+			env:     map[string]string{"SPEEDTEST_SESSION_TTL": "tomorrow"},
+			wantErr: "SPEEDTEST_SESSION_TTL must be a Go duration",
+		},
+		{
+			name:    "session duration too long",
+			env:     map[string]string{"SPEEDTEST_SESSION_TTL": "744h"},
+			wantErr: "SPEEDTEST_SESSION_TTL must be positive and at most 720h",
+		},
+		{
+			name:    "login limit too small",
+			env:     map[string]string{"SPEEDTEST_LOGIN_MAX_ATTEMPTS": "0"},
+			wantErr: "SPEEDTEST_LOGIN_MAX_ATTEMPTS must be between 1 and 100",
+		},
+		{
+			name:    "invalid login window",
+			env:     map[string]string{"SPEEDTEST_LOGIN_WINDOW": "0s"},
+			wantErr: "SPEEDTEST_LOGIN_WINDOW must be positive and at most 24h",
+		},
+		{
+			name:    "invalid trusted proxy CIDR",
+			env:     map[string]string{"SPEEDTEST_TRUSTED_PROXY_CIDRS": "not-an-ip"},
+			wantErr: "SPEEDTEST_TRUSTED_PROXY_CIDRS must be a comma-separated list of CIDRs",
 		},
 		{
 			name:    "http addr missing port",

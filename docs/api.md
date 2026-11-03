@@ -16,13 +16,34 @@ UI requests use the opaque `speedtest_session` cookie, with `HttpOnly`,
 passwords use argon2id. Every authenticated UI session has the single owner's
 permissions; this contract does not introduce roles or SSO.
 
+The center stores only SHA-256 hashes of the opaque session and CSRF bearer
+values. `csrfToken` is a per-session synchronizer token; the server reissues it
+from `auth/me` without storing its plaintext. Expired sessions are pruned when a
+new anonymous session is created. Login limits each remote client IP
+and normalized account email to 5 attempts per 15-minute sliding window by
+default (`SPEEDTEST_LOGIN_MAX_ATTEMPTS`, `SPEEDTEST_LOGIN_WINDOW`). The limit is
+in process memory. By default, the direct TCP peer is the client IP. Configure
+`SPEEDTEST_TRUSTED_PROXY_CIDRS` to accept forwarded client and HTTPS scheme headers
+from explicitly trusted reverse proxies; forwarded headers from other peers are ignored.
+Login failures use the same 401 problem for an unknown email
+and an incorrect password. New passwords must contain at least 12 Unicode
+characters and at most 1024 UTF-8 bytes.
+
+Run `go run ./cmd/center seed-admin` to ensure the documented default owner is
+present in local or test environments. `APP_ENV` must be `local` or `test`; the
+command refuses staging, production and unknown values. It inserts only when the
+email does not already exist, hashes the password with Argon2id, and never resets
+an existing password. Local/test commands require `speedtest_test` or a
+`speedtest_wt*` database with the Workspaces ownership marker. Keep the default
+credential limited to local/test data.
+
 1. `GET /api/auth/me` without a cookie establishes an anonymous session and returns
    `user: null`, `csrfToken`, `expiresAt`, and `Set-Cookie`.
 2. Send that cookie and `X-CSRF-Token` with `POST /api/auth/login`. Login failures
    are generic; rate limits apply per IP and account. Success rotates the session
    and CSRF token and returns the authenticated `Session`.
 3. Every UI write, including login/logout, requires the session-bound CSRF header
-   and Origin validation. An expired/revoked cookie returns 401, including on
+   and same-origin Origin validation. An expired/revoked cookie returns 401, including on
    `auth/me`; clear it and bootstrap again. Password changes invalidate other
    sessions; fetch `auth/me` for the rotated CSRF token. Logout expires the cookie.
 

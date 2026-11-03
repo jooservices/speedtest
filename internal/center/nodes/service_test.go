@@ -319,12 +319,6 @@ func TestDatabaseFailurePathsFailClosed(t *testing.T) {
 			t.Fatalf("ValidateEnrollmentKey() error = %v", err)
 		}
 	})
-	t.Run("session query errors", func(t *testing.T) {
-		service := NewService(&scriptedDatabase{row: func(string, ...any) pgx.Row { return scriptedRow{err: connectionError} }}, key)
-		if _, err := service.VerifyOwnerSession(ctx, "session", "csrf"); !errors.Is(err, connectionError) {
-			t.Fatalf("VerifyOwnerSession() error = %v", err)
-		}
-	})
 }
 
 func TestIdempotencyTransactionFailurePaths(t *testing.T) {
@@ -417,9 +411,6 @@ func TestDatabaseErrorTranslationAndInvalidIDs(t *testing.T) {
 	}
 	if _, err := service.ValidateEnrollmentKey(t.Context(), ""); !errors.Is(err, ErrInvalidAuth) {
 		t.Fatalf("empty enrollment key error = %v", err)
-	}
-	if _, err := service.VerifyOwnerSession(t.Context(), "", "csrf"); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("empty session error = %v", err)
 	}
 }
 

@@ -359,26 +359,6 @@ func (s *Service) RotateEnrollmentKey(ctx context.Context, principal, idempotenc
 	})
 }
 
-// VerifyOwnerSession validates an authenticated session and returns its user ID.
-func (s *Service) VerifyOwnerSession(ctx context.Context, sessionToken, csrfToken string) (string, error) {
-	if sessionToken == "" {
-		return "", ErrUnauthorized
-	}
-	var userID string
-	var storedCSRFHash string
-	err := s.db.QueryRow(ctx, `SELECT user_id::text,csrf_token_hash FROM sessions WHERE token_hash=$1 AND expires_at>now() AND user_id IS NOT NULL`, hashSecret(sessionToken)).Scan(&userID, &storedCSRFHash)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrUnauthorized
-	}
-	if err != nil {
-		return "", err
-	}
-	if csrfToken == "" || !constantHashEqual(storedCSRFHash, hashSecret(csrfToken)) {
-		return "", ErrForbidden
-	}
-	return userID, nil
-}
-
 type nodeRecord struct {
 	ID           string
 	Name         string

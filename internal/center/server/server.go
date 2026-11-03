@@ -30,12 +30,15 @@ type Pinger interface {
 
 // Options configures the HTTP handlers.
 type Options struct {
-	Pinger           Pinger
-	Logger           *slog.Logger
-	UI               fs.FS
-	ReadinessTimeout time.Duration
-	NodeCredentials  NodeCredentialService
-	AgentRateLimit   int
+	Pinger            Pinger
+	Auth              AuthService
+	RequireHTTPS      bool
+	TrustedProxyCIDRs string
+	Logger            *slog.Logger
+	UI                fs.FS
+	ReadinessTimeout  time.Duration
+	NodeCredentials   NodeCredentialService
+	AgentRateLimit    int
 }
 
 // NewHandler builds the health, readiness, and static UI routes.
@@ -60,9 +63,12 @@ func NewHandler(options Options) http.Handler {
 	uiMux.Handle("GET /", uiHandler)
 
 	readinessHandler := readyz(options.Pinger, readinessTimeout)
-	apiHandler := newAPIHandler(options.NodeCredentials, options.AgentRateLimit)
+	authHandler := &serverAuth{service: options.Auth, requireHTTPS: options.RequireHTTPS, trustedProxyCIDRs: options.TrustedProxyCIDRs}
+	apiHandler := newAPIHandler(options.NodeCredentials, options.AgentRateLimit, authHandler)
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.URL.Path == "/api/auth" || strings.HasPrefix(r.URL.Path, "/api/auth/"):
+			authHandler.serve(w, r)
 		case r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/"):
 			apiHandler.ServeHTTP(w, r)
 		case r.URL.Path == "/healthz":
