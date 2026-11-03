@@ -567,9 +567,11 @@
   else {
     initRemote();
     // Keep the numbers fresh without disturbing the owner: only while the tab is visible, nothing is being typed and no dialog is open.
-    setInterval(function () {
+    ST.refreshWhenIdle = function () {
       var active = document.activeElement, typing = active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
-      if (document.visibilityState === 'visible' && ST.remote.status === 'ready' && !typing && !document.querySelector('.overlay, .drawer-wrap')) ST.load();
-    }, 60000);
+      if (document.visibilityState === 'visible' && ST.remote.status === 'ready' && !typing && !document.querySelector('.overlay, .drawer-wrap')) return ST.load();
+      return null;
+    };
+    if (typeof setInterval === 'function') setInterval(ST.refreshWhenIdle, 60000);
   }
 })();

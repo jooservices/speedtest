@@ -3,6 +3,7 @@
 import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
+import http from 'node:http';
 import { startStack, startAgent, stopAll, query, root } from './lib.mjs';
 import { steps } from './steps.mjs';
 
@@ -17,6 +18,11 @@ const problems = [];
 page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') problems.push(`${m.type()}: ${m.text()}`); });
 page.on('pageerror', e => problems.push(`pageerror: ${e.message}`));
 
+// A local receiver for webhook test messages.
+const receiver = { bodies: [], url: '' };
+const receiverServer = http.createServer((req, res) => { const chunks = []; req.on('data', c => chunks.push(c)); req.on('end', () => { try { receiver.bodies.push(JSON.parse(Buffer.concat(chunks).toString())); } catch { receiver.bodies.push({ raw: true }); } res.writeHead(200); res.end('ok'); }); });
+await new Promise(resolve => receiverServer.listen(0, '127.0.0.1', resolve));
+receiver.url = `http://127.0.0.1:${receiverServer.address().port}/hook`;
 const S = steps({ page, stack, startAgent, query, problems });
 const scenarios = [
   ['signing in needs the right password', S.signInRules],
@@ -28,6 +34,7 @@ const scenarios = [
   ['schedules are saved on the center', S.schedulesSave],
   ['alert rules can be created, edited, switched and deleted; events acknowledged', S.alertRules],
   ['settings are saved, secrets stay hidden and the enrolment key is shown once', S.settingsSave],
+  ['a test notification reaches the configured channel', () => S.notificationTest(receiver)],
   ['signing out ends the session', S.signOut]
 ];
 if (process.env.E2E_TRACE) page.on('response', r => { if (r.url().includes('/api/') && r.request().method() !== 'GET') console.log('  ', r.request().method(), r.url().replace(stack.origin, ''), r.status()); });
@@ -50,6 +57,7 @@ for (const [name, scenario] of scenarios) {
   }
 }
 await browser.close();
+receiverServer.close();
 stopAll();
 void query;
 process.exit(failed ? 1 : 0);

@@ -123,6 +123,7 @@ export function steps({ page, stack, startAgent, query, problems }) {
       await dialog.getByLabel('Expected download').fill('100');
       await dialog.getByLabel('Expected upload').fill('50');
       await dialog.getByRole('button', { name: 'Continue' }).click();
+      await dialog.getByRole('button', { name: /I will run a command/ }).click();
       const command = await dialog.locator('pre, code, .code').first().innerText();
       const token = /--token\s+(\S+)/.exec(command)?.[1];
       assert.ok(token && token.length > 20, 'the wizard shows a real one-time enrolment key: ' + command.slice(0, 80));
@@ -233,6 +234,26 @@ export function steps({ page, stack, startAgent, query, problems }) {
       await page.reload();
       await page.getByRole('tab', { name: 'Access' }).click();
       assert.ok(!(await page.content()).includes(key.trim()), 'the key is not shown again after a reload');
+    },
+
+    // The center sends a test message through the channel and the owner sees the outcome.
+    async notificationTest(receiver) {
+      await S.open('#/settings', 'Settings');
+      await page.getByRole('tab', { name: 'Notifications' }).click();
+      await page.getByLabel('URL for Webhook').fill(receiver.url);
+      await page.getByLabel('URL for Webhook').blur();
+      await toast('Saved').waitFor();
+      await page.getByLabel('Enable Webhook').check({ force: true });
+      await page.waitForTimeout(500);
+      await page.locator('.setting').filter({ hasText: 'Webhook' }).getByRole('button', { name: 'Send a test' }).click();
+      await toast('Test message sent to Webhook').waitFor({ timeout: 30000 });
+      assert.ok(receiver.bodies.length >= 1, 'the receiver got the message');
+      assert.ok(!JSON.stringify(receiver.bodies[0]).includes('secret'), 'no secret in the message');
+      // A channel that is not set up is refused in plain words.
+      await page.locator('.setting').filter({ hasText: 'Telegram' }).getByRole('button', { name: 'Send a test' }).click();
+      await toast('Telegram is not set up yet').waitFor();
+      // The browser logs the refused request itself; refusing an unconfigured channel is the expected outcome.
+      for (let i = problems.length - 1; i >= 0; i--) if (/status of 422/.test(problems[i])) problems.splice(i, 1);
     },
 
     async signOut() {

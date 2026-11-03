@@ -35,7 +35,7 @@
   function validHost(v) { return validIp(v) || /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(v); }
 
   function openWizard() {
-    var d = { name: '', label: '', down: '', up: '', method: ST.demo ? 'ssh' : 'manual', host: '', port: '22', user: '', auth: 'password', secret: '', iface: '' };
+    var d = { name: '', label: '', down: '', up: '', method: 'ssh', host: '', port: '22', user: '', auth: 'password', secret: '', sudoSecret: '', iface: '' };
     var step = 0, body = h('div'), steps = h('div', { class: 'steps', 'aria-hidden': 'true' }, [0, 1, 2, 3].map(function () { return h('span'); }));
     var errBox = h('div');
     var timers = [], layer;
@@ -55,7 +55,15 @@
         h('div', { class: 'field-row' }, U.field('Expected download', U.suffix(down, 'Mbps')), U.field('Expected upload', U.suffix(up, 'Mbps'))),
         h('span', { class: 'hint' }, 'The expected speed is the figure this node is compared against. Use what you actually get, not only what the plan promises.'));
     }
+    var probe = null, installation = null;
+    function confirmView() {
+      return h('div', { class: 'stack' },
+        h('p', null, 'The machine ', h('b', null, d.host.trim() + ':' + d.port), ' introduced itself with this fingerprint. Continue only if it is the machine you meant.'),
+        U.code(probe.fingerprint),
+        h('span', { class: 'hint' }, 'Nothing has been sent to it yet except this introduction. The installer stops if the machine ever shows a different fingerprint. If you can, compare it with the output of ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub on the machine.'));
+    }
     function s1() {
+      if (real && d.method === 'ssh' && probe) return confirmView();
       var wrap = h('div', { class: 'stack' });
       var sshForm = h('div', { class: 'stack' });
       function drawForm() {
@@ -74,12 +82,13 @@
           sshForm.appendChild(U.code(cmd));
           sshForm.appendChild(h('span', { class: 'hint' }, 'The command contains a one-time enrolment key. Do not share it.'));
         }
+        if (d.method === 'ssh' && real) sshForm.appendChild(U.field('Sudo password (only if it differs)', U.input(d.sudoSecret, function (v) { d.sudoSecret = v; }, { type: 'password', autocomplete: 'new-password', 'aria-label': 'Sudo password' }), 'Leave empty to use the sign-in password, or when sudo needs none. Never stored.'));
         sshForm.appendChild(h('details', null, h('summary', { style: 'cursor:pointer;font-weight:600' }, 'Advanced'),
           h('div', { style: 'margin-top:10px' }, U.field('Network interface', U.input(d.iface, function (v) { d.iface = v; }, { placeholder: 'Automatic', 'aria-label': 'Network interface' }), 'Leave empty unless the machine has more than one network connection and the test must use a specific one.'))));
       }
       wrap.appendChild(h('div', { class: 'grid cols-2' },
-        h('button', { type: 'button', class: 'choice ' + (d.method === 'ssh' ? 'on' : ''), disabled: real && !ST.installer, title: real && !ST.installer ? 'Remote install is not available on this command center yet.' : null, onClick: function (e) { d.method = 'ssh'; var btns = wrap.querySelectorAll('.choice'); btns[0].classList.add('on'); btns[1].classList.remove('on'); drawForm(); } }, h('b', null, U.icon('terminal', 16), 'Install for me'), h('span', { class: 'muted' }, 'We connect to the machine and set everything up.')),
-        h('button', { type: 'button', class: 'choice ' + (d.method === 'manual' ? 'on' : ''), onClick: function () { d.method = 'manual'; var btns = wrap.querySelectorAll('.choice'); btns[1].classList.add('on'); btns[0].classList.remove('on'); drawForm(); } }, h('b', null, U.icon('copy', 16), 'I will run a command'), h('span', { class: 'muted' }, 'Copy one line and paste it on the machine.'))));
+        h('button', { type: 'button', class: 'choice ' + (d.method === 'ssh' ? 'on' : ''), onClick: function (e) { d.method = 'ssh'; var btns = wrap.querySelectorAll('.choice'); btns[0].classList.add('on'); btns[1].classList.remove('on'); drawForm(); if (layer) layer.setFoot(footer()); } }, h('b', null, U.icon('terminal', 16), 'Install for me'), h('span', { class: 'muted' }, 'We connect to the machine and set everything up.')),
+        h('button', { type: 'button', class: 'choice ' + (d.method === 'manual' ? 'on' : ''), onClick: function () { d.method = 'manual'; var btns = wrap.querySelectorAll('.choice'); btns[1].classList.add('on'); btns[0].classList.remove('on'); drawForm(); if (layer) layer.setFoot(footer()); } }, h('b', null, U.icon('copy', 16), 'I will run a command'), h('span', { class: 'muted' }, 'Copy one line and paste it on the machine.'))));
       wrap.appendChild(sshForm); drawForm();
       return wrap;
     }
@@ -109,7 +118,44 @@
         }, function () { timers.push(setTimeout(poll, 5000)); });
       })();
     }
+    function watchInstall() {
+      var bar = h('div', { class: 'progress', style: 'margin:10px 0' }, h('i', { style: 'width:0%' }));
+      var log = h('ul', { class: 'checklist' });
+      U.clear(checklist.parentNode); checklist = log;
+      resultBox = h('div', { style: 'margin-top:14px' });
+      var host = body.querySelector('.install-host') || body;
+      var wrap = h('div', { class: 'install-host' }, h('p', { class: 'muted', style: 'margin-bottom:12px' }, 'Installing on ' + d.host.trim() + '. This usually takes under a minute. You can leave this window open.'), bar, log, resultBox);
+      U.clear(body); body.appendChild(steps); body.appendChild(h('h3', { style: 'margin-bottom:10px' }, 'Setting things up')); body.appendChild(wrap); body.appendChild(errBox);
+      var shown = {}, finished = false, source;
+      function line(event) {
+        bar.firstChild.style.width = Math.max(0, Math.min(100, event.pct || 0)) + '%';
+        if (shown[event.id] || event.status === 'failed') return; shown[event.id] = true; // a failure is explained once, below the list
+        var last = log.lastChild; if (last && last.className === 'run') { last.className = 'ok'; U.clear(last.firstChild); last.firstChild.appendChild(U.icon('check', 14)); }
+        var li = h('li', { class: event.status === 'failed' ? 'bad' : event.status === 'succeeded' ? 'ok' : 'run' }, h('span', { style: 'width:16px;display:inline-grid' }, event.status === 'failed' ? U.icon('x', 14) : event.status === 'succeeded' ? U.icon('check', 14) : h('span', { class: 'spinner' })), event.message);
+        log.appendChild(li);
+      }
+      function done(event) {
+        if (finished) return; finished = true; if (source) source.close();
+        if (event.status === 'succeeded') { ST.load().then(function () { step = 3; render(); }); return; }
+        U.clear(resultBox);
+        resultBox.appendChild(U.callout(event.message || 'The installation did not finish.', 'crit', 'alert'));
+        resultBox.appendChild(h('p', { class: 'hint', style: 'margin-top:8px' }, 'Nothing was left half-installed. Go back, fix the problem and try again.'));
+        layer.setFoot([U.btn('Back', { onClick: function () { probe = null; installation = null; step = 1; render(); } })]);
+      }
+      function handle(raw) { var event; try { event = JSON.parse(raw); } catch (e) { return; } line(event); if (event.status === 'succeeded' || event.status === 'failed') done(event); }
+      source = new EventSource('/api/installations/' + encodeURIComponent(installation.id) + '/events');
+      source.addEventListener('progress', function (e) { handle(e.data); });
+      source.onerror = function () {
+        // The browser reconnects by itself with Last-Event-ID; if the job already ended, read its final state.
+        ST.api.request('/api/installations/' + encodeURIComponent(installation.id)).then(function (reply) {
+          var job = reply.data;
+          if (job.status === 'succeeded' || job.status === 'failed') done({ status: job.status, message: job.error || (job.status === 'succeeded' ? 'Installed.' : 'The installation failed.'), pct: 100, id: 'final' });
+        }, function () {});
+      };
+      timers.push(function () { if (source) source.close(); });
+    }
     function runInstall() {
+      if (real && d.method === 'ssh') { watchInstall(); return; }
       if (real) { waitForCheckIn(); return; }
       var i = 0;
       (function next() {
@@ -176,8 +222,32 @@
       }
       if (step === 2) runInstall();
     }
+    function sshApi(path, body) { return ST.api.request(path, { method: 'POST', idempotencyKey: ST.api.key(), body: body }); }
+    function checkMachine(button) {
+      button.disabled = true; error(null);
+      sshApi('/api/installer/probes', { host: d.host.trim(), port: +d.port }).then(function (reply) { probe = reply.data; render(); }, function (failure) {
+        button.disabled = false;
+        error(failure.status === 0 ? failure.message : 'The dashboard could not reach ' + d.host.trim() + ':' + d.port + ' over SSH. Check the address and that SSH is running there.');
+      });
+    }
+    function startInstall(button) {
+      button.disabled = true; error(null);
+      var ssh = { host: d.host.trim(), port: +d.port, user: d.user.trim(), auth: d.auth, secret: d.secret };
+      if (d.sudoSecret) ssh.sudoPassword = d.sudoSecret;
+      sshApi('/api/nodes/' + encodeURIComponent(created.id) + '/installations', { probeId: probe.id, fingerprint: probe.fingerprint, ssh: ssh }).then(function (reply) {
+        d.secret = ''; d.sudoSecret = ''; installation = reply.data; step = 2; render();
+      }, function (failure) {
+        button.disabled = false;
+        error(failure.status === 409 ? 'An installation is already running on this node, or the confirmation expired. Go back and check the machine again.' : failure.message);
+      });
+    }
     function footer() {
       if (step === 2) return [U.btn('Cancel', { onClick: function () { layer.close(); } })];
+      if (real && step === 1 && d.method === 'ssh') {
+        return [U.btn('Back', { onClick: function () { if (probe) { probe = null; render(); } else { step--; render(); } } }),
+          probe ? U.btn('Trust it and install', { variant: 'primary', onClick: function (event) { startInstall(event.currentTarget); } })
+            : U.btn('Check the machine', { variant: 'primary', onClick: function (event) { var e = validate(); if (e) { error(e); return; } checkMachine(event.currentTarget); } })];
+      }
       if (step === 3) return [U.btn('Add another', { onClick: function () { layer.close(); setTimeout(openWizard, 50); } }), U.btn('Open node', { variant: 'primary', onClick: function () { layer.close(); location.hash = '#/nodes/' + created.id; } })];
       return [step > 0 ? U.btn('Back', { onClick: function () { step--; render(); } }) : U.btn('Cancel', { onClick: function () { layer.close(); } }),
         U.btn(step === 1 ? (d.method === 'ssh' ? 'Install' : 'I ran the command') : 'Continue', { variant: 'primary', onClick: function (event) {
@@ -186,7 +256,7 @@
           step++; render();
         } })];
     }
-    layer = U.modal({ title: 'Add a node', body: body, sticky: true, onClose: function () { timers.forEach(clearTimeout); }, actions: function () { return footer(); } });
+    layer = U.modal({ title: 'Add a node', body: body, sticky: true, onClose: function () { timers.forEach(function (t) { if (typeof t === 'function') t(); else clearTimeout(t); }); }, actions: function () { return footer(); } });
     render();
   }
   ST.openAddNode = openWizard;
