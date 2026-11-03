@@ -90,9 +90,9 @@
         h('div', { class: 'row wrap' },
           U.rangeSelect(rangeKey, function (v) { q.range = v; q.page = 1; draw(); }),
           U.select([{ value: 'all', label: 'Any status' }, { value: 'ok', label: 'OK' }, { value: 'degraded', label: 'Degraded' }, { value: 'failed', label: 'Failed' }], q.status, function (v) { q.status = v; q.page = 1; draw(); }, 'auto'),
-          h('div', { style: 'width:150px' }, U.suffix(U.input(q.minDown, function (v) { q.minDown = v; q.page = 1; draw(); }, { type: 'number', min: 0, placeholder: 'Min download', 'aria-label': 'Minimum download' }), 'Mbps')),
-          h('div', { style: 'width:150px' }, U.suffix(U.input(q.maxDown, function (v) { q.maxDown = v; q.page = 1; draw(); }, { type: 'number', min: 0, placeholder: 'Max download', 'aria-label': 'Maximum download' }), 'Mbps')),
-          h('div', { style: 'width:220px;position:relative' }, U.input(q.text, function (v) { q.text = v; q.page = 1; draw(); }, { type: 'search', placeholder: 'Search IP, server, city, error', 'aria-label': 'Search results' }))),
+          h('div', { style: 'width:190px' }, U.suffix(U.input(q.minDown, function (v) { q.minDown = v; q.page = 1; draw(); }, { type: 'number', min: 0, placeholder: 'Min download', 'aria-label': 'Minimum download' }), 'Mbps')),
+          h('div', { style: 'width:190px' }, U.suffix(U.input(q.maxDown, function (v) { q.maxDown = v; q.page = 1; draw(); }, { type: 'number', min: 0, placeholder: 'Max download', 'aria-label': 'Maximum download' }), 'Mbps')),
+          h('div', { style: 'width:280px;position:relative' }, U.input(q.text, function (v) { q.text = v; q.page = 1; draw(); }, { type: 'search', placeholder: 'Search IP, server, city, error', 'aria-label': 'Search results' }))),
         countHost),
       nodeBox);
     root.appendChild(filters);

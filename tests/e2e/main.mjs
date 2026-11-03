@@ -37,6 +37,7 @@ const scenarios = [
   ['statistics summarise the loaded results', S.statisticsPage],
   ['IP history lists addresses and looks one up', S.ipPage],
   ['the theme switch persists', S.themeSwitch],
+  ['controls have names and the keyboard reaches them on every page', S.accessibilityBasics],
   ['results can be filtered, opened and exported', S.resultsFilterAndExport],
   ['a node is added with the install command and reports', S.addNodeAndRunTest],
   ['schedules are saved on the center', S.schedulesSave],
