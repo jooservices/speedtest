@@ -206,3 +206,8 @@ This does not change the demo UI. See
 [configuration, lifecycle and verification](docs/geolocation.md).
 
 See [`docs/engine.md`](docs/engine.md) for the Ookla engine API, environment configuration, units, errors and offline runner tests.
+
+See [reliable result reporting](docs/reporting.md) for the JOOST-17 SQLite spool,
+UUID replay contract, retention settings and integration API. This library is
+available for lifecycle composition; `agent run` does not schedule or submit
+measurements yet.
