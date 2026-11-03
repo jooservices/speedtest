@@ -27,7 +27,9 @@ for _ in $(seq 1 60); do psql_run -c 'select 1' >/dev/null 2>&1 && break; sleep 
 psql_run -c 'select 1' >/dev/null 2>&1 || die "database not reachable"
 
 log "applying migrations"
-speedtest-migrate up
+# The migrate tool insists on a .env file next to it; the real settings come from the container environment.
+: > "$STATE/.env"
+(cd "$STATE" && speedtest-migrate up)
 
 log "starting the command center on ${CENTER}"
 speedtest-center seed-admin
