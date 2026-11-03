@@ -1,0 +1,115 @@
+// Isolated contract-shaped API; never connects to PostgreSQL or real agents.
+import http from 'node:http';
+import { readFile } from 'node:fs/promises';
+import { resolve, extname } from 'node:path';
+
+export function fixture() {
+  const ts = new Date().toISOString();
+  const node = { id: 'node-contract', name: 'Contract node', label: 'Test connection', provider: 'Fixture', plan: '',
+    expectedDown: 100, expectedUp: 50, threads: 4, server: 'auto', note: '', enabled: true, binding: { iface: '', sourceIp: null }, autoUpdate: false,
+    colorSlot: 1, interval: 30, offset: 0, host: '', agent: 'test', createdAt: ts, lastSeen: ts, status: 'online',
+    latest: null, latestGood: null, currentIp: '203.0.113.9', geo: null, updateVersion: null };
+  const result = { id: 'a4bbcf7b-8938-4e90-8128-59047d35b087', nodeId: node.id, ts,
+    serverId: 1, threads: 4, ip: '203.0.113.9', status: 'ok', error: null, down: 90, up: 40, ping: 0,
+    jitter: null, loss: null, dLat: null, uLat: null, bytesDown: 1000, bytesUp: 500, duration: 1,
+    manual: false, raw: {}, server: { id: 1, name: 'Fixture server', city: '', sponsor: '' }, geo: null };
+  node.latest = result; node.latestGood = result;
+  const notify = Object.fromEntries(['email', 'telegram', 'slack', 'webhook'].map(key => [key, { on: false, to: '', configured: false }]));
+  const settings = { theme: 'dark', range: '7d', units: 'auto', timezone: 'browser', hour12: false, decimals: 1,
+    retentionDays: 365, geoProvider: 'geolite2', geoFallback: 'ip-api', geoAutoUpdate: true, engine: 'ookla',
+    defaultThreads: 4, serverMode: 'auto', maxConcurrent: 1, stagger: true, quietStart: '', quietEnd: '',
+    centerUrl: 'http://localhost', geoKeyConfigured: false, enrollKeyConfigured: false, notify };
+  const rule = { id: 'rule-fixture', name: 'Slow connection', metric: 'down_pct', op: '<', value: 60, forTests: 3,
+    nodes: 'all', severity: 'warn', channels: ['email'], enabled: true };
+  const event = { id: 'event-fixture', ruleId: rule.id, nodeId: node.id, severity: 'warn', ts, resolvedAt: null,
+    title: rule.name, detail: 'Fixture alert', acked: false };
+  return { node, result, settings, rule, event };
+}
+export const envelope = (data, meta = {}, code = 200) => ({ success: true, code, message: 'OK', data, meta, errors: null });
+export const problem = status => ({ type: `/problems/test-${status}`, title: `HTTP ${status}`, status,
+  detail: status === 403 ? 'CSRF token invalid. Retry the request.' : `Fixture failure ${status}. Retry the request.` });
+
+export async function startServer() {
+  const data = fixture();
+  const control = { status: 0, empty: false, delay: 0, requests: [], responses: [], session: true };
+  const server = http.createServer(async (req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    if (url.pathname.startsWith('/api/')) {
+      const chunks = [];
+      for await (const chunk of req) chunks.push(chunk);
+      const body = Buffer.concat(chunks).toString();
+      control.requests.push({ path: url.pathname, query: url.searchParams, headers: req.headers, method: req.method,
+        body: body ? JSON.parse(body) : undefined });
+      if (control.delay) await new Promise(resolve => setTimeout(resolve, control.delay));
+      const send = (status, value) => {
+        control.responses.push({ path: url.pathname, method: req.method.toLowerCase(), status, value });
+        res.writeHead(status, { 'Content-Type': status >= 400 ? 'application/problem+json' : 'application/json',
+          'Cache-Control': 'no-store', ETag: '"fixture-v1"', ...(status === 429 ? { 'Retry-After': '2' } : {}) });
+        res.end(JSON.stringify(value));
+      };
+      if (control.status) { send(control.status, problem(control.status)); return; }
+      if (url.pathname === '/api/auth/me') {
+        send(200, envelope({ user: control.session ? { id: 'owner', email: 'owner@example.com' } : null,
+          csrfToken: 'fixture-csrf', expiresAt: new Date(Date.now() + 60000).toISOString() })); return;
+      }
+      if (req.method !== 'GET') {
+        if (req.headers['x-csrf-token'] !== 'fixture-csrf') { send(403, problem(403)); return; }
+        const input = body ? JSON.parse(body) : {};
+        if (['PUT', 'PATCH', 'DELETE'].includes(req.method) && !req.headers['if-match']) { send(428, problem(428)); return; }
+        const created = url.pathname === '/api/nodes' || url.pathname === '/api/alerts/rules';
+        const queued = url.pathname.endsWith('/run') || url.pathname === '/api/alerts/acknowledgements';
+        if ((created || queued) && !req.headers['idempotency-key']) { send(400, problem(400)); return; }
+        if (req.method === 'DELETE') {
+          if (url.pathname.startsWith('/api/nodes/') && url.searchParams.get('confirm') !== 'true') { send(422, problem(422)); return; }
+          res.writeHead(204); res.end(); return;
+        }
+        let output, status = 200;
+        if (url.pathname === '/api/settings') {
+          output = { ...data.settings, ...input, notify: data.settings.notify };
+          delete output.geoKey;
+        }
+        else if (url.pathname === '/api/nodes') {
+          status = 201;
+          output = { node: { ...data.node, ...input }, token: 'fixture-issuance-only', expiresAt: new Date(Date.now() + 60000).toISOString() };
+        } else if (url.pathname === '/api/alerts/rules') { status = 201; output = { ...data.rule, ...input }; }
+        else if (url.pathname === '/api/alerts/acknowledgements') { status = 202; output = { id: 'job-fixture', status: 'pending', error: null }; }
+        else if (url.pathname.endsWith('/run')) {
+          status = 202; output = { id: 'command-fixture', nodeId: data.node.id, type: 'run_now', version: null, status: 'pending',
+            createdAt: new Date().toISOString(), ackedAt: null, phase: '', pct: 0, resultId: null, error: null };
+        } else if (url.pathname.endsWith('/ack')) output = { ...data.event, ...input };
+        else if (url.pathname.startsWith('/api/alerts/rules/')) output = { ...data.rule, ...input };
+        else if (url.pathname.startsWith('/api/nodes/')) output = { ...data.node, ...input };
+        else { send(404, problem(404)); return; }
+        send(status, envelope(output, {}, status)); return;
+      }
+      if (url.pathname === '/api/settings') { send(200, envelope(data.settings)); return; }
+      if (url.pathname.startsWith('/api/nodes/')) { send(200, envelope(data.node)); return; }
+      if (url.pathname.startsWith('/api/alerts/rules/')) { send(200, envelope(data.rule)); return; }
+      if (url.pathname.startsWith('/api/alerts/events/')) { send(200, envelope(data.event)); return; }
+      const lists = {
+        '/api/nodes': [data.node], '/api/results': [data.result], '/api/alerts/rules': [], '/api/alerts/events': [],
+        '/api/ip/addresses': [{ nodeId: data.node.id, ip: data.result.ip, first: data.result.ts, last: data.result.ts,
+          tests: 1, avgDown: 90, avgUp: 40, geo: null }], '/api/ip/history': []
+      };
+      if (url.pathname in lists) {
+        const rows = control.empty ? [] : lists[url.pathname];
+        const page = Number(url.searchParams.get('page') || 1), size = Number(url.searchParams.get('size') || 25);
+        send(200, envelope(rows.slice((page - 1) * size, page * size), { pagination: {
+          current_page: page, per_page: size, total: rows.length, last_page: Math.max(1, Math.ceil(rows.length / size)) } })); return;
+      }
+      send(404, problem(404)); return;
+    }
+    const file = resolve('ui', '.' + decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname));
+    if (!file.startsWith(resolve('ui') + '/')) { res.writeHead(404); res.end(); return; }
+    try {
+      const content = await readFile(file);
+      res.writeHead(200, { 'Content-Type': ({ '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css' })[extname(file)] || 'application/octet-stream' });
+      res.end(content);
+    } catch { res.writeHead(404); res.end(); }
+  });
+  const port = process.env.UI_TEST_PORT === undefined ? 0 : Number(process.env.UI_TEST_PORT);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error('UI_TEST_PORT must be between 0 and 65535.');
+  await new Promise(resolve => server.listen(port, '127.0.0.1', resolve));
+  return { origin: `http://127.0.0.1:${server.address().port}`, control, data,
+    close: () => new Promise(resolve => { server.closeAllConnections(); server.close(resolve); }) };
+}

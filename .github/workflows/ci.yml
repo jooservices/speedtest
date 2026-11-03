@@ -37,3 +37,21 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
+
+      - name: Set up Node for UI checks
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: UI contract, unit tests and coverage
+        run: |
+          npm ci
+          npm run lint
+          npm run test:coverage
+          npm audit
+
+      - name: UI browser smoke (demo and contract API)
+        run: |
+          npx playwright install --with-deps chromium
+          npm run test:ui

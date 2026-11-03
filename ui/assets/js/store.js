@@ -3,6 +3,7 @@
   'use strict';
   var ST = window.ST;
   var KEY = 'st.demo.v1';
+  ST.demo = new URLSearchParams(location.search).get('demo') === '1';
   var MIN = 60000, HOUR = 3600000, DAY = 86400000;
   ST.MIN = MIN; ST.HOUR = HOUR; ST.DAY = DAY;
   ST.ranges = { '6h': 6 * HOUR, '24h': DAY, '7d': 7 * DAY, '30d': 30 * DAY };
@@ -57,12 +58,13 @@
     ST.recomputeEvents();
   }
   function persist() {
+    if (!ST.demo) return;
     try {
       localStorage.setItem(KEY, JSON.stringify({ nodes: state.nodes, settings: state.settings, rules: state.rules, acked: state.acked, extra: state.extra }));
     } catch (e) { /* storage full or disabled: demo keeps working in memory */ }
   }
   ST.persist = persist;
-  ST.resetDemo = function () { try { localStorage.removeItem(KEY); } catch (e) {} location.reload(); };
+  ST.resetDemo = function () { if (!ST.demo) return; try { localStorage.removeItem(KEY); } catch (e) {} location.reload(); };
 
   var byNode = {};
   function reindex() {
@@ -362,5 +364,134 @@
     })).join('\n');
   };
 
-  load();
+  /* API-backed snapshot; reads retain the preview API for existing page renderers.
+     Server-specific page queries and workflows are composed by JOOST-38/39/40/41. */
+  function initRemote() {
+    state.rules = []; state.extra = [];
+    state.settings.geoKey = ''; state.settings.enrollToken = '';
+    state.settings.centerUrl = location.origin;
+    state.settings.notify = { email: { on: false, to: '' }, telegram: { on: false, to: '' },
+      slack: { on: false, to: '' }, webhook: { on: false, to: '' } };
+    ST.servers = [];
+    var geos = {}, addresses = [], changes = [], controller, revision = 0;
+    var API = ST.api;
+    ST.remote = { status: 'idle', error: null };
+    ST.geo = function (ip) { return geos[ip] || null; };
+    ST.recomputeEvents = function () {}; // Events are evaluated by the center.
+    ST.ipHistory = function (id) {
+      return { ips: addresses.filter(function (a) { return a.nodeId === id; }),
+        changes: changes.filter(function (c) { return c.nodeId === id; }) };
+    };
+    function timestamp(value) { return value == null ? null : Date.parse(value); }
+    function result(r) { return Object.assign({}, r, { ts: timestamp(r.ts) }); }
+    function remember(r) {
+      if (r.server && !ST.servers.some(function (s) { return s.id === r.server.id; })) ST.servers.push(r.server);
+      if (r.geo) geos[r.ip] = r.geo;
+    }
+    ST.cancelLoad = function () {
+      revision++;
+      if (controller) controller.abort();
+      ST.remote.status = 'idle';
+    };
+    ST.load = async function () {
+      ST.cancelLoad();
+      var current = revision;
+      controller = new AbortController();
+      var options = { signal: controller.signal };
+      ST.remote = { status: 'loading', error: null };
+      ST.emit('remote');
+      try {
+        var session = await API.session(options);
+        if (!session.data.user) { API.signIn(); throw new Error('Sign in to view your nodes.'); }
+        var settings = await API.request('/api/settings', options);
+        var range = settings.data.range;
+        var snapshot = await Promise.all([
+          API.list('/api/nodes', options),
+          API.list('/api/results?range=' + encodeURIComponent(range), options),
+          API.list('/api/alerts/rules', options),
+          API.list('/api/alerts/events?range=' + encodeURIComponent(range), options),
+          API.list('/api/ip/addresses', options),
+          API.list('/api/ip/history', options)
+        ]);
+        if (current !== revision) return;
+        geos = {}; ST.servers = [];
+        state.settings = Object.assign({}, state.settings, settings.data, { geoKey: '', enrollToken: '' });
+        state.nodes = snapshot[0].map(function (n) {
+          if (n.geo && n.currentIp) geos[n.currentIp] = n.geo;
+          return Object.assign({}, n, { createdAt: timestamp(n.createdAt), lastSeen: timestamp(n.lastSeen),
+            latest: n.latest && result(n.latest), latestGood: n.latestGood && result(n.latestGood) });
+        });
+        state.results = snapshot[1].map(result).sort(function (a, b) { return a.ts - b.ts; });
+        state.results.forEach(remember);
+        state.rules = snapshot[2];
+        state.events = snapshot[3].map(function (e) { return Object.assign({}, e, { ts: timestamp(e.ts), resolvedAt: timestamp(e.resolvedAt) }); });
+        addresses = snapshot[4].map(function (a) {
+          if (a.geo) geos[a.ip] = a.geo;
+          return Object.assign({}, a, { first: timestamp(a.first), last: timestamp(a.last) });
+        });
+        changes = snapshot[5].map(function (c) { return Object.assign({}, c, { ts: timestamp(c.ts) }); });
+        reindex();
+        ST.remote = { status: 'ready', error: null };
+        ST.emit('settings');
+      } catch (error) {
+        if (current !== revision) return;
+        controller.abort();
+        ST.remote = { status: 'error', error: error };
+      }
+      if (current === revision) ST.emit('remote');
+    };
+    // These methods must never mutate a local simulation in real mode. Return
+    // promises so page workflow tickets can await server confirmation.
+    function mutation(path, method, body, extra) {
+      return API.request(path, Object.assign({ method: method, body: body }, extra)).then(async function (response) {
+        await ST.load();
+        return response.data;
+      });
+    }
+    function editable(path, method, body, contentType) {
+      return API.request(path).then(function (response) {
+        return mutation(path, method, body, { ifMatch: response.etag, contentType: contentType });
+      });
+    }
+    ST.updateNode = function (id, patch) {
+      return editable('/api/nodes/' + encodeURIComponent(id), 'PATCH', patch, 'application/merge-patch+json');
+    };
+    ST.addNode = function (node) { return mutation('/api/nodes', 'POST', node, { idempotencyKey: API.key() }); };
+    ST.removeNode = function (id) {
+      var path = '/api/nodes/' + encodeURIComponent(id);
+      return API.request(path).then(function (response) {
+        return mutation(path + '?confirm=true', 'DELETE', undefined, { ifMatch: response.etag });
+      });
+    };
+    ST.saveRule = function (rule) {
+      var input = Object.assign({}, rule); delete input.id;
+      if (rule.id) return editable('/api/alerts/rules/' + encodeURIComponent(rule.id), 'PUT', input);
+      return mutation('/api/alerts/rules', 'POST', input, { idempotencyKey: API.key() });
+    };
+    ST.deleteRule = function (id) { return editable('/api/alerts/rules/' + encodeURIComponent(id), 'DELETE'); };
+    ST.ack = function (id, on) {
+      var path = '/api/alerts/events/' + encodeURIComponent(id);
+      return API.request(path).then(function (response) {
+        return mutation(path + '/ack', 'PUT', { acked: on !== false }, { ifMatch: response.etag });
+      });
+    };
+    ST.ackAll = function () { return mutation('/api/alerts/acknowledgements', 'POST', undefined, { idempotencyKey: API.key() }); };
+    ST.setSettings = function (patch) {
+      return API.request('/api/settings').then(function (response) {
+        var input = Object.assign({}, response.data, patch);
+        delete input.geoKeyConfigured; delete input.enrollKeyConfigured;
+        delete input.enrollToken;
+        if (!input.geoKey) delete input.geoKey;
+        Object.keys(input.notify).forEach(function (key) {
+          input.notify[key] = Object.assign({}, input.notify[key]);
+          delete input.notify[key].configured;
+        });
+        return mutation('/api/settings', 'PUT', input, { ifMatch: response.etag });
+      });
+    };
+    ST.runTest = function (id) { return mutation('/api/nodes/' + encodeURIComponent(id) + '/run', 'POST', undefined, { idempotencyKey: API.key() }); };
+  }
+
+  if (ST.demo) load();
+  else initRemote();
 })();

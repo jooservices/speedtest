@@ -1,0 +1,22 @@
+{
+  "name": "speedtest-ui-checks",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/ui/*.test.mjs",
+    "test:ui": "node tests/ui/smoke.mjs",
+    "test:coverage": "node tests/ui/coverage.mjs",
+    "lint": "node --check ui/assets/js/api.js && node --check ui/assets/js/store.js && node --check ui/assets/js/app.js && node --check ui/assets/js/charts.js"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1",
+    "istanbul-lib-coverage": "^3.2.2",
+    "playwright": "1.63.0",
+    "v8-to-istanbul": "^9.3.0",
+    "yaml": "^2.8.2"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
