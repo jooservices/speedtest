@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/nodes"
 )
 
@@ -171,7 +172,7 @@ func (l *nodeRateLimiter) allow(key string) (bool, time.Duration) {
 	return true, 0
 }
 
-func newAPIHandler(service NodeCredentialService, perMinute int, ownerAuth *serverAuth) http.Handler {
+func newAPIHandler(service NodeCredentialService, perMinute int, ownerAuth *serverAuth, agentStore agentapi.Store) http.Handler {
 	limiter := newNodeRateLimiter(perMinute, defaultAgentBurst)
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !isCredentialAPIPath(r.URL.Path) {
@@ -187,7 +188,7 @@ func newAPIHandler(service NodeCredentialService, perMinute int, ownerAuth *serv
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/agent/") && r.URL.Path != "/api/agent/enroll" && r.URL.Path != "/api/agent/tokens" {
-			handleAgentProtected(service, limiter, w, r)
+			handleAgentProtected(service, limiter, w, r, agentStore, ownerAuth.trustedProxyCIDRs)
 			return
 		}
 		switch {
@@ -216,6 +217,9 @@ func newAPIHandler(service NodeCredentialService, perMinute int, ownerAuth *serv
 }
 
 func allowedNodeMethods(path string) []string {
+	if method := agentapi.Method(path); method != "" {
+		return []string{method}
+	}
 	switch path {
 	case "/api/nodes", "/api/agent/tokens", "/api/agent/enroll", "/api/settings/enrolment-key":
 		return []string{http.MethodPost}
@@ -414,7 +418,7 @@ func handleNodeCredential(service NodeCredentialService, limiter *nodeRateLimite
 	}
 }
 
-func handleAgentProtected(service NodeCredentialService, limiter *nodeRateLimiter, w http.ResponseWriter, r *http.Request) {
+func handleAgentProtected(service NodeCredentialService, limiter *nodeRateLimiter, w http.ResponseWriter, r *http.Request, store agentapi.Store, trustedProxies string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost && r.Method != http.MethodPut && r.Method != http.MethodDelete {
 		methodNotAllowed(w, r, http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete)
 		return
@@ -430,6 +434,10 @@ func handleAgentProtected(service NodeCredentialService, limiter *nodeRateLimite
 		return
 	}
 	if !allowRate(limiter, "node:"+nodeID, w, r) {
+		return
+	}
+	if agentapi.Method(r.URL.Path) != "" {
+		(agentapi.Handler{Store: store}).ServeNode(w, r, nodeID, remoteIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), trustedProxies))
 		return
 	}
 	writeNotFoundProblem(w, r)

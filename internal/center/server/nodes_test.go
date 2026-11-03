@@ -243,7 +243,7 @@ func TestAgentMiddlewareRejectsWrongAndRevokedAndRateLimitsByNode(t *testing.T) 
 	service := &fakeNodeCredentialService{}
 	handler := newNodeHandler(Options{NodeCredentials: service, AgentRateLimit: 1})
 	for _, token := range []string{"wrong", "revoked"} {
-		req := httptest.NewRequest(http.MethodGet, "/api/agent/heartbeat", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/agent/unknown", nil)
 		req.Header.Set("Authorization", "Bearer "+token)
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, req)
@@ -252,7 +252,7 @@ func TestAgentMiddlewareRejectsWrongAndRevokedAndRateLimitsByNode(t *testing.T) 
 		}
 	}
 	for i := 0; i < defaultAgentBurst; i++ {
-		req := httptest.NewRequest(http.MethodGet, "/api/agent/heartbeat", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/agent/unknown", nil)
 		req.Header.Set("Authorization", "Bearer good")
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, req)
@@ -260,7 +260,7 @@ func TestAgentMiddlewareRejectsWrongAndRevokedAndRateLimitsByNode(t *testing.T) 
 			t.Fatalf("request %d status = %d", i, response.Code)
 		}
 	}
-	req := httptest.NewRequest(http.MethodGet, "/api/agent/heartbeat", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/agent/unknown", nil)
 	req.Header.Set("Authorization", "Bearer good")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, req)
@@ -377,7 +377,7 @@ func TestSameOriginAndBearerParsing(t *testing.T) {
 }
 
 func TestServiceErrorDoesNotExposeInternalDetails(t *testing.T) {
-	request := httptest.NewRequest(http.MethodGet, "/api/agent/heartbeat", nil)
+	request := httptest.NewRequest(http.MethodGet, "/api/agent/unknown", nil)
 	for _, test := range []struct {
 		name string
 		err  error
@@ -536,7 +536,7 @@ func TestCredentialHandlerValidationErrorsAndLimits(t *testing.T) {
 			{"database error", http.MethodGet, "Bearer good", &fakeNodeCredentialService{authErr: errors.New("database unavailable")}, http.StatusInternalServerError},
 		} {
 			t.Run(test.name, func(t *testing.T) {
-				req := httptest.NewRequest(test.method, "/api/agent/heartbeat", nil)
+				req := httptest.NewRequest(test.method, "/api/agent/unknown", nil)
 				if test.auth != "" {
 					req.Header.Set("Authorization", test.auth)
 				}

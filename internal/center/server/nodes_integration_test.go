@@ -115,7 +115,7 @@ func TestNodeCredentialHTTPFlowIntegration(t *testing.T) {
 	}
 	credential := responseString(t, enrollResponse.Body.Bytes(), "data", "credential")
 
-	validAgent := httptest.NewRequest(http.MethodGet, "http://center.test/api/agent/heartbeat", nil)
+	validAgent := httptest.NewRequest(http.MethodGet, "http://center.test/api/agent/unknown", nil)
 	validAgent.Header.Set("Authorization", "Bearer "+credential)
 	validResponse := httptest.NewRecorder()
 	handler.ServeHTTP(validResponse, validAgent)
@@ -132,7 +132,7 @@ func TestNodeCredentialHTTPFlowIntegration(t *testing.T) {
 		t.Fatalf("credential rotation status = %d", rotateResponse.Code)
 	}
 	newCredential := responseString(t, rotateResponse.Body.Bytes(), "data", "credential")
-	oldAgent := httptest.NewRequest(http.MethodGet, "http://center.test/api/agent/heartbeat", nil)
+	oldAgent := httptest.NewRequest(http.MethodGet, "http://center.test/api/agent/unknown", nil)
 	oldAgent.Header.Set("Authorization", "Bearer "+credential)
 	oldResponse := httptest.NewRecorder()
 	handler.ServeHTTP(oldResponse, oldAgent)
@@ -147,7 +147,7 @@ func TestNodeCredentialHTTPFlowIntegration(t *testing.T) {
 	if revokeResponse.Code != http.StatusNoContent {
 		t.Fatalf("revoke status = %d", revokeResponse.Code)
 	}
-	revokedAgent := httptest.NewRequest(http.MethodGet, "http://center.test/api/agent/heartbeat", nil)
+	revokedAgent := httptest.NewRequest(http.MethodGet, "http://center.test/api/agent/unknown", nil)
 	revokedAgent.Header.Set("Authorization", "Bearer "+newCredential)
 	revokedResponse := httptest.NewRecorder()
 	handler.ServeHTTP(revokedResponse, revokedAgent)
