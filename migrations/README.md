@@ -7,6 +7,8 @@ results and requires a typed server identity (name or host) for successful ones.
 Numeric server IDs remain positive when present but may be unavailable.
 `00004_ip_history.sql` adds per-node/address counters, the ordered timeline index
 and durable change signals; it backfills history/counters without replaying alerts.
+`00005_alert_engine.sql` adds rule revisions, active-event references, result-
+keyed event deduplication and the event-keyed notification handoff to JOOST-30.
 Its down migration preserves results, cached locations and derived history; see
 [IP history rollback and consumer rules](../docs/ip-history.md).
 SQL files are embedded by
@@ -80,6 +82,8 @@ that a subsequent up can reapply version 1.
 | `alert_rules` | Threshold, selected nodes, channels and severity (`info`, `warn`, `crit`) |
 | `alert_events` | Alert history, resolution and acknowledgement |
 | `alert_state` | Per-rule/per-node evaluation state |
+| `alert_notification_outbox` | One event-keyed, channel-snapshotted handoff to JOOST-30 |
+| `maintenance_jobs` | Status of owner-started maintenance work (bulk alert acknowledgement, later IP refresh) polled at `/api/jobs/{id}` |
 | `settings` | Public JSON or encrypted secret bytes, revision |
 | `api_idempotency` | Hashed request identity and encrypted one-time issuance responses, expiring after 24 hours |
 | `agent_commands` | Per-node command lifecycle and progress |

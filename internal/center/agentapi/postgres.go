@@ -19,6 +19,22 @@ type ResultHook interface {
 	AfterResultStored(context.Context, pgx.Tx, string, Result) error
 }
 
+// ResultHookChain runs hooks in order within the ingestion transaction. A hook
+// failure prevents later hooks and rolls back the result and earlier hook work.
+type ResultHookChain []ResultHook
+
+func (hooks ResultHookChain) AfterResultStored(ctx context.Context, tx pgx.Tx, node string, result Result) error {
+	for _, hook := range hooks {
+		if hook == nil {
+			continue
+		}
+		if err := hook.AfterResultStored(ctx, tx, node, result); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 type Database interface {
 	Begin(context.Context) (pgx.Tx, error)
 	Query(context.Context, string, ...any) (pgx.Rows, error)
@@ -52,12 +68,12 @@ func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool,
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	// Serialize all per-node evaluation, including failures whose IP is unknown.
+	// The lock also precedes address locks to avoid ingestion deadlocks.
+	if _, err = tx.Exec(ctx, `SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE`, node); err != nil {
+		return false, err
+	}
 	if r.IP != nil {
-		// Lock before inserting results or addresses: locking later can deadlock
-		// with another ingestion holding an address lock and waiting for this node.
-		if _, err = tx.Exec(ctx, `SELECT id FROM nodes WHERE id=$1 FOR NO KEY UPDATE`, node); err != nil {
-			return false, err
-		}
 		if _, err = tx.Exec(ctx, `INSERT INTO ip_addresses(ip) VALUES ($1) ON CONFLICT DO NOTHING`, r.IP); err != nil {
 			return false, err
 		}
@@ -87,7 +103,7 @@ func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool,
 		}
 		return true, nil
 	}
-	if s.Hook != nil && r.IP != nil {
+	if s.Hook != nil {
 		if err = s.Hook.AfterResultStored(ctx, tx, node, r); err != nil {
 			return false, err
 		}

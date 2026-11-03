@@ -141,7 +141,7 @@ func TestPostgresSaveFailuresAndHook(t *testing.T) {
 		t.Fatal("nil JSON")
 	}
 }
-func TestPostgresSaveNullIPSkipsIPHistoryWork(t *testing.T) {
+func TestPostgresSaveNullIPStillRunsAlertHook(t *testing.T) {
 	errorMessage := "speedtest: no_route"
 	tx := &testTx{inserted: true}
 	hook := &testHook{}
@@ -151,11 +151,24 @@ func TestPostgresSaveNullIPSkipsIPHistoryWork(t *testing.T) {
 	if err != nil || duplicate {
 		t.Fatal(duplicate, err)
 	}
-	if len(tx.execs) != 1 || !strings.HasPrefix(tx.execs[0], "INSERT INTO results") {
-		t.Fatal("NULL IP performed address or node-lock work", tx.execs)
+	if len(tx.execs) != 2 || !strings.Contains(tx.execs[0], "FROM nodes WHERE id=$1 FOR NO KEY UPDATE") || !strings.HasPrefix(tx.execs[1], "INSERT INTO results") {
+		t.Fatal("NULL IP performed address work or omitted per-node serialization", tx.execs)
 	}
-	if hook.called != 0 {
-		t.Fatal("NULL IP invoked the history hook", hook.called)
+	if hook.called != 1 {
+		t.Fatal("NULL IP did not invoke the alert hook", hook.called)
+	}
+}
+
+func TestResultHookChainOrderAndFailure(t *testing.T) {
+	first, second := &testHook{}, &testHook{}
+	chain := ResultHookChain{first, nil, second}
+	if err := chain.AfterResultStored(t.Context(), nil, "node", Result{}); err != nil || first.called != 1 || second.called != 1 {
+		t.Fatalf("successful chain = %v, calls %d/%d", err, first.called, second.called)
+	}
+	failure := errors.New("hook failed")
+	first, second = &testHook{err: failure}, &testHook{}
+	if err := (ResultHookChain{first, second}).AfterResultStored(t.Context(), nil, "node", Result{}); !errors.Is(err, failure) || first.called != 1 || second.called != 0 {
+		t.Fatalf("failed chain = %v, calls %d/%d", err, first.called, second.called)
 	}
 }
 func TestPostgresConfigAndHeartbeat(t *testing.T) {

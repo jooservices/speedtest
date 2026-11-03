@@ -189,6 +189,11 @@ The center coordinates offsets; there is no WAN, load-balancer or peer-node mode
 | Settings/notifications, JOOST-30/31/40 | Settings GET/PUT/key rotation, test-channel POST, delivery logs/status; `Settings`, `NotificationSettings`, `Delivery`, issuance-only `IssuedKey` |
 | Installer distribution, JOOST-46 | public `GET /install.sh`; checksum-verifying shell script |
 
+The alert engine's rule validation, per-result streak semantics, offline checks,
+event filters/acknowledgement and durable JOOST-30 handoff are described in
+[`docs/alerts.md`](alerts.md). The alert paths and schemas below are already
+part of this OpenAPI contract.
+
 Field names follow `seed.js` and `store.js`: Node `name`, `label`, `provider`,
 `plan`, `colorSlot`, `expectedDown`, `expectedUp`, `interval`, `offset`, `threads`,
 `server`, `enabled`, `host`, `agent`, `note`, `createdAt`; Result `id`, `nodeId`,

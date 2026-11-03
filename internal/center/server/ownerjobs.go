@@ -1,0 +1,54 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"strings"
+
+	"github.com/jooservices/speedtest/internal/center/jobs"
+)
+
+// OwnerJobsStore reads the status of owner-started maintenance jobs.
+type OwnerJobsStore interface {
+	Get(ctx context.Context, id string) (map[string]any, error)
+}
+
+func ownerJobsRoute(path string) bool {
+	return strings.HasPrefix(path, "/api/jobs/") && strings.Count(strings.Trim(path, "/"), "/") == 2
+}
+
+func newOwnerJobsHandler(store OwnerJobsStore, auth *serverAuth, perMinute int) http.Handler {
+	if perMinute <= 0 {
+		perMinute = defaultAgentRequestsPerMinute
+	}
+	limiter := newNodeRateLimiter(perMinute, defaultAgentBurst*2)
+	return auth.requireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		principal, err := ownerPrincipal(r)
+		if err != nil {
+			writeUnauthorized(w, r)
+			return
+		}
+		if !allowRate(limiter, "owner:"+principal, w, r) {
+			return
+		}
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, r, http.MethodGet)
+			return
+		}
+		id := strings.TrimPrefix(r.URL.Path, "/api/jobs/")
+		if !uuidPattern.MatchString(id) {
+			writeNotFoundProblem(w, r)
+			return
+		}
+		job, err := store.Get(r.Context(), strings.ToLower(id))
+		switch {
+		case errors.Is(err, jobs.ErrNotFound):
+			writeNotFoundProblem(w, r)
+		case err != nil:
+			writeAPIProblem(w, r, http.StatusInternalServerError, "Internal failure", "Internal failure; safe detail only.")
+		default:
+			writeEnvelope(w, http.StatusOK, "Success", job)
+		}
+	}))
+}

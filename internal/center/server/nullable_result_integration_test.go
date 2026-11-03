@@ -32,8 +32,8 @@ func TestNullableResultIdentityIntegration(t *testing.T) {
 	failed, _ := json.Marshal(fields)
 	outcomes(t, ingestRequest(t, handler, token, "POST", "/api/agent/results", `{"results":[`+string(failed)+`]}`), 201)
 	outcomes(t, ingestRequest(t, handler, token, "POST", "/api/agent/results", `{"results":[`+string(failed)+`]}`), 200)
-	if hook.calls != 0 {
-		t.Fatal("unknown IP invoked IP history hook")
+	if hook.calls != 1 {
+		t.Fatal("new failed NULL-IP result did not invoke the transactional alert hook exactly once")
 	}
 	var null bool
 	if err := pool.QueryRow(ctx, `SELECT ip IS NULL FROM results WHERE id=$1`, fields["id"]).Scan(&null); err != nil || !null {
@@ -52,12 +52,14 @@ func TestNullableResultIdentityIntegration(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT server_id IS NULL AND server->>'host'='speed.example' FROM results WHERE id=$1`, fields["id"]).Scan(&null); err != nil || !null {
 		t.Fatal("server object not persisted", err)
 	}
-	if hook.calls != 1 {
+	if hook.calls != 2 {
 		t.Fatal("known IP hook not invoked")
 	}
-	// Roll back the history migration, then refuse to lose the nullable-IP contract.
-	if err := db.Migrate(ctx, pool, "down"); err != nil {
-		t.Fatal("history migration rollback failed", err)
+	// Roll back the alert engine and the history migrations, then refuse to lose the nullable-IP contract.
+	for _, name := range []string{"alert engine", "history"} {
+		if err := db.Migrate(ctx, pool, "down"); err != nil {
+			t.Fatal(name+" migration rollback failed", err)
+		}
 	}
 	// New-format rows cannot be represented under version 2. Refuse rollback atomically.
 	if err := db.Migrate(ctx, pool, "down"); err == nil {
@@ -91,5 +93,5 @@ func TestNullableResultIdentityIntegration(t *testing.T) {
 	if err = pool.QueryRow(ctx, `SELECT server_id=1 AND ip='203.0.113.1' AND server->>'name'='Server 1' FROM results WHERE id=$1`, result.ID).Scan(&null); err != nil || !null {
 		t.Fatal("compatible data changed or backfill missing", err)
 	}
-	t.Log("PASS: failed NULL IP accepted/stored/idempotent; ok NULL IP rejected; LibreSpeed server identity accepted/stored; null IP skips history hook; populated down/up; lossy down refuses atomically")
+	t.Log("PASS: failed NULL IP accepted/stored/idempotent and invokes alert hook; ok NULL IP rejected; LibreSpeed server identity accepted/stored; null IP skips IP history work; populated down/up; lossy down refuses atomically")
 }

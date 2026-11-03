@@ -45,10 +45,14 @@ type Options struct {
 	OwnerNodes OwnerNodesStore
 	// OwnerSchedules optionally serves the dashboard schedule API.
 	OwnerSchedules OwnerSchedulesStore
+	// OwnerJobs optionally serves the status of maintenance jobs.
+	OwnerJobs OwnerJobsStore
 	// OwnerResults optionally serves the dashboard result API (list, detail, CSV export).
 	OwnerResults OwnerResultsStore
 	// OwnerStats optionally serves the owner statistics API.
 	OwnerStats OwnerStatsStore
+	// OwnerAlerts optionally serves alert-rule and event APIs.
+	OwnerAlerts OwnerAlertsStore
 	// Install optionally serves /install.sh and /download/<artifact>.
 	Install  http.Handler
 	AgentAPI agentapi.Store
@@ -86,6 +90,10 @@ func NewHandler(options Options) http.Handler {
 	if options.OwnerSchedules != nil {
 		ownerSchedulesHandler = newOwnerSchedulesHandler(options.OwnerSchedules, authHandler, options.AgentRateLimit)
 	}
+	var ownerJobsHandler http.Handler
+	if options.OwnerJobs != nil {
+		ownerJobsHandler = newOwnerJobsHandler(options.OwnerJobs, authHandler, options.AgentRateLimit)
+	}
 	var ownerResultsHandler http.Handler
 	if options.OwnerResults != nil {
 		ownerResultsHandler = newOwnerResultsHandler(options.OwnerResults, authHandler, options.AgentRateLimit)
@@ -93,6 +101,10 @@ func NewHandler(options Options) http.Handler {
 	var ownerStatsHandler http.Handler
 	if options.OwnerStats != nil {
 		ownerStatsHandler = newOwnerStatsHandler(options.OwnerStats, authHandler, options.AgentRateLimit)
+	}
+	var ownerAlertsHandler http.Handler
+	if options.OwnerAlerts != nil {
+		ownerAlertsHandler = newOwnerAlertsHandler(options.OwnerAlerts, authHandler, options.AgentRateLimit)
 	}
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -102,10 +114,14 @@ func NewHandler(options Options) http.Handler {
 			ownerNodesHandler.ServeHTTP(w, r)
 		case ownerSchedulesHandler != nil && ownerSchedulesRoute(r.URL.Path):
 			ownerSchedulesHandler.ServeHTTP(w, r)
+		case ownerJobsHandler != nil && ownerJobsRoute(r.URL.Path):
+			ownerJobsHandler.ServeHTTP(w, r)
 		case ownerResultsHandler != nil && ownerResultsRoute(r.URL.Path):
 			ownerResultsHandler.ServeHTTP(w, r)
 		case ownerStatsHandler != nil && ownerStatsRoute(r.URL.Path):
 			ownerStatsHandler.ServeHTTP(w, r)
+		case ownerAlertsHandler != nil && ownerAlertsRoute(r.URL.Path):
+			ownerAlertsHandler.ServeHTTP(w, r)
 		case r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/"):
 			apiHandler.ServeHTTP(w, r)
 		case options.Install != nil && (r.URL.Path == "/install.sh" || strings.HasPrefix(r.URL.Path, "/download/")):
