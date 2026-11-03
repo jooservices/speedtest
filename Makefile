@@ -85,3 +85,8 @@ lint-ui:
 ## e2e runs the browser end-to-end scenarios against a real center and real agents (needs .env, psql and a Chromium).
 e2e:
 	node tests/e2e/main.mjs
+
+.PHONY: perf
+## perf runs the dashboard load test (10 users, 50 nodes, ~70k results) against a real center; needs .env and psql.
+perf:
+	node tests/perf/dashboard.mjs

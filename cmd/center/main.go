@@ -30,6 +30,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/ipapi"
 	"github.com/jooservices/speedtest/internal/center/ipwatch"
 	"github.com/jooservices/speedtest/internal/center/jobs"
+	"github.com/jooservices/speedtest/internal/center/metrics"
 	"github.com/jooservices/speedtest/internal/center/nodes"
 	"github.com/jooservices/speedtest/internal/center/notify"
 	"github.com/jooservices/speedtest/internal/center/ownerapi"
@@ -144,6 +145,7 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 		Auth:               service,
 		NodeCredential:     nodeService,
 		Pinger:             poolPinger{pool: pool},
+		Metrics:            metrics.Collector{DB: pool},
 		Agent:              &agentapi.Postgres{Pool: pool, Hook: agentapi.ResultHookChain{watcher, alertStore}},
 		OwnerNodes:         owner,
 		OwnerResults:       owner,
@@ -151,7 +153,7 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 		OwnerStats:         statsStore,
 		Settings:           settingsStore,
 		OwnerIP:            &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...)},
-		OwnerDashboard:     &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore},
+		OwnerDashboard:     &dashboard.Cached{Source: &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore}, TTL: 5 * time.Second},
 		OwnerAlerts:        alertStore,
 		OwnerJobs:          &jobs.Registry{DB: pool},
 		Background: func(ctx context.Context) {
@@ -188,6 +190,7 @@ type services struct {
 	Auth               *auth.Service
 	NodeCredential     server.NodeCredentialService
 	Pinger             server.Pinger
+	Metrics            server.MetricsSource
 	Agent              agentapi.Store
 	OwnerNodes         server.OwnerNodesStore
 	OwnerResults       server.OwnerResultsStore
@@ -263,6 +266,8 @@ func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Wr
 		Logger:             logger,
 		UI:                 ui,
 		Pinger:             svc.Pinger,
+		Metrics:            svc.Metrics,
+		MetricsToken:       os.Getenv("SPEEDTEST_METRICS_TOKEN"),
 		Auth:               svc.Auth,
 		RequireHTTPS:       cfg.AppEnv != "local" && cfg.AppEnv != "test",
 		TrustedProxyCIDRs:  cfg.TrustedProxyCIDRs,
