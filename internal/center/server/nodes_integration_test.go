@@ -35,11 +35,8 @@ func openServerIntegrationPool(t *testing.T) (*pgxpool.Pool, context.Context, []
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
 	}
-	if cfg.Database.Name != "speedtest_wt29" {
-		t.Fatal("integration tests require the configured speedtest_wt29 database")
-	}
 	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
-		t.Fatal(err)
+		t.Fatal("integration tests require a configured worktree test database")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
 	t.Cleanup(cancel)

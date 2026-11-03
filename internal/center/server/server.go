@@ -47,6 +47,8 @@ type Options struct {
 	OwnerSchedules OwnerSchedulesStore
 	// OwnerJobs optionally serves the status of maintenance jobs.
 	OwnerJobs OwnerJobsStore
+	// OwnerDashboard optionally serves the dashboard snapshot and comparison series.
+	OwnerDashboard OwnerDashboardStore
 	// OwnerResults optionally serves the dashboard result API (list, detail, CSV export).
 	OwnerResults OwnerResultsStore
 	// OwnerStats optionally serves the owner statistics API.
@@ -94,6 +96,10 @@ func NewHandler(options Options) http.Handler {
 	if options.OwnerJobs != nil {
 		ownerJobsHandler = newOwnerJobsHandler(options.OwnerJobs, authHandler, options.AgentRateLimit)
 	}
+	var ownerDashboardHandler http.Handler
+	if options.OwnerDashboard != nil {
+		ownerDashboardHandler = newOwnerDashboardHandler(options.OwnerDashboard, authHandler, options.AgentRateLimit)
+	}
 	var ownerResultsHandler http.Handler
 	if options.OwnerResults != nil {
 		ownerResultsHandler = newOwnerResultsHandler(options.OwnerResults, authHandler, options.AgentRateLimit)
@@ -116,6 +122,8 @@ func NewHandler(options Options) http.Handler {
 			ownerSchedulesHandler.ServeHTTP(w, r)
 		case ownerJobsHandler != nil && ownerJobsRoute(r.URL.Path):
 			ownerJobsHandler.ServeHTTP(w, r)
+		case ownerDashboardHandler != nil && ownerDashboardRoute(r.URL.Path):
+			ownerDashboardHandler.ServeHTTP(w, r)
 		case ownerResultsHandler != nil && ownerResultsRoute(r.URL.Path):
 			ownerResultsHandler.ServeHTTP(w, r)
 		case ownerStatsHandler != nil && ownerStatsRoute(r.URL.Path):
