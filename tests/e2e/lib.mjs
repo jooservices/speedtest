@@ -11,7 +11,7 @@ const processes = [];
 export function parseEnv(file) {
   const values = {};
   for (const line of readFileSync(file, 'utf8').split('\n')) {
-    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line);
+    const match = /^\s*(\w+)\s*=(.*)$/.exec(line);
     if (match && !line.trim().startsWith('#')) values[match[1]] = match[2].replace(/^["']|["']$/g, '');
   }
   return values;

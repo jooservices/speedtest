@@ -98,7 +98,7 @@ export function steps({ page, stack, startAgent, query, problems }) {
       const statusSelect = page.locator('select', { has: page.locator('option', { hasText: 'Any status' }) });
       await statusSelect.selectOption('failed');
       const failed = await page.locator('text=/\\d[\\d,]* results?/').first().innerText();
-      assert.ok(/^(\d+) results?$/.test(failed.replace(/,/g, '')) && parseInt(failed) < 1680, `status filter: ${failed}`);
+      assert.ok(/^(\d+) results?$/.test(failed.replace(/,/g, '')) && Number.parseInt(failed, 10) < 1680, `status filter: ${failed}`);
       await statusSelect.selectOption('all');
       await page.getByLabel('Search results').fill('VM3');
       await page.getByText('336 results').waitFor();

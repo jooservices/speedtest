@@ -9,9 +9,15 @@ const contract = YAML.parse(readFileSync(`${root}/docs/openapi.yaml`, 'utf8'));
 const ajv = new Ajv({ strict: false, allErrors: true });
 addFormats(ajv);
 
+// Segment-wise comparison keeps this linear (no regular expression built from the spec).
+function matchesTemplate(template, path) {
+  const a = template.split('/'), b = path.split('/');
+  return a.length === b.length && a.every((seg, i) => (seg.startsWith('{') && seg.endsWith('}') && b[i] !== '') || seg === b[i]);
+}
+
 function operation(path, method) {
   // A literal path (/api/schedules/rules) wins over a parametrised one (/api/schedules/{id}).
-  const template = contract.paths[path] ? path : Object.keys(contract.paths).find(t => new RegExp('^' + t.replace(/\{[^}]+\}/g, '[^/]+') + '$').test(path));
+  const template = contract.paths[path] ? path : Object.keys(contract.paths).find(t => matchesTemplate(t, path));
   return template ? { template, op: contract.paths[template][method.toLowerCase()] } : {};
 }
 
