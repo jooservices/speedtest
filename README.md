@@ -206,3 +206,5 @@ This does not change the demo UI. See
 [configuration, lifecycle and verification](docs/geolocation.md).
 
 See [`docs/engine.md`](docs/engine.md) for the Ookla engine API, environment configuration, units, errors and offline runner tests.
+
+Release packaging and the one-line agent installer: [`docs/release.md`](docs/release.md).

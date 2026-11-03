@@ -50,6 +50,11 @@ type CenterConfig struct {
 	AppKey []byte
 	// AgentRequestsPerMinute is the per-node sustained agent API rate.
 	AgentRequestsPerMinute int
+	// PublicURL is the address agents use to reach the center; it is written into
+	// the served installer script. ReleaseDir holds the files built by `make release`.
+	// Both must be set to enable GET /install.sh and GET /download/<artifact>.
+	PublicURL  string
+	ReleaseDir string
 }
 
 // DatabaseConfig holds the PostgreSQL connection settings.
@@ -123,6 +128,8 @@ func LoadCenter() (CenterConfig, error) {
 		},
 		AppKey:                 appKey,
 		AgentRequestsPerMinute: rateLimit,
+		PublicURL:              strings.TrimSpace(getString("SPEEDTEST_PUBLIC_URL", "")),
+		ReleaseDir:             strings.TrimSpace(getString("SPEEDTEST_RELEASE_DIR", "")),
 	}
 	if err := cfg.validate(); err != nil {
 		return CenterConfig{}, err
@@ -131,6 +138,9 @@ func LoadCenter() (CenterConfig, error) {
 }
 
 func (c CenterConfig) validate() error {
+	if (c.PublicURL == "") != (c.ReleaseDir == "") {
+		return errors.New("SPEEDTEST_PUBLIC_URL and SPEEDTEST_RELEASE_DIR must be set together")
+	}
 	if err := validateHostPort("SPEEDTEST_HTTP_ADDR", c.HTTPAddr); err != nil {
 		return err
 	}

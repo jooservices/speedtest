@@ -608,3 +608,25 @@ func assertRequestLog(t *testing.T, output, requestID string, status int, method
 }
 
 var _ io.Writer = (*statusWriter)(nil)
+
+func TestInstallRoutesAreOptional(t *testing.T) {
+	without := NewHandler(Options{})
+	for _, path := range []string{"/install.sh", "/download/SHA256SUMS"} {
+		rec := httptest.NewRecorder()
+		without.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("%s without an installer: status = %d, want 404", path, rec.Code)
+		}
+	}
+	marker := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("installer:" + r.URL.Path))
+	})
+	with := NewHandler(Options{Install: marker})
+	for _, path := range []string{"/install.sh", "/download/SHA256SUMS"} {
+		rec := httptest.NewRecorder()
+		with.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK || rec.Body.String() != "installer:"+path {
+			t.Fatalf("%s with an installer: status = %d body = %q", path, rec.Code, rec.Body.String())
+		}
+	}
+}

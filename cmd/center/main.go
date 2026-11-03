@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/jooservices/speedtest"
 	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/db"
+	"github.com/jooservices/speedtest/internal/center/install"
 	"github.com/jooservices/speedtest/internal/center/nodes"
 	"github.com/jooservices/speedtest/internal/center/server"
 	"github.com/jooservices/speedtest/internal/shared/config"
@@ -134,7 +136,16 @@ func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Wr
 		return fmt.Errorf("listen on configured address: %w", err)
 	}
 
+	var installHandler http.Handler
+	if cfg.PublicURL != "" {
+		installHandler, err = install.Handler(install.Config{PublicURL: cfg.PublicURL, ReleaseDir: cfg.ReleaseDir})
+		if err != nil {
+			return err
+		}
+	}
+
 	handler := server.NewHandler(server.Options{
+		Install:           installHandler,
 		Logger:            logger,
 		UI:                ui,
 		Pinger:            pinger,

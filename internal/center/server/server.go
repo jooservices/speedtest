@@ -39,6 +39,8 @@ type Options struct {
 	ReadinessTimeout  time.Duration
 	NodeCredentials   NodeCredentialService
 	AgentRateLimit    int
+	// Install optionally serves /install.sh and /download/<artifact>.
+	Install http.Handler
 }
 
 // NewHandler builds the health, readiness, and static UI routes.
@@ -71,6 +73,8 @@ func NewHandler(options Options) http.Handler {
 			authHandler.serve(w, r)
 		case r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/"):
 			apiHandler.ServeHTTP(w, r)
+		case options.Install != nil && (r.URL.Path == "/install.sh" || strings.HasPrefix(r.URL.Path, "/download/")):
+			options.Install.ServeHTTP(w, r)
 		case r.URL.Path == "/healthz":
 			serveGetRoute(w, r, http.HandlerFunc(healthz))
 		case r.URL.Path == "/readyz":

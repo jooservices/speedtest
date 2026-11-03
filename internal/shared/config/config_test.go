@@ -24,6 +24,8 @@ var allEnvVars = []string{
 	"SPEEDTEST_DB_SSLMODE",
 	"APP_KEY",
 	"SPEEDTEST_AGENT_REQUESTS_PER_MINUTE",
+	"SPEEDTEST_PUBLIC_URL",
+	"SPEEDTEST_RELEASE_DIR",
 }
 
 // resetEnv clears every known variable so the documented defaults apply.
@@ -143,6 +145,16 @@ func TestLoadCenterInvalid(t *testing.T) {
 			name:    "sslmode unknown",
 			env:     map[string]string{"SPEEDTEST_DB_SSLMODE": "enabled"},
 			wantErr: "SPEEDTEST_DB_SSLMODE must be one of disable, allow, prefer, require, verify-ca, verify-full",
+		},
+		{
+			name:    "public URL without release directory",
+			env:     map[string]string{"SPEEDTEST_PUBLIC_URL": "https://speedtest.example.com"},
+			wantErr: "SPEEDTEST_PUBLIC_URL and SPEEDTEST_RELEASE_DIR must be set together",
+		},
+		{
+			name:    "release directory without public URL",
+			env:     map[string]string{"SPEEDTEST_RELEASE_DIR": "/opt/speedtest/dist"},
+			wantErr: "SPEEDTEST_PUBLIC_URL and SPEEDTEST_RELEASE_DIR must be set together",
 		},
 		{
 			name:    "agent rate limit invalid",
@@ -283,5 +295,18 @@ func TestDatabaseConfigDSNEmptyPassword(t *testing.T) {
 	want := "postgres://speedtest:@127.0.0.1:5432/speedtest?sslmode=disable"
 	if got != want {
 		t.Fatalf("DSN() = %q, want %q", got, want)
+	}
+}
+
+func TestLoadCenterInstallerSettings(t *testing.T) {
+	resetEnv(t)
+	t.Setenv("SPEEDTEST_PUBLIC_URL", " https://speedtest.example.com ")
+	t.Setenv("SPEEDTEST_RELEASE_DIR", " /opt/speedtest/dist ")
+	cfg, err := LoadCenter()
+	if err != nil {
+		t.Fatalf("LoadCenter() error = %v", err)
+	}
+	if cfg.PublicURL != "https://speedtest.example.com" || cfg.ReleaseDir != "/opt/speedtest/dist" {
+		t.Fatalf("installer settings = %q, %q", cfg.PublicURL, cfg.ReleaseDir)
 	}
 }
