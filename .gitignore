@@ -8,3 +8,4 @@ node_modules/
 # GeoLite2 databases are downloaded locally, never committed.
 *.mmdb
 data/geoip/
+dist/
