@@ -379,12 +379,16 @@ command ID. Acknowledgements lock the owned command, preserve omitted progress,
 refuse decreasing progress or changes after a terminal state, and verify that a
 referenced result belongs to the same node. Terminal retry preserves `ackedAt`.
 
-`agentapi.ResultHook.AfterResultStored` is the JOOST-35 extension point. It runs
-only after a new result is inserted, inside that result's transaction, using the
-provided transaction. Hook errors roll back the result and address insertion.
-Duplicates never run the hook. IP history and alert evaluation are not implemented
-by ingestion; inserting `ip_addresses` only satisfies the existing result foreign
-key. `/api/agent/ip` uses the socket peer, or the existing trusted proxy policy
+`agentapi.ResultHook.AfterResultStored` runs only after a new result is inserted,
+inside that result's transaction. The center wires `ipwatch.Watcher` to maintain
+IP history and per-node/address counters atomically. Timelines use stored
+`(ts,result UUID)` measurement order, including failed results. Late observations
+repair adjacent transitions but emit no alerts; only a new newest result with a
+different IP emits a durable `ip_changed` signal for JOOST-29. Duplicate UUIDs
+never run the hook. Hook errors roll back the result and all derived state.
+See [IP history and the alert handoff](ip-history.md) for storage, geolocation,
+late-arrival, consumer and rollback contracts. `/api/agent/ip` uses the socket
+peer, or the existing trusted proxy policy
 configured by `SPEEDTEST_TRUSTED_PROXY_CIDRS`; it performs no hostname lookup.
 
 Verification (native Go; database suites must run serially on a verified worktree

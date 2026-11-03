@@ -22,6 +22,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/install"
+	"github.com/jooservices/speedtest/internal/center/ipwatch"
 	"github.com/jooservices/speedtest/internal/center/nodes"
 	"github.com/jooservices/speedtest/internal/center/server"
 	"github.com/jooservices/speedtest/internal/shared/config"
@@ -90,8 +91,13 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 	if err != nil {
 		return err
 	}
+	watcher, closeGeo, err := ipwatch.Open(logger)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = closeGeo() }()
 	nodeService := nodes.NewService(pool, cfg.AppKey)
-	return serve(ctx, args, logger, stderr, cfg, service, nodeService, poolPinger{pool: pool}, &agentapi.Postgres{Pool: pool})
+	return serve(ctx, args, logger, stderr, cfg, service, nodeService, poolPinger{pool: pool}, &agentapi.Postgres{Pool: pool, Hook: watcher})
 }
 
 func validateCenterArguments(args []string, cfg config.CenterConfig, stderr io.Writer) error {

@@ -74,12 +74,12 @@ func TestMigrations(t *testing.T) {
 			t.Error(e)
 		}
 	}()
-	t.Run("AllFourteenTables", func(t *testing.T) {
+	t.Run("AllSixteenTables", func(t *testing.T) {
 		var got int
-		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency"}).Scan(&got); e != nil || got != 14 {
-			t.Fatalf("required tables: got %d want 14: %v", got, e)
+		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals"}).Scan(&got); e != nil || got != 16 {
+			t.Fatalf("required tables: got %d want 16: %v", got, e)
 		}
-		t.Log("PASS: 14 required tables created by embedded migrations")
+		t.Log("PASS: 16 required tables created by embedded migrations")
 	})
 	t.Run("IndexesUUIDUnitsAndTimeTypes", func(t *testing.T) {
 		var got int
@@ -169,6 +169,9 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		if e := db.Migrate(ctx, pool, "down"); e != nil {
 			t.Fatal(e)
 		}
+		if e := db.Migrate(ctx, pool, "down"); e != nil {
+			t.Fatal(e)
+		}
 		var n int
 		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name <> 'goose_db_version'").Scan(&n); e != nil || n != 0 {
 			t.Fatal("rollback left application tables")
@@ -201,6 +204,9 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		}
 	})
 	t.Run("TransactionalRollbackFailure", func(t *testing.T) {
+		if e := db.Migrate(ctx, pool, "down"); e != nil {
+			t.Fatal(e)
+		}
 		if e := db.Migrate(ctx, pool, "down"); e != nil {
 			t.Fatal(e)
 		}

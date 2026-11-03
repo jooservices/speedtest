@@ -42,7 +42,7 @@ migrate-down:
 
 ## test-db exercises migrations and constraints on a verified non-live database.
 test-db:
-	$(GO) test -p 1 -tags integration ./cmd/center ./internal/center/db/... ./internal/center/geo ./internal/center/nodes ./internal/center/server -count=1 -v
+	$(GO) test -p 1 -tags integration ./cmd/center ./internal/center/db/... ./internal/center/geo ./internal/center/ipwatch ./internal/center/nodes ./internal/center/server -count=1 -v
 
 ## shellcheck lints the shell scripts shipped or used by the project.
 shellcheck:

@@ -4,14 +4,21 @@ package main
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
+	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/shared/config"
@@ -45,14 +52,29 @@ func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
 	}
 	t.Log("PASS: command-center startup is checked against the verified Speedtest worktree database")
 
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	var locationCalls atomic.Int64
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		locationCalls.Add(1)
+		_ = json.NewEncoder(w).Encode(map[string]any{"status": "success", "query": strings.TrimPrefix(r.URL.Path, "/"), "countryCode": "ZZ", "city": "Fixture city", "lat": 1, "lon": 2})
+	}))
+	t.Cleanup(provider.Close)
+	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "true")
+	t.Setenv("SPEEDTEST_GEO_IPAPI_URL", provider.URL)
+	t.Setenv("SPEEDTEST_GEO_IPINFO_ENABLED", "false")
+	t.Setenv("SPEEDTEST_GEOIP_CITY_DB", t.TempDir()+"/missing-city.mmdb")
+	t.Setenv("SPEEDTEST_GEOIP_ASN_DB", t.TempDir()+"/missing-asn.mmdb")
 	address := freeTCPAddress(t)
 	t.Setenv("SPEEDTEST_HTTP_ADDR", address)
 	t.Setenv("SPEEDTEST_UI_DIR", "")
 	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	runCtx, stop := context.WithCancel(t.Context())
+	t.Cleanup(stop)
 	runDone := make(chan error, 1)
 	go func() { runDone <- runWithDatabase(runCtx, nil, logger, io.Discard) }()
-	client := &http.Client{Timeout: time.Second}
+	client := &http.Client{Timeout: 5 * time.Second}
 	baseURL := "http://" + address
 	deadline := time.Now().Add(3 * time.Second)
 	for {
@@ -93,6 +115,10 @@ func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
 		stop()
 		t.Fatalf("POST /api/agent/enroll status = %d, want 400 from configured API service", response.StatusCode)
 	}
+	verifyIPHistoryHTTP(t, ctx, pool, client, baseURL)
+	if locationCalls.Load() != 2 {
+		t.Fatal("expected one fallback lookup for each new public IP", locationCalls.Load())
+	}
 	client.CloseIdleConnections()
 	stop()
 	select {
@@ -115,7 +141,7 @@ func TestSeedAndStartupGuardsIntegration(t *testing.T) {
 		t.Setenv(key, value)
 	}
 	cfg, err := config.LoadCenter()
-	if err != nil || cfg.Database.Name != "speedtest_wt23" {
+	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
 		t.Fatal("worktree database required")
 	}
 	pool, err := db.Open(t.Context(), cfg.Database)
@@ -142,6 +168,11 @@ func TestSeedAndStartupGuardsIntegration(t *testing.T) {
 			t.Fatal("invalid args accepted", args)
 		}
 	}
+	t.Setenv("SPEEDTEST_GEO_PROVIDER_TIMEOUT", "invalid")
+	if err = runWithDatabase(t.Context(), nil, logger, io.Discard); err == nil {
+		t.Fatal("invalid geo configuration accepted")
+	}
+	t.Setenv("SPEEDTEST_GEO_PROVIDER_TIMEOUT", "5s")
 	canceled, cancel := context.WithCancel(t.Context())
 	cancel()
 	if err = runWithDatabase(canceled, nil, logger, io.Discard); err == nil {
@@ -170,4 +201,60 @@ func TestSeedAndStartupGuardsIntegration(t *testing.T) {
 	if err = runSeedAdmin(t.Context(), nil, io.Discard); err == nil {
 		t.Fatal("invalid config accepted")
 	}
+}
+
+// verifyIPHistoryHTTP exercises the real executable wiring, authentication,
+// batch replay contract, transaction hook and configured geolocation provider.
+func verifyIPHistoryHTTP(t *testing.T, ctx context.Context, pool *pgxpool.Pool, client *http.Client, baseURL string) {
+	t.Helper()
+	const node = "00000000-0000-4000-8000-000000000035"
+	const bearer = "sp_fixture_public_test_credential"
+	hash := sha256.Sum256([]byte(bearer))
+	if _, err := pool.Exec(ctx, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES ($1,'fixture',100,50)`, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO node_credentials(id,node_id,kind,token_hash) VALUES ($1,$1,'bearer',$2)`, node, hex.EncodeToString(hash[:])); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"results":[{"id":"10000000-0000-4000-8000-000000000001","ts":"2026-11-03T10:00:00Z","status":"failed","error":"offline","down":null,"up":null,"ping":null,"jitter":null,"loss":null,"dLat":null,"uLat":null,"serverId":null,"ip":"203.0.113.1","threads":1,"bytesDown":0,"bytesUp":0,"duration":0,"manual":false,"raw":{}}]}`
+	post := func(payload, token string, wantStatus int, wantOutcome ...int) {
+		t.Helper()
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/api/agent/results", strings.NewReader(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer "+token)
+		response, err := client.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = response.Body.Close() }()
+		if response.StatusCode != wantStatus {
+			data, _ := io.ReadAll(response.Body)
+			t.Fatalf("ingestion status=%d want=%d body=%s", response.StatusCode, wantStatus, data)
+		}
+		if len(wantOutcome) > 0 {
+			var wire struct{ Data []agentapi.Outcome }
+			if err = json.NewDecoder(response.Body).Decode(&wire); err != nil || len(wire.Data) != len(wantOutcome) {
+				t.Fatal("batch outcomes", err, wire)
+			}
+			for i, status := range wantOutcome {
+				if wire.Data[i].Status != status {
+					t.Fatal(wire.Data)
+				}
+			}
+		}
+	}
+	post(body, "invalid", 401)
+	post(body, bearer, 207, 201)
+	newest := strings.ReplaceAll(strings.ReplaceAll(strings.ReplaceAll(body, "000000000001", "000000000003"), "10:00:00Z", "10:10:00Z"), "203.0.113.1", "203.0.113.2")
+	post(newest, bearer, 207, 201)
+	late := strings.ReplaceAll(strings.ReplaceAll(body, "000000000001", "000000000002"), "10:00:00Z", "10:05:00Z")
+	post(late, bearer, 207, 201)
+	post(newest, bearer, 207, 200)
+	var tests, history, signals, locations int
+	if err := pool.QueryRow(ctx, `SELECT (SELECT sum(tests) FROM node_ip_addresses),(SELECT count(*) FROM node_ip_history),(SELECT count(*) FROM ip_change_signals),(SELECT count(*) FROM ip_addresses WHERE looked_up_at IS NOT NULL)`).Scan(&tests, &history, &signals, &locations); err != nil || tests != 3 || history != 2 || signals != 1 || locations != 2 {
+		t.Fatal("HTTP IP watch persistence", tests, history, signals, locations, err)
+	}
+	t.Log("PASS: executable HTTP ingestion rejects unauthorized bearer; 201/200 replay outcomes; 3 samples, 2 history openings/transitions, 1 newest-change signal, 2 cached locations; late sample emits no alert")
 }

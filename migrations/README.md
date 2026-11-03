@@ -2,6 +2,10 @@
 
 `00001_initial.sql` creates the initial schema. `00002_node_enrollment_idempotency.sql`
 adds encrypted response replay records used by retryable credential issuance.
+`00003_ip_history.sql` adds per-node/address counters, the ordered timeline index
+and durable change signals; it backfills history/counters without replaying alerts.
+Its down migration preserves results, cached locations and derived history; see
+[IP history rollback and consumer rules](../docs/ip-history.md).
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file
@@ -66,7 +70,9 @@ that a subsequent up can reapply version 1.
 | `node_credentials` | Hashed single-use enrollment tokens and bearer credentials, expiration/revocation |
 | `results` | Client UUID, normalized nullable measurements, original engine JSON and metadata |
 | `ip_addresses` | IPv4/IPv6 host address and cached geolocation JSON |
-| `node_ip_history` | Timestamped address changes per node |
+| `node_ip_history` | Measurement-ordered address boundaries per node (initial row has null from_ip) |
+| `node_ip_addresses` | Per-node/address counts, first/last measurement time and speed sums |
+| `ip_change_signals` | Durable newest-only IP-change handoff to the alert engine |
 | `schedules` | One interval/offset configuration per node |
 | `alert_rules` | Threshold, selected nodes, channels and severity (`info`, `warn`, `crit`) |
 | `alert_events` | Alert history, resolution and acknowledgement |
@@ -131,7 +137,7 @@ The geo suite applies its own schema before testing. These are destructive
 fixtures: use only a disposable test/worktree database. Always use `-p 1` and
 `-count=1`; never run separate integration commands or parallel tests against
 the same database concurrently. Migration suites apply version 1, insert
-synthetic fixtures across all 13 tables, roll back populated data, reapply
+synthetic fixtures across the application tables, roll back populated data, reapply
 concurrently and clean up.
 They verify UUID uniqueness, foreign keys, bounds, nulls, IPv6, UTC precision,
 indexes, cancellation and transactional failure on an external view dependency.

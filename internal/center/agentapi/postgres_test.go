@@ -103,8 +103,9 @@ func TestPostgresSaveFailuresAndHook(t *testing.T) {
 		duplicate bool
 	}{
 		{"begin", testDB{beginErr: failure}, nil, failure, false},
-		{"ip insert", testDB{tx: &testTx{execErrors: []error{failure}}}, nil, failure, false},
-		{"result insert", testDB{tx: &testTx{execErrors: []error{nil, failure}}}, nil, failure, false},
+		{"node lock", testDB{tx: &testTx{execErrors: []error{failure}}}, nil, failure, false},
+		{"ip insert", testDB{tx: &testTx{execErrors: []error{nil, failure}}}, nil, failure, false},
+		{"result insert", testDB{tx: &testTx{execErrors: []error{nil, nil, failure}}}, nil, failure, false},
 		{"compare query", testDB{tx: &testTx{row: testRow{err: failure}}}, nil, failure, false},
 		{"conflict", testDB{tx: &testTx{row: testRow{values: []any{false}}}}, nil, ErrConflict, false},
 		{"duplicate", testDB{tx: &testTx{row: testRow{values: []any{true}}}}, &testHook{}, nil, true},
