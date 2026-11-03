@@ -23,8 +23,9 @@ type ResultView struct {
 	IP     string
 }
 
-// ScanResult reads one row selected with ResultColumns. The geo member is nil until AttachGeo.
-func ScanResult(row pgx.Row) (ResultView, error) {
+// ScanResult reads one row selected with ResultColumns followed by the columns for extra. The geo member is nil
+// until the caller attaches it.
+func ScanResult(row pgx.Row, extra ...any) (ResultView, error) {
 	var id, nodeID, status string
 	var ts time.Time
 	var down, up, ping, jitter, dLat, uLat, loss, duration *float64
@@ -34,9 +35,10 @@ func ScanResult(row pgx.Row) (ResultView, error) {
 	var ip, errText, engineISP, engineResultID, engineResultURL, engineIP *string
 	var manual bool
 	var sid *int32
-	if err := row.Scan(&id, &nodeID, &ts, &status, &down, &up, &ping, &jitter, &dLat, &uLat, &loss, &sid, &server, &ip,
+	dest := []any{&id, &nodeID, &ts, &status, &down, &up, &ping, &jitter, &dLat, &uLat, &loss, &sid, &server, &ip,
 		&threads, &bytesDown, &bytesUp, &duration, &errText, &manual, &raw, &loadedDown, &loadedUp, &engineISP,
-		&engineResultID, &engineResultURL, &engineIP, &warnings); err != nil {
+		&engineResultID, &engineResultURL, &engineIP, &warnings}
+	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return ResultView{}, err
 	}
 	var serverIDValue any
