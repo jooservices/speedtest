@@ -12,7 +12,7 @@ export function runtime(origin, options = {}) {
     fetch: (path, init) => (options.fetch || fetch)(new URL(path, origin), init) });
   context.window = context;
   for (const file of ['seed', 'api', ...(options.apiOnly ? [] : ['store'])]) {
-    vm.runInContext(readFileSync(`ui/assets/js/${file}.js`, 'utf8'), context, { filename: resolve(`ui/assets/js/${file}.js`) });
+    vm.runInContext(readFileSync(`ui/assets/js/${file}.js`, 'utf8'), context, { filename: resolve(`ui/assets/js/${file}.js`) }); // NOSONAR: loads the repository's own UI scripts into a test sandbox
   }
   return { ST: context.ST, context, storage };
 }

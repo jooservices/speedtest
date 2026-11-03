@@ -20,7 +20,7 @@ lint:
 	golangci-lint run
 
 ## ci runs the same checks as CI: vet, test, build and lint.
-ci: vet test build lint test-install
+ci: vet test build lint test-install test-matrix
 
 ## run-center starts the command center from the current .env.
 run-center:
@@ -85,3 +85,26 @@ lint-ui:
 ## e2e runs the browser end-to-end scenarios against a real center and real agents (needs .env, psql and a Chromium).
 e2e:
 	node tests/e2e/main.mjs
+
+.PHONY: perf
+## perf runs the dashboard load test (10 users, 50 nodes, ~70k results) against a real center; needs .env and psql.
+perf:
+	node tests/perf/dashboard.mjs
+
+.PHONY: test-matrix
+## test-matrix fails when an operation of docs/openapi.yaml has no test or docs/test-matrix.md is stale.
+test-matrix:
+	node scripts/test-matrix.mjs
+
+.PHONY: mutation-check
+## mutation-check applies five deliberate breakages and requires the suite to catch each (needs .env).
+mutation-check:
+	python3 scripts/mutation-check.py
+
+.PHONY: integration-e2e
+## integration-e2e runs the serial integration suite, the real-center browser E2E (with OpenAPI conformance of every response) and the mutation checks.
+integration-e2e:
+	python3 scripts/geo-test-fixtures.py
+	$(GO) test -race -p 1 -tags integration ./...
+	node tests/e2e/main.mjs
+	python3 scripts/mutation-check.py

@@ -437,3 +437,26 @@ func TestAgentIngestionLoad1000PerMinuteIntegration(t *testing.T) {
 		t.Fatalf("CPU %.3f%% exceeds 5%%", percent)
 	}
 }
+
+// Every measurement an agent reports must be stored as sent; a dropped column would silently
+// corrupt statistics, so each one is read back with a distinct non-null value.
+func TestAgentIngestionStoresEveryMeasurementIntegration(t *testing.T) {
+	pool, ctx, key := openServerIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	service := nodes.NewService(pool, key)
+	_, token := enrollIngestionNode(t, ctx, service, "ingestion-measures")
+	handler := NewHandler(Options{NodeCredentials: service, AgentAPI: &agentapi.Postgres{Pool: pool}, AgentRateLimit: 10000, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil))})
+	body := strings.NewReplacer(`"jitter":null`, `"jitter":1.5`, `"dLat":null`, `"dLat":21.25`, `"uLat":null`, `"uLat":31.75`, `"loss":null`, `"loss":0.5`).Replace(ingestionResult)
+	outcomes(t, ingestRequest(t, handler, token, "POST", "/api/agent/results", `{"results":[`+body+`]}`), 201)
+	var down, up, ping, jitter, dLat, uLat, loss float64
+	var threads, bytesDown int
+	if err := pool.QueryRow(ctx, `SELECT down_mbps,up_mbps,ping_ms,jitter_ms,down_latency_ms,up_latency_ms,loss_percent,threads,bytes_down FROM results`).
+		Scan(&down, &up, &ping, &jitter, &dLat, &uLat, &loss, &threads, &bytesDown); err != nil {
+		t.Fatal(err)
+	}
+	if down != 123.4 || up != 56.7 || ping != 3 || jitter != 1.5 || dLat != 21.25 || uLat != 31.75 || loss != 0.5 || threads != 4 || bytesDown != 1024 {
+		t.Fatalf("stored %v %v %v %v %v %v %v %v %v", down, up, ping, jitter, dLat, uLat, loss, threads, bytesDown)
+	}
+}

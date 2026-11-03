@@ -73,12 +73,13 @@ export function steps({ page, stack, startAgent, query, problems }) {
           for (const [hash, title] of routes) {
             await S.open(hash, title);
             await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
-            await page.waitForTimeout(150);
+            await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+            if (process.env.E2E_SHOTS) { await page.evaluate(() => new Promise(r => setTimeout(r, 700))); await page.screenshot({ path: `${process.env.E2E_SHOTS}/${theme}-${width}-${title.replaceAll(/\W+/g, '_')}.png`, fullPage: false }); }
             const overflow = await page.evaluate(() => {
               const wide = [];
               for (const el of document.querySelectorAll('.content *')) {
                 const box = el.getBoundingClientRect();
-                if (box.width && box.right > document.documentElement.clientWidth + 1 && !el.closest('.table-wrap, .tabs, .seg, pre, .legend')) wide.push(el.tagName + '.' + el.className);
+                if (box.width && box.right > document.documentElement.clientWidth + 1 && !el.closest('.table-wrap, .tabs, .seg, pre, .legend, .leaflet-container')) wide.push(el.tagName + '.' + el.className);
               }
               return { page: document.documentElement.scrollWidth - document.documentElement.clientWidth, wide: wide.slice(0, 3) };
             });
@@ -97,7 +98,7 @@ export function steps({ page, stack, startAgent, query, problems }) {
       const statusSelect = page.locator('select', { has: page.locator('option', { hasText: 'Any status' }) });
       await statusSelect.selectOption('failed');
       const failed = await page.locator('text=/\\d[\\d,]* results?/').first().innerText();
-      assert.ok(/^(\d+) results?$/.test(failed.replace(/,/g, '')) && parseInt(failed) < 1680, `status filter: ${failed}`);
+      assert.ok(/^(\d+) results?$/.test(failed.replace(/,/g, '')) && Number.parseInt(failed, 10) < 1680, `status filter: ${failed}`);
       await statusSelect.selectOption('all');
       await page.getByLabel('Search results').fill('VM3');
       await page.getByText('336 results').waitFor();
@@ -164,6 +165,9 @@ export function steps({ page, stack, startAgent, query, problems }) {
       await toast('Start times spread out').waitFor();
       const offsets = query(stack.db, "select count(distinct offset_minutes) from schedules");
       assert.ok(Number(offsets) > 1, 'staggering gives different start minutes');
+      // The spread-out request reloads the data and redraws the page; type only after that has settled.
+      await page.waitForLoadState('networkidle');
+      await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
       await page.getByLabel('Pause from').fill('23:00');
       await page.getByLabel('Pause from').blur();
       await page.getByLabel('Pause until').fill('05:00');
@@ -222,6 +226,7 @@ export function steps({ page, stack, startAgent, query, problems }) {
       await page.getByLabel('Address for Email').fill('ops@example.com');
       await page.getByLabel('Enable Email').check({ force: true });
       await toast('Saved').waitFor();
+      await page.waitForLoadState('networkidle'); // the earlier 'Saved' toast may still be showing; wait for every save to finish
       const settings = await (await page.request.get(stack.origin + '/api/settings')).text();
       assert.ok(!settings.includes('e2e-secret-path'), 'secrets are never returned');
       assert.ok(settings.includes('"configured":true'), 'the read model says a secret is configured');
@@ -237,6 +242,84 @@ export function steps({ page, stack, startAgent, query, problems }) {
       assert.ok(!(await page.content()).includes(key.trim()), 'the key is not shown again after a reload');
     },
 
+    // Statistics: every section draws from the loaded results and the metric switch changes the table.
+    async statisticsPage() {
+      await S.open('#/stats', 'Statistics');
+      await page.getByRole('heading', { name: 'Summary by node' }).waitFor();
+      await page.getByRole('columnheader', { name: 'Average' }).waitFor();
+      const before = await page.locator('table').first().innerText();
+      await page.getByRole('tab', { name: 'Upload' }).first().click();
+      await page.getByRole('heading', { name: 'Summary by node' }).waitFor();
+      assert.notEqual(await page.locator('table').first().innerText(), before, 'switching to upload changes the figures');
+      for (const section of ['Trend', 'Time of day', 'Week at a glance', 'Distribution']) await page.getByRole('heading', { name: section }).waitFor();
+      await S.expectNoLoadError();
+    },
+
+    // IP & location: the recorded addresses are listed and the lookup asks the center.
+    async ipPage() {
+      await S.open('#/network', 'IP & location');
+      await page.getByRole('heading', { name: 'Every address seen' }).waitFor();
+      // The live map shows one marker per location; hovering it names the nodes there.
+      await page.locator('.leaflet-container').waitFor();
+      const markers = page.locator('.leaflet-marker-icon');
+      await markers.first().waitFor();
+      assert.ok(await markers.count() >= 1, 'the map shows the node locations');
+      await markers.first().hover();
+      await page.locator('.leaflet-tooltip').first().waitFor();
+      await page.getByRole('link', { name: 'OpenStreetMap' }).waitFor();
+      await page.getByRole('cell', { name: '203.0.113.11' }).first().waitFor();
+      await page.getByLabel('IP address to look up').fill('not an address');
+      await page.getByRole('button', { name: 'Look up' }).click();
+      await page.getByText('Enter a valid IPv4 address').waitFor();
+      await page.getByLabel('IP address to look up').fill('203.0.113.11');
+      await page.getByRole('button', { name: 'Look up' }).click();
+      await page.getByText('Hanoi').first().waitFor();
+      await page.getByRole('cell', { name: '203.0.113.11' }).first().click();
+      await page.getByRole('heading', { name: 'IP address details' }).waitFor();
+    },
+
+    // The top-bar button flips the theme and the choice survives a reload (stored on the center).
+    async themeSwitch() {
+      await S.open('#/', 'Dashboard');
+      const theme = () => page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+      const start = await theme();
+      await page.getByRole('button', { name: 'Toggle theme' }).click();
+      await page.waitForFunction(t => document.documentElement.getAttribute('data-theme') !== t, start);
+      const flipped = await theme();
+      assert.notEqual(flipped, start);
+      await page.waitForLoadState('networkidle');
+      await page.reload();
+      await heading('Dashboard').waitFor();
+      assert.equal(await theme(), flipped, 'the theme survives a reload');
+      await page.getByRole('button', { name: 'Toggle theme' }).click();
+      await page.waitForFunction(t => document.documentElement.getAttribute('data-theme') !== t, flipped);
+      await page.waitForLoadState('networkidle');
+    },
+
+    // Keyboard and screen-reader basics on every page: controls have names, the keyboard reaches them, one h1.
+    async accessibilityBasics() {
+      for (const [hash, title] of [['#/', 'Dashboard'], ['#/nodes', 'Nodes'], ['#/history', 'Results'], ['#/stats', 'Statistics'], ['#/network', 'IP & location'], ['#/schedules', 'Schedules'], ['#/alerts', 'Alerts'], ['#/settings', 'Settings']]) {
+        await S.open(hash, title);
+        await page.waitForLoadState('networkidle');
+        const problems = await page.evaluate(() => {
+          const out = [];
+          const name = el => (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || el.textContent || '').trim()
+            || (el.labels && el.labels.length ? 'label' : '') || (el.querySelector && el.querySelector('img[alt]:not([alt=""])') ? 'img' : '');
+          for (const el of document.querySelectorAll('button, a[href], input:not([type=hidden]), select, textarea, [role=button], [role=tab]')) {
+            if (el.closest('.leaflet-control-container, [hidden]')) continue;
+            if (!name(el)) out.push(`${el.tagName.toLowerCase()}.${el.className} has no accessible name`);
+          }
+          if (document.querySelectorAll('h1').length !== 1) out.push(`${document.querySelectorAll('h1').length} h1 elements`);
+          if (!document.documentElement.lang) out.push('html has no lang');
+          return out;
+        });
+        assert.deepEqual(problems, [], `${title}: ${problems.join('; ')}`);
+        await page.keyboard.press('Tab'); await page.keyboard.press('Tab'); await page.keyboard.press('Tab');
+        const focused = await page.evaluate(() => document.activeElement && document.activeElement !== document.body ? document.activeElement.tagName : '');
+        assert.ok(focused, `${title}: Tab does not move focus into the page`);
+      }
+    },
+
     // The center sends a test message through the channel and the owner sees the outcome.
     async notificationTest(receiver) {
       await S.open('#/settings', 'Settings');
@@ -245,7 +328,7 @@ export function steps({ page, stack, startAgent, query, problems }) {
       await page.getByLabel('URL for Webhook').blur();
       await toast('Saved').waitFor();
       await page.getByLabel('Enable Webhook').check({ force: true });
-      await page.waitForTimeout(500);
+      await page.waitForLoadState('networkidle');
       await page.locator('.setting').filter({ hasText: 'Webhook' }).getByRole('button', { name: 'Send a test' }).click();
       await toast('Test message sent to Webhook').waitFor({ timeout: 30000 });
       assert.ok(receiver.bodies.length >= 1, 'the receiver got the message');

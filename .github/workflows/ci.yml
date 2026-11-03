@@ -55,3 +55,6 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           npm run test:ui
+
+      - name: Every API operation has a test
+        run: node scripts/test-matrix.mjs

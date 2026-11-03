@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import http from 'node:http';
 import { startStack, startAgent, stopAll, query, root } from './lib.mjs';
 import { steps } from './steps.mjs';
+import { recordContract } from './contract.mjs';
 
 const shots = join(root, '.tmp', 'e2e', 'shots');
 mkdirSync(shots, { recursive: true });
@@ -15,6 +16,10 @@ const browser = process.env.PW_TEST_CONNECT_WS_ENDPOINT ? await chromium.connect
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
 const page = await context.newPage();
 const problems = [];
+// Map tiles come from the internet in production; the suite answers them locally with a blank tile.
+const BLANK_TILE = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+await context.route('https://tile.openstreetmap.org/**', route => route.fulfill({ status: 200, contentType: 'image/png', body: BLANK_TILE }));
+const contractRecorder = recordContract(page, stack.origin);
 page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') problems.push(`${m.type()}: ${m.text()}`); });
 page.on('pageerror', e => problems.push(`pageerror: ${e.message}`));
 
@@ -29,6 +34,10 @@ const scenarios = [
   ['the dashboard shows the seeded fleet', S.dashboardShowsFleet],
   ['every page draws real data without console errors', S.allPagesDraw],
   ['every page holds its layout at 390, 768 and 1440 px in both themes', S.layoutHolds],
+  ['statistics summarise the loaded results', S.statisticsPage],
+  ['IP history lists addresses and looks one up', S.ipPage],
+  ['the theme switch persists', S.themeSwitch],
+  ['controls have names and the keyboard reaches them on every page', S.accessibilityBasics],
   ['results can be filtered, opened and exported', S.resultsFilterAndExport],
   ['a node is added with the install command and reports', S.addNodeAndRunTest],
   ['schedules are saved on the center', S.schedulesSave],
@@ -37,7 +46,7 @@ const scenarios = [
   ['a test notification reaches the configured channel', () => S.notificationTest(receiver)],
   ['signing out ends the session', S.signOut]
 ];
-if (process.env.E2E_TRACE) page.on('response', r => { if (r.url().includes('/api/') && r.request().method() !== 'GET') console.log('  ', r.request().method(), r.url().replace(stack.origin, ''), r.status()); });
+if (process.env.E2E_TRACE) page.on('response', r => {  if (r.url().includes('/api/') && r.request().method() !== 'GET') console.log('  ', r.request().method(), r.url().replace(stack.origin, ''), r.status()); });
 let failed = 0;
 const only = process.env.E2E_ONLY;
 for (const [name, scenario] of scenarios) {
@@ -56,6 +65,10 @@ for (const [name, scenario] of scenarios) {
     console.log(`FAIL ${name}: ${error.message}`);
   }
 }
+const contractResult = contractRecorder.check();
+console.log(`contract: ${contractResult.responses} responses checked against docs/openapi.yaml, ${contractResult.violations.length} violations`);
+for (const v of contractResult.violations) console.log('  CONTRACT ' + v);
+if (contractResult.violations.length && !only) failed++;
 await browser.close();
 receiverServer.close();
 stopAll();

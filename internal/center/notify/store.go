@@ -99,6 +99,12 @@ func (s *Store) Test(ctx context.Context, channel string) (Delivery, error) {
 func scanDelivery(row pgx.Row) (Delivery, error) {
 	var d Delivery
 	err := row.Scan(&d.ID, &d.EventID, &d.Channel, &d.Status, &d.Attempts, &d.CreatedAt, &d.LastAttempt, &d.Error)
+	// The API contract uses UTC timestamps ending in Z, whatever the server's local zone is.
+	d.CreatedAt = d.CreatedAt.UTC()
+	if d.LastAttempt != nil {
+		t := d.LastAttempt.UTC()
+		d.LastAttempt = &t
+	}
 	return d, err
 }
 func (s *Store) Delivery(ctx context.Context, id string) (Delivery, error) {

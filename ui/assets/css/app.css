@@ -225,6 +225,7 @@ table.data tr:last-child td { border-bottom: 0; }
 table.data tbody tr.clickable { cursor: pointer; }
 table.data tbody tr.clickable:hover td { background: var(--surface-2); }
 table.data td.num, table.data th.num { text-align: right; }
+table.data td.num, table.data th.num { padding-left: 6px; padding-right: 10px; }
 .empty { padding: 36px 16px; text-align: center; color: var(--muted); }
 .empty h3 { color: var(--text); margin-bottom: 4px; }
 .pager { display: flex; align-items: center; gap: 8px; justify-content: space-between; padding: 10px 14px; border-top: 1px solid var(--line); flex-wrap: wrap; }
@@ -386,3 +387,18 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
   .speeds { grid-template-columns: 1fr 1fr; }
   .kv { grid-template-columns: 1fr; }
 }
+
+/* Live map (Leaflet) */
+.map-live { background: var(--surface-2); }
+.map-live .map-canvas { height: 460px; width: 100%; border-radius: var(--radius); z-index: 0; }
+.map-pin-wrap { background: none; border: 0; }
+.map-pin { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--surface); box-shadow: 0 1px 4px rgb(0 0 0 / .45); }
+.map-pin i { display: block; width: 12px; height: 12px; border-radius: 50%; }
+.map-tip .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; }
+.leaflet-container { font: inherit; }
+.leaflet-container a { color: var(--accent); }
+@media (max-width: 640px) { .map-live .map-canvas { height: 340px; } }
+
+/* Top bar: keep the range label on one line and the selected range readable at every width. */
+.topbar .row.muted { white-space: nowrap; }
+.topbar select { min-width: 8.5em; }

@@ -450,8 +450,19 @@
         return response.data;
       });
     }
+    // Read the current ETag, write with it, and try once more with a fresh one when the center says the
+    // resource changed in between (for example by the owner's own previous change still being applied).
+    function conditional(path, send) {
+      function attempt(again) {
+        return API.request(path).then(send).catch(function (error) {
+          if (again && error && error.status === 412) return attempt(false);
+          throw error;
+        });
+      }
+      return attempt(true);
+    }
     function editable(path, method, body, contentType) {
-      return API.request(path).then(function (response) {
+      return conditional(path, function (response) {
         return mutation(path, method, body, { ifMatch: response.etag, contentType: contentType });
       });
     }
@@ -503,15 +514,17 @@
       return API.request(path).then(function (response) { return mutation(path, 'PUT', input, { ifMatch: response.etag }); });
     };
     ST.saveScheduleRules = function (patch) {
-      var rules = Object.assign({ stagger: schedules.rules.stagger, maxConcurrent: schedules.rules.maxConcurrent,
-        quietStart: schedules.rules.quiet.quietStart, quietEnd: schedules.rules.quiet.quietEnd }, patch);
-      return API.request('/api/schedules').then(function (response) {
+      return conditional('/api/schedules', function (response) {
+        // Start from the rules this ETag belongs to, so a stale local copy can never overwrite newer values.
+        var current = response.data.rules;
+        var rules = Object.assign({ stagger: current.stagger, maxConcurrent: current.maxConcurrent,
+          quietStart: current.quiet.quietStart, quietEnd: current.quiet.quietEnd }, patch);
         return mutation('/api/schedules/rules', 'PUT', { stagger: !!rules.stagger, maxConcurrent: +rules.maxConcurrent,
           quiet: { quietStart: rules.quietStart || '', quietEnd: rules.quietEnd || '', timezone: quietZone() } }, { ifMatch: response.etag });
       });
     };
     ST.staggerSchedules = function () {
-      return API.request('/api/schedules').then(function (response) { return mutation('/api/schedules/stagger', 'POST', undefined, { ifMatch: response.etag }); });
+      return conditional('/api/schedules', function (response) { return mutation('/api/schedules/stagger', 'POST', undefined, { ifMatch: response.etag }); });
     };
     ST.rotateEnrollmentKey = function () {
       // No reload here: the page shows the new key once, and a reload would redraw the page and discard it.

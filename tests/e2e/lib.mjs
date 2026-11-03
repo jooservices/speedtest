@@ -11,7 +11,7 @@ const processes = [];
 export function parseEnv(file) {
   const values = {};
   for (const line of readFileSync(file, 'utf8').split('\n')) {
-    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line);
+    const match = /^\s*(\w+)\s*=(.*)$/.exec(line);
     if (match && !line.trim().startsWith('#')) values[match[1]] = match[2].replace(/^["']|["']$/g, '');
   }
   return values;
@@ -54,7 +54,7 @@ export async function startStack({ seed = true } = {}) {
   run('go', ['build', '-o', join(out, 'bin', 'fake-speedtest'), './internal/agent/testdata/fake-speedtest']);
   sql(db, 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
   const port = await freePort();
-  const centerEnv = { ...process.env, ...env, APP_ENV: 'local', APP_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=', SPEEDTEST_HTTP_ADDR: `127.0.0.1:${port}`,
+  const centerEnv = { ...process.env, ...env, APP_ENV: 'local', APP_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=', SPEEDTEST_HTTP_ADDR: `127.0.0.1:${port}`, // gitleaks:allow (fixed test-only key)
     SPEEDTEST_ADMIN_EMAIL: '' };
   run('go', ['run', './internal/center/db/cmd/migrate', 'up'], { env: centerEnv });
   run(join(out, 'bin', 'center'), ['seed-admin'], { env: centerEnv });
@@ -69,7 +69,7 @@ export async function startStack({ seed = true } = {}) {
     await new Promise(r => setTimeout(r, 100));
     if (i === 99) throw new Error('the center did not become ready');
   }
-  return { origin, db, env: centerEnv };
+  return { origin, db, env: centerEnv, pid: center.pid };
 }
 
 // Starts a real agent for an enrolment token and waits until the center has seen it.
