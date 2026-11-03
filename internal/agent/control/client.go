@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/jooservices/speedtest/internal/agent/update"
 )
 
 // DefaultTimeout bounds each control request so an unreachable center never
@@ -19,10 +21,14 @@ const DefaultTimeout = 10 * time.Second
 
 // Heartbeat is the POST /api/agent/heartbeat body.
 type Heartbeat struct {
-	Agent    string  `json:"agent"`
-	Uptime   int64   `json:"uptime"`
-	LastTest *string `json:"lastTest"`
+	Agent        string        `json:"agent"`
+	Uptime       int64         `json:"uptime"`
+	LastTest     *string       `json:"lastTest"`
+	UpdateResult *UpdateResult `json:"updateResult,omitempty"`
 }
+
+// UpdateResult is the outcome of the latest self-update, reported with the heartbeat.
+type UpdateResult = update.Result
 
 // ScheduleInput is the schedule part of the effective agent configuration.
 // Interval and offset are whole minutes.
@@ -50,12 +56,14 @@ type AgentConfig struct {
 		Interface string  `json:"iface"`
 		SourceIP  *string `json:"sourceIp"`
 	} `json:"binding"`
-	Revision     string        `json:"revision"`
-	Name         string        `json:"name"`
-	ExpectedDown float64       `json:"expectedDown"`
-	ExpectedUp   float64       `json:"expectedUp"`
-	Schedule     ScheduleInput `json:"schedule"`
-	Quiet        QuietHours    `json:"quiet"`
+	AutoUpdate   bool            `json:"autoUpdate"`
+	Release      *update.Release `json:"release"`
+	Revision     string          `json:"revision"`
+	Name         string          `json:"name"`
+	ExpectedDown float64         `json:"expectedDown"`
+	ExpectedUp   float64         `json:"expectedUp"`
+	Schedule     ScheduleInput   `json:"schedule"`
+	Quiet        QuietHours      `json:"quiet"`
 }
 
 // Command is one queued control command. status/phase/pct/resultId/error carry

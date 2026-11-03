@@ -27,6 +27,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/nodes"
 	"github.com/jooservices/speedtest/internal/center/ownerapi"
 	"github.com/jooservices/speedtest/internal/center/server"
+	"github.com/jooservices/speedtest/internal/center/stats"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
 
@@ -60,7 +61,7 @@ func run(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writ
 	if err != nil {
 		return fmt.Errorf("invalid configuration: %w", err)
 	}
-	return serve(ctx, args, logger, stderr, cfg, nil, nil, nil, nil, nil, nil, nil, nil)
+	return serve(ctx, args, logger, stderr, cfg, services{})
 }
 
 func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer) error {
@@ -100,7 +101,17 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 	defer func() { _ = closeGeo() }()
 	nodeService := nodes.NewService(pool, cfg.AppKey)
 	owner := &ownerapi.Store{DB: pool}
-	return serve(ctx, args, logger, stderr, cfg, service, nodeService, poolPinger{pool: pool}, &agentapi.Postgres{Pool: pool, Hook: watcher}, owner, owner, owner, (&jobs.Retention{DB: pool, Logger: logger}).Loop)
+	return serve(ctx, args, logger, stderr, cfg, services{
+		Auth:           service,
+		NodeCredential: nodeService,
+		Pinger:         poolPinger{pool: pool},
+		Agent:          &agentapi.Postgres{Pool: pool, Hook: watcher},
+		OwnerNodes:     owner,
+		OwnerResults:   owner,
+		OwnerSchedules: owner,
+		OwnerStats:     &stats.Store{DB: pool},
+		Background:     (&jobs.Retention{DB: pool, Logger: logger}).Loop,
+	})
 }
 
 func validateCenterArguments(args []string, cfg config.CenterConfig, stderr io.Writer) error {
@@ -121,7 +132,21 @@ type poolPinger struct{ pool *pgxpool.Pool }
 
 func (p poolPinger) PingContext(ctx context.Context) error { return p.pool.Ping(ctx) }
 
-func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer, cfg config.CenterConfig, authService *auth.Service, nodeService server.NodeCredentialService, pinger server.Pinger, agentStore agentapi.Store, ownerNodes server.OwnerNodesStore, ownerResults server.OwnerResultsStore, ownerSchedules server.OwnerSchedulesStore, background func(context.Context)) error {
+// services are the database-backed collaborators of the server; any may be nil in tests.
+type services struct {
+	Auth           *auth.Service
+	NodeCredential server.NodeCredentialService
+	Pinger         server.Pinger
+	Agent          agentapi.Store
+	OwnerNodes     server.OwnerNodesStore
+	OwnerResults   server.OwnerResultsStore
+	OwnerSchedules server.OwnerSchedulesStore
+	OwnerStats     server.OwnerStatsStore
+	// Background runs until the context ends, for example the daily retention job.
+	Background func(context.Context)
+}
+
+func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Writer, cfg config.CenterConfig, svc services) error {
 
 	flags := flag.NewFlagSet("center", flag.ContinueOnError)
 	flags.SetOutput(stderr)
@@ -158,21 +183,22 @@ func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Wr
 
 	handler := server.NewHandler(server.Options{
 		Install:           installHandler,
-		OwnerNodes:        ownerNodes,
-		OwnerResults:      ownerResults,
-		OwnerSchedules:    ownerSchedules,
-		AgentAPI:          agentStore,
+		OwnerNodes:        svc.OwnerNodes,
+		OwnerResults:      svc.OwnerResults,
+		OwnerSchedules:    svc.OwnerSchedules,
+		OwnerStats:        svc.OwnerStats,
+		AgentAPI:          svc.Agent,
 		Logger:            logger,
 		UI:                ui,
-		Pinger:            pinger,
-		Auth:              authService,
+		Pinger:            svc.Pinger,
+		Auth:              svc.Auth,
 		RequireHTTPS:      cfg.AppEnv != "local" && cfg.AppEnv != "test",
 		TrustedProxyCIDRs: cfg.TrustedProxyCIDRs,
-		NodeCredentials:   nodeService,
+		NodeCredentials:   svc.NodeCredential,
 		AgentRateLimit:    cfg.AgentRequestsPerMinute,
 	})
-	if background != nil {
-		go background(ctx)
+	if svc.Background != nil {
+		go svc.Background(ctx)
 	}
 	logger.Info("command center listening",
 		"address", listener.Addr().String(),

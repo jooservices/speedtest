@@ -26,7 +26,11 @@ Type=simple
 User=speedtest-agent
 Group=speedtest-agent
 EnvironmentFile=-/etc/speedtest-agent/.env
+# Self-update: before every start, a privileged step installs a requested update, keeps a good one or
+# restores the previous binary (see docs/agent-update.md). "-" ignores its failure, "+" runs it as root.
+ExecStartPre=-+/usr/local/bin/speedtest-agent update-apply
 ExecStart=/usr/local/bin/speedtest-agent run
+TimeoutStartSec=300
 Restart=always
 RestartSec=5
 
@@ -38,7 +42,7 @@ StandardError=journal
 NoNewPrivileges=true
 PrivateTmp=true
 ProtectSystem=strict
-ReadWritePaths=/etc/speedtest-agent
+ReadWritePaths=/etc/speedtest-agent -/var/lib/speedtest-agent
 
 [Install]
 WantedBy=multi-user.target

@@ -55,6 +55,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return runAgent(ctx, args[1:], stdout, stderr)
 	case "uninstall":
 		return runUninstall(args[1:], stdout, stderr)
+	case "update-apply":
+		return runUpdateApply(ctx, args[1:], stdout, stderr)
 	default:
 		_, _ = fmt.Fprintf(stderr, "agent: unknown command %q\n\n", args[0])
 		printUsage(stderr)
@@ -72,6 +74,8 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, "      run the node as a background service")
 	_, _ = fmt.Fprintln(w, "  version")
 	_, _ = fmt.Fprintln(w, "      print the agent version")
+	_, _ = fmt.Fprintln(w, "  update-apply")
+	_, _ = fmt.Fprintln(w, "      install, confirm or roll back a self-update (run by the service unit as root)")
 	_, _ = fmt.Fprintln(w, "  uninstall")
 	_, _ = fmt.Fprintln(w, "      remove the agent configuration and credential")
 }

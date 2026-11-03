@@ -9,6 +9,8 @@ import (
 	"log/slog"
 	"net/url"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	agentconfig "github.com/jooservices/speedtest/internal/agent/config"
 	"github.com/jooservices/speedtest/internal/agent/control"
@@ -16,7 +18,14 @@ import (
 	"github.com/jooservices/speedtest/internal/agent/netpath"
 	"github.com/jooservices/speedtest/internal/agent/report"
 	"github.com/jooservices/speedtest/internal/agent/sched"
+	"github.com/jooservices/speedtest/internal/agent/update"
 )
+
+// restartDelay lets the acknowledgement of an update command reach the center before the process exits.
+var restartDelay = 3 * time.Second
+
+// watchdogInterval is how often a freshly updated agent checks whether its confirmation window has passed.
+var watchdogInterval = 5 * time.Second
 
 type measurementConfig struct {
 	engine  engine.Engine
@@ -35,6 +44,9 @@ type commandState struct {
 type Loop struct {
 	Scheduler  *sched.Scheduler
 	Controller *control.Controller
+	// Updater decides on self-updates; its paths come from the environment.
+	Updater    *update.Agent
+	stop       atomic.Pointer[context.CancelFunc]
 	spool      *report.Spool
 	reporter   *report.Reporter
 	logger     *slog.Logger
@@ -105,6 +117,11 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 	l.Controller = control.New(control.Client{BaseURL: center, Credential: credential, Agent: "speedtest-agent/" + version}, l.Scheduler, control.WithLogger(logger))
 	l.Controller.ApplyConfig = l.applyConfig
 	l.Controller.RunCommand = l.command
+	l.Updater = &update.Agent{Paths: update.DefaultPaths(), Version: version, Logger: logger, Restart: l.restartSoon}
+	l.Controller.UpdateResult = l.Updater.Result
+	l.Controller.HeartbeatOK = l.Updater.Confirm
+	l.Controller.OfferUpdate = func(c control.AgentConfig) { l.Updater.Offer(c.AutoUpdate, c.Release) }
+	l.Controller.UpdateAgent = l.updateAgent
 	return l, nil
 }
 
@@ -117,8 +134,10 @@ func (l *Loop) Close() error { return l.spool.Close() }
 func (l *Loop) Serve(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	l.stop.Store(&cancel)
 	var wg sync.WaitGroup
-	wg.Add(3)
+	wg.Add(4)
+	go func() { defer wg.Done(); l.watchUpdate(ctx) }()
 	go func() { defer wg.Done(); _ = l.Scheduler.Run(ctx) }()
 	go func() { defer wg.Done(); _ = l.Controller.Run(ctx) }()
 	go func() { defer wg.Done(); l.deliver(ctx) }()
@@ -136,6 +155,49 @@ func (l *Loop) Serve(ctx context.Context) error {
 		}
 	}
 	return err
+}
+
+// restartSoon stops the loop shortly, so the service manager starts the freshly installed version.
+func (l *Loop) restartSoon() {
+	time.AfterFunc(restartDelay, func() {
+		if stop := l.stop.Load(); stop != nil {
+			(*stop)()
+		}
+	})
+}
+
+// updateAgent serves the owner's update_agent command.
+func (l *Loop) updateAgent(cmd control.Command, cfg control.AgentConfig) control.CommandAck {
+	version := ""
+	if cmd.Version != nil {
+		version = *cmd.Version
+	}
+	if version != "" && version == l.Updater.Version {
+		return control.CommandAck{Status: "succeeded", Phase: "already installed", Pct: 100}
+	}
+	if err := l.Updater.Command(version, cfg.Release); err != nil {
+		msg := err.Error()
+		return control.CommandAck{Status: "failed", Error: &msg}
+	}
+	return control.CommandAck{Status: "succeeded", Phase: "restarting to install", Pct: 100}
+}
+
+// watchUpdate makes a freshly installed version that cannot confirm itself exit with an error, which lets the
+// privileged start step restore the previous binary.
+func (l *Loop) watchUpdate(ctx context.Context) {
+	t := time.NewTicker(watchdogInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if l.Updater.Expired() {
+				l.fail(errors.New("the new version did not complete a heartbeat in time; exiting so the previous version is restored"))
+				return
+			}
+		}
+	}
 }
 
 func (l *Loop) fail(err error) {

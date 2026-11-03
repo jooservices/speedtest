@@ -1210,9 +1210,10 @@ paths:
       tags:
         - Statistics
       summary: Read bucketed trend and optional display total
-      description: Ok-only samples to match stats.js trend. Missing buckets are null, not zero; combined
-        is null unless all selected nodes have a value. Return 422 if requested fixed buckets exceed
-        300.
+      description: Ok-only samples to match stats.js trend. Missing buckets are null, not zero; repeated
+        fall-back hours are grouped into the same local hour and nonexistent spring-forward hours are
+        omitted. A combined bucket sums available selected node values and is null only when none have
+        values. Return 422 if requested fixed buckets exceed 300.
       security:
         - SessionCookie: []
       responses:
@@ -1338,8 +1339,8 @@ paths:
       tags:
         - Statistics
       summary: Read metric histograms
-      description: Ok-only samples. Bin edges span min..max; bins=[] on empty data; final upper edge
-        inclusive. Values/counts support UI tooltips.
+      description: Ok-only samples. Bin edges span min..max; constant data uses a nonzero range centered
+        on its value; bins=[] on empty data; final upper edge inclusive. Values/counts support UI tooltips.
       security:
         - SessionCookie: []
       responses:
@@ -4693,7 +4694,8 @@ components:
         - points
         - summary
       description: nodeId=null denotes an optional display-only combined total, never a node relationship.
-        summary uses source samples, not averages of buckets.
+        Per-node summaries use raw source samples, not averages of buckets; a combined series summary
+        uses its non-null derived bucket totals.
     HourValue:
       type: object
       additionalProperties: false
