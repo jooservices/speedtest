@@ -23,7 +23,7 @@
         { key: 'ping', label: 'Latency', num: true, render: function (r) { return F.ms(r.sum.ping.median); } },
         { key: 'ip', label: 'Public IP', render: function (r) { return h('span', { class: 'mono' }, r.last ? r.last.ip : '—'); } },
         { key: 'seen', label: 'Last test', render: function (r) { return r.last ? F.rel(r.last.ts) : 'Never'; } },
-        { key: 'agent', label: 'Agent', render: function (r) { return h('span', { class: 'mono' }, 'v' + r.n.agent); } },
+        { key: 'agent', label: 'Agent', render: function (r) { return h('span', { class: 'mono' }, r.n.agent ? 'v' + r.n.agent : '—'); } },
         { key: 'act', label: '', render: function (r) { return h('span', { class: 'row', style: 'justify-content:flex-end' }, U.btn('', { icon: 'play', size: 'sm', title: 'Run a test on ' + r.n.name, onClick: function (e) { e.stopPropagation(); U.runTestDialog([r.n.id]); } })); } }],
       rows: rows, onRow: function (r) { location.hash = '#/nodes/' + r.n.id; }
     })));
@@ -35,11 +35,11 @@
   function validHost(v) { return validIp(v) || /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/i.test(v); }
 
   function openWizard() {
-    var d = { name: '', label: '', down: '', up: '', method: 'ssh', host: '', port: '22', user: '', auth: 'password', secret: '', iface: '' };
+    var d = { name: '', label: '', down: '', up: '', method: 'ssh', host: '', port: '22', user: '', auth: 'password', secret: '', sudoSecret: '', iface: '' };
     var step = 0, body = h('div'), steps = h('div', { class: 'steps', 'aria-hidden': 'true' }, [0, 1, 2, 3].map(function () { return h('span'); }));
     var errBox = h('div');
     var timers = [], layer;
-    var token = ST.settings().enrollToken;
+    var token = ST.settings().enrollToken, real = !ST.demo, enrolled = null;
 
     function setSteps() { Array.prototype.forEach.call(steps.children, function (s, i) { s.className = i <= step ? 'done' : ''; }); }
     function error(msg) { U.clear(errBox); if (msg) errBox.appendChild(U.callout(msg, 'crit', 'alert')); }
@@ -55,7 +55,15 @@
         h('div', { class: 'field-row' }, U.field('Expected download', U.suffix(down, 'Mbps')), U.field('Expected upload', U.suffix(up, 'Mbps'))),
         h('span', { class: 'hint' }, 'The expected speed is the figure this node is compared against. Use what you actually get, not only what the plan promises.'));
     }
+    var probe = null, installation = null;
+    function confirmView() {
+      return h('div', { class: 'stack' },
+        h('p', null, 'The machine ', h('b', null, d.host.trim() + ':' + d.port), ' introduced itself with this fingerprint. Continue only if it is the machine you meant.'),
+        U.code(probe.fingerprint),
+        h('span', { class: 'hint' }, 'Nothing has been sent to it yet except this introduction. The installer stops if the machine ever shows a different fingerprint. If you can, compare it with the output of ssh-keygen -lf /etc/ssh/ssh_host_ed25519_key.pub on the machine.'));
+    }
     function s1() {
+      if (real && d.method === 'ssh' && probe) return confirmView();
       var wrap = h('div', { class: 'stack' });
       var sshForm = h('div', { class: 'stack' });
       function drawForm() {
@@ -69,17 +77,18 @@
           sshForm.appendChild(d.auth === 'password' ? U.field('Password', U.input(d.secret, function (v) { d.secret = v; }, { type: 'password', autocomplete: 'new-password', 'aria-label': 'Password' }), 'Used once for the installation and never stored.')
             : U.field('Private key', h('textarea', { class: 'input', rows: 4, placeholder: '-----BEGIN OPENSSH PRIVATE KEY-----', 'aria-label': 'Private key', onInput: function (e) { d.secret = e.target.value; } }), 'Used once for the installation and never stored.'));
         } else {
-          var cmd = 'curl -fsSL ' + ST.settings().centerUrl + '/install.sh | sudo sh -s -- \\\n  --token ' + token + ' \\\n  --name "' + (d.name || 'node') + '"';
+          var cmd = 'curl -fsSL ' + (ST.settings().centerUrl || location.origin) + '/install.sh | sudo sh -s -- \\\n  --token ' + token + ' \\\n  --name "' + (d.name || 'node') + '"';
           sshForm.appendChild(h('p', null, 'Open a terminal on the machine and paste this single command. The node appears here by itself when it finishes.'));
           sshForm.appendChild(U.code(cmd));
           sshForm.appendChild(h('span', { class: 'hint' }, 'The command contains a one-time enrolment key. Do not share it.'));
         }
+        if (d.method === 'ssh' && real) sshForm.appendChild(U.field('Sudo password (only if it differs)', U.input(d.sudoSecret, function (v) { d.sudoSecret = v; }, { type: 'password', autocomplete: 'new-password', 'aria-label': 'Sudo password' }), 'Leave empty to use the sign-in password, or when sudo needs none. Never stored.'));
         sshForm.appendChild(h('details', null, h('summary', { style: 'cursor:pointer;font-weight:600' }, 'Advanced'),
           h('div', { style: 'margin-top:10px' }, U.field('Network interface', U.input(d.iface, function (v) { d.iface = v; }, { placeholder: 'Automatic', 'aria-label': 'Network interface' }), 'Leave empty unless the machine has more than one network connection and the test must use a specific one.'))));
       }
       wrap.appendChild(h('div', { class: 'grid cols-2' },
-        h('button', { type: 'button', class: 'choice ' + (d.method === 'ssh' ? 'on' : ''), onClick: function (e) { d.method = 'ssh'; var btns = wrap.querySelectorAll('.choice'); btns[0].classList.add('on'); btns[1].classList.remove('on'); drawForm(); } }, h('b', null, U.icon('terminal', 16), 'Install for me'), h('span', { class: 'muted' }, 'We connect to the machine and set everything up.')),
-        h('button', { type: 'button', class: 'choice ' + (d.method === 'manual' ? 'on' : ''), onClick: function () { d.method = 'manual'; var btns = wrap.querySelectorAll('.choice'); btns[1].classList.add('on'); btns[0].classList.remove('on'); drawForm(); } }, h('b', null, U.icon('copy', 16), 'I will run a command'), h('span', { class: 'muted' }, 'Copy one line and paste it on the machine.'))));
+        h('button', { type: 'button', class: 'choice ' + (d.method === 'ssh' ? 'on' : ''), onClick: function (e) { d.method = 'ssh'; var btns = wrap.querySelectorAll('.choice'); btns[0].classList.add('on'); btns[1].classList.remove('on'); drawForm(); if (layer) layer.setFoot(footer()); } }, h('b', null, U.icon('terminal', 16), 'Install for me'), h('span', { class: 'muted' }, 'We connect to the machine and set everything up.')),
+        h('button', { type: 'button', class: 'choice ' + (d.method === 'manual' ? 'on' : ''), onClick: function () { d.method = 'manual'; var btns = wrap.querySelectorAll('.choice'); btns[1].classList.add('on'); btns[0].classList.remove('on'); drawForm(); if (layer) layer.setFoot(footer()); } }, h('b', null, U.icon('copy', 16), 'I will run a command'), h('span', { class: 'muted' }, 'Copy one line and paste it on the machine.'))));
       wrap.appendChild(sshForm); drawForm();
       return wrap;
     }
@@ -87,11 +96,67 @@
     var tasks = ['Connecting to the machine', 'Checking the system', 'Downloading the speed test program', 'Installing it as a background service', 'Registering with this dashboard', 'Running the first speed test'];
     function s2() {
       checklist = h('ul', { class: 'checklist' });
-      tasks.forEach(function (t, i) { if (d.method === 'manual' && i === 0) t = 'Waiting for the machine to check in'; checklist.appendChild(h('li', { id: 'ck' + i }, h('span', { style: 'width:16px;display:inline-grid' }, U.icon('clock', 14)), t)); });
+      (real ? ['Waiting for the machine to check in'] : tasks).forEach(function (t, i) { if (d.method === 'manual' && i === 0) t = 'Waiting for the machine to check in'; checklist.appendChild(h('li', { id: 'ck' + i }, h('span', { style: 'width:16px;display:inline-grid' }, U.icon('clock', 14)), t)); });
       resultBox = h('div', { style: 'margin-top:14px' });
       return h('div', null, h('p', { class: 'muted', style: 'margin-bottom:12px' }, 'This usually takes under a minute. You can leave this window open.'), checklist, resultBox);
     }
+    function waitForCheckIn() {
+      var started = Date.now(), li = checklist.children[0];
+      li.className = 'run'; U.clear(li.firstChild); li.firstChild.appendChild(h('span', { class: 'spinner' }));
+      (function poll() {
+        ST.api.request('/api/nodes/' + encodeURIComponent(created.id)).then(function (response) {
+          if (response.data.lastSeen) {
+            li.className = 'ok'; U.clear(li.firstChild); li.firstChild.appendChild(U.icon('check', 14));
+            ST.load().then(function () { step = 3; render(); });
+            return;
+          }
+          if (Date.now() - started > 10 * 60 * 1000) {
+            U.clear(resultBox); resultBox.appendChild(U.callout('The machine has not checked in yet. Make sure the command finished without errors, then close this window: the node appears in the list by itself when it connects.', 'warn', 'alert'));
+            return;
+          }
+          timers.push(setTimeout(poll, 3000));
+        }, function () { timers.push(setTimeout(poll, 5000)); });
+      })();
+    }
+    function watchInstall() {
+      var bar = h('div', { class: 'progress', style: 'margin:10px 0' }, h('i', { style: 'width:0%' }));
+      var log = h('ul', { class: 'checklist' });
+      U.clear(checklist.parentNode); checklist = log;
+      resultBox = h('div', { style: 'margin-top:14px' });
+      var host = body.querySelector('.install-host') || body;
+      var wrap = h('div', { class: 'install-host' }, h('p', { class: 'muted', style: 'margin-bottom:12px' }, 'Installing on ' + d.host.trim() + '. This usually takes under a minute. You can leave this window open.'), bar, log, resultBox);
+      U.clear(body); body.appendChild(steps); body.appendChild(h('h3', { style: 'margin-bottom:10px' }, 'Setting things up')); body.appendChild(wrap); body.appendChild(errBox);
+      var shown = {}, finished = false, source;
+      function line(event) {
+        bar.firstChild.style.width = Math.max(0, Math.min(100, event.pct || 0)) + '%';
+        if (shown[event.id] || event.status === 'failed') return; shown[event.id] = true; // a failure is explained once, below the list
+        var last = log.lastChild; if (last && last.className === 'run') { last.className = 'ok'; U.clear(last.firstChild); last.firstChild.appendChild(U.icon('check', 14)); }
+        var li = h('li', { class: event.status === 'failed' ? 'bad' : event.status === 'succeeded' ? 'ok' : 'run' }, h('span', { style: 'width:16px;display:inline-grid' }, event.status === 'failed' ? U.icon('x', 14) : event.status === 'succeeded' ? U.icon('check', 14) : h('span', { class: 'spinner' })), event.message);
+        log.appendChild(li);
+      }
+      function done(event) {
+        if (finished) return; finished = true; if (source) source.close();
+        if (event.status === 'succeeded') { ST.load().then(function () { step = 3; render(); }); return; }
+        U.clear(resultBox);
+        resultBox.appendChild(U.callout(event.message || 'The installation did not finish.', 'crit', 'alert'));
+        resultBox.appendChild(h('p', { class: 'hint', style: 'margin-top:8px' }, 'Nothing was left half-installed. Go back, fix the problem and try again.'));
+        layer.setFoot([U.btn('Back', { onClick: function () { probe = null; installation = null; step = 1; render(); } })]);
+      }
+      function handle(raw) { var event; try { event = JSON.parse(raw); } catch (e) { return; } line(event); if (event.status === 'succeeded' || event.status === 'failed') done(event); }
+      source = new EventSource('/api/installations/' + encodeURIComponent(installation.id) + '/events');
+      source.addEventListener('progress', function (e) { handle(e.data); });
+      source.onerror = function () {
+        // The browser reconnects by itself with Last-Event-ID; if the job already ended, read its final state.
+        ST.api.request('/api/installations/' + encodeURIComponent(installation.id)).then(function (reply) {
+          var job = reply.data;
+          if (job.status === 'succeeded' || job.status === 'failed') done({ status: job.status, message: job.error || (job.status === 'succeeded' ? 'Installed.' : 'The installation failed.'), pct: 100, id: 'final' });
+        }, function () {});
+      };
+      timers.push(function () { if (source) source.close(); });
+    }
     function runInstall() {
+      if (real && d.method === 'ssh') { watchInstall(); return; }
+      if (real) { waitForCheckIn(); return; }
       var i = 0;
       (function next() {
         if (i > 0) { var prev = checklist.children[i - 1]; prev.className = 'ok'; U.clear(prev.firstChild); prev.firstChild.appendChild(U.icon('check', 14)); }
@@ -111,12 +176,12 @@
       // runTest emits data events that refresh the page behind the dialog; keep the dialog as-is until the result is in.
     }
     function s3() {
-      var res = ST.latest(created.id);
+      var res = real ? ST.latest(created.id) : ST.latest(created.id);
       return h('div', { class: 'stack', style: 'text-align:center;padding:6px 0' },
         h('div', { class: 'ev-ico good', style: 'width:48px;height:48px;margin:0 auto;border-radius:14px' }, U.icon('check', 26)),
         h('h2', null, created.name + ' is online'),
         res && res.status !== 'failed' ? h('p', { class: 'text-2' }, 'First result: ' + F.speed(res.down) + ' down, ' + F.speed(res.up) + ' up, ' + F.ms(res.ping) + ' ping.') : h('p', { class: 'text-2' }, 'The node is connected. Its first scheduled test will run shortly.'),
-        h('p', { class: 'hint' }, 'It will now test every ' + created.interval + ' minutes. You can change that under Schedules.'));
+        h('p', { class: 'hint' }, 'It will now test every ' + (ST.node(created.id) || created).interval + ' minutes. You can change that under Schedules.'));
     }
 
     function validate() {
@@ -133,6 +198,17 @@
       }
       return null;
     }
+    // In real mode the node is created on the center as soon as it is described: that is what issues its one-time enrolment key.
+    function createNode(button) {
+      button.disabled = true; error(null);
+      ST.addNode({ name: d.name.trim(), label: d.label.trim(), expectedDown: +d.down, expectedUp: +d.up }).then(function (data) {
+        enrolled = data; created = data.node; token = data.token;
+        step++; render();
+      }, function (failure) {
+        button.disabled = false;
+        error(failure.status === 409 ? 'A node with this name already exists. Choose another name.' : failure.message);
+      });
+    }
     var back, next;
     function render() {
       U.clear(body); setSteps(); error(null);
@@ -146,16 +222,41 @@
       }
       if (step === 2) runInstall();
     }
+    function sshApi(path, body) { return ST.api.request(path, { method: 'POST', idempotencyKey: ST.api.key(), body: body }); }
+    function checkMachine(button) {
+      button.disabled = true; error(null);
+      sshApi('/api/installer/probes', { host: d.host.trim(), port: +d.port }).then(function (reply) { probe = reply.data; render(); }, function (failure) {
+        button.disabled = false;
+        error(failure.status === 0 ? failure.message : 'The dashboard could not reach ' + d.host.trim() + ':' + d.port + ' over SSH. Check the address and that SSH is running there.');
+      });
+    }
+    function startInstall(button) {
+      button.disabled = true; error(null);
+      var ssh = { host: d.host.trim(), port: +d.port, user: d.user.trim(), auth: d.auth, secret: d.secret };
+      if (d.sudoSecret) ssh.sudoPassword = d.sudoSecret;
+      sshApi('/api/nodes/' + encodeURIComponent(created.id) + '/installations', { probeId: probe.id, fingerprint: probe.fingerprint, ssh: ssh }).then(function (reply) {
+        d.secret = ''; d.sudoSecret = ''; installation = reply.data; step = 2; render();
+      }, function (failure) {
+        button.disabled = false;
+        error(failure.status === 409 ? 'An installation is already running on this node, or the confirmation expired. Go back and check the machine again.' : failure.message);
+      });
+    }
     function footer() {
       if (step === 2) return [U.btn('Cancel', { onClick: function () { layer.close(); } })];
+      if (real && step === 1 && d.method === 'ssh') {
+        return [U.btn('Back', { onClick: function () { if (probe) { probe = null; render(); } else { step--; render(); } } }),
+          probe ? U.btn('Trust it and install', { variant: 'primary', onClick: function (event) { startInstall(event.currentTarget); } })
+            : U.btn('Check the machine', { variant: 'primary', onClick: function (event) { var e = validate(); if (e) { error(e); return; } checkMachine(event.currentTarget); } })];
+      }
       if (step === 3) return [U.btn('Add another', { onClick: function () { layer.close(); setTimeout(openWizard, 50); } }), U.btn('Open node', { variant: 'primary', onClick: function () { layer.close(); location.hash = '#/nodes/' + created.id; } })];
       return [step > 0 ? U.btn('Back', { onClick: function () { step--; render(); } }) : U.btn('Cancel', { onClick: function () { layer.close(); } }),
-        U.btn(step === 1 ? (d.method === 'ssh' ? 'Install' : 'I ran the command') : 'Continue', { variant: 'primary', onClick: function () {
+        U.btn(step === 1 ? (d.method === 'ssh' ? 'Install' : 'I ran the command') : 'Continue', { variant: 'primary', onClick: function (event) {
           var e = validate(); if (e) { error(e); return; }
+          if (real && step === 0 && !enrolled) { createNode(event.currentTarget); return; }
           step++; render();
         } })];
     }
-    layer = U.modal({ title: 'Add a node', body: body, sticky: true, onClose: function () { timers.forEach(clearTimeout); }, actions: function () { return footer(); } });
+    layer = U.modal({ title: 'Add a node', body: body, sticky: true, onClose: function () { timers.forEach(function (t) { if (typeof t === 'function') t(); else clearTimeout(t); }); }, actions: function () { return footer(); } });
     render();
   }
   ST.openAddNode = openWizard;
@@ -217,20 +318,30 @@
         h('div', { class: 'row' }, U.btn('Save changes', { variant: 'primary', onClick: function () {
           if (!d.name.trim()) { U.toast('Node name cannot be empty', 'error'); return; }
           if (!(+d.down > 0) || !(+d.up > 0)) { U.toast('Expected speeds must be above zero', 'error'); return; }
-          ST.updateNode(n.id, { name: d.name.trim(), label: d.label.trim(), expectedDown: +d.down, expectedUp: +d.up, threads: d.threads, server: d.server, note: d.note });
-          U.toast('Settings saved');
+          var patch = { name: d.name.trim(), label: d.label.trim(), expectedDown: +d.down, expectedUp: +d.up, threads: d.threads, server: ST.demo || d.server === 'auto' ? d.server : +d.server, note: d.note };
+          Promise.resolve(ST.updateNode(n.id, patch)).then(function () { U.toast('Settings saved'); }, function (error) {
+            U.toast(error.status === 409 ? 'Another node already has this name.' : error.status === 412 ? 'This node was changed elsewhere. Reload and try again.' : error.message, 'error');
+          });
         } }), U.btn('Discard', { onClick: function () { ST.refresh(); } })));
       root.appendChild(U.card('Node settings', null, form));
       root.appendChild(h('div', { class: 'mt' }, U.card('Remove this node', 'Stops testing and removes the program from the machine.', h('div', null,
         h('p', { class: 'text-2', style: 'margin-bottom:10px' }, 'The results already collected for this node are deleted from the dashboard.'),
         U.btn('Remove ' + n.name, { variant: 'danger', icon: 'trash', onClick: function () {
-          U.confirm({ title: 'Remove ' + n.name + '?', text: 'This deletes ' + ST.nodeResults(n.id).length + ' results and uninstalls the program from the machine. This cannot be undone.', confirm: 'Remove node', danger: true }).then(function (ok) {
-            if (!ok) return; ST.removeNode(n.id); location.hash = '#/nodes'; U.toast(n.name + ' removed');
+          U.confirm({ title: 'Remove ' + n.name + '?', text: ST.demo ? 'This deletes ' + ST.nodeResults(n.id).length + ' results and uninstalls the program from the machine. This cannot be undone.' : 'This deletes the node and all of its results from the dashboard. This cannot be undone. The program on the machine stops reporting; remove it there as well if you no longer need it.', confirm: 'Remove node', danger: true }).then(function (ok) {
+            if (!ok) return;
+            Promise.resolve(ST.removeNode(n.id)).then(function () { location.hash = '#/nodes'; U.toast(n.name + ' removed'); }, function (error) { U.toast(error.status === 412 ? 'This node was changed elsewhere. Reload and try again.' : error.message, 'error'); });
           });
         } })))));
     }
 
-    if (tab === 'agent') {
+    if (tab === 'agent' && !ST.demo) {
+      var stateChip = !n.enabled ? U.chip('Paused', '', 'pause') : n.status === 'offline' ? U.chip('Not reporting', 'warn', 'alert') : U.chip('Running', 'good', 'check');
+      root.appendChild(U.card('Program on the machine', null, h('div', { class: 'stack' },
+        U.kv([['Machine', h('span', { class: 'mono' }, n.host || '—')], ['Program version', n.agent ? 'v' + n.agent : '—'], ['Last check-in', n.lastSeen ? F.rel(n.lastSeen) : 'Never'], ['Status', stateChip]]),
+        n.updateVersion ? h('div', { class: 'row wrap' }, U.btn('Update to v' + n.updateVersion, { icon: 'refresh', onClick: function () {
+          Promise.resolve(ST.updateAgent(n.id, n.updateVersion)).then(function () { U.toast('Update queued: the program restarts when it is installed'); }, function (error) { U.toast(error.message, 'error'); });
+        } })) : h('p', { class: 'hint' }, 'The program is up to date.'))));
+    } else if (tab === 'agent') {
       var logs = ['info  agent started (v' + n.agent + ')', 'info  connected to ' + ST.settings().centerUrl, 'info  schedule received: every ' + n.interval + ' min, offset +' + n.offset + ' min', last ? 'info  last test ' + (last.status === 'failed' ? 'failed: ' + last.error : 'finished: ' + F.speed(last.down) + ' down, ' + F.speed(last.up) + ' up') : 'info  waiting for first test', 'info  heartbeat ok'];
       var logBox = h('pre', { class: 'code', style: 'min-height:120px' }, logs.join('\n'));
       var appendLog = function (line) { logBox.textContent += '\n' + line; logBox.scrollTop = logBox.scrollHeight; };

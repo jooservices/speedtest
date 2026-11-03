@@ -25,7 +25,7 @@
       var upc = sums.map(function (x) { return x.upPct; }).filter(function (v) { return v != null; });
       var allOk = S.sum(sums.map(function (x) { return x.ok; })), allN = S.sum(sums.map(function (x) { return x.count; }));
       var pings = ST.results({ from: a, to: b, status: 'ok' }).map(function (r) { return r.ping; });
-      var ips = S.sum(nodes.map(function (n) { return ST.ipHistory(n.id).changes.filter(function (c) { return c.ts >= a && c.ts <= b && n.ipModel && n.ipModel.kind !== 'mix'; }).length; }));
+      var ips = S.sum(nodes.map(function (n) { return ST.ipHistory(n.id).changes.filter(function (c) { return c.ts >= a && c.ts <= b && !(n.ipModel && n.ipModel.kind === 'mix'); }).length; }));
       return { down: S.mean(pcts), up: S.mean(upc), ping: S.summary(pings).median, success: allN ? allOk / allN * 100 : null, ips: ips, count: allN };
     }
     var cur = fleet(from, now), prev = fleet(prevFrom, from);

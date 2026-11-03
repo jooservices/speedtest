@@ -94,19 +94,19 @@ func NewHandler(options Options) http.Handler {
 	apiHandler := newAPIHandler(options.NodeCredentials, options.AgentRateLimit, authHandler, options.AgentAPI)
 	var ownerNodesHandler http.Handler
 	if options.OwnerNodes != nil {
-		ownerNodesHandler = newOwnerNodesHandler(options.OwnerNodes, authHandler, options.AgentRateLimit)
+		ownerNodesHandler = newOwnerNodesHandler(options.OwnerNodes, authHandler)
 	}
 	var ownerSchedulesHandler http.Handler
 	if options.OwnerSchedules != nil {
-		ownerSchedulesHandler = newOwnerSchedulesHandler(options.OwnerSchedules, authHandler, options.AgentRateLimit)
+		ownerSchedulesHandler = newOwnerSchedulesHandler(options.OwnerSchedules, authHandler)
 	}
 	var ownerJobsHandler http.Handler
 	if options.OwnerJobs != nil {
-		ownerJobsHandler = newOwnerJobsHandler(options.OwnerJobs, authHandler, options.AgentRateLimit)
+		ownerJobsHandler = newOwnerJobsHandler(options.OwnerJobs, authHandler)
 	}
 	var ownerDashboardHandler http.Handler
 	if options.OwnerDashboard != nil {
-		ownerDashboardHandler = newOwnerDashboardHandler(options.OwnerDashboard, authHandler, options.AgentRateLimit)
+		ownerDashboardHandler = newOwnerDashboardHandler(options.OwnerDashboard, authHandler)
 	}
 	var notificationHandler http.Handler
 	if options.OwnerNotifications != nil {
@@ -114,23 +114,23 @@ func NewHandler(options Options) http.Handler {
 	}
 	var ownerIPHandler http.Handler
 	if options.OwnerIP != nil {
-		ownerIPHandler = newOwnerIPHandler(options.OwnerIP, authHandler, options.AgentRateLimit)
+		ownerIPHandler = newOwnerIPHandler(options.OwnerIP, authHandler)
 	}
 	var settingsHandler http.Handler
 	if options.Settings != nil {
-		settingsHandler = newOwnerSettingsHandler(options.Settings, authHandler, options.AgentRateLimit)
+		settingsHandler = newOwnerSettingsHandler(options.Settings, authHandler)
 	}
 	var ownerResultsHandler http.Handler
 	if options.OwnerResults != nil {
-		ownerResultsHandler = newOwnerResultsHandler(options.OwnerResults, authHandler, options.AgentRateLimit)
+		ownerResultsHandler = newOwnerResultsHandler(options.OwnerResults, authHandler)
 	}
 	var ownerStatsHandler http.Handler
 	if options.OwnerStats != nil {
-		ownerStatsHandler = newOwnerStatsHandler(options.OwnerStats, authHandler, options.AgentRateLimit)
+		ownerStatsHandler = newOwnerStatsHandler(options.OwnerStats, authHandler)
 	}
 	var ownerAlertsHandler http.Handler
 	if options.OwnerAlerts != nil {
-		ownerAlertsHandler = newOwnerAlertsHandler(options.OwnerAlerts, authHandler, options.AgentRateLimit)
+		ownerAlertsHandler = newOwnerAlertsHandler(options.OwnerAlerts, authHandler)
 	}
 	var installerHandler http.Handler
 	if options.Installer != nil {

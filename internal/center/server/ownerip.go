@@ -21,11 +21,8 @@ type ownerIP struct {
 	limiter *nodeRateLimiter
 }
 
-func newOwnerIPHandler(store OwnerIPStore, auth *serverAuth, perMinute int) http.Handler {
-	if perMinute <= 0 {
-		perMinute = defaultAgentRequestsPerMinute
-	}
-	h := &ownerIP{store: store, limiter: newNodeRateLimiter(perMinute, defaultAgentBurst*2)}
+func newOwnerIPHandler(store OwnerIPStore, auth *serverAuth) http.Handler {
+	h := &ownerIP{store: store, limiter: newOwnerRateLimiter()}
 	return auth.requireSession(http.HandlerFunc(h.serve))
 }
 

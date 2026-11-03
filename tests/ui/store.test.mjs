@@ -176,3 +176,71 @@ test('demo manual test reports progress and inserts a result without network acc
   assert.ok(progress.some(value => value.phase === 'Testing download'));
   assert.equal(ST.latest('n1').id, result.id);
 });
+
+test('remote schedules, rules, stagger, key rotation, agent update, manual tests and notification tests use the API', async t => {
+  const { ST, control, data } = await setup(t);
+  await ST.load();
+  assert.equal(ST.scheduleInfo().rules.maxConcurrent, 1);
+  assert.equal(ST.scheduleInfo().nodes[0].nodeId, data.node.id);
+  await ST.saveSchedule(data.node.id, { interval: 60, offset: 5, enabled: true });
+  const put = control.requests.find(r => r.method === 'PUT' && r.path === '/api/schedules/' + data.node.id);
+  assert.deepEqual(put.body, { interval: 60, offset: 5, enabled: true }); assert.equal(put.headers['if-match'], '"fixture-v1"');
+  await ST.saveScheduleRules({ maxConcurrent: 3, quietStart: '23:00', quietEnd: '05:00' });
+  const rules = control.requests.find(r => r.path === '/api/schedules/rules' && r.method === 'PUT').body;
+  assert.equal(rules.maxConcurrent, 3); assert.equal(rules.stagger, true); assert.equal(rules.quiet.quietStart, '23:00');
+  assert.match(rules.quiet.timezone, /^[A-Za-z_]+(\/[A-Za-z_+-]+)*$/, 'the quiet-hours zone is always an IANA name');
+  await ST.saveScheduleRules({ stagger: false });
+  assert.equal(control.requests.filter(r => r.path === '/api/schedules/rules').at(-1).body.stagger, false);
+  await ST.staggerSchedules();
+  assert.equal(control.requests.find(r => r.path === '/api/schedules/stagger').method, 'POST');
+  assert.equal(await ST.updateAgent(data.node.id, '2.0.0').then(c => c.version), '2.0.0');
+  assert.deepEqual(control.requests.find(r => r.path.endsWith('/commands')).body, { type: 'update_agent', version: '2.0.0' });
+  assert.equal((await ST.rotateEnrollmentKey()).enrollToken, 'st_enroll_fixture_once');
+  assert.equal(ST.settings().enrollKeyConfigured, true);
+  assert.equal((await ST.testNotification('webhook')).status, 'sent');
+  control.deliveryFails = true;
+  assert.equal((await ST.testNotification('webhook')).status, 'failed');
+});
+
+test('a manual test follows the command to its result and reports a failed command plainly', async t => {
+  const { ST, control, data } = await setup(t);
+  await ST.load();
+  const progress = [];
+  const result = await ST.runTest(data.node.id, p => progress.push(p));
+  assert.equal(result.id, data.result.id); assert.equal(result.ts, Date.parse(data.result.ts));
+  assert.equal(progress.at(-1).pct, 100); assert.equal(progress.at(-1).phase, 'done');
+  control.commandFails = true;
+  const failed = await ST.runTest(data.node.id);
+  assert.deepEqual({ status: failed.status, error: failed.error }, { status: 'failed', error: 'speedtest: network is down' });
+});
+
+test('polling waits for pending commands and deliveries and gives up after its time limit', async t => {
+  const { ST, control, context, data } = await setup(t);
+  await ST.load();
+  const real = context.setTimeout; context.setTimeout = fn => real(fn, 1);
+  control.pending = 2;
+  const seen = [];
+  const result = await ST.runTest(data.node.id, p => seen.push(p.phase));
+  assert.equal(result.id, data.result.id); assert.ok(seen.includes('Testing download'));
+  control.pending = 2;
+  assert.equal((await ST.testNotification('webhook')).status, 'sent');
+  const vm = await import('node:vm');
+  vm.runInContext('var clockNow = 1000000; Date.now = function () { clockNow += 400000; return clockNow; };', context);
+  control.pending = 99;
+  assert.match((await ST.runTest(data.node.id)).error, /did not answer in time/);
+  control.pending = 99;
+  assert.match((await ST.testNotification('webhook')).error, /no answer/);
+});
+
+test('the idle refresh reloads only when nothing is being typed, no dialog is open and the tab is visible', async t => {
+  const { ST, context, control } = await setup(t);
+  await ST.load();
+  const reloads = () => control.requests.filter(r => r.path === '/api/settings').length;
+  const set = state => { context.document = { body: true, visibilityState: 'visible', activeElement: null, querySelector: () => null, ...state }; };
+  let before = reloads();
+  set({}); await ST.refreshWhenIdle(); assert.equal(reloads(), before + 1, 'idle page reloads');
+  before = reloads();
+  set({ activeElement: { tagName: 'INPUT' } }); assert.equal(ST.refreshWhenIdle(), null); assert.equal(reloads(), before, 'typing');
+  set({ querySelector: () => ({}) }); assert.equal(ST.refreshWhenIdle(), null); assert.equal(reloads(), before, 'dialog open');
+  set({ visibilityState: 'hidden' }); assert.equal(ST.refreshWhenIdle(), null); assert.equal(reloads(), before, 'hidden tab');
+});

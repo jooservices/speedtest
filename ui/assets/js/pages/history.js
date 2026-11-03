@@ -2,11 +2,12 @@
 (function () {
   'use strict';
   var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt;
-  var q = { nodes: null, status: 'all', text: '', minDown: '', maxDown: '', range: null, sort: 'ts', dir: 'desc', page: 1, size: 25 };
+  var q = { nodes: null, allNodes: true, status: 'all', text: '', minDown: '', maxDown: '', range: null, sort: 'ts', dir: 'desc', page: 1, size: 25 };
 
   ST.pages.history = function (root) {
     var nodes = ST.nodes();
-    if (!q.nodes) q.nodes = nodes.map(function (n) { return n.id; });
+    // Until the owner picks nodes by hand every node is shown, including nodes added after this page was first opened.
+    if (!q.nodes || q.allNodes) q.nodes = nodes.map(function (n) { return n.id; });
     q.nodes = q.nodes.filter(function (id) { return ST.node(id); });
     var rangeKey = q.range || ST.settings().range;
     var listHost = h('div'), countHost = h('span', { class: 'muted' });
@@ -52,7 +53,7 @@
           { key: 'ping', label: 'Ping', sort: true, num: true, render: function (r) { return F.ms(r.ping); } },
           { key: 'jitter', label: 'Jitter', sort: true, num: true, render: function (r) { return F.ms(r.jitter); } },
           { key: 'loss', label: 'Loss', sort: true, num: true, render: function (r) { return r.loss == null ? '—' : F.num(r.loss, 1) + '%'; } },
-          { key: 'server', label: 'Server', sort: true, render: function (r) { var s = ST.server(r.serverId); return s.name + ', ' + s.city; } },
+          { key: 'server', label: 'Server', sort: true, render: function (r) { if (r.serverId == null && !r.server) return '—'; var s = r.server || ST.server(r.serverId); return s.name + (s.city ? ', ' + s.city : ''); } },
           { key: 'ip', label: 'Public IP', sort: true, render: function (r) { return h('span', { class: 'mono' }, r.ip); } },
           { key: 'status', label: 'Status', sort: true, render: function (r) { return U.statusChip(r.status); } }],
         rows: slice, sortKey: q.sort, sortDir: q.dir, onSort: function (k) { if (q.sort === k) q.dir = q.dir === 'asc' ? 'desc' : 'asc'; else { q.sort = k; q.dir = k === 'ts' ? 'desc' : 'asc'; } draw(); },
@@ -79,7 +80,7 @@
     nodes.forEach(function (n) {
       var on = q.nodes.indexOf(n.id) >= 0;
       var b = h('button', { type: 'button', class: on ? '' : 'off', 'aria-pressed': on, onClick: function () {
-        var i = q.nodes.indexOf(n.id); if (i >= 0) q.nodes.splice(i, 1); else q.nodes.push(n.id);
+        q.allNodes = false; var i = q.nodes.indexOf(n.id); if (i >= 0) q.nodes.splice(i, 1); else q.nodes.push(n.id);
         b.classList.toggle('off', q.nodes.indexOf(n.id) < 0); b.setAttribute('aria-pressed', q.nodes.indexOf(n.id) >= 0); q.page = 1; draw();
       } }, U.dot(ST.nodeColor(n)), n.name);
       nodeBox.appendChild(b);

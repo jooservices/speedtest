@@ -373,7 +373,7 @@
     state.settings.notify = { email: { on: false, to: '' }, telegram: { on: false, to: '' },
       slack: { on: false, to: '' }, webhook: { on: false, to: '' } };
     ST.servers = [];
-    var geos = {}, addresses = [], changes = [], controller, revision = 0;
+    var geos = {}, addresses = [], changes = [], schedules = { rules: {}, nodes: [], clashes: [] }, controller, revision = 0;
     var API = ST.api;
     ST.remote = { status: 'idle', error: null };
     ST.geo = function (ip) { return geos[ip] || null; };
@@ -411,14 +411,15 @@
           API.list('/api/alerts/rules', options),
           API.list('/api/alerts/events?range=' + encodeURIComponent(range), options),
           API.list('/api/ip/addresses', options),
-          API.list('/api/ip/history', options)
+          API.list('/api/ip/history', options),
+          API.request('/api/schedules', options)
         ]);
         if (current !== revision) return;
         geos = {}; ST.servers = [];
         state.settings = Object.assign({}, state.settings, settings.data, { geoKey: '', enrollToken: '' });
         state.nodes = snapshot[0].map(function (n) {
           if (n.geo && n.currentIp) geos[n.currentIp] = n.geo;
-          return Object.assign({}, n, { createdAt: timestamp(n.createdAt), lastSeen: timestamp(n.lastSeen),
+          return Object.assign({}, n, { agent: String(n.agent || '').replace(/^speedtest-agent\//, ''), createdAt: timestamp(n.createdAt), lastSeen: timestamp(n.lastSeen),
             latest: n.latest && result(n.latest), latestGood: n.latestGood && result(n.latestGood) });
         });
         state.results = snapshot[1].map(result).sort(function (a, b) { return a.ts - b.ts; });
@@ -430,6 +431,7 @@
           return Object.assign({}, a, { first: timestamp(a.first), last: timestamp(a.last) });
         });
         changes = snapshot[5].map(function (c) { return Object.assign({}, c, { ts: timestamp(c.ts) }); });
+        schedules = snapshot[6].data;
         reindex();
         ST.remote = { status: 'ready', error: null };
         ST.emit('settings');
@@ -489,9 +491,87 @@
         return mutation('/api/settings', 'PUT', input, { ifMatch: response.etag });
       });
     };
-    ST.runTest = function (id) { return mutation('/api/nodes/' + encodeURIComponent(id) + '/run', 'POST', undefined, { idempotencyKey: API.key() }); };
+    // Schedules are computed by the center: next runs, data usage and clashes come from /api/schedules.
+    ST.scheduleInfo = function () { return schedules; };
+    function quietZone() {
+      var zone = state.settings.timezone;
+      if (zone && zone !== 'browser') return zone;
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    }
+    ST.saveSchedule = function (id, input) {
+      var path = '/api/schedules/' + encodeURIComponent(id);
+      return API.request(path).then(function (response) { return mutation(path, 'PUT', input, { ifMatch: response.etag }); });
+    };
+    ST.saveScheduleRules = function (patch) {
+      var rules = Object.assign({ stagger: schedules.rules.stagger, maxConcurrent: schedules.rules.maxConcurrent,
+        quietStart: schedules.rules.quiet.quietStart, quietEnd: schedules.rules.quiet.quietEnd }, patch);
+      return API.request('/api/schedules').then(function (response) {
+        return mutation('/api/schedules/rules', 'PUT', { stagger: !!rules.stagger, maxConcurrent: +rules.maxConcurrent,
+          quiet: { quietStart: rules.quietStart || '', quietEnd: rules.quietEnd || '', timezone: quietZone() } }, { ifMatch: response.etag });
+      });
+    };
+    ST.staggerSchedules = function () {
+      return API.request('/api/schedules').then(function (response) { return mutation('/api/schedules/stagger', 'POST', undefined, { ifMatch: response.etag }); });
+    };
+    ST.rotateEnrollmentKey = function () {
+      // No reload here: the page shows the new key once, and a reload would redraw the page and discard it.
+      return API.request('/api/settings/enrolment-key', { method: 'POST' }).then(function (response) { state.settings.enrollKeyConfigured = true; return response.data; });
+    };
+    // A test message is a delivery the center sends; wait until it is sent or has failed.
+    ST.testNotification = function (channel) {
+      return API.request('/api/notifications/test/' + encodeURIComponent(channel), { method: 'POST', idempotencyKey: API.key() }).then(function (queued) {
+        var started = Date.now(), path = '/api/notifications/deliveries/' + encodeURIComponent(queued.data.id);
+        return new Promise(function (resolve, reject) {
+          (function poll() {
+            API.request(path).then(function (reply) {
+              var d = reply.data;
+              if (d.status === 'sent' || d.status === 'failed') { resolve(d); return; }
+              if (Date.now() - started > 30000) { resolve({ status: 'failed', error: 'no answer from the center in time' }); return; }
+              setTimeout(poll, 1000);
+            }, reject);
+          })();
+        });
+      });
+    };
+    ST.updateAgent = function (id, version) {
+      return mutation('/api/nodes/' + encodeURIComponent(id) + '/commands', 'POST', { type: 'update_agent', version: version }, { idempotencyKey: API.key() });
+    };
+    // A manual test is a command the node picks up; poll its progress, then read the result it produced.
+    ST.runTest = function (id, onProgress) {
+      var base = '/api/nodes/' + encodeURIComponent(id);
+      return API.request(base + '/run', { method: 'POST', idempotencyKey: API.key() }).then(function (queued) {
+        var command = queued.data, started = Date.now();
+        return new Promise(function (resolve, reject) {
+          (function poll() {
+            API.request(base + '/commands/' + encodeURIComponent(command.id)).then(function (reply) {
+              var c = reply.data;
+              if (onProgress) onProgress({ phase: c.phase || (c.status === 'pending' ? 'Waiting for the node to pick this up' : 'Running the test'), pct: c.pct || 0, value: null, unit: 'speed', index: 0 });
+              if (c.status === 'succeeded' || c.status === 'failed') {
+                ST.load();
+                if (c.status === 'succeeded' && c.resultId) {
+                  // The result travels from the node after the command is acknowledged, so reload once more when it is in.
+                  API.request('/api/results/' + encodeURIComponent(c.resultId)).then(function (r) { ST.load(); resolve(result(r.data)); }, reject);
+                } else resolve({ status: 'failed', error: c.error || 'The test did not finish.' });
+                return;
+              }
+              if (Date.now() - started > 5 * 60 * 1000) { resolve({ status: 'failed', error: 'The node did not answer in time. Check that it is online.' }); return; }
+              setTimeout(poll, 1500);
+            }, reject);
+          })();
+        });
+      });
+    };
   }
 
   if (ST.demo) load();
-  else initRemote();
+  else {
+    initRemote();
+    // Keep the numbers fresh without disturbing the owner: only while the tab is visible, nothing is being typed and no dialog is open.
+    ST.refreshWhenIdle = function () {
+      var active = document.activeElement, typing = active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
+      if (document.visibilityState === 'visible' && ST.remote.status === 'ready' && !typing && !document.querySelector('.overlay, .drawer-wrap')) return ST.load();
+      return null;
+    };
+    if (typeof setInterval === 'function') setInterval(ST.refreshWhenIdle, 60000);
+  }
 })();

@@ -12,7 +12,8 @@
   ST.pages.stats = function (root) {
     var all = ST.nodes();
     if (!all.length) { root.appendChild(U.pageHead('Statistics')); root.appendChild(U.card(null, null, U.empty('No data yet', 'Add a node to see statistics.'))); return; }
-    if (!q.nodes) q.nodes = all.map(function (n) { return n.id; });
+    // Every node is shown until the owner picks some by hand, including nodes added later.
+    if (!q.nodes || q.allNodes !== false) q.nodes = all.map(function (n) { return n.id; });
     q.nodes = q.nodes.filter(function (id) { return ST.node(id); });
     if (!q.heatNode || !ST.node(q.heatNode)) q.heatNode = all[0].id;
     var now = Date.now(), range = ST.settings().range, from = now - ST.ranges[range];
@@ -25,7 +26,7 @@
     all.forEach(function (n) {
       var on = q.nodes.indexOf(n.id) >= 0;
       nodeBox.appendChild(h('button', { type: 'button', class: on ? '' : 'off', 'aria-pressed': on, onClick: function () {
-        var i = q.nodes.indexOf(n.id); if (i >= 0) { if (q.nodes.length === 1) { U.toast('Keep at least one node selected'); return; } q.nodes.splice(i, 1); } else q.nodes.push(n.id); ST.refresh();
+        q.allNodes = false; var i = q.nodes.indexOf(n.id); if (i >= 0) { if (q.nodes.length === 1) { U.toast('Keep at least one node selected'); return; } q.nodes.splice(i, 1); } else q.nodes.push(n.id); ST.refresh();
       } }, U.dot(ST.nodeColor(n)), ST.nodeTitle(n)));
     });
     root.appendChild(nodeBox);

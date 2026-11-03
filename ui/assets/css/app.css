@@ -320,6 +320,9 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
 .steps span.done { background: var(--accent); }
 .choice { border: 1px solid var(--line-strong); border-radius: var(--radius); padding: 12px 14px; cursor: pointer; display: grid; gap: 2px; background: var(--surface); text-align: left; }
 .choice:hover { background: var(--surface-2); }
+.choice:disabled { opacity: .55; cursor: not-allowed; }
+.checklist li.bad { color: var(--crit); }
+.choice:disabled:hover { background: var(--surface); }
 .choice.on { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-soft); }
 .choice b { display: flex; align-items: center; gap: 8px; }
 .checklist { display: grid; gap: 8px; }
@@ -348,6 +351,16 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
 .ev-ico.warn { background: var(--warn-soft); color: var(--warn); }
 .ev-ico.info { background: var(--info-soft); color: var(--accent-strong); }
 .ev-ico.good { background: var(--good-soft); color: var(--good); }
+
+/* The view takes focus after navigation for screen readers; it is not a control, so it shows no ring. */
+.content:focus, .content:focus-visible { outline: none; }
+
+/* ---------- Sign-in ---------- */
+.app.signed-out { grid-template-columns: 1fr; }
+.app.signed-out .sidebar, .app.signed-out .topbar { display: none; }
+.signin { min-height: 80vh; display: grid; place-items: center; padding: 16px; }
+.signin-card { width: min(400px, 100%); }
+.form-error { color: var(--crit); background: var(--crit-soft); border-radius: 8px; padding: 8px 10px; font-size: 13px; }
 
 /* ---------- Responsive ---------- */
 @media (max-width: 1200px) {

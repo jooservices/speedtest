@@ -23,8 +23,12 @@ export function fixture() {
     nodes: 'all', severity: 'warn', channels: ['email'], enabled: true };
   const event = { id: 'event-fixture', ruleId: rule.id, nodeId: node.id, severity: 'warn', ts, resolvedAt: null,
     title: rule.name, detail: 'Fixture alert', acked: false };
-  return { node, result, settings, rule, event };
+  const schedules = { rules: { stagger: true, maxConcurrent: 1, quiet: { quietStart: '', quietEnd: '', timezone: 'UTC' } },
+    nodes: [{ nodeId: node.id, config: { interval: 30, offset: 0, enabled: true }, nextRun: ts, upcoming: [ts], bytesPerDay: 72000, bytesPerMonth: 2160000 }],
+    clashes: [] };
+  return { node, result, settings, rule, event, schedules };
 }
+const ts0 = () => new Date().toISOString();
 export const envelope = (data, meta = {}, code = 200) => ({ success: true, code, message: 'OK', data, meta, errors: null });
 export const problem = status => ({ type: `/problems/test-${status}`, title: `HTTP ${status}`, status,
   detail: status === 403 ? 'CSRF token invalid. Retry the request.' : `Fixture failure ${status}. Retry the request.` });
@@ -48,6 +52,20 @@ export async function startServer() {
         res.end(JSON.stringify(value));
       };
       if (control.status) { send(control.status, problem(control.status)); return; }
+      const installId = '9b0f2c3e-1111-4222-8333-444455556666';
+      if (url.pathname === `/api/installations/${installId}/events`) {
+        control.responses.push({ path: url.pathname, method: 'get', status: 200, value: null });
+        res.writeHead(200, { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' });
+        const events = control.installFails
+          ? [['Connecting to the machine', 10, 'running'], ['Checking the system', 30, 'running'], ['Sudo is not allowed for this account.', 30, 'failed']]
+          : [['Connecting to the machine', 10, 'running'], ['Downloading the program', 50, 'running'], ['Waiting for the first heartbeat', 90, 'running'], ['Installed and reporting', 100, 'succeeded']];
+        events.forEach(([message, pct, status], i) => setTimeout(() => res.write(`id: ${i + 1}\nevent: progress\ndata: ${JSON.stringify({ id: String(i + 1), ts: new Date().toISOString(), step: 'step' + i, message, pct, status })}\n\n`), 80 * (i + 1)));
+        setTimeout(() => res.end(), 80 * events.length + 200);
+        return;
+      }
+      if (req.method === 'GET' && url.pathname === `/api/installations/${installId}`) {
+        send(200, envelope({ id: installId, nodeId: data.node.id, status: control.installFails ? 'failed' : 'succeeded', step: 'done', error: control.installFails ? 'Sudo is not allowed for this account.' : null })); return;
+      }
       if (url.pathname === '/api/auth/me') {
         send(200, envelope({ user: control.session ? { id: 'owner', email: 'owner@example.com' } : null,
           csrfToken: 'fixture-csrf', expiresAt: new Date(Date.now() + 60000).toISOString() })); return;
@@ -56,8 +74,17 @@ export async function startServer() {
         if (req.headers['x-csrf-token'] !== 'fixture-csrf') { send(403, problem(403)); return; }
         const input = body ? JSON.parse(body) : {};
         if (['PUT', 'PATCH', 'DELETE'].includes(req.method) && !req.headers['if-match']) { send(428, problem(428)); return; }
+        if (url.pathname === '/api/installer/probes') {
+          send(201, envelope({ id: 'c0ffee00-0000-4000-8000-000000000001', fingerprint: 'SHA256:fixtureFingerprint0123456789', expiresAt: new Date(Date.now() + 600000).toISOString() }, {}, 201)); return;
+        }
+        if (url.pathname.endsWith('/installations')) {
+          control.lastInstall = input; // kept for assertions
+          control.responses.push({ path: url.pathname, method: 'post', status: 202, value: null });
+          res.writeHead(202, { 'Content-Type': 'application/json', Location: '/api/installations/9b0f2c3e-1111-4222-8333-444455556666' });
+          res.end(JSON.stringify(envelope({ id: '9b0f2c3e-1111-4222-8333-444455556666', nodeId: data.node.id, status: 'pending', step: 'queued', error: null }, {}, 202))); return;
+        }
         const created = url.pathname === '/api/nodes' || url.pathname === '/api/alerts/rules';
-        const queued = url.pathname.endsWith('/run') || url.pathname === '/api/alerts/acknowledgements';
+        const queued = url.pathname.endsWith('/run') || url.pathname.endsWith('/commands') || url.pathname.startsWith('/api/notifications/test/') || url.pathname === '/api/alerts/acknowledgements';
         if ((created || queued) && !req.headers['idempotency-key']) { send(400, problem(400)); return; }
         if (req.method === 'DELETE') {
           if (url.pathname.startsWith('/api/nodes/') && url.searchParams.get('confirm') !== 'true') { send(422, problem(422)); return; }
@@ -76,6 +103,15 @@ export async function startServer() {
         else if (url.pathname.endsWith('/run')) {
           status = 202; output = { id: 'command-fixture', nodeId: data.node.id, type: 'run_now', version: null, status: 'pending',
             createdAt: new Date().toISOString(), ackedAt: null, phase: '', pct: 0, resultId: null, error: null };
+        } else if (url.pathname.endsWith('/commands')) {
+          status = 202; output = { id: 'command-update', nodeId: data.node.id, type: input.type, version: input.version ?? null, status: 'pending',
+            createdAt: new Date().toISOString(), ackedAt: null, phase: '', pct: 0, resultId: null, error: null };
+        } else if (url.pathname === '/api/schedules/rules') output = data.schedules.rules;
+        else if (url.pathname === '/api/schedules/stagger') output = data.schedules;
+        else if (url.pathname.startsWith('/api/schedules/')) output = { ...data.schedules.nodes[0], config: input };
+        else if (url.pathname === '/api/settings/enrolment-key') { status = 201; output = { enrollToken: 'st_enroll_fixture_once', createdAt: new Date().toISOString() }; }
+        else if (url.pathname.startsWith('/api/notifications/test/')) {
+          status = 202; output = { id: 'd1e7a000-0000-4000-8000-000000000001', eventId: null, channel: url.pathname.split('/').pop(), status: 'pending', attempts: 0, createdAt: new Date().toISOString(), lastAttempt: null, error: null };
         } else if (url.pathname.endsWith('/ack')) output = { ...data.event, ...input };
         else if (url.pathname.startsWith('/api/alerts/rules/')) output = { ...data.rule, ...input };
         else if (url.pathname.startsWith('/api/nodes/')) output = { ...data.node, ...input };
@@ -83,6 +119,22 @@ export async function startServer() {
         send(status, envelope(output, {}, status)); return;
       }
       if (url.pathname === '/api/settings') { send(200, envelope(data.settings)); return; }
+      if (url.pathname === '/api/schedules') { send(200, envelope(data.schedules)); return; }
+      if (url.pathname.startsWith('/api/schedules/')) { send(200, envelope(data.schedules.nodes[0])); return; }
+      if (/\/commands\/[^/]+$/.test(url.pathname)) {
+        if (control.pending > 0) {
+          control.pending--;
+          send(200, envelope({ id: 'command-fixture', nodeId: data.node.id, type: 'run_now', version: null, status: 'running', createdAt: ts0(), ackedAt: null, phase: 'Testing download', pct: 40, resultId: null, error: null })); return;
+        }
+        const failed = control.commandFails;
+        send(200, envelope({ id: 'command-fixture', nodeId: data.node.id, type: 'run_now', version: null, status: failed ? 'failed' : 'succeeded', createdAt: ts0(),
+          ackedAt: ts0(), phase: failed ? '' : 'done', pct: failed ? 0 : 100, resultId: failed ? null : data.result.id, error: failed ? 'speedtest: network is down' : null })); return;
+      }
+      if (url.pathname.startsWith('/api/notifications/deliveries/')) {
+        const waiting = control.pending > 0 && control.pending--;
+        send(200, envelope({ id: url.pathname.split('/').pop(), eventId: null, channel: 'webhook', status: waiting ? 'pending' : control.deliveryFails ? 'failed' : 'sent', attempts: 1, createdAt: ts0(), lastAttempt: ts0(), error: control.deliveryFails ? 'the receiver answered 500' : null })); return;
+      }
+      if (url.pathname.startsWith('/api/results/')) { send(200, envelope(data.result)); return; }
       if (url.pathname.startsWith('/api/nodes/')) { send(200, envelope(data.node)); return; }
       if (url.pathname.startsWith('/api/alerts/rules/')) { send(200, envelope(data.rule)); return; }
       if (url.pathname.startsWith('/api/alerts/events/')) { send(200, envelope(data.event)); return; }

@@ -78,12 +78,15 @@
     } }));
     var dark = s.theme !== 'light';
     tb.appendChild(U.btn('', { icon: dark ? 'sun' : 'moon', variant: 'ghost', title: dark ? 'Switch to light theme' : 'Switch to dark theme', aria: 'Toggle theme', onClick: ST.toggleTheme }));
+    if (!ST.demo) tb.appendChild(U.btn('Sign out', { variant: 'ghost', onClick: function () { ST.signOut(); } }));
   }
   function closeMenu() { document.getElementById('sidebar').classList.remove('open'); }
 
   function renderPage() {
     current = route();
     var view = document.getElementById('view');
+    var shell = view.closest('.app');
+    if (shell) shell.classList.toggle('signed-out', !ST.demo && current.page === 'signin');
     if (cleanup) { try { cleanup(); } catch (e) {} cleanup = null; }
     var scroll = window.scrollY;
     U.clear(view);
@@ -92,9 +95,7 @@
     var blocked = !ST.demo && current.page !== 'notFound' && current.page !== 'signin' && remote.status !== 'ready';
     try {
       if (!ST.demo && current.page === 'signin') {
-        view.appendChild(U.pageHead('Sign in', 'Sign in to the command center to continue.'));
-        view.appendChild(U.empty('Session required', 'Your session has expired or you are signed out. Sign in before loading data.',
-          U.btn('Retry session', { onClick: function () { location.hash = '#/'; ST.load(); } })));
+        cleanup = ST.pages.signin(view);
       } else if (blocked) {
         var failed = remote.status === 'error';
         view.appendChild(h('div', { role: failed ? 'alert' : 'status', 'aria-live': 'polite', 'data-load-state': remote.status },

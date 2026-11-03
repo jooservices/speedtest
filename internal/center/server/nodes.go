@@ -122,6 +122,16 @@ type nodeRateLimiter struct {
 	now       func() time.Time
 }
 
+// The owner works through the dashboard, which loads many pages of data at once; the limit only stops runaway scripts.
+const (
+	ownerRequestsPerMinute = 3000
+	ownerBurst             = 400
+)
+
+func newOwnerRateLimiter() *nodeRateLimiter {
+	return newNodeRateLimiter(ownerRequestsPerMinute, ownerBurst)
+}
+
 func newNodeRateLimiter(perMinute, burst int) *nodeRateLimiter {
 	if perMinute < 1 {
 		perMinute = defaultAgentRequestsPerMinute

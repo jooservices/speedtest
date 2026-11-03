@@ -17,11 +17,8 @@ type ownerSettings struct {
 }
 
 // newOwnerSettingsHandler protects the settings API: reads need a session, writes also CSRF and origin checks.
-func newOwnerSettingsHandler(store settings.Store, auth *serverAuth, perMinute int) http.Handler {
-	if perMinute <= 0 {
-		perMinute = defaultAgentRequestsPerMinute
-	}
-	h := &ownerSettings{store: store, limiter: newNodeRateLimiter(perMinute, defaultAgentBurst*2)}
+func newOwnerSettingsHandler(store settings.Store, auth *serverAuth) http.Handler {
+	h := &ownerSettings{store: store, limiter: newOwnerRateLimiter()}
 	read := auth.requireSession(http.HandlerFunc(h.serve))
 	write := auth.requireOwner(http.HandlerFunc(h.serve))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -168,7 +165,7 @@ func writeSuccess(w http.ResponseWriter, r *http.Request, code int, message stri
 		Code:    code,
 		Message: message,
 		Data:    data,
-		Meta:    nil,
+		Meta:    map[string]any{},
 		Errors:  nil,
 	})
 }

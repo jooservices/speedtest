@@ -25,7 +25,7 @@ type authSuccessResponse struct {
 	Code    int    `json:"code"`
 	Message string `json:"message"`
 	Data    any    `json:"data"`
-	Meta    any    `json:"meta,omitempty"`
+	Meta    any    `json:"meta"`
 	Errors  any    `json:"errors"`
 	TraceID string `json:"trace_id,omitempty"`
 }
@@ -604,7 +604,7 @@ func writeAuthSuccess(w http.ResponseWriter, r *http.Request, status int, messag
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(authSuccessResponse{
-		Success: true, Code: status, Message: message, Data: data, Errors: nil,
+		Success: true, Code: status, Message: message, Data: data, Meta: map[string]any{}, Errors: nil,
 		TraceID: requestIDFromContext(r.Context()),
 	})
 }
