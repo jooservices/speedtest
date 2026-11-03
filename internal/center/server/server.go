@@ -43,6 +43,8 @@ type Options struct {
 	AgentRateLimit    int
 	// OwnerNodes optionally serves the dashboard node API (list, detail, update, delete, commands).
 	OwnerNodes OwnerNodesStore
+	// OwnerSchedules optionally serves the dashboard schedule API.
+	OwnerSchedules OwnerSchedulesStore
 	// OwnerResults optionally serves the dashboard result API (list, detail, CSV export).
 	OwnerResults OwnerResultsStore
 	// Install optionally serves /install.sh and /download/<artifact>.
@@ -78,6 +80,10 @@ func NewHandler(options Options) http.Handler {
 	if options.OwnerNodes != nil {
 		ownerNodesHandler = newOwnerNodesHandler(options.OwnerNodes, authHandler, options.AgentRateLimit)
 	}
+	var ownerSchedulesHandler http.Handler
+	if options.OwnerSchedules != nil {
+		ownerSchedulesHandler = newOwnerSchedulesHandler(options.OwnerSchedules, authHandler, options.AgentRateLimit)
+	}
 	var ownerResultsHandler http.Handler
 	if options.OwnerResults != nil {
 		ownerResultsHandler = newOwnerResultsHandler(options.OwnerResults, authHandler, options.AgentRateLimit)
@@ -88,6 +94,8 @@ func NewHandler(options Options) http.Handler {
 			authHandler.serve(w, r)
 		case ownerNodesHandler != nil && ownerNodesRoute(r.URL.Path) && (r.Method != http.MethodPost || r.URL.Path != "/api/nodes"):
 			ownerNodesHandler.ServeHTTP(w, r)
+		case ownerSchedulesHandler != nil && ownerSchedulesRoute(r.URL.Path):
+			ownerSchedulesHandler.ServeHTTP(w, r)
 		case ownerResultsHandler != nil && ownerResultsRoute(r.URL.Path):
 			ownerResultsHandler.ServeHTTP(w, r)
 		case r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/"):
