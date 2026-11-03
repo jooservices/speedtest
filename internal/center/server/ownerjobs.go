@@ -18,11 +18,8 @@ func ownerJobsRoute(path string) bool {
 	return strings.HasPrefix(path, "/api/jobs/") && strings.Count(strings.Trim(path, "/"), "/") == 2
 }
 
-func newOwnerJobsHandler(store OwnerJobsStore, auth *serverAuth, perMinute int) http.Handler {
-	if perMinute <= 0 {
-		perMinute = defaultAgentRequestsPerMinute
-	}
-	limiter := newNodeRateLimiter(perMinute, defaultAgentBurst*2)
+func newOwnerJobsHandler(store OwnerJobsStore, auth *serverAuth) http.Handler {
+	limiter := newOwnerRateLimiter()
 	return auth.requireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, err := ownerPrincipal(r)
 		if err != nil {

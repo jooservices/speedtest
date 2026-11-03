@@ -22,11 +22,8 @@ type ownerDashboard struct {
 	window  *ownerStats
 }
 
-func newOwnerDashboardHandler(store OwnerDashboardStore, auth *serverAuth, perMinute int) http.Handler {
-	if perMinute <= 0 {
-		perMinute = defaultAgentRequestsPerMinute
-	}
-	h := &ownerDashboard{store: store, limiter: newNodeRateLimiter(perMinute, defaultAgentBurst*2), window: &ownerStats{now: time.Now}}
+func newOwnerDashboardHandler(store OwnerDashboardStore, auth *serverAuth) http.Handler {
+	h := &ownerDashboard{store: store, limiter: newOwnerRateLimiter(), window: &ownerStats{now: time.Now}}
 	return auth.requireSession(http.HandlerFunc(h.serve))
 }
 

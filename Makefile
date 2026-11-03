@@ -80,3 +80,8 @@ test-ui:
 ## lint-ui checks syntax of the changed browser scripts.
 lint-ui:
 	npm run lint
+
+.PHONY: e2e
+## e2e runs the browser end-to-end scenarios against a real center and real agents (needs .env, psql and a Chromium).
+e2e:
+	node tests/e2e/main.mjs

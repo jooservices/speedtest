@@ -1,0 +1,92 @@
+// End-to-end harness: a real command center on a throw-away worktree database, real agents driven by a fake speed test.
+import { spawn, spawnSync } from 'node:child_process';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
+import { createServer } from 'node:net';
+import { resolve, join } from 'node:path';
+
+export const root = resolve(new URL('../..', import.meta.url).pathname);
+const out = join(root, '.tmp', 'e2e');
+const processes = [];
+
+export function parseEnv(file) {
+  const values = {};
+  for (const line of readFileSync(file, 'utf8').split('\n')) {
+    const match = /^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/.exec(line);
+    if (match && !line.trim().startsWith('#')) values[match[1]] = match[2].replace(/^["']|["']$/g, '');
+  }
+  return values;
+}
+
+function run(command, args, options = {}) {
+  const result = spawnSync(command, args, { cwd: root, encoding: 'utf8', ...options });
+  if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed:\n${result.stdout}\n${result.stderr}`.replaceAll(/password=\S+/gi, 'password=***'));
+  return result.stdout;
+}
+
+function freePort() {
+  return new Promise((resolvePort, reject) => {
+    const server = createServer();
+    server.listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolvePort(port)); });
+    server.on('error', reject);
+  });
+}
+
+// The database must be a verified, non-live worktree or test database: the reset below drops everything in it.
+function database(env) {
+  const name = env.SPEEDTEST_DB_NAME || '';
+  if (!/^speedtest_(test|wt[0-9a-z]{1,16})$/.test(name)) throw new Error(`refusing to reset database "${name}": not a worktree or test database`);
+  const pg = { PGHOST: env.SPEEDTEST_DB_HOST, PGPORT: env.SPEEDTEST_DB_PORT, PGUSER: env.SPEEDTEST_DB_USER, PGPASSWORD: env.SPEEDTEST_DB_PASSWORD, PGDATABASE: name };
+  const marker = run('psql', ['-Atc', "select shobj_description(oid,'pg_database') from pg_database where datname=current_database()"], { env: { ...process.env, ...pg } }).trim();
+  if (marker !== 'workspaces-project:speedtest') throw new Error('refusing to reset a database without the Speedtest ownership marker');
+  return { name, pg: { ...process.env, ...pg } };
+}
+
+export function sql(db, text) { return run('psql', ['-v', 'ON_ERROR_STOP=1', '-q', '-c', text], { env: db.pg }); }
+export function sqlFile(db, file) { return run('psql', ['-v', 'ON_ERROR_STOP=1', '-q', '-f', file], { env: db.pg }); }
+export function query(db, text) { return run('psql', ['-Atc', text], { env: db.pg }).trim(); }
+
+export async function startStack({ seed = true } = {}) {
+  const env = parseEnv(join(root, '.env'));
+  const db = database(env);
+  mkdirSync(join(out, 'bin'), { recursive: true });
+  run('go', ['build', '-o', join(out, 'bin', 'center'), './cmd/center']);
+  run('go', ['build', '-o', join(out, 'bin', 'agent'), './cmd/agent']);
+  run('go', ['build', '-o', join(out, 'bin', 'fake-speedtest'), './internal/agent/testdata/fake-speedtest']);
+  sql(db, 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
+  const port = await freePort();
+  const centerEnv = { ...process.env, ...env, APP_ENV: 'local', APP_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=', SPEEDTEST_HTTP_ADDR: `127.0.0.1:${port}`,
+    SPEEDTEST_ADMIN_EMAIL: '' };
+  run('go', ['run', './internal/center/db/cmd/migrate', 'up'], { env: centerEnv });
+  run(join(out, 'bin', 'center'), ['seed-admin'], { env: centerEnv });
+  if (seed) sqlFile(db, join(root, 'tests', 'e2e', 'seed.sql'));
+  const log = join(out, 'center.log');
+  writeFileSync(log, '');
+  const center = spawn(join(out, 'bin', 'center'), ['-ui-dir', join(root, 'ui')], { cwd: root, env: centerEnv, stdio: ['ignore', 'ignore', 'ignore'], detached: false });
+  processes.push(center);
+  const origin = `http://127.0.0.1:${port}`;
+  for (let i = 0; i < 100; i++) {
+    try { if ((await fetch(origin + '/readyz')).ok) break; } catch { /* not up yet */ }
+    await new Promise(r => setTimeout(r, 100));
+    if (i === 99) throw new Error('the center did not become ready');
+  }
+  return { origin, db, env: centerEnv };
+}
+
+// Starts a real agent for an enrolment token and waits until the center has seen it.
+export async function startAgent(stack, { name, token }) {
+  const dir = join(out, 'agents', name.replaceAll(/[^A-Za-z0-9]/g, '_'));
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+  const env = { ...process.env, SPEEDTEST_AGENT_CONFIG: join(dir, 'config.yaml'), SPEEDTEST_AGENT_CREDENTIAL: join(dir, 'credential'), SPEEDTEST_AGENT_CENTER: stack.origin,
+    SPEEDTEST_OOKLA_BINARY: join(out, 'bin', 'fake-speedtest'), SPEEDTEST_OOKLA_ARGS: '["--scenario","success"]', SPEEDTEST_SPOOL_DIR: join(dir, 'spool'),
+    SPEEDTEST_AGENT_UPDATE_DIR: join(dir, 'update'), SPEEDTEST_AGENT_INBOX_DIR: join(dir, 'inbox') };
+  run(join(out, 'bin', 'agent'), ['enroll', '--center', stack.origin, '--token', token, '--name', name], { env });
+  const agent = spawn(join(out, 'bin', 'agent'), ['run'], { cwd: dir, env, stdio: 'ignore' });
+  processes.push(agent);
+  return agent;
+}
+
+export function stopAll() {
+  for (const p of processes.splice(0)) { try { p.kill('SIGTERM'); } catch { /* already gone */ } }
+}
+process.on('exit', stopAll);

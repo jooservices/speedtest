@@ -23,11 +23,8 @@ type ownerSchedules struct {
 	limiter *nodeRateLimiter
 }
 
-func newOwnerSchedulesHandler(store OwnerSchedulesStore, auth *serverAuth, perMinute int) http.Handler {
-	if perMinute <= 0 {
-		perMinute = defaultAgentRequestsPerMinute
-	}
-	h := &ownerSchedules{store: store, limiter: newNodeRateLimiter(perMinute, defaultAgentBurst*2)}
+func newOwnerSchedulesHandler(store OwnerSchedulesStore, auth *serverAuth) http.Handler {
+	h := &ownerSchedules{store: store, limiter: newOwnerRateLimiter()}
 	read := auth.requireSession(http.HandlerFunc(h.serve))
 	write := auth.requireOwner(http.HandlerFunc(h.serve))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

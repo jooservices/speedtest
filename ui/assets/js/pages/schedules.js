@@ -34,9 +34,12 @@
         U.input(s.quietStart, function (v) { if (!real) ST.setSettings({ quietStart: v }, true); }, { type: 'time', 'aria-label': 'Pause from', onChange: function (e) { quiet(e.target.value, undefined); } }), h('span', { class: 'muted' }, 'to'),
         U.input(s.quietEnd, function (v) { if (!real) ST.setSettings({ quietEnd: v }, true); }, { type: 'time', 'aria-label': 'Pause until', onChange: function (e) { quiet(undefined, e.target.value); } }))))));
     // Both ends must be empty or both set; the center refuses anything else, so wait until the pair is complete.
+    var quietDraft = { start: s.quietStart, end: s.quietEnd };
     function quiet(start, end) {
       if (!real) return;
-      var nextStart = start === undefined ? s.quietStart : start, nextEnd = end === undefined ? s.quietEnd : end;
+      if (start !== undefined) quietDraft.start = start;
+      if (end !== undefined) quietDraft.end = end;
+      var nextStart = quietDraft.start, nextEnd = quietDraft.end;
       if (!!nextStart !== !!nextEnd) return;
       ST.saveScheduleRules({ quietStart: nextStart, quietEnd: nextEnd }).then(function () { U.toast('Saved'); }, failed);
     }

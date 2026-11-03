@@ -107,9 +107,16 @@
     var inp = h('input', { type: 'checkbox', checked: !!checked, 'aria-label': label || 'Toggle', onChange: function () { onChange && onChange(inp.checked); } });
     return h('span', { class: 'switch' }, inp, h('i'));
   };
+  var fieldCount = 0;
   U.field = function (label, control, hint, id) {
     var wrap = h('div', { class: 'field' });
-    if (label) wrap.appendChild(h('label', null, label));
+    if (label) {
+      // Associate the label with its control so screen readers announce it and a click on the label focuses the field.
+      var target = control && control.matches && control.matches('input, select, textarea') ? control : control && control.querySelector && control.querySelector('input, select, textarea');
+      var labelProps = null;
+      if (target) { if (!target.id) target.id = id || 'field-' + (++fieldCount); labelProps = { for: target.id }; }
+      wrap.appendChild(h('label', labelProps, label));
+    }
     wrap.appendChild(control);
     if (hint) wrap.appendChild(h('span', { class: 'hint' }, hint));
     return wrap;

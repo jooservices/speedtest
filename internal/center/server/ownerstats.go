@@ -31,11 +31,8 @@ type ownerStats struct {
 	now     func() time.Time
 }
 
-func newOwnerStatsHandler(store OwnerStatsStore, auth *serverAuth, perMinute int) http.Handler {
-	if perMinute <= 0 {
-		perMinute = defaultAgentRequestsPerMinute
-	}
-	h := &ownerStats{store: store, limiter: newNodeRateLimiter(perMinute, defaultAgentBurst*2), now: time.Now}
+func newOwnerStatsHandler(store OwnerStatsStore, auth *serverAuth) http.Handler {
+	h := &ownerStats{store: store, limiter: newOwnerRateLimiter(), now: time.Now}
 	return auth.requireSession(http.HandlerFunc(h.serve))
 }
 

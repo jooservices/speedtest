@@ -514,7 +514,8 @@
       return API.request('/api/schedules').then(function (response) { return mutation('/api/schedules/stagger', 'POST', undefined, { ifMatch: response.etag }); });
     };
     ST.rotateEnrollmentKey = function () {
-      return API.request('/api/settings/enrolment-key', { method: 'POST' }).then(function (response) { ST.load(); return response.data; });
+      // No reload here: the page shows the new key once, and a reload would redraw the page and discard it.
+      return API.request('/api/settings/enrolment-key', { method: 'POST' }).then(function (response) { state.settings.enrollKeyConfigured = true; return response.data; });
     };
     // A test message is a delivery the center sends; wait until it is sent or has failed.
     ST.testNotification = function (channel) {
@@ -548,7 +549,8 @@
               if (c.status === 'succeeded' || c.status === 'failed') {
                 ST.load();
                 if (c.status === 'succeeded' && c.resultId) {
-                  API.request('/api/results/' + encodeURIComponent(c.resultId)).then(function (r) { resolve(result(r.data)); }, reject);
+                  // The result travels from the node after the command is acknowledged, so reload once more when it is in.
+                  API.request('/api/results/' + encodeURIComponent(c.resultId)).then(function (r) { ST.load(); resolve(result(r.data)); }, reject);
                 } else resolve({ status: 'failed', error: c.error || 'The test did not finish.' });
                 return;
               }
@@ -562,5 +564,12 @@
   }
 
   if (ST.demo) load();
-  else initRemote();
+  else {
+    initRemote();
+    // Keep the numbers fresh without disturbing the owner: only while the tab is visible, nothing is being typed and no dialog is open.
+    setInterval(function () {
+      var active = document.activeElement, typing = active && /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName);
+      if (document.visibilityState === 'visible' && ST.remote.status === 'ready' && !typing && !document.querySelector('.overlay, .drawer-wrap')) ST.load();
+    }, 60000);
+  }
 })();
