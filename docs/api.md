@@ -408,3 +408,9 @@ executable uses the normal build. Target: at most 5%.
 Use structured access logs (path, request ID, status, duration) with `/readyz` to
 distinguish authentication/rate limits (401/429), rejected input (item 422/409),
 and storage failures (500). An item failure contains only a safe generic problem.
+
+## Results CSV export
+
+`GET /api/results/export.csv` takes the same filter and sort parameters as `GET /api/results` (`nodes`, `range` or `from`+`to`, `status`, `q`, `minDown`, `maxDown`, `sort`, `dir`) and no pagination. It streams every matching row in the requested order (default `ts` descending) as `text/csv; charset=utf-8` with `Content-Disposition: attachment; filename="speedtest-results-YYYY-MM-DD.csv"`. With neither `range` nor `from`/`to` it covers the trailing 7 days, as the list does.
+
+Columns, in order: `time` (RFC 3339 UTC), `node` (name and label), `status`, `download_mbps`, `upload_mbps`, `ping_ms`, `jitter_ms`, `packet_loss_pct`, `loaded_latency_down_ms`, `loaded_latency_up_ms`, `server` (`name - city`), `public_ip`, `error`. Numbers are plain decimals and empty when the engine did not report them. Cells follow RFC 4180 quoting; a text cell that starts with `=`, `+`, `-`, `@`, tab or carriage return is prefixed with `'` so spreadsheets do not run it as a formula. A failure after the first row aborts the connection so a truncated download is never mistaken for a complete one.
