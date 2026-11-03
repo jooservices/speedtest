@@ -5,7 +5,7 @@
 `internal/agent/netpath` coordinator, which also calls the center's existing
 `GET /api/agent/ip` endpoint on the same path. JOOST-17 owns result reporting.
 
-The node's `engine` config key selects `ookla` (the default) or `librespeed`.
+The node's `engine` config key selects `ookla` (the default), `librespeed` or `speedtestcli`.
 `config.Config.NewEngine()` constructs the selected runner using `.env` values.
 The optional node `parallel_connections` value overrides LibreSpeed's
 concurrency default; zero leaves the `.env` value in effect.
@@ -151,3 +151,20 @@ Browser E2E, database migration and deployment checks do not apply to this
 package-only change. Real installed Ookla execution on an authorized node and
 Claude's review/QA remain release/staging verification; these offline tests do
 not claim to measure a live connection.
+
+## speedtest-cli (`engine: speedtestcli`)
+
+Runs the `speedtest-cli` Python client that Ubuntu ships in its official archive
+(`apt install speedtest-cli`), which is useful where the official Ookla executable cannot
+be installed. It runs `speedtest-cli --json --secure`, adds `--server <id>` for a pinned
+server and `--source <ip>` for a source-address binding; an interface binding is refused
+with `invalid_options` (the client cannot bind an interface, so it would silently measure
+the default route). Settings: `SPEEDTEST_SPEEDTESTCLI_BINARY` (default `speedtest-cli`) and
+`SPEEDTEST_SPEEDTESTCLI_TIMEOUT` (default 120 s).
+
+Mapping: `download` and `upload` (bits per second) become Mbps; `ping` is the latency;
+`bytes_received` and `bytes_sent` are the data used; `server.sponsor`/`name`/`country`/`host`/`id`
+identify the server (the id may be a string); `client.ip` and `client.isp` are reported as the
+engine's external IP and ISP. Jitter, packet loss and latency under load are not reported by
+this client and stay unavailable, never zero. Results are labelled by the engine in the raw JSON.
+

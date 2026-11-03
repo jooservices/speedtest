@@ -128,8 +128,8 @@ func applyFile(path string, cfg *Config) error {
 }
 
 func (c Config) validate() error {
-	if c.Engine != "ookla" && c.Engine != "librespeed" {
-		return fmt.Errorf("engine must be ookla or librespeed, got %q", c.Engine)
+	if c.Engine != "ookla" && c.Engine != "librespeed" && c.Engine != "speedtestcli" {
+		return fmt.Errorf("engine must be ookla, librespeed or speedtestcli, got %q", c.Engine)
 	}
 	if c.Name == "" {
 		return errors.New("name must not be blank")
