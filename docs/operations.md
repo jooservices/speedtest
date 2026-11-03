@@ -60,18 +60,46 @@ for 30 s. Result on 2026-11-03: 1,470 requests, p50 16 ms, p95 262 ms, center CP
 18% of one core, no errors; gate is p95 < 300 ms and CPU < 50%. The dashboard
 snapshot is shared for 5 s between requests (`dashboard.Cached`), so extra tabs do
 not multiply the fleet aggregation. Agent ingestion at 1,000 results/min is
-covered by the Go load test; it is close to the 5% CPU target, so watch CPU if the
-fleet grows beyond ~50 nodes on a 30-minute schedule.
+covered by the Go load test; the 5% CPU gate measures the center process during
+the paced 60-second workload, excluding startup/shutdown, the generator and PostgreSQL. Linux
+`/proc/<pid>/stat` user + system ticks (all process threads) are sampled after
+readiness and before shutdown using `getconf CLK_TCK`; the test logs measured
+CPU seconds and percentage. This avoids charging startup to ingestion when
+other suites compete for CPU, without changing 1,000 committed results/minute
+or the 5% threshold. Two full-suite runs on dev-workspaces on 2026-11-03
+committed 1,000 results in 60.001/60.002 s with 2.69/2.50 CPU seconds
+(4.483%/4.167% of one core). These are development VM measurements, separate
+from the staging dashboard benchmark above.
 
 ## Failure behaviour
 
 | Failure | Behaviour |
 |---|---|
-| Center down | Agents keep testing, spool results on disk and upload them when it returns; results are idempotent by id. |
-| PostgreSQL down | `/readyz` fails, API calls return problem+json 5xx, the pool reconnects on its own when the database is back. Not rehearsed against the shared server; rehearse before relying on it. |
+| Center down | Agents keep testing, spool results on disk and upload them when it returns; results are idempotent by id. Rehearsed with a closed/rebound HTTP listener and fresh production handlers: three queued results delivered once in FIFO order, spool empty and PostgreSQL count 3; a second flush delivered nothing. |
+| PostgreSQL down | `/readyz` fails, API calls return problem+json 5xx, the pool reconnects on its own when the database is back. Rehearsed on 2026-11-03 through a local TCP fault proxy: existing connections cut and new connections refused; readiness 200 → 503 → 200, authenticated config/commands returned problem+json 5xx, then the same pool reconnected and accepted a result. The shared PostgreSQL service was never restarted; this tests transport loss, not PostgreSQL crash recovery. |
 | Agent offline for hours | The node shows offline (`speedtest_nodes_offline`), the offline alert fires, backlog uploads on return. |
-| Clock skew on an agent | Results carry the agent timestamp; keep NTP running on nodes. Large skew shows as results in the future/past on charts. |
+| Clock skew on an agent | Measured with −10 and +10 minute timestamps: ingestion accepted both (item status 201), PostgreSQL preserved the exact agent timestamp, and last-result-age was respectively 600 and −600 seconds. Heartbeat last_seen_at used center time in both cases. There is no skew rejection or correction; future results can mask ingestion staleness until center time catches up. Keep NTP running on nodes. |
 | Notification target down | Deliveries retry with backoff and end `failed` (see gauge); the alert itself is still recorded. |
+
+### Reproduce the failure rehearsals
+
+Use only a configured, ownership-verified test/worktree database from `.env`,
+never the live database. Do not run database suites concurrently. These tests
+verify `db.CheckTestDatabase` and the Workspaces ownership marker before reset.
+
+```bash
+python3 scripts/geo-test-fixtures.py
+go test -race -p 1 -tags integration ./internal/center/server -run 'Test(DatabaseDisconnectRecovery|CenterRestartSpool|AgentClockSkew|MetricsGaugeTransitions)Integration' -count=1 -v
+go test -race -p 1 -tags integration ./... -count=1 -v
+```
+
+`TestMetricsGaugeTransitionsIntegration` scrapes the production `/metrics`
+handler over seeded PostgreSQL rows: offline nodes 0 → 1 → 0, last result age
+−1 → 90 → 150 → 0 seconds, failed deliveries 0 → 1 → 0. The collector uses a
+controlled clock so exact age assertions do not depend on machine load.
+The restart rehearsal composes the real SQLite reporter, HTTP client, center
+handlers and PostgreSQL; it complements the JOOST-45 agent harness and the
+JOOST-48 browser suite without changing browser flows or the UI.
 
 ## Map tiles
 
