@@ -9,3 +9,4 @@ node_modules/
 *.mmdb
 data/geoip/
 dist/
+deploy/docker/*.env
