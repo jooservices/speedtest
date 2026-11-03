@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/csv"
+	"encoding/json"
 	"math"
 	"net/http"
 	"net/url"
@@ -44,7 +45,7 @@ func newOwnerResultsHandler(store OwnerResultsStore, auth *serverAuth, perMinute
 
 // ownerResultsRoute reports whether the path belongs to the result API.
 func ownerResultsRoute(path string) bool {
-	return path == "/api/results" || path == "/api/results/export.csv" ||
+	return path == "/api/export/results.csv" || path == "/api/export/results.json" || path == "/api/results" || path == "/api/results/export.csv" ||
 		(strings.HasPrefix(path, "/api/results/") && strings.Count(strings.Trim(path, "/"), "/") == 2)
 }
 
@@ -62,10 +63,18 @@ func (h *ownerResults) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch r.URL.Path {
+	case "/api/export/results.csv":
+		h.exportCSV(w, r, ownerapi.ResultFilter{Sort: "ts", Dir: "asc"})
+	case "/api/export/results.json":
+		h.exportJSON(w, r)
 	case "/api/results":
 		h.list(w, r)
 	case "/api/results/export.csv":
-		h.export(w, r)
+		filter, ok := h.filter(w, r)
+		if !ok {
+			return
+		}
+		h.exportCSV(w, r, filter)
 	default:
 		id := strings.TrimPrefix(r.URL.Path, "/api/results/")
 		if !uuidPattern.MatchString(id) {
@@ -103,11 +112,7 @@ func (h *ownerResults) list(w http.ResponseWriter, r *http.Request) {
 		Meta: map[string]any{"pagination": map[string]any{"current_page": page, "per_page": size, "total": total, "last_page": last}}})
 }
 
-func (h *ownerResults) export(w http.ResponseWriter, r *http.Request) {
-	filter, ok := h.filter(w, r)
-	if !ok {
-		return
-	}
+func (h *ownerResults) exportCSV(w http.ResponseWriter, r *http.Request, filter ownerapi.ResultFilter) {
 	var out *csv.Writer
 	flusher, _ := w.(http.Flusher)
 	start := func() {
@@ -150,6 +155,55 @@ func (h *ownerResults) export(w http.ResponseWriter, r *http.Request) {
 		// The status line is already sent; cut the connection so the client sees an incomplete download.
 		panic(http.ErrAbortHandler)
 	}
+}
+
+// exportJSON streams every stored result, oldest first, as one JSON array without the response envelope.
+func (h *ownerResults) exportJSON(w http.ResponseWriter, r *http.Request) {
+	flusher, _ := w.(http.Flusher)
+	started := false
+	rows := 0
+	enc := func(row ownerapi.ResultRow) error {
+		if !started {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.Header().Set("Content-Disposition", `attachment; filename="speedtest-results-`+h.now().UTC().Format("2006-01-02")+`.json"`)
+			w.Header().Set("Cache-Control", "no-store")
+			w.WriteHeader(http.StatusOK)
+			if _, err := w.Write([]byte("[")); err != nil {
+				return err
+			}
+			started = true
+		} else if _, err := w.Write([]byte(",")); err != nil {
+			return err
+		}
+		raw, err := json.Marshal(row.Result)
+		if err != nil {
+			return err
+		}
+		if _, err := w.Write(raw); err != nil {
+			return err
+		}
+		rows++
+		if rows%500 == 0 && flusher != nil {
+			flusher.Flush()
+		}
+		return nil
+	}
+	err := h.store.ExportResults(r.Context(), ownerapi.ResultFilter{Sort: "ts", Dir: "asc"}, enc)
+	if !started && err != nil {
+		writeOwnerError(w, r, err)
+		return
+	}
+	if err != nil {
+		panic(http.ErrAbortHandler)
+	}
+	if !started {
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.Header().Set("Content-Disposition", `attachment; filename="speedtest-results-`+h.now().UTC().Format("2006-01-02")+`.json"`)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("[]"))
+		return
+	}
+	_, _ = w.Write([]byte("]"))
 }
 
 // csvRecord renders one result. Text cells that a spreadsheet would read as a formula are neutralised.

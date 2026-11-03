@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -107,5 +108,82 @@ func TestOwnerResultsHTTPFlowIntegration(t *testing.T) {
 	if rec := get("/api/results?minDown=500&maxDown=100", true); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("inverted download range = %d", rec.Code)
 	}
+	full := get("/api/export/results.json", true)
+	var all []map[string]any
+	if full.Code != http.StatusOK || json.Unmarshal(full.Body.Bytes(), &all) != nil || len(all) != 3 || all[0]["id"] != "00000000-0000-4000-8000-0000000000b3" ||
+		all[2]["id"] != "00000000-0000-4000-8000-0000000000b1" {
+		t.Fatalf("full JSON export covers every result regardless of age, oldest first: %d %s", full.Code, full.Body.String())
+	}
+	if all[0]["geo"].(map[string]any)["city"] != "Hanoi" {
+		t.Fatalf("exported result lacks its location: %v", all[0])
+	}
+	fullCSV := get("/api/export/results.csv", true)
+	if rows, err := csv.NewReader(fullCSV.Body).ReadAll(); fullCSV.Code != http.StatusOK || err != nil || len(rows) != 4 {
+		t.Fatalf("full CSV export = %d %v %v", fullCSV.Code, rows, err)
+	}
 	t.Log("PASS: result list, detail with geolocation and CSV export over HTTP against PostgreSQL")
+}
+
+// countingWriter discards the body so the test measures the server, not a recorder that keeps everything.
+type countingWriter struct {
+	header http.Header
+	bytes  int64
+	status int
+}
+
+func (c *countingWriter) Header() http.Header  { return c.header }
+func (c *countingWriter) WriteHeader(code int) { c.status = code }
+func (c *countingWriter) Write(p []byte) (int, error) {
+	c.bytes += int64(len(p))
+	return len(p), nil
+}
+
+// TestFullExportStreamsLargeResultSets exports 30,000 rows through the handler and checks memory stays flat.
+func TestFullExportStreamsLargeResultSets(t *testing.T) {
+	pool, ctx, appKey := openServerIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	hash, _ := auth.HashPassword("integration test owner password")
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES ('00000000-0000-4000-8000-000000000901','owner@example.test',$1)`, hash); err != nil {
+		t.Fatal(err)
+	}
+	store, err := auth.NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authService, err := auth.NewService(store, auth.Config{SessionTTL: time.Hour, LoginMaxAttempts: 5, LoginWindow: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := &ownerapi.Store{DB: pool}
+	handler := NewHandler(Options{Auth: authService, NodeCredentials: nodes.NewService(pool, appKey), OwnerResults: owner})
+	session, _ := loginIntegrationOwner(t, handler)
+	for _, q := range []string{
+		`INSERT INTO nodes (id,name,label,expected_down_mbps,expected_up_mbps,color_slot,host,agent) VALUES ('00000000-0000-4000-8000-000000000a01','VM1','Home',300,100,1,'h','a/1')`,
+		`INSERT INTO ip_addresses (ip) VALUES ('203.0.113.5')`,
+		`INSERT INTO results (id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,raw)
+			SELECT gen_random_uuid(),'00000000-0000-4000-8000-000000000a01',now() - (g || ' seconds')::interval,'ok',100,50,10,9,'{"id":9,"name":"S","city":"C","sponsor":"P"}','203.0.113.5',4,'{"k":"vvvvvvvvvvvvvvvvvvvvvvvv"}' FROM generate_series(1,30000) g`,
+	} {
+		if _, err := pool.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, path := range []string{"/api/export/results.csv", "/api/export/results.json"} {
+		runtime.GC()
+		var before runtime.MemStats
+		runtime.ReadMemStats(&before)
+		w := &countingWriter{header: http.Header{}}
+		req := httptest.NewRequest(http.MethodGet, "http://center.test"+path, nil)
+		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session})
+		start := time.Now()
+		handler.ServeHTTP(w, req)
+		var after runtime.MemStats
+		runtime.ReadMemStats(&after)
+		growth := int64(after.HeapAlloc) - int64(before.HeapAlloc)
+		t.Logf("%s: %d rows' worth of bytes = %d MiB in %s, heap delta %d KiB", path, 30000, w.bytes>>20, time.Since(start).Round(time.Millisecond), growth/1024)
+		if w.status != http.StatusOK || w.bytes < 30000*40 || growth > 48<<20 {
+			t.Fatalf("%s: status %d bytes %d heap growth %d MiB", path, w.status, w.bytes, growth>>20)
+		}
+	}
 }
