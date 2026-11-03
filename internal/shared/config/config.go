@@ -30,7 +30,11 @@ var validSSLModes = map[string]bool{
 // CenterConfig is everything the command center needs to run.
 type CenterConfig struct {
 	// HTTPAddr is the listen address for the web UI and API.
-	HTTPAddr string
+	HTTPAddr    string
+	SMTPAddr    string
+	SMTPFrom    string
+	SMTPUser    string
+	TelegramURL string
 	// AppEnv controls environment-gated operations such as default seeding.
 	AppEnv string
 	// UIDir optionally selects a development directory instead of embedded assets.
@@ -128,6 +132,10 @@ func LoadCenter() (CenterConfig, error) {
 		},
 		AppKey:                 appKey,
 		AgentRequestsPerMinute: rateLimit,
+		SMTPAddr:               getString("SPEEDTEST_SMTP_ADDR", "127.0.0.1:11025"),
+		SMTPFrom:               getString("SPEEDTEST_SMTP_FROM", "speedtest@example.com"),
+		SMTPUser:               getString("SPEEDTEST_SMTP_USER", ""),
+		TelegramURL:            getString("SPEEDTEST_TELEGRAM_URL", "https://api.telegram.org"),
 		PublicURL:              strings.TrimSpace(getString("SPEEDTEST_PUBLIC_URL", "")),
 		ReleaseDir:             strings.TrimSpace(getString("SPEEDTEST_RELEASE_DIR", "")),
 	}

@@ -11,9 +11,11 @@ and durable change signals; it backfills history/counters without replaying aler
 keyed event deduplication and the event-keyed notification handoff to JOOST-30.
 Its down migration preserves results, cached locations and derived history; see
 [IP history rollback and consumer rules](../docs/ip-history.md).
-`00006_ssh_installations.sql` adds short-lived host-key probes, installation job
+`00007_ssh_installations.sql` adds short-lived host-key probes, installation job
 state and replayable progress events, with hashed idempotency keys and an active
 installation limit per node. It stores no SSH credentials or enrollment tokens.
+
+`00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file
@@ -184,3 +186,14 @@ verified disposable test database, the integration suite removes only its own
 fixtures to demonstrate down/up with compatible populated data. The refused down
 is transactional: data and the migration version stay unchanged. After resolving
 compatibility, run `make migrate-down`; reapply with `make migrate`.
+
+## Version 6 rollback
+
+Stop the center's notification workers before an authorized rollback. Verify the
+non-live target as above, then `make migrate-down` rolls back version 6 only.
+This deletes delivery history and retry state; alert events, the outbox and
+Settings remain. Consumed outbox rows remain consumed, so reapplying version 6
+with `make migrate` does not resend previously consumed events. Preserve delivery
+history through the operator backup process when needed. On a disposable test
+DB, `TestNotificationMigrationRollback` rehearses populated down/up and verifies
+that events and consumed markers survive without replaying old deliveries.

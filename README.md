@@ -244,3 +244,6 @@ UUID replay contract, retention settings and integration API. `agent run` compos
 See [the agent lifecycle runbook](docs/agent-lifecycle.md) for shutdown, recovery and verification.
 
 Remote SSH installation, repair, progress and rollback: [SSH installer runbook](docs/ssh-installer.md).
+
+See [notification delivery](docs/notifications.md) for SMTP, Telegram, Slack and
+JSON webhook configuration, delivery APIs, durable retries and verification.

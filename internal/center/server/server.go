@@ -51,7 +51,8 @@ type Options struct {
 	// OwnerDashboard optionally serves the dashboard snapshot and comparison series.
 	OwnerDashboard OwnerDashboardStore
 	// OwnerIP optionally serves the IP history, address, lookup and map views.
-	OwnerIP OwnerIPStore
+	OwnerIP            OwnerIPStore
+	OwnerNotifications OwnerNotificationsStore
 	// Settings optionally serves the settings API and enrolment-key rotation.
 	Settings settings.Store
 	// OwnerResults optionally serves the dashboard result API (list, detail, CSV export).
@@ -107,6 +108,10 @@ func NewHandler(options Options) http.Handler {
 	if options.OwnerDashboard != nil {
 		ownerDashboardHandler = newOwnerDashboardHandler(options.OwnerDashboard, authHandler, options.AgentRateLimit)
 	}
+	var notificationHandler http.Handler
+	if options.OwnerNotifications != nil {
+		notificationHandler = newOwnerNotificationsHandler(options.OwnerNotifications, authHandler, options.AgentRateLimit)
+	}
 	var ownerIPHandler http.Handler
 	if options.OwnerIP != nil {
 		ownerIPHandler = newOwnerIPHandler(options.OwnerIP, authHandler, options.AgentRateLimit)
@@ -145,6 +150,8 @@ func NewHandler(options Options) http.Handler {
 			ownerJobsHandler.ServeHTTP(w, r)
 		case ownerDashboardHandler != nil && ownerDashboardRoute(r.URL.Path):
 			ownerDashboardHandler.ServeHTTP(w, r)
+		case notificationHandler != nil && ownerNotificationsRoute(r.URL.Path):
+			notificationHandler.ServeHTTP(w, r)
 		case ownerIPHandler != nil && ownerIPRoute(r.URL.Path):
 			ownerIPHandler.ServeHTTP(w, r)
 		case settingsHandler != nil && ownerSettingsRoute(r.URL.Path):

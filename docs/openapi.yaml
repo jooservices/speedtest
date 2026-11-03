@@ -2066,7 +2066,8 @@ paths:
         - Notifications
       summary: Queue test notification
       description: channel is email, telegram, slack or webhook; reject unconfigured destinations with
-        422. Poll /api/notifications/deliveries/{id}.
+        422. Poll /api/notifications/deliveries/{id} at a modest rate (for example once per second).
+        Requires same-origin Origin and the session CSRF token.
       security:
         - SessionCookie: []
       responses:
@@ -2111,7 +2112,7 @@ paths:
         - Notifications
       summary: Read notification delivery log
       description: Newest createdAt,id first. Secret-free attempt/error metadata; retries preserve one
-        logical delivery per event/channel.
+        logical delivery per event/channel. Notification page is limited to 1000000.
       security:
         - SessionCookie: []
       responses:
