@@ -41,6 +41,12 @@ type Options struct {
 	ReadinessTimeout  time.Duration
 	NodeCredentials   NodeCredentialService
 	AgentRateLimit    int
+	// OwnerNodes optionally serves the dashboard node API (list, detail, update, delete, commands).
+	OwnerNodes OwnerNodesStore
+	// OwnerSchedules optionally serves the dashboard schedule API.
+	OwnerSchedules OwnerSchedulesStore
+	// OwnerResults optionally serves the dashboard result API (list, detail, CSV export).
+	OwnerResults OwnerResultsStore
 	// Install optionally serves /install.sh and /download/<artifact>.
 	Install  http.Handler
 	AgentAPI agentapi.Store
@@ -70,10 +76,28 @@ func NewHandler(options Options) http.Handler {
 	readinessHandler := readyz(options.Pinger, readinessTimeout)
 	authHandler := &serverAuth{service: options.Auth, requireHTTPS: options.RequireHTTPS, trustedProxyCIDRs: options.TrustedProxyCIDRs}
 	apiHandler := newAPIHandler(options.NodeCredentials, options.AgentRateLimit, authHandler, options.AgentAPI)
+	var ownerNodesHandler http.Handler
+	if options.OwnerNodes != nil {
+		ownerNodesHandler = newOwnerNodesHandler(options.OwnerNodes, authHandler, options.AgentRateLimit)
+	}
+	var ownerSchedulesHandler http.Handler
+	if options.OwnerSchedules != nil {
+		ownerSchedulesHandler = newOwnerSchedulesHandler(options.OwnerSchedules, authHandler, options.AgentRateLimit)
+	}
+	var ownerResultsHandler http.Handler
+	if options.OwnerResults != nil {
+		ownerResultsHandler = newOwnerResultsHandler(options.OwnerResults, authHandler, options.AgentRateLimit)
+	}
 	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/api/auth" || strings.HasPrefix(r.URL.Path, "/api/auth/"):
 			authHandler.serve(w, r)
+		case ownerNodesHandler != nil && ownerNodesRoute(r.URL.Path) && (r.Method != http.MethodPost || r.URL.Path != "/api/nodes"):
+			ownerNodesHandler.ServeHTTP(w, r)
+		case ownerSchedulesHandler != nil && ownerSchedulesRoute(r.URL.Path):
+			ownerSchedulesHandler.ServeHTTP(w, r)
+		case ownerResultsHandler != nil && ownerResultsRoute(r.URL.Path):
+			ownerResultsHandler.ServeHTTP(w, r)
 		case r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/"):
 			apiHandler.ServeHTTP(w, r)
 		case options.Install != nil && (r.URL.Path == "/install.sh" || strings.HasPrefix(r.URL.Path, "/download/")):
@@ -293,8 +317,13 @@ func newRequestID() string {
 func recoverPanics(next http.Handler, logger *slog.Logger) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
-			if recover() == nil {
+			recovered := recover()
+			if recovered == nil {
 				return
+			}
+			if recovered == http.ErrAbortHandler {
+				// A handler that already sent part of a streamed body aborts the connection on purpose.
+				panic(recovered)
 			}
 
 			requestID := requestIDFromContext(r.Context())

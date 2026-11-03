@@ -151,11 +151,12 @@ replay by the same node is `duplicate` (200) and cannot create another row.
 Changed content for that UUID, or a UUID already owned by another node, is a
 per-item 409 conflict with a generic diagnostic that reveals no other-node data. Retry transport failures/429/5xx with backoff and jitter;
 never discard unacknowledged spool entries. Failed results require an error and
-allow null measurements; ok/degraded require down/up/ping/serverId and `error: null`. Engines may omit
+allow null measurements and `ip: null` when the address is unavailable. Never invent an IP or reuse a stale one. IP history hooks skip null-IP results; consumers display "unavailable".
+Successful/degraded results require down/up/ping, a non-null IP, a server object with a nonblank name or host, and `error: null`. Numeric `serverId` is optional for every status, positive when present (LibreSpeed automatic selection has no numeric ID). Engines may omit
 loss/jitter/loaded latency even on success; preserve those as null. Optional
 loadedDown/loadedUp retain low/iqm/high; engine details retain ISP, result ID/URL,
 external IP and mismatch warnings, with remaining original fields in raw.
-After each successful measurement, the agent calls `GET /api/agent/ip` over the
+After each measurement, including engine failures, the agent calls `GET /api/agent/ip` over the
 same selected interface/source IP. The center-observed `data.ip` is the result's
 public IP; preserve the engine-reported address as `engineIp` and add a `warnings`
 entry when the two addresses differ.
@@ -273,8 +274,9 @@ for (const source of ST.state.results) {
   const r = plain(source);
   r.id = '00000000-0000-4000-8000-000000000001';
   r.ts = new Date(r.ts).toISOString(); r.manual = !!r.manual; r.error ??= null;
+  r.server = plain(ST.server(r.serverId));
   check('ResultInput', select(r, 'ResultInput'));
-  r.raw = {}; r.server = plain(ST.server(r.serverId)); r.geo = plain(ST.geo(r.ip));
+  r.raw = {}; r.geo = plain(ST.geo(r.ip));
   check('Result', r); check('Geo', r.geo);
   r.status === 'failed' ? failed++ : good++;
 }
@@ -282,6 +284,7 @@ assert(failed > 0 && good > 0);
 const sample = plain(ST.state.results.find(r => r.status === 'ok'));
 sample.id = '00000000-0000-4000-8000-000000000001';
 sample.ts = new Date(sample.ts).toISOString(); sample.error = null; sample.manual = false;
+sample.server = plain(ST.server(sample.serverId));
 const input = select(sample, 'ResultInput');
 check('ResultInput', { ...input, loss: 101 }, false);
 check('ResultInput', { ...input, down: -1 }, false);
@@ -289,6 +292,12 @@ check('ResultInput', { ...input, down: null }, false);
 check('ResultInput', { ...input, loss: null, jitter: null, dLat: null, uLat: null });
 check('ResultInput', { ...input, ts: '2026-11-03T07:00:00+07:00' }, false);
 check('ResultInput', { ...input, status: 'failed', error: '' }, false);
+check('ResultInput', { ...input, status: 'failed', error: 'speedtest: no_route', ip: null });
+check('ResultInput', { ...input, ip: null }, false);
+check('ResultInput', { ...input, serverId: null, server: { name: 'LibreSpeed', host: 'speed.example' } });
+check('ResultInput', { ...input, serverId: null, server: {} }, false);
+check('ResultInput', { ...input, server: { name: '   ' } }, false);
+check('ResultInput', { ...input, server: { name: 'valid', id: 0 } }, false);
 check('ResultBatch', { results: [] }, false);
 check('ResultBatch', { results: Array(101).fill(input) }, false);
 check('ScheduleInput', { interval: 4, offset: 0, enabled: true }, false);
@@ -333,11 +342,12 @@ console.log(`PASS: ${operations.length} operations; ${Object.keys(schemas).lengt
 JS
 ```
 
-Contract-only changes have no changed Go package, SQL boundary, running endpoint
-or browser flow: Go coverage/vet, database integration, three browser runs,
-staging/agent soak and migrations are inapplicable here. Claude reviews this
-contract and UI coverage; implementation tickets must prove runtime behavior.
-No push is requested, so pre-push Sonar/Gitleaks gates are not invoked here.
+The schema and fixture checks above validate contract examples against
+deterministic UI data; they do not exercise running handlers, PostgreSQL,
+migrations, browser behavior or a real agent. Implementation work must run the
+unit and integration suites for each changed boundary, and UI-flow changes must
+run browser E2E. Staging and real-agent soak are separate owner-authorized
+verification. Follow the workspace Sonar/Gitleaks gates before any push.
 
 Compatibility: `/api` is the initial v1 surface fixed by the backlog; do not add
 an incompatible prefix for these consumers. Optional response fields/endpoints
@@ -412,3 +422,21 @@ executable uses the normal build. Target: at most 5%.
 Use structured access logs (path, request ID, status, duration) with `/readyz` to
 distinguish authentication/rate limits (401/429), rejected input (item 422/409),
 and storage failures (500). An item failure contains only a safe generic problem.
+
+## Results CSV export
+
+`GET /api/results/export.csv` takes the same filter and sort parameters as `GET /api/results` (`nodes`, `range` or `from`+`to`, `status`, `q`, `minDown`, `maxDown`, `sort`, `dir`) and no pagination. It streams every matching row in the requested order (default `ts` descending) as `text/csv; charset=utf-8` with `Content-Disposition: attachment; filename="speedtest-results-YYYY-MM-DD.csv"`. With neither `range` nor `from`/`to` it covers the trailing 7 days, as the list does.
+
+Columns, in order: `time` (RFC 3339 UTC), `node` (name and label), `status`, `download_mbps`, `upload_mbps`, `ping_ms`, `jitter_ms`, `packet_loss_pct`, `loaded_latency_down_ms`, `loaded_latency_up_ms`, `server` (`name - city`), `public_ip`, `error`. Numbers are plain decimals and empty when the engine did not report them. Cells follow RFC 4180 quoting; a text cell that starts with `=`, `+`, `-`, `@`, tab or carriage return is prefixed with `'` so spreadsheets do not run it as a formula. A failure after the first row aborts the connection so a truncated download is never mistaken for a complete one.
+
+## Schedules
+
+Slots are Unix-epoch minutes: a node tests at `offset + k*interval`. `PUT /api/schedules/{node}` clamps the offset to `interval-1` instead of rejecting it, so changing an interval never needs a second request. `nextRun` and `upcoming` (up to 10) skip the quiet window of the rules and are empty while the node or its schedule is disabled. `bytesPerDay` is the average of `bytesDown + bytesUp` of the 200 most recent non-failed results times the runs in the next 24 hours outside quiet hours; `bytesPerMonth` is 30 times that, and both are zero without history or while paused.
+
+A **clash** is a pair of enabled nodes whose tests can start less than 5 minutes apart at any time (found from the gcd of the two intervals, so mixed intervals are covered). With `maxConcurrent` above 1 a pair is reported only when more nodes overlap one of them than the limit allows. The coordination rules are stored in the settings rows `stagger`, `maxConcurrent`, `quietStart`, `quietEnd` and `timezone`. Saving rules, or `POST /api/schedules/stagger`, bumps the schedule revision of the affected nodes, which is part of the agent configuration revision, so agents pick the change up through the config ETag. Staggering spaces nodes of the same interval evenly in node-id order (`i * interval / count`).
+
+## Full export and retention
+
+`GET /api/export/results.csv` and `GET /api/export/results.json` stream every stored result, oldest first (`ts`, then `id`), whatever its age; query parameters are ignored. The CSV has the columns of the filtered export. The JSON is a bare array of `Result` objects (no envelope) written one element at a time, so memory use does not grow with the number of results. A failure after the first byte aborts the connection, so a truncated download cannot look complete.
+
+A daily job (03:15 UTC) deletes results older than the `retentionDays` setting (default 365; `0` keeps everything) with `DELETE ... WHERE id IN (SELECT id ... LIMIT n)` batches of 5,000 and a short pause between full batches, so ingestion is never blocked. Each run logs `rows_deleted`, `batches`, `retention_days` and `duration_ms`.

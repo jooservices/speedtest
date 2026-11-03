@@ -449,10 +449,7 @@ paths:
         - SessionCookie: []
       responses:
         "204":
-          description: No content; session cookie is rotated.
-          headers:
-            Set-Cookie:
-              $ref: "#/components/headers/SetCookie"
+          description: No content.
         "400":
           $ref: "#/components/responses/BadRequest"
         "401":
@@ -3370,28 +3367,6 @@ components:
         - errors
       description: Shared JSON envelope. code equals the HTTP status. Endpoint schemas specialize data and
         code; 204/304 and documented streams have no envelope.
-    Server:
-      type: object
-      additionalProperties: false
-      properties:
-        id:
-          type: integer
-          minimum: 1
-        name:
-          type: string
-        city:
-          type: string
-        sponsor:
-          type: string
-        host:
-          type: string
-          description: Engine-reported test-server host, if supplied.
-          maxLength: 255
-      required:
-        - id
-        - name
-        - city
-        - sponsor
     Geo:
       type: object
       additionalProperties: false
@@ -3762,6 +3737,34 @@ components:
         restart; retain last known configuration offline. release advertises latest
         version/url/sha256; update only when owner enables autoUpdate. Verify checksum; atomically
         replace and roll back if first heartbeat fails within 2 minutes.
+    Server:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          minimum: 1
+        name:
+          type: string
+        host:
+          type: string
+          maxLength: 255
+        city:
+          type: string
+        sponsor:
+          type: string
+      anyOf:
+        - required: [name]
+          properties:
+            name:
+              type: string
+              pattern: "\\S"
+        - required: [host]
+          properties:
+            host:
+              type: string
+              pattern: "\\S"
+      description: Engine server identity. Numeric ID is optional for automatic LibreSpeed selection.
     ResultInput:
       type: object
       additionalProperties: false
@@ -3797,7 +3800,9 @@ components:
               minimum: 1
             - type: "null"
         ip:
-          $ref: "#/components/schemas/IP"
+          anyOf:
+            - $ref: "#/components/schemas/IP"
+            - type: "null"
         threads:
           type: integer
           minimum: 1
@@ -3881,7 +3886,7 @@ components:
         - error
         - manual
       description: Globally unique UUID allocated before spooling. Failed results require a nonempty error and allow null
-        metrics/serverId; ok/degraded require down, up, ping and serverId, and error=null. down/up
+        metrics/serverId/ip; ok/degraded require down, up, ping, ip and server identity, and error=null. down/up
         are Mbps; ping/jitter/dLat/uLat are ms. Missing measurements remain null. Engine-specific
         loss/jitter/loaded metrics may be null even on success when unavailable; never invent zero.
         Optional typed engine details preserve low/iqm/high, ISP, external IP, result ID/URL; raw
@@ -3899,6 +3904,7 @@ components:
                 minLength: 1
                 maxLength: 2000
           else:
+            required: [server]
             properties:
               down:
                 $ref: "#/components/schemas/Mbps"
@@ -3906,9 +3912,10 @@ components:
                 $ref: "#/components/schemas/Mbps"
               ping:
                 $ref: "#/components/schemas/Milliseconds"
-              serverId:
-                type: integer
-                minimum: 1
+              ip:
+                $ref: "#/components/schemas/IP"
+              server:
+                $ref: "#/components/schemas/Server"
               error:
                 type: "null"
     Result:
@@ -3948,7 +3955,9 @@ components:
               minimum: 1
             - type: "null"
         ip:
-          $ref: "#/components/schemas/IP"
+          anyOf:
+            - $ref: "#/components/schemas/IP"
+            - type: "null"
         threads:
           type: integer
           minimum: 1
@@ -4057,6 +4066,7 @@ components:
                 minLength: 1
                 maxLength: 2000
           else:
+            required: [server]
             properties:
               down:
                 $ref: "#/components/schemas/Mbps"
@@ -4064,9 +4074,10 @@ components:
                 $ref: "#/components/schemas/Mbps"
               ping:
                 $ref: "#/components/schemas/Milliseconds"
-              serverId:
-                type: integer
-                minimum: 1
+              ip:
+                $ref: "#/components/schemas/IP"
+              server:
+                $ref: "#/components/schemas/Server"
               error:
                 type: "null"
     Node:

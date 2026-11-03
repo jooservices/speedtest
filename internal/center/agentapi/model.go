@@ -34,7 +34,7 @@ type Result struct {
 	ULat            *float64        `json:"uLat"`
 	Loss            *float64        `json:"loss"`
 	ServerID        *int            `json:"serverId"`
-	IP              string          `json:"ip"`
+	IP              *string         `json:"ip"`
 	Threads         int             `json:"threads"`
 	BytesDown       int64           `json:"bytesDown"`
 	BytesUp         int64           `json:"bytesUp"`
@@ -59,7 +59,7 @@ type LoadedLatency struct {
 }
 
 type Server struct {
-	ID      int    `json:"id"`
+	ID      *int   `json:"id,omitempty"`
 	Name    string `json:"name"`
 	City    string `json:"city"`
 	Sponsor string `json:"sponsor"`
@@ -171,10 +171,10 @@ func text(value *string, max int) bool { return value == nil || utf8.RuneCountIn
 func ParseResult(data []byte) (Result, error) {
 	var r Result
 	if Decode(data, &r, "id", "ts", "status", "down", "up", "ping", "jitter", "dLat", "uLat", "loss", "serverId", "ip", "threads", "bytesDown", "bytesUp", "duration", "error", "manual") != nil ||
-		!nonNull(data, "id", "ts", "status", "ip", "threads", "bytesDown", "bytesUp", "duration", "manual", "raw", "warnings") {
+		!nonNull(data, "id", "ts", "status", "threads", "bytesDown", "bytesUp", "duration", "manual", "raw", "warnings") {
 		return r, ErrInvalid
 	}
-	if !UUID(r.ID) || !timestamp(r.TS) || !address(r.IP) || r.Threads < 1 || r.Threads > 64 || r.BytesDown < 0 || r.BytesUp < 0 || !number(&r.Duration) || !text(r.Error, 2000) {
+	if !UUID(r.ID) || !timestamp(r.TS) || (r.IP != nil && !address(*r.IP)) || r.Threads < 1 || r.Threads > 64 || r.BytesDown < 0 || r.BytesUp < 0 || !number(&r.Duration) || !text(r.Error, 2000) {
 		return r, ErrInvalid
 	}
 	for _, metric := range []*float64{r.Down, r.Up, r.Ping, r.Jitter, r.DLat, r.ULat, r.Loss} {
@@ -187,7 +187,7 @@ func ParseResult(data []byte) (Result, error) {
 	}
 	switch r.Status {
 	case "ok", "degraded":
-		if r.Down == nil || r.Up == nil || r.Ping == nil || r.ServerID == nil || r.Error != nil {
+		if r.Down == nil || r.Up == nil || r.Ping == nil || r.Server == nil || r.IP == nil || r.Error != nil {
 			return r, ErrInvalid
 		}
 	case "failed":
@@ -216,7 +216,7 @@ func ParseResult(data []byte) (Result, error) {
 	if r.Server != nil {
 		var fields map[string]json.RawMessage
 		_ = json.Unmarshal(data, &fields)
-		if Decode(fields["server"], new(Server), "id", "name", "city", "sponsor") != nil || !nonNull(fields["server"], "id", "name", "city", "sponsor", "host") || r.Server.ID < 1 || utf8.RuneCountInString(r.Server.Host) > 255 {
+		if Decode(fields["server"], new(Server)) != nil || !nonNull(fields["server"], "id", "name", "city", "sponsor", "host") || (r.Server.ID != nil && *r.Server.ID < 1) || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || utf8.RuneCountInString(r.Server.Host) > 255 {
 			return r, ErrInvalid
 		}
 	}

@@ -166,6 +166,51 @@ func (s *serverAuth) requireOwner(next http.Handler) http.Handler {
 	})
 }
 
+// requireSession admits requests that carry a valid signed-in session cookie. It is meant for
+// read-only (safe method) routes, so unlike requireOwner it needs no CSRF token or origin check.
+func (s *serverAuth) requireSession(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.service == nil {
+			writeProblemResponse(w, http.StatusServiceUnavailable, problemResponse{
+				Type: "/problems/servererror", Title: "Service unavailable", Status: http.StatusServiceUnavailable,
+				Detail: "Authentication service is not configured.", TraceID: requestIDFromContext(r.Context()),
+			})
+			return
+		}
+		if s.requireHTTPS && !s.isHTTPS(r) {
+			writeProblemResponse(w, http.StatusForbidden, problemResponse{
+				Type: "/problems/forbidden", Title: "HTTPS required", Status: http.StatusForbidden,
+				Detail: "HTTPS is required outside local and test environments.", TraceID: requestIDFromContext(r.Context()),
+			})
+			return
+		}
+		token, present, invalid := readSessionCookie(r)
+		if !present || invalid {
+			if invalid {
+				s.clearCookie(w, r)
+			}
+			writeUnauthorized(w, r)
+			return
+		}
+		session, err := s.service.Session(r.Context(), token)
+		if errors.Is(err, auth.ErrInvalidSession) {
+			s.clearCookie(w, r)
+			writeUnauthorized(w, r)
+			return
+		}
+		if err != nil {
+			writeAuthInternalError(w, r)
+			return
+		}
+		if session.Identity == nil || session.Identity.ID == "" {
+			writeUnauthorized(w, r)
+			return
+		}
+		ctx := context.WithValue(r.Context(), ownerIdentityContextKey{}, session.Identity.ID)
+		next.ServeHTTP(w, r.WithContext(ctx))
+	})
+}
+
 func (s *serverAuth) setCookie(w http.ResponseWriter, r *http.Request, session auth.SessionView) {
 	setSessionCookieSecure(w, session, s.isHTTPS(r))
 }

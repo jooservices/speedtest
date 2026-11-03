@@ -140,7 +140,8 @@ func TestAgentIngestionProtocolIntegration(t *testing.T) {
 	hook.fail = true
 	failed := result
 	failed.ID = "00000000-0000-4000-8000-000000000003"
-	failed.IP = "203.0.113.3"
+	failedIP := "203.0.113.3"
+	failed.IP = &failedIP
 	if _, err = store.SaveResult(ctx, node, failed); err == nil {
 		t.Fatal("hook failure ignored")
 	}

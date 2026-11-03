@@ -47,7 +47,7 @@ func TestValidateRejectsBadInput(t *testing.T) {
 		"failed no error":   func(r *Result) { r.Status = StatusFailed; r.Error = nil },
 		"ok with error":     func(r *Result) { r.Error = strp("x") },
 		"ok missing down":   func(r *Result) { r.Down = nil },
-		"ok missing server": func(r *Result) { r.ServerID = nil },
+		"ok missing server": func(r *Result) { r.Server = nil },
 		"ok zero server":    func(r *Result) { r.ServerID = i64p(0) },
 		"unknown status":    func(r *Result) { r.Status = "nope" },
 	}
@@ -155,7 +155,7 @@ func TestFromEngineRejectsResultWithoutIP(t *testing.T) {
 		Down:      f64p(1),
 		Up:        f64p(1),
 		Ping:      f64p(1),
-		Server:    &engine.Server{ID: 1},
+		Server:    &engine.Server{ID: 1, Name: "test"},
 	}
 	if _, err := FromEngine(e, Options{}); err == nil {
 		t.Fatal("FromEngine() = nil error, want validation error for missing IP")
@@ -168,7 +168,7 @@ func TestFromEngineDefaultThreads(t *testing.T) {
 		Down:       f64p(1),
 		Up:         f64p(1),
 		Ping:       f64p(1),
-		Server:     &engine.Server{ID: 1},
+		Server:     &engine.Server{ID: 1, Name: "test"},
 		ExternalIP: "203.0.113.1",
 	}
 	r, err := FromEngine(e, Options{})
@@ -235,7 +235,7 @@ func TestOptionalResultSchemaAndNonfiniteValues(t *testing.T) {
 		}
 	}
 	r := result(t)
-	r.Server = &Server{ID: 1}
+	r.Server = &Server{ID: 1, Name: "test"}
 	r.EngineIP = "2001:db8::1"
 	r.EngineResultURL = "https://example.test/result"
 	if err := r.Validate(); err != nil {

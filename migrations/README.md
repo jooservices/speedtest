@@ -2,7 +2,10 @@
 
 `00001_initial.sql` creates the initial schema. `00002_node_enrollment_idempotency.sql`
 adds encrypted response replay records used by retryable credential issuance.
-`00003_ip_history.sql` adds per-node/address counters, the ordered timeline index
+`00003_nullable_ip_and_server_identity.sql` allows unknown IPs only for failed
+results and requires a typed server identity (name or host) for successful ones.
+Numeric server IDs remain positive when present but may be unavailable.
+`00004_ip_history.sql` adds per-node/address counters, the ordered timeline index
 and durable change signals; it backfills history/counters without replaying alerts.
 Its down migration preserves results, cached locations and derived history; see
 [IP history rollback and consumer rules](../docs/ip-history.md).
@@ -153,3 +156,19 @@ Owner authentication is implemented separately in `internal/center/auth` and
 `internal/center/server`; remaining browser E2E, real-agent staging soak and
 screenshots belong to their implementation/QA tickets. No deployment is
 performed by database migrations.
+
+## Version 3 rollback
+
+Upgrade the center before starting agents that can send the new nullable fields.
+The migration retains existing successful rows: an older row without a named
+server receives a display name derived from its existing numeric server ID.
+No IP is inferred or fabricated. The IP foreign key still protects known values.
+
+Version 3 down is deliberately lossless: it refuses when rows have null IPs or
+successful rows have null numeric server IDs. It never deletes such measurements
+or invents replacement values. Before an authorized downgrade, stop agents and
+retain/export incompatible rows through the operator's backup process. On the
+verified disposable test database, the integration suite removes only its own
+fixtures to demonstrate down/up with compatible populated data. The refused down
+is transactional: data and the migration version stay unchanged. After resolving
+compatibility, run `make migrate-down`; reapply with `make migrate`.
