@@ -67,7 +67,16 @@ go build -o ~/.local/opt/speedtest-center/speedtest-migrate ./internal/center/db
 # 3. Create the environment file from the template (see Environment below).
 cp .env.example ~/.local/opt/speedtest-center/.env
 chmod 600 ~/.local/opt/speedtest-center/.env
-# edit it: set SPEEDTEST_DB_*, SPEEDTEST_HTTP_ADDR, SPEEDTEST_UI_DIR
+# edit it: set SPEEDTEST_DB_*, SPEEDTEST_HTTP_ADDR, SPEEDTEST_UI_DIR and APP_ENV=production, and a
+# 32-byte APP_KEY (without it the center cannot issue node tokens or store integration secrets):
+#   echo "APP_KEY=$(openssl rand -base64 32)" >> ~/.local/opt/speedtest-center/.env
+# Keep a copy of APP_KEY somewhere safe and separate from the database backups.
+
+# 3b. Apply the schema and create the owner account (production never seeds a default password).
+cd ~/.local/opt/speedtest-center && ./speedtest-migrate up
+printf '%s\n' 'choose-a-long-unique-passphrase' > /dev/shm/owner-pw && chmod 600 /dev/shm/owner-pw
+SPEEDTEST_OWNER_EMAIL=you@example.com ./speedtest-center create-owner < /dev/shm/owner-pw; shred -u /dev/shm/owner-pw
+# (prompt-free alternative: type the passphrase on one line after `create-owner`, then press Ctrl-D)
 
 # 4. Install and enable the user service.
 mkdir -p ~/.config/systemd/user

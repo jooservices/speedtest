@@ -9,7 +9,7 @@
   --line-strong: #cfcdc6;
   --text: #1b1b1a;
   --text-2: #52514e;
-  --muted: #7a7972;
+  --muted: #6a6963;
   --accent: #2a78d6;
   --accent-strong: #1c5cab;
   --accent-soft: #e3effc;
@@ -402,3 +402,5 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
 /* Top bar: keep the range label on one line and the selected range readable at every width. */
 .topbar .row.muted { white-space: nowrap; }
 .topbar select { min-width: 8.5em; }
+.leaflet-control-attribution { background: color-mix(in srgb, var(--surface) 88%, transparent) !important; color: var(--text-2) !important; }
+.leaflet-control-attribution a { color: var(--accent-strong) !important; }

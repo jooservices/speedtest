@@ -37,7 +37,12 @@ absent if the center has no database.
 ## Backup and restore
 
 ```bash
-# nightly (cron/systemd timer), environment as for the center
+# nightly: the script needs SPEEDTEST_DB_* in its environment. From a systemd timer use the center's env file:
+#   [Service]
+#   Type=oneshot
+#   EnvironmentFile=%h/.local/opt/speedtest-center/.env
+#   ExecStart=%h/.local/opt/speedtest-center/backup.sh %h/backups/speedtest
+# From cron or a shell: set -a; . ./.env; set +a  (trusted file only), then:
 deploy/backup.sh /var/backups/speedtest        # keeps the newest 14 dumps (KEEP=n)
 # restore: stop the center first
 deploy/restore.sh /var/backups/speedtest/speedtest-<stamp>.dump speedtest

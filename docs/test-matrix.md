@@ -62,7 +62,7 @@ Operations: 65. Without a test: 0.
 | rotateEnrollmentKey | POST | `/api/settings/enrolment-key` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>+1 more |
 | listIPChanges | GET | `/api/ip/history` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go`<br>`tests/ui/contract.test.mjs`<br>`tests/ui/store.test.mjs`<br>+1 more |
 | listIPAddresses | GET | `/api/ip/addresses` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go`<br>`tests/ui/contract.test.mjs`<br>`tests/ui/store.test.mjs`<br>+1 more |
-| lookupIP | GET | `/api/ip/lookup` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go` |
+| lookupIP | GET | `/api/ip/lookup` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go`<br>`tests/e2e/steps.mjs` |
 | getMap | GET | `/api/ip/map` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go` |
 | getJob | GET | `/api/jobs/{id}` | `internal/center/server/owneralerts_test.go`<br>`internal/center/server/ownerjobs_test.go` |
 | probeSSH | POST | `/api/installer/probes` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |

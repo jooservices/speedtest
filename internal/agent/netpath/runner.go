@@ -72,6 +72,11 @@ func (r *Runner) Run(ctx context.Context, opts engine.Options) (RunResult, error
 	if measurement.ExternalIP != "" {
 		reported := net.ParseIP(measurement.ExternalIP)
 		switch {
+		case reported != nil && !publicAddress(publicIP) && publicAddress(reported):
+			// The agent reaches the center over a private or loopback network (same host or LAN), so the
+			// center cannot see the real public address; the engine's own report is the better answer.
+			result.Warnings = append(result.Warnings, fmt.Sprintf("command center observed the non-public address %s; using the engine-reported public IP %s", publicIP, reported))
+			result.PublicIP = reported.String()
 		case reported == nil:
 			result.Warnings = append(result.Warnings, fmt.Sprintf("engine reported an invalid external IP; command center observed %s", publicIP))
 		case !reported.Equal(publicIP):
@@ -79,4 +84,9 @@ func (r *Runner) Run(ctx context.Context, opts engine.Options) (RunResult, error
 		}
 	}
 	return result, runErr
+}
+
+// publicAddress reports whether ip could be a globally routable address.
+func publicAddress(ip net.IP) bool {
+	return ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified() && !ip.IsMulticast()
 }
