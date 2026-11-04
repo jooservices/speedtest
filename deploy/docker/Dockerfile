@@ -25,7 +25,8 @@ COPY dist/speedtest-center-linux-amd64  /usr/local/bin/speedtest-center
 COPY dist/speedtest-agent-linux-amd64   /usr/local/bin/speedtest-agent
 COPY dist/speedtest-migrate-linux-amd64 /usr/local/bin/speedtest-migrate
 COPY deploy/docker/entrypoint.sh        /usr/local/bin/entrypoint.sh
-RUN chmod 0755 /usr/local/bin/speedtest-center /usr/local/bin/speedtest-agent /usr/local/bin/speedtest-migrate /usr/local/bin/entrypoint.sh
+COPY deploy/docker/node-entrypoint.sh   /usr/local/bin/node-entrypoint.sh
+RUN chmod 0755 /usr/local/bin/speedtest-center /usr/local/bin/speedtest-agent /usr/local/bin/speedtest-migrate /usr/local/bin/entrypoint.sh /usr/local/bin/node-entrypoint.sh
 
 USER speedtest
 WORKDIR /var/lib/speedtest

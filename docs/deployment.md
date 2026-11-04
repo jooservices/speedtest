@@ -278,3 +278,21 @@ address, then health-check through the proxy:
 ```bash
 curl -sS https://speedtest.example.com/healthz
 ```
+
+## Extra node containers ("VMs") on the staging host
+
+`deploy/docker/nodes.sh` starts extra agent-only containers that report to the running staging center, to rehearse
+many nodes without more machines:
+
+```bash
+sg docker -c "deploy/docker/nodes.sh up dock-a dock-b"   # creates the nodes through the owner API and starts one container each
+sg docker -c "deploy/docker/nodes.sh list"
+sg docker -c "deploy/docker/nodes.sh down dock-a"        # stop; "forget dock-a" also removes the node from the center
+```
+
+Each container has its own volume and configuration and knows only its own name and the center address. They
+share the host's uplink, so their speeds compete; use real machines (install wizard, `docs/ssh-installer.md`) for
+the multi-connection acceptance. Bridge-per-node networking (`NODE_NETWORK=bridge`) needs a firewall that lets
+containers reach the host's center port; on the dev VM that path is closed, so the default is host networking.
+`scripts/test-netpath-namespace.sh` can run in a throwaway container with `--cap-add NET_ADMIN --cap-add SYS_ADMIN`
+and unconfined seccomp/AppArmor (it passed that way on 2026-11-04).
