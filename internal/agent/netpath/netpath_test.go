@@ -471,3 +471,24 @@ func (f fakeRawConn) Control(fn func(uintptr)) error {
 func (fakeRawConn) Read(func(uintptr) bool) error  { return nil }
 func (fakeRawConn) Write(func(uintptr) bool) error { return nil }
 func (fakeRawConn) Close() error                   { return nil }
+
+func TestRunnerUsesEngineIPWhenCenterSeesPrivateAddress(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeEcho(w, http.StatusOK, "127.0.0.1")
+	}))
+	t.Cleanup(server.Close)
+	measurement := &recordingEngine{result: engine.Result{ExternalIP: "203.0.113.10"}}
+	result, err := newTestRunner(t, measurement, server.URL, Binding{}).Run(context.Background(), engine.Options{})
+	if err != nil || result.PublicIP != "203.0.113.10" {
+		t.Fatalf("Run() = %+v, %v; want the engine-reported public IP", result, err)
+	}
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "non-public address 127.0.0.1") {
+		t.Fatalf("warnings = %q", result.Warnings)
+	}
+	// Without a public engine report the observed address is kept.
+	measurement = &recordingEngine{result: engine.Result{ExternalIP: "10.0.0.7"}}
+	result, _ = newTestRunner(t, measurement, server.URL, Binding{}).Run(context.Background(), engine.Options{})
+	if result.PublicIP != "127.0.0.1" {
+		t.Fatalf("PublicIP = %q, want the observed address kept", result.PublicIP)
+	}
+}

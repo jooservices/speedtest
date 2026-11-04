@@ -267,3 +267,48 @@ func verifyIPHistoryHTTP(t *testing.T, ctx context.Context, pool *pgxpool.Pool, 
 	}
 	t.Log("PASS: executable HTTP ingestion rejects unauthorized bearer; 201/200 replay outcomes; 3 known-IP samples, 2 history openings/transitions, 1 newest-change signal, 2 cached locations; late known-IP and NULL-IP failures emit no signal")
 }
+
+func TestCreateOwnerIntegration(t *testing.T) {
+	values, err := godotenv.Read("../../.env")
+	if err != nil {
+		t.Fatal("worktree configuration required")
+	}
+	for key, value := range values {
+		t.Setenv(key, value)
+	}
+	cfg, err := config.LoadCenter()
+	if err != nil {
+		t.Fatal("invalid worktree test configuration")
+	}
+	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := db.Open(t.Context(), cfg.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	t.Setenv("SPEEDTEST_OWNER_EMAIL", "Owner@Example.com")
+	for _, bad := range []string{"", "password\n", "short\n"} {
+		if err := runCreateOwner(t.Context(), nil, strings.NewReader(bad), io.Discard); err == nil {
+			t.Fatalf("password %q accepted", bad)
+		}
+	}
+	if err := runCreateOwner(t.Context(), nil, strings.NewReader("a long unique passphrase 42\n"), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var email string
+	if err := pool.QueryRow(t.Context(), `SELECT email FROM users`).Scan(&email); err != nil || email != "owner@example.com" {
+		t.Fatal("owner row", email, err)
+	}
+	if err := runCreateOwner(t.Context(), nil, strings.NewReader("another long passphrase 43\n"), io.Discard); err == nil {
+		t.Fatal("a second owner was created")
+	}
+	t.Setenv("SPEEDTEST_OWNER_EMAIL", "not-an-email")
+	if err := runCreateOwner(t.Context(), nil, strings.NewReader("a long unique passphrase 42\n"), io.Discard); err == nil {
+		t.Fatal("invalid email accepted")
+	}
+}

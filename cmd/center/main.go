@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"flag"
@@ -53,6 +54,8 @@ func mainRun(args []string, stdout, stderr io.Writer) int {
 	switch {
 	case len(args) > 0 && args[0] == "seed-admin":
 		err = runSeedAdmin(ctx, args[1:], stdout)
+	case len(args) > 0 && args[0] == "create-owner":
+		err = runCreateOwner(ctx, args[1:], os.Stdin, stdout)
 	case containsHelp(args):
 		err = run(ctx, args, logger, stderr)
 	default:
@@ -334,6 +337,62 @@ func runSeedAdmin(ctx context.Context, args []string, stdout io.Writer) error {
 		return errors.New("could not seed the default administrator")
 	}
 	_, _ = fmt.Fprintln(stdout, "default administrator ensured")
+	return nil
+}
+
+// runCreateOwner creates the single owner account of a production install. The email comes from
+// SPEEDTEST_OWNER_EMAIL and the password from the first line of standard input, so it never appears
+// in the process list, shell history or logs. It refuses to run when a user already exists.
+func runCreateOwner(ctx context.Context, args []string, input io.Reader, stdout io.Writer) error {
+	if len(args) != 0 {
+		return errors.New("usage: SPEEDTEST_OWNER_EMAIL=you@example.com center create-owner < password-file")
+	}
+	email := strings.ToLower(strings.TrimSpace(os.Getenv("SPEEDTEST_OWNER_EMAIL")))
+	if email == "" || !strings.Contains(email, "@") || strings.ContainsAny(email, " \t\r\n") {
+		return errors.New("SPEEDTEST_OWNER_EMAIL must be a valid email address")
+	}
+	line, _ := bufio.NewReader(io.LimitReader(input, 4096)).ReadString('\n')
+	password := strings.TrimRight(line, "\r\n")
+	if password == auth.DefaultAdminPassword {
+		return errors.New("the default password is not allowed")
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return errors.New("the password does not meet the password policy (read it from the first line of standard input)")
+	}
+	if err := loadDotEnv(); err != nil {
+		return err
+	}
+	cfg, err := config.LoadCenter()
+	if err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	if err := validateLocalDatabaseName(cfg); err != nil {
+		return err
+	}
+	pool, err := db.Open(ctx, cfg.Database)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	if err := verifyLocalDatabaseIdentity(ctx, pool, cfg); err != nil {
+		return err
+	}
+	var users int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM users`).Scan(&users); err != nil {
+		return errors.New("could not check for existing users (are migrations applied?)")
+	}
+	if users > 0 {
+		return errors.New("an owner account already exists; nothing was changed")
+	}
+	store, err := auth.NewPostgresStore(pool)
+	if err != nil {
+		return err
+	}
+	if err := store.SeedAdmin(ctx, email, hash); err != nil {
+		return errors.New("could not create the owner account")
+	}
+	_, _ = fmt.Fprintln(stdout, "owner account created")
 	return nil
 }
 
