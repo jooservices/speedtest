@@ -294,3 +294,19 @@ the inherited environment when spawning that binary. Detailed command logic is
 tested through the existing `run` functions. Keep genuinely unreachable defensive
 returns, and record their reasons and every remaining function below 100% in the
 ticket's verification comment.
+
+### Statistics latency regression
+
+`TestStatisticsQueriesMeetLatencyTargetOnOneYearDataset` seeds five nodes with
+one year of half-hourly results (87,600 rows) in the guarded test database.
+Each store operation runs five times; its fastest complete call must remain
+strictly below 300 ms. All five durations are logged, and any query error fails
+immediately. This bounded best-of-five check tolerates transient shared-machine
+contention while retaining database round trips and Go result decoding in the
+measurement. Persistent slowness across all five calls still fails. The summary
+EXPLAIN ANALYZE remains diagnostic, rather than replacing the store-call budget.
+
+Run it with `go test -tags integration ./internal/center/stats -run
+TestStatisticsQueriesMeetLatencyTargetOnOneYearDataset -count=1 -v` using only a
+configured, ownership-marked test/worktree database. This test-only change does
+not introduce a user flow or change the API.
