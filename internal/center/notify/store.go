@@ -197,14 +197,15 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 			return false, err
 		}
 	}
-	if held {
+	switch {
+	case held:
 		// Quiet hours: the alert stays recorded and the delivery waits; look again in a minute.
 		status = "pending"
 		next = now.Add(time.Minute)
-	} else if !now.Before(d.CreatedAt.Add(24 * time.Hour)) {
+	case !now.Before(d.CreatedAt.Add(24 * time.Hour)):
 		text := "delivery expired after 24 hours"
 		safeError = &text
-	} else {
+	default:
 		attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		view, ch, secret, sendErr := s.configurationTx(attemptCtx, tx, d.Channel)
 		if sendErr == nil {
