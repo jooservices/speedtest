@@ -9,7 +9,7 @@ Operations: 65. Without a test: 0.
 | getSession | GET | `/api/auth/me` | `cmd/center/notifications_integration_test.go`<br>`internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/installer_test.go`<br>+5 more |
 | login | POST | `/api/auth/login` | `cmd/center/notifications_integration_test.go`<br>`internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/installer_test.go`<br>+2 more |
 | logout | POST | `/api/auth/logout` | `internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go` |
-| changePassword | POST | `/api/auth/password` | `internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>`tests/ui/api.test.mjs` |
+| changePassword | POST | `/api/auth/password` | `internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>`tests/ui/api.test.mjs`<br>`tests/ui/store.test.mjs`<br>+1 more |
 | listNodes | GET | `/api/nodes` | `internal/center/server/auth_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>+8 more |
 | createNode | POST | `/api/nodes` | `internal/center/server/auth_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>+6 more |
 | createEnrollmentToken | POST | `/api/agent/tokens` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go` |
