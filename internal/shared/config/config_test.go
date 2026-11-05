@@ -23,6 +23,7 @@ var allEnvVars = []string{
 	"SPEEDTEST_DB_USER",
 	"SPEEDTEST_DB_PASSWORD",
 	"SPEEDTEST_DB_SSLMODE",
+	"SPEEDTEST_DB_MAX_CONNS",
 	"APP_KEY",
 	"SPEEDTEST_AGENT_REQUESTS_PER_MINUTE",
 	"SPEEDTEST_PUBLIC_URL",
@@ -61,6 +62,7 @@ func TestLoadCenterDefaults(t *testing.T) {
 			User:     "speedtest",
 			Password: "",
 			SSLMode:  "disable",
+			MaxConns: 10,
 		},
 		AgentRequestsPerMinute: 120,
 	}
@@ -109,6 +111,7 @@ func TestLoadCenterOverrides(t *testing.T) {
 			User:     "speedtest_app",
 			Password: "s3cret",
 			SSLMode:  "require",
+			MaxConns: 10,
 		},
 		AppKey:                 []byte(strings.Repeat("k", 32)),
 		AgentRequestsPerMinute: 240,
@@ -143,6 +146,16 @@ func TestLoadCenterInvalid(t *testing.T) {
 			name:    "port negative",
 			env:     map[string]string{"SPEEDTEST_DB_PORT": "-1"},
 			wantErr: "SPEEDTEST_DB_PORT must be between 1 and 65535",
+		},
+		{
+			name:    "pool size zero",
+			env:     map[string]string{"SPEEDTEST_DB_MAX_CONNS": "0"},
+			wantErr: "SPEEDTEST_DB_MAX_CONNS must be between 1 and 100",
+		},
+		{
+			name:    "pool size too large",
+			env:     map[string]string{"SPEEDTEST_DB_MAX_CONNS": "101"},
+			wantErr: "SPEEDTEST_DB_MAX_CONNS must be between 1 and 100",
 		},
 		{
 			name:    "sslmode unknown",

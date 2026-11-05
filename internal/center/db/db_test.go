@@ -42,3 +42,16 @@ func TestMigrateRejectsMissingEmbeddedBundle(t *testing.T) {
 		t.Fatal("expected safe embedded migration initialization error")
 	}
 }
+
+func TestPoolURLUsesTheConfiguredPoolSize(t *testing.T) {
+	cfg := config.DatabaseConfig{Host: "db.example", Port: 5432, Name: "speedtest", User: "u", Password: "p@ss/word", SSLMode: "require"}
+	for _, tc := range []struct {
+		max  int
+		want string
+	}{{0, "pool_max_conns=10"}, {-3, "pool_max_conns=10"}, {25, "pool_max_conns=25"}} {
+		cfg.MaxConns = tc.max
+		if got := poolURL(cfg); !strings.Contains(got, tc.want) || !strings.Contains(got, "sslmode=require") || strings.Contains(got, "p@ss/word") {
+			t.Errorf("poolURL(max=%d) = %q, want %q and an escaped password", tc.max, got, tc.want)
+		}
+	}
+}
