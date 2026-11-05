@@ -326,7 +326,7 @@ func (s *Store) Trend(ctx context.Context, q Query) ([]Series, error) {
 			byID[id] = idx
 			items = append(items, Series{NodeID: &copyID, Name: name, Metric: q.Metric, Unit: q.Metric.unit(), Points: make([]Point, 0)})
 		}
-		items[idx].Points = append(items[idx].Points, Point{TS: bucket, Value: value, Count: count})
+		items[idx].Points = append(items[idx].Points, Point{TS: bucket.UTC(), Value: value, Count: count})
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read statistics trend: %w", err)

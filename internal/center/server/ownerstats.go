@@ -342,7 +342,31 @@ func parseStatsTimezone(w http.ResponseWriter, r *http.Request) (string, bool) {
 		statsInvalid(w, r, "timezone must be a valid IANA time zone.")
 		return "", false
 	}
-	return raw, true
+	return canonicalZone(raw), true
+}
+
+// zoneAliases maps legacy IANA link names, which browsers still report (Asia/Saigon is what many Vietnamese
+// systems return), to the canonical names PostgreSQL's time zone database knows. Go accepts both spellings,
+// PostgreSQL only the canonical one, so an unmapped alias would turn into a 500 in the grouping queries.
+var zoneAliases = map[string]string{
+	"Asia/Saigon": "Asia/Ho_Chi_Minh", "Asia/Calcutta": "Asia/Kolkata", "Asia/Katmandu": "Asia/Kathmandu",
+	"Asia/Rangoon": "Asia/Yangon", "Asia/Dacca": "Asia/Dhaka", "Asia/Thimbu": "Asia/Thimphu",
+	"Asia/Ujung_Pandang": "Asia/Makassar", "Asia/Ulan_Bator": "Asia/Ulaanbaatar", "Asia/Macao": "Asia/Macau",
+	"Asia/Chongqing": "Asia/Shanghai", "Asia/Chungking": "Asia/Shanghai", "Asia/Harbin": "Asia/Shanghai",
+	"Asia/Istanbul": "Europe/Istanbul", "Asia/Ashkhabad": "Asia/Ashgabat", "Asia/Tel_Aviv": "Asia/Jerusalem",
+	"Europe/Kiev": "Europe/Kyiv", "Europe/Belfast": "Europe/London", "Atlantic/Faeroe": "Atlantic/Faroe",
+	"America/Buenos_Aires": "America/Argentina/Buenos_Aires", "America/Indianapolis": "America/Indiana/Indianapolis",
+	"America/Louisville": "America/Kentucky/Louisville", "America/Godthab": "America/Nuuk", "Pacific/Samoa": "Pacific/Pago_Pago",
+	"Australia/ACT": "Australia/Sydney", "Australia/NSW": "Australia/Sydney", "Australia/Victoria": "Australia/Melbourne",
+	"US/Eastern": "America/New_York", "US/Central": "America/Chicago", "US/Mountain": "America/Denver", "US/Pacific": "America/Los_Angeles",
+	"Etc/UTC": "UTC", "Etc/GMT": "UTC", "GMT": "UTC", "Zulu": "UTC", "Universal": "UTC",
+}
+
+func canonicalZone(name string) string {
+	if canonical, ok := zoneAliases[name]; ok {
+		return canonical
+	}
+	return name
 }
 
 func singleStatsParam(w http.ResponseWriter, r *http.Request, name string) (string, bool, bool) {

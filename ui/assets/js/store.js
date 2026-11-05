@@ -509,6 +509,7 @@
       if (zone && zone !== 'browser') return zone;
       return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     }
+    ST.timezone = quietZone;
     ST.saveSchedule = function (id, input) {
       var path = '/api/schedules/' + encodeURIComponent(id);
       return API.request(path).then(function (response) { return mutation(path, 'PUT', input, { ifMatch: response.etag }); });
