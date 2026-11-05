@@ -188,3 +188,33 @@ func TestRetentionCutoffIsExactlyTheConfiguredDays(t *testing.T) {
 		t.Fatalf("deleted %d, %d left (want only the row older than 30 days gone): err %v", res.Deleted, count(t, ctx, pool), err)
 	}
 }
+
+// The owner's change log is pruned with the same cut-off as results, and kept with "keep everything".
+func TestRetentionAlsoPrunesTheAuditLog(t *testing.T) {
+	pool, ctx := openPool(t)
+	seed(t, ctx, pool, 1, 1)
+	setRetention(t, ctx, pool, "30")
+	for name, age := range map[string]string{"inside": "29 days", "outside": "31 days"} {
+		if _, err := pool.Exec(ctx, `INSERT INTO audit_log(id,ts,actor,action) VALUES (gen_random_uuid(), $1::timestamptz - $2::interval, 'owner', $3)`, now, age, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	res, err := (&Retention{DB: pool, Now: func() time.Time { return now }, BatchSize: 100}).Run(ctx)
+	if err != nil || res.AuditDeleted != 1 {
+		t.Fatalf("result %+v err %v", res, err)
+	}
+	var left []string
+	rows, _ := pool.Query(ctx, `SELECT action FROM audit_log`)
+	for rows.Next() {
+		var a string
+		_ = rows.Scan(&a)
+		left = append(left, a)
+	}
+	if len(left) != 1 || left[0] != "inside" {
+		t.Fatalf("audit entries left: %v", left)
+	}
+	setRetention(t, ctx, pool, "0")
+	if res, err := (&Retention{DB: pool, Now: func() time.Time { return now.AddDate(5, 0, 0) }, BatchSize: 100}).Run(ctx); err != nil || res.AuditDeleted != 0 {
+		t.Fatalf("keep-everything run: %+v %v", res, err)
+	}
+}

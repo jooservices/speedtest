@@ -203,3 +203,12 @@ flow in JOOST-45/JOOST-48.
 
 `TestRotateAppKeyInstallerPolicyIntegration` verifies active-job refusal, atomic
 HMAC invalidation (including failure rollback), cleared counts and retained history.
+
+## Activity log
+
+Every successful owner change (adding, editing or removing a node, schedules, alert rules and acknowledgements, settings, enrolment key,
+test notifications, password change) is recorded in `audit_log` with who (the signed-in e-mail), what (a plain sentence plus an action
+code such as `node.update`), the item id and the address it came from. Request bodies, passwords, keys and message contents are never
+stored. Read it in Settings > Activity log or with `GET /api/audit?action=node.`. Entries follow the results retention period and are
+removed by the same nightly job; with retention set to "keep everything" they are kept. A failure to write an entry is logged and never
+blocks the change itself. Sign-ins and sign-outs are not recorded (they carry no change).

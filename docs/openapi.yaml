@@ -1840,6 +1840,45 @@ paths:
             $ref: "#/components/schemas/ID"
         - $ref: "#/components/parameters/IfMatch"
         - $ref: "#/components/parameters/CSRF"
+  /api/audit:
+    get:
+      operationId: listAudit
+      tags:
+        - Settings
+      summary: List the log of owner changes
+      description: Newest first. Each entry says who changed what and when; request bodies and secrets are
+        never recorded. Entries older than the results retention period are removed nightly.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listAuditResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Page"
+        - $ref: "#/components/parameters/Size"
+        - name: action
+          in: query
+          required: false
+          description: Action prefix, for example node. for every node change.
+          schema:
+            type: string
+            maxLength: 60
   /api/alerts/events:
     get:
       operationId: listEvents
@@ -5999,6 +6038,57 @@ components:
               const: 200
             data:
               $ref: "#/components/schemas/AlertRule"
+    AuditEntry:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        ts:
+          type: string
+          format: date-time
+          pattern: Z$
+        actor:
+          type: string
+        action:
+          type: string
+        targetType:
+          type: string
+        targetId:
+          type: string
+        summary:
+          type: string
+          maxLength: 300
+        remote:
+          type: string
+      required:
+        - id
+        - ts
+        - actor
+        - action
+        - targetType
+        - targetId
+        - summary
+        - remote
+    listAuditResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/AuditEntry"
+            meta:
+              type: object
+              additionalProperties: false
+              properties:
+                pagination:
+                  $ref: "#/components/schemas/Pagination"
+              required:
+                - pagination
     listEventsResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
