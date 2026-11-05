@@ -49,6 +49,8 @@ type Options struct {
 	OwnerNodes OwnerNodesStore
 	// OwnerSchedules optionally serves the dashboard schedule API.
 	OwnerSchedules OwnerSchedulesStore
+	// Audit optionally records owner changes and serves GET /api/audit.
+	Audit AuditStore
 	// OwnerJobs optionally serves the status of maintenance jobs.
 	OwnerJobs OwnerJobsStore
 	// OwnerDashboard optionally serves the dashboard snapshot and comparison series.
@@ -104,6 +106,10 @@ func NewHandler(options Options) http.Handler {
 		ownerSchedulesHandler = newOwnerSchedulesHandler(options.OwnerSchedules, authHandler)
 	}
 	var ownerJobsHandler http.Handler
+	var auditHandler http.Handler
+	if options.Audit != nil {
+		auditHandler = newOwnerAuditHandler(options.Audit, authHandler)
+	}
 	if options.OwnerJobs != nil {
 		ownerJobsHandler = newOwnerJobsHandler(options.OwnerJobs, authHandler)
 	}
@@ -143,6 +149,8 @@ func NewHandler(options Options) http.Handler {
 		switch {
 		case r.URL.Path == "/api/auth" || strings.HasPrefix(r.URL.Path, "/api/auth/"):
 			authHandler.serve(w, r)
+		case auditHandler != nil && auditRoute(r.URL.Path):
+			auditHandler.ServeHTTP(w, r)
 		case installerHandler != nil && installerRoute(r.URL.Path):
 			installerHandler.ServeHTTP(w, r)
 		case ownerNodesHandler != nil && ownerNodesRoute(r.URL.Path) && (r.Method != http.MethodPost || r.URL.Path != "/api/nodes"):
@@ -180,7 +188,7 @@ func NewHandler(options Options) http.Handler {
 		}
 	})
 
-	var handler http.Handler = dispatch
+	var handler http.Handler = withAudit(dispatch, options.Audit, authHandler, logger)
 	handler = withSecurityHeaders(handler)
 	handler = recoverPanics(handler, logger)
 	handler = logRequests(handler, logger)

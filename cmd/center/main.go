@@ -22,6 +22,7 @@ import (
 	"github.com/jooservices/speedtest"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/alerts"
+	"github.com/jooservices/speedtest/internal/center/audit"
 	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/dashboard"
 	"github.com/jooservices/speedtest/internal/center/db"
@@ -163,6 +164,7 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 		OwnerDashboard:     &dashboard.Cached{Source: &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore}, TTL: 5 * time.Second},
 		OwnerAlerts:        alertStore,
 		OwnerJobs:          &jobs.Registry{DB: pool},
+		Audit:              &audit.Store{DB: pool},
 		Background: func(ctx context.Context) {
 			if notifications != nil {
 				go notifications.Loop(ctx)
@@ -209,6 +211,7 @@ type services struct {
 	OwnerDashboard     server.OwnerDashboardStore
 	OwnerAlerts        server.OwnerAlertsStore
 	OwnerJobs          server.OwnerJobsStore
+	Audit              server.AuditStore
 	Installer          *installer.Service
 	// Background runs until the context ends, for example the daily retention job.
 	Background func(context.Context)
@@ -268,6 +271,7 @@ func serve(ctx context.Context, args []string, logger *slog.Logger, stderr io.Wr
 		OwnerDashboard:     svc.OwnerDashboard,
 		OwnerAlerts:        svc.OwnerAlerts,
 		OwnerJobs:          svc.OwnerJobs,
+		Audit:              svc.Audit,
 		Installer:          svc.Installer,
 		AgentAPI:           svc.Agent,
 		Logger:             logger,

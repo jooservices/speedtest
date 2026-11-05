@@ -154,6 +154,7 @@ export async function startServer() {
       if (url.pathname.startsWith('/api/alerts/events/')) { send(200, envelope(data.event)); return; }
       const lists = {
         '/api/nodes': [data.node], '/api/results': [data.result], '/api/alerts/rules': [], '/api/alerts/events': [],
+        '/api/audit': [{ id: '7d1c0000-0000-4000-8000-000000000001', ts: '2026-11-05T05:00:00Z', actor: 'owner@example.com', action: 'settings.update', targetType: 'settings', targetId: '', summary: 'Changed settings', remote: '127.0.0.1' }],
         '/api/ip/addresses': [{ nodeId: data.node.id, ip: data.result.ip, first: data.result.ts, last: data.result.ts,
           tests: 1, avgDown: 90, avgUp: 40, geo: null }], '/api/ip/history': []
       };
