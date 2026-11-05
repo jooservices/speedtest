@@ -69,6 +69,8 @@ type DatabaseConfig struct {
 	User     string
 	Password string
 	SSLMode  string
+	// MaxConns bounds the connection pool (SPEEDTEST_DB_MAX_CONNS, default 10).
+	MaxConns int
 }
 
 // DSN returns a PostgreSQL connection string for the database. The password is
@@ -90,6 +92,10 @@ func (d DatabaseConfig) DSN() string {
 // environment.
 func LoadCenter() (CenterConfig, error) {
 	port, err := getInt("SPEEDTEST_DB_PORT", 5432)
+	if err != nil {
+		return CenterConfig{}, err
+	}
+	maxConns, err := getInt("SPEEDTEST_DB_MAX_CONNS", 10)
 	if err != nil {
 		return CenterConfig{}, err
 	}
@@ -129,6 +135,7 @@ func LoadCenter() (CenterConfig, error) {
 			User:     getString("SPEEDTEST_DB_USER", "speedtest"),
 			Password: getString("SPEEDTEST_DB_PASSWORD", ""),
 			SSLMode:  getString("SPEEDTEST_DB_SSLMODE", "disable"),
+			MaxConns: maxConns,
 		},
 		AppKey:                 appKey,
 		AgentRequestsPerMinute: rateLimit,
@@ -154,6 +161,9 @@ func (c CenterConfig) validate() error {
 	}
 	if c.Database.Port < 1 || c.Database.Port > 65535 {
 		return fmt.Errorf("SPEEDTEST_DB_PORT must be between 1 and 65535, got %d", c.Database.Port)
+	}
+	if c.Database.MaxConns < 1 || c.Database.MaxConns > 100 {
+		return fmt.Errorf("SPEEDTEST_DB_MAX_CONNS must be between 1 and 100, got %d", c.Database.MaxConns)
 	}
 	if !validSSLModes[c.Database.SSLMode] {
 		return fmt.Errorf("SPEEDTEST_DB_SSLMODE must be one of disable, allow, prefer, require, verify-ca, verify-full, got %q", c.Database.SSLMode)

@@ -205,6 +205,10 @@ func serve(ctx context.Context, listener net.Listener, handler http.Handler, shu
 	httpServer := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
+		// Request bodies are small; a slow sender must not hold a connection for ever. There is deliberately no
+		// WriteTimeout: CSV exports and installer progress are long-lived streams.
+		ReadTimeout: 60 * time.Second,
+		IdleTimeout: 2 * time.Minute,
 	}
 	serveErr := make(chan error, 1)
 	go func() {

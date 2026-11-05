@@ -17,13 +17,23 @@ import (
 	"github.com/jooservices/speedtest/migrations"
 )
 
+// defaultMaxConns is used when the configuration does not set a pool size.
+const defaultMaxConns = 10
+
+func poolURL(cfg config.DatabaseConfig) string {
+	maxConns := cfg.MaxConns
+	if maxConns < 1 {
+		maxConns = defaultMaxConns
+	}
+	u := url.URL{Scheme: "postgres", User: url.UserPassword(cfg.User, cfg.Password), Host: net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)), Path: "/" + cfg.Name}
+	u.RawQuery = url.Values{"sslmode": {cfg.SSLMode}, "timezone": {"UTC"}, "pool_max_conns": {strconv.Itoa(maxConns)}}.Encode()
+	return u.String()
+}
+
 // Open connects and pings a bounded pool. Every connection uses UTC, regardless
 // of the server's default timezone. Callers own Close. Errors never expose a DSN.
 func Open(ctx context.Context, cfg config.DatabaseConfig) (*pgxpool.Pool, error) {
-	u := url.URL{Scheme: "postgres", User: url.UserPassword(cfg.User, cfg.Password), Host: net.JoinHostPort(cfg.Host, strconv.Itoa(cfg.Port)), Path: "/" + cfg.Name}
-	q := url.Values{"sslmode": {cfg.SSLMode}, "timezone": {"UTC"}, "pool_max_conns": {"4"}}
-	u.RawQuery = q.Encode()
-	p, err := pgxpool.New(ctx, u.String())
+	p, err := pgxpool.New(ctx, poolURL(cfg))
 	if err != nil {
 		return nil, errors.New("invalid PostgreSQL connection configuration")
 	}

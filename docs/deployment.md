@@ -77,6 +77,7 @@ cd ~/.local/opt/speedtest-center && ./speedtest-migrate up
 printf '%s\n' 'choose-a-long-unique-passphrase' > /dev/shm/owner-pw && chmod 600 /dev/shm/owner-pw
 SPEEDTEST_OWNER_EMAIL=you@example.com ./speedtest-center create-owner < /dev/shm/owner-pw; shred -u /dev/shm/owner-pw
 # (prompt-free alternative: type the passphrase on one line after `create-owner`, then press Ctrl-D)
+# Forgotten password later: same pattern with `reset-owner-password` (sets a new password, signs every session out).
 
 # 4. Install and enable the user service.
 mkdir -p ~/.config/systemd/user

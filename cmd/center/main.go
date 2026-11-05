@@ -54,6 +54,8 @@ func mainRun(args []string, stdout, stderr io.Writer) int {
 	switch {
 	case len(args) > 0 && args[0] == "seed-admin":
 		err = runSeedAdmin(ctx, args[1:], stdout)
+	case len(args) > 0 && args[0] == "reset-owner-password":
+		err = runResetOwnerPassword(ctx, args[1:], os.Stdin, stdout)
 	case len(args) > 0 && args[0] == "create-owner":
 		err = runCreateOwner(ctx, args[1:], os.Stdin, stdout)
 	case containsHelp(args):
@@ -393,6 +395,68 @@ func runCreateOwner(ctx context.Context, args []string, input io.Reader, stdout 
 		return errors.New("could not create the owner account")
 	}
 	_, _ = fmt.Fprintln(stdout, "owner account created")
+	return nil
+}
+
+// runResetOwnerPassword sets a new owner password and signs every session out. It is the recovery path for a
+// forgotten password: whoever can run it already has shell and database access to the server. The new password
+// is the first line of standard input; the account is SPEEDTEST_OWNER_EMAIL, or the only account when unset.
+func runResetOwnerPassword(ctx context.Context, args []string, input io.Reader, stdout io.Writer) error {
+	if len(args) != 0 {
+		return errors.New("usage: [SPEEDTEST_OWNER_EMAIL=you@example.com] center reset-owner-password < password-file")
+	}
+	line, _ := bufio.NewReader(io.LimitReader(input, 4096)).ReadString('\n')
+	password := strings.TrimRight(line, "\r\n")
+	if password == auth.DefaultAdminPassword {
+		return errors.New("the default password is not allowed")
+	}
+	hash, err := auth.HashPassword(password)
+	if err != nil {
+		return errors.New("the password does not meet the password policy (read it from the first line of standard input)")
+	}
+	if err := loadDotEnv(); err != nil {
+		return err
+	}
+	cfg, err := config.LoadCenter()
+	if err != nil {
+		return fmt.Errorf("invalid configuration: %w", err)
+	}
+	if err := validateLocalDatabaseName(cfg); err != nil {
+		return err
+	}
+	pool, err := db.Open(ctx, cfg.Database)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	if err := verifyLocalDatabaseIdentity(ctx, pool, cfg); err != nil {
+		return err
+	}
+	email := strings.ToLower(strings.TrimSpace(os.Getenv("SPEEDTEST_OWNER_EMAIL")))
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return errors.New("could not start the password reset")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var id string
+	if email == "" {
+		var users int
+		if err := tx.QueryRow(ctx, `SELECT count(*), coalesce(min(id::text), '') FROM users`).Scan(&users, &id); err != nil || users != 1 {
+			return errors.New("set SPEEDTEST_OWNER_EMAIL: there is not exactly one account")
+		}
+	} else if err := tx.QueryRow(ctx, `SELECT id::text FROM users WHERE email=$1`, email).Scan(&id); err != nil {
+		return errors.New("no account has that email address")
+	}
+	if _, err := tx.Exec(ctx, `UPDATE users SET password_hash=$2, updated_at=now() WHERE id=$1`, id, hash); err != nil {
+		return errors.New("could not set the password")
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM sessions`); err != nil {
+		return errors.New("could not sign existing sessions out")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return errors.New("could not save the new password")
+	}
+	_, _ = fmt.Fprintln(stdout, "owner password reset; all sessions were signed out")
 	return nil
 }
 

@@ -33,11 +33,11 @@ Operations: 65. Without a test: 0.
 | exportFilteredCSV | GET | `/api/results/export.csv` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | exportAllCSV | GET | `/api/export/results.csv` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | exportAllJSON | GET | `/api/export/results.json` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
-| getSummary | GET | `/api/stats/summary` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/perf/dashboard.mjs` |
-| getTrend | GET | `/api/stats/trend` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go` |
-| getHourOfDay | GET | `/api/stats/hour-of-day` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go` |
-| getHeatmap | GET | `/api/stats/heatmap` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go` |
-| getDistribution | GET | `/api/stats/distribution` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go` |
+| getSummary | GET | `/api/stats/summary` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/e2e/steps.mjs`<br>`tests/perf/dashboard.mjs`<br>+1 more |
+| getTrend | GET | `/api/stats/trend` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
+| getHourOfDay | GET | `/api/stats/hour-of-day` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
+| getHeatmap | GET | `/api/stats/heatmap` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
+| getDistribution | GET | `/api/stats/distribution` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
 | getDashboard | GET | `/api/dashboard` | `internal/center/server/ownerdashboard_integration_test.go`<br>`internal/center/server/ownerdashboard_test.go`<br>`tests/perf/dashboard.mjs` |
 | getSeries | GET | `/api/series` | `internal/center/server/ownerdashboard_integration_test.go`<br>`internal/center/server/ownerdashboard_test.go` |
 | getSchedules | GET | `/api/schedules` | `internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/perf/dashboard.mjs`<br>`tests/ui-fixtures/server.mjs` |
