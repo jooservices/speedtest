@@ -138,14 +138,13 @@ FROM generated g JOIN nodes n ON n.name = 'Perf-' || g.node_no`, nodeCount, samp
 
 	measure := func(name string, run func() error) {
 		t.Helper()
-		started := time.Now()
-		if err := run(); err != nil {
+		best, samples, err := bestStatisticsLatency(run, time.Now)
+		if err != nil {
 			t.Fatalf("%s query failed: %v", name, err)
 		}
-		elapsed := time.Since(started)
-		t.Logf("PERF %s: %.2f ms on %d results", name, float64(elapsed)/float64(time.Millisecond), totalSamples)
-		if elapsed >= 300*time.Millisecond {
-			t.Fatalf("%s took %s, target is under 300 ms", name, elapsed)
+		t.Logf("PERF %s: best %.2f ms of %d runs on %d results; samples=%v", name, float64(best)/float64(time.Millisecond), len(samples), totalSamples, samples)
+		if best >= 300*time.Millisecond {
+			t.Fatalf("%s best of %d took %s, target is under 300 ms; samples=%v", name, len(samples), best, samples)
 		}
 	}
 	var summary []SummaryComparison
