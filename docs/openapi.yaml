@@ -5104,6 +5104,25 @@ components:
           description: HH:mm or empty; equal nonempty endpoints are invalid. Crossing midnight is allowed.
           pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
           default: ""
+        notifyQuietStart:
+          type: string
+          description: HH:mm or empty. Alert notifications are held between notifyQuietStart and notifyQuietEnd
+            (test messages never are); both must be empty or both set.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        notifyQuietEnd:
+          type: string
+          description: HH:mm or empty; crossing midnight is allowed.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        notifyQuietTimezone:
+          type: string
+          description: IANA zone in which the notification quiet hours are read; empty means UTC.
+          default: UTC
+        notifyQuietCritical:
+          type: boolean
+          description: When true, critical alerts are delivered even during the notification quiet hours.
+          default: true
         centerUrl:
           type: string
           description: Configured public HTTPS origin (empty when not configured); HTTP permitted only
@@ -5137,6 +5156,10 @@ components:
         - stagger
         - quietStart
         - quietEnd
+        - notifyQuietStart
+        - notifyQuietEnd
+        - notifyQuietTimezone
+        - notifyQuietCritical
         - centerUrl
         - geoKeyConfigured
         - enrollKeyConfigured
@@ -5237,6 +5260,25 @@ components:
           description: HH:mm or empty; equal nonempty endpoints are invalid. Crossing midnight is allowed.
           pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
           default: ""
+        notifyQuietStart:
+          type: string
+          description: HH:mm or empty. Alert notifications are held between notifyQuietStart and notifyQuietEnd
+            (test messages never are); both must be empty or both set.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        notifyQuietEnd:
+          type: string
+          description: HH:mm or empty; crossing midnight is allowed.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        notifyQuietTimezone:
+          type: string
+          description: IANA zone in which the notification quiet hours are read; empty means UTC.
+          default: UTC
+        notifyQuietCritical:
+          type: boolean
+          description: When true, critical alerts are delivered even during the notification quiet hours.
+          default: true
         centerUrl:
           type: string
           description: Configured public HTTPS origin (empty when not configured); HTTP permitted only
@@ -5268,6 +5310,10 @@ components:
         - stagger
         - quietStart
         - quietEnd
+        - notifyQuietStart
+        - notifyQuietEnd
+        - notifyQuietTimezone
+        - notifyQuietCritical
         - centerUrl
         - notify
       description: PUT replaces all nonsecret preferences. Optional geoKey and channel secrets replace

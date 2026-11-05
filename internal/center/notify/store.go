@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"time"
@@ -9,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jooservices/speedtest/internal/center/schedules"
 	"github.com/jooservices/speedtest/internal/center/settings"
 )
 
@@ -189,7 +191,17 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 	last := d.LastAttempt
 	next := now
 	attempts := d.Attempts
-	if !now.Before(d.CreatedAt.Add(24 * time.Hour)) {
+	held := false
+	if now.Before(d.CreatedAt.Add(24*time.Hour)) && d.EventID != nil {
+		if held, err = heldByQuietHours(ctx, tx, *d.EventID, now); err != nil {
+			return false, err
+		}
+	}
+	if held {
+		// Quiet hours: the alert stays recorded and the delivery waits; look again in a minute.
+		status = "pending"
+		next = now.Add(time.Minute)
+	} else if !now.Before(d.CreatedAt.Add(24 * time.Hour)) {
 		text := "delivery expired after 24 hours"
 		safeError = &text
 	} else {
@@ -223,6 +235,55 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 		return false, err
 	}
 	return true, tx.Commit(ctx)
+}
+
+// heldByQuietHours reports whether an alert notification must wait because the owner's notification quiet hours
+// are in force now. Critical alerts are exempt when the owner left that option on. Test messages never wait.
+func heldByQuietHours(ctx context.Context, q interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, eventID string, now time.Time) (bool, error) {
+	rows, err := q.Query(ctx, `SELECT key, value FROM settings WHERE key IN ('notifyQuietStart','notifyQuietEnd','notifyQuietTimezone','notifyQuietCritical') AND value IS NOT NULL`)
+	if err != nil {
+		return false, err
+	}
+	var window schedules.Quiet
+	critical := true
+	for rows.Next() {
+		var key string
+		var raw []byte
+		if err := rows.Scan(&key, &raw); err != nil {
+			rows.Close()
+			return false, err
+		}
+		switch key {
+		case "notifyQuietStart":
+			_ = json.Unmarshal(raw, &window.Start)
+		case "notifyQuietEnd":
+			_ = json.Unmarshal(raw, &window.End)
+		case "notifyQuietTimezone":
+			_ = json.Unmarshal(raw, &window.Timezone)
+		case "notifyQuietCritical":
+			_ = json.Unmarshal(raw, &critical)
+		}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return false, err
+	}
+	if !window.Contains(now) {
+		return false, nil
+	}
+	if critical {
+		var severity string
+		if err := q.QueryRow(ctx, `SELECT severity FROM alert_events WHERE id=$1`, eventID).Scan(&severity); err != nil {
+			return false, err
+		}
+		if severity == "crit" {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // Loop drains bounded batches and stops promptly with the center context.

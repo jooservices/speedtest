@@ -92,6 +92,28 @@ export function settingsSuite(T, ctx) {
       T.expectRefusal(422);
     },
 
+    // Quiet hours for messages: both ends or neither; the critical exemption; stored with the owner's time zone.
+    async notificationQuietHours() {
+      await T.open('#/settings', 'Settings');
+      await T.tab('Notifications');
+      await T.fillAndLeave('Hold messages from', '22:00');
+      await T.settled();
+      assert.notEqual(T.db("select value #>> '{}' from settings where key='notifyQuietStart'"), '22:00', 'a half-typed window is not saved');
+      await T.fillAndLeave('Hold messages until', '07:00');
+      await T.toast('Saved').waitFor();
+      await T.eventually(() => T.db("select value #>> '{}' from settings where key='notifyQuietStart'") === '22:00', 'the quiet window is stored');
+      assert.equal(T.db("select value #>> '{}' from settings where key='notifyQuietEnd'"), '07:00');
+      assert.ok(T.db("select value #>> '{}' from settings where key='notifyQuietTimezone'").length > 2, 'the owner time zone is stored with it');
+      await page.getByLabel('Critical alerts are still delivered').uncheck();
+      await T.eventually(() => T.db("select value #>> '{}' from settings where key='notifyQuietCritical'") === 'false', 'the critical exemption is stored');
+      await page.reload();
+      await T.tab('Notifications');
+      assert.equal(await page.getByLabel('Hold messages from').inputValue(), '22:00', 'the window survives a reload');
+      // Put the defaults back: no quiet window, critical alerts delivered.
+      await T.fillAndLeave('Hold messages from', ''); await T.fillAndLeave('Hold messages until', ''); await T.settled();
+      await page.getByLabel('Critical alerts are still delivered').check(); await T.settled();
+    },
+
     // Data: the retention period and the full exports.
     async dataRetentionAndExport() {
       await T.open('#/settings', 'Settings');

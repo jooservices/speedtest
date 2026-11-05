@@ -45,6 +45,17 @@
         { key: 'telegram', name: 'Telegram', to: 'Chat ID', toHint: '-1001234567890', secret: 'Bot token', secretHint: 'From @BotFather', needsTo: true },
         { key: 'slack', name: 'Slack', secret: 'Webhook URL', secretHint: 'https://hooks.slack.com/services/…' },
         { key: 'webhook', name: 'Webhook', secret: 'URL', secretHint: 'https://example.com/hook' }];
+      // Quiet hours for messages: both ends or neither, so a half-typed window is kept here and saved when complete.
+      var qh = { start: s.notifyQuietStart || '', end: s.notifyQuietEnd || '' };
+      function saveQuiet() {
+        if (!!qh.start !== !!qh.end) return;
+        set({ notifyQuietStart: qh.start, notifyQuietEnd: qh.end, notifyQuietTimezone: ST.timezone() });
+      }
+      body.appendChild(row('Quiet hours', 'Alert messages wait until the quiet hours end. Test messages are always sent.', h('div', { class: 'stack', style: 'gap:8px' },
+        h('div', { class: 'row' },
+          U.input(qh.start, function (v) { qh.start = v; }, { type: 'time', 'aria-label': 'Hold messages from', onChange: saveQuiet }), h('span', { class: 'muted' }, 'to'),
+          U.input(qh.end, function (v) { qh.end = v; }, { type: 'time', 'aria-label': 'Hold messages until', onChange: saveQuiet })),
+        h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: s.notifyQuietCritical !== false, 'aria-label': 'Critical alerts are still delivered', onChange: function (e) { set({ notifyQuietCritical: e.target.checked }); } }), 'Critical alerts are still delivered'))));
       channels.forEach(function (c) {
         var cfg = s.notify[c.key] || { on: false, to: '', configured: false };
         var controls = [h('div', { style: 'text-align:right' }, U.toggle(cfg.on, function (v) {
