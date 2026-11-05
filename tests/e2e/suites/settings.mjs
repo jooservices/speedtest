@@ -61,14 +61,16 @@ export function settingsSuite(T, ctx) {
     async notificationSecrets() {
       await T.open('#/settings', 'Settings');
       await T.tab('Notifications');
-      await T.fill('URL for Webhook', 'https://hooks.example.com/e2e-secret-path');
-      await T.fill('Address for Email', 'ops@example.com');
-      await page.getByLabel('Enable Email').check({ force: true });
+      await T.fillAndLeave('URL for Webhook', 'https://hooks.example.com/e2e-secret-path');
       await T.toast('Saved').waitFor();
       await T.settled();
+      await T.fillAndLeave('Address for Email', 'ops@example.com');
+      await T.settled();
+      await page.getByLabel('Enable Email').check({ force: true });
+      await T.settled();
+      await T.eventually(async () => (await T.api('/api/settings')).text.includes('"configured":true'), 'the read model says a secret is configured');
       const read = (await T.api('/api/settings')).text;
       assert.ok(!read.includes('e2e-secret-path'), 'secrets are never returned');
-      assert.ok(read.includes('"configured":true'), 'the read model says a secret is configured');
       assert.ok(Number(T.db('select count(*) from settings where secret_ciphertext is not null')) >= 1, 'the secret is stored encrypted');
     },
 
@@ -78,6 +80,7 @@ export function settingsSuite(T, ctx) {
       await T.tab('Notifications');
       await T.fillAndLeave('URL for Webhook', receiver.url);
       await T.toast('Saved').waitFor();
+      await T.settled();
       await page.getByLabel('Enable Webhook').check({ force: true });
       await T.settled();
       await T.press('Send a test', setting('Webhook'));
