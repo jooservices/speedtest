@@ -404,3 +404,17 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
 .topbar select { min-width: 8.5em; }
 .leaflet-control-attribution { background: color-mix(in srgb, var(--surface) 88%, transparent) !important; color: var(--text-2) !important; }
 .leaflet-control-attribution a { color: var(--accent-strong) !important; }
+
+/* Tables marked "cards" (the node list) turn each row into a card on phones instead of scrolling sideways. */
+@media (max-width: 640px) {
+  table.data.cards, table.data.cards tbody, table.data.cards tr, table.data.cards td { display: block; width: 100%; }
+  table.data.cards thead { position: absolute; left: -9999px; }
+  table.data.cards tbody tr { padding: 12px 14px; border-bottom: 1px solid var(--line); }
+  table.data.cards tbody tr:last-child { border-bottom: 0; }
+  table.data.cards td { display: flex; justify-content: space-between; gap: 12px; padding: 4px 0; border: 0; white-space: normal; text-align: right; }
+  table.data.cards td::before { content: attr(data-label); color: var(--muted); font-size: 12.5px; font-weight: 600; text-align: left; flex: none; }
+  table.data.cards td:first-child { display: block; text-align: left; font-size: 15px; padding-bottom: 8px; }
+  table.data.cards td:first-child::before { content: none; }
+  table.data.cards td:last-child { justify-content: flex-end; }
+  table.data.cards td:last-child::before { content: none; }
+}

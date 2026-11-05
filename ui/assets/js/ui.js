@@ -167,7 +167,7 @@
 
   /* ---------- Data table ---------- */
   U.table = function (o) {
-    var wrap = h('div', { class: 'table-wrap' }), t = h('table', { class: 'data' });
+    var wrap = h('div', { class: 'table-wrap' }), t = h('table', { class: 'data' + (o.cards ? ' cards' : '') });
     var thead = h('thead'), tr = h('tr');
     o.columns.forEach(function (c) {
       var th = h('th', { class: (c.num ? 'num ' : '') + (c.sort ? 'sortable' : ''), scope: 'col', 'aria-sort': o.sortKey === c.key ? (o.sortDir === 'asc' ? 'ascending' : 'descending') : null,
@@ -180,7 +180,7 @@
     o.rows.forEach(function (r) {
       var row = h('tr', { class: o.onRow ? 'clickable' : '', tabindex: o.onRow ? 0 : null, onClick: o.onRow ? function () { o.onRow(r); } : null,
         onKeydown: o.onRow ? function (e) { if (e.key === 'Enter') o.onRow(r); } : null });
-      o.columns.forEach(function (c) { row.appendChild(h('td', { class: c.num ? 'num' : '' }, c.render ? c.render(r) : r[c.key])); });
+      o.columns.forEach(function (c) { row.appendChild(h('td', { class: c.num ? 'num' : '', 'data-label': o.cards && c.label ? c.label : null }, c.render ? c.render(r) : r[c.key])); });
       tb.appendChild(row);
     });
     t.appendChild(tb); wrap.appendChild(t);

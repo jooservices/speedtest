@@ -50,6 +50,26 @@ export function nodesSuite(T, ctx) {
     },
 
     // Wizard validation: nothing is created from an incomplete or duplicate form.
+    // On a phone the list is cards (no sideways scrolling) and a card still opens the node.
+    async cardsOnPhone() {
+      const original = page.viewportSize();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await T.open('#/nodes', 'Nodes');
+      await T.settled();
+      const overflow = await page.evaluate(() => { const w = document.querySelector('.table-wrap'); return w.scrollWidth - w.clientWidth; });
+      assert.ok(overflow <= 1, `the node list scrolls sideways by ${overflow}px`);
+      assert.equal(await page.locator('table.data thead').evaluate(e => getComputedStyle(e).position), 'absolute', 'the header row is hidden on phones');
+      const card = T.row('VM1');
+      for (const label of ['Status', 'Public IP']) {
+        const cell = card.locator(`td[data-label="${label}"]`);
+        await cell.waitFor();
+        assert.equal(await cell.evaluate(e => getComputedStyle(e, '::before').content), `"${label}"`, `each value is captioned with its column (${label})`);
+      }
+      await card.click();
+      await page.getByRole('heading', { name: /VM1/, level: 1 }).waitFor();
+      await page.setViewportSize(original);
+    },
+
     async wizardValidation() {
       await T.open('#/nodes', 'Nodes');
       await T.press('Add a node');
@@ -105,7 +125,7 @@ export function nodesSuite(T, ctx) {
       await T.toast('paused').waitFor();
       await T.settled();
       assert.equal(T.db("select enabled from nodes where name='VM4'"), 'f');
-      assert.equal(await page.getByRole('button', { name: 'Run test' }).isDisabled(), true, 'a paused node cannot be tested');
+      await T.eventually(async () => await page.getByRole('button', { name: 'Run test' }).isDisabled(), 'a paused node cannot be tested');
       await T.press('Resume');
       await T.toast('resumed').waitFor();
       await T.settled();

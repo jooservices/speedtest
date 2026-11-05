@@ -37,7 +37,7 @@ export function schedulesSuite(T) {
       await T.row('VM2').locator('.switch').click();
       await T.toast('paused').waitFor();
       await T.settled();
-      assert.equal(await T.row('VM2').getByRole('button', { name: 'Run now' }).isDisabled(), true, 'a paused node cannot run now');
+      await T.eventually(async () => await T.row('VM2').getByRole('button', { name: 'Run now' }).isDisabled(), 'a paused node cannot run now');
       await T.row('VM2').locator('.switch').click();
       await T.toast('resumed').waitFor();
       await T.settled();
