@@ -247,6 +247,10 @@ export function steps({ page, stack, startAgent, query, problems }) {
       await S.open('#/stats', 'Statistics');
       await page.getByRole('heading', { name: 'Summary by node' }).waitFor();
       await page.getByRole('columnheader', { name: 'Average' }).waitFor();
+      // The figures on the page are the center's, not a browser calculation: VM1's average matches /api/stats/summary.
+      const summary = await (await page.request.get(stack.origin + '/api/stats/summary?range=7d')).json();
+      const vm1 = summary.data.find(x => x.nodeId === '10000000-0000-4000-8000-000000000001').current.down.mean;
+      assert.ok((await page.getByRole('row').filter({ hasText: 'VM1' }).first().innerText()).includes(vm1.toFixed(1)), 'the summary shows the center average');
       const before = await page.locator('table').first().innerText();
       await page.getByRole('tab', { name: 'Upload' }).first().click();
       await page.getByRole('heading', { name: 'Summary by node' }).waitFor();
