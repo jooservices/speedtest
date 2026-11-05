@@ -81,8 +81,30 @@
         U.btn('CSV', { icon: 'download', onClick: function () { download('/api/export/results.csv', 'speedtest-all.csv'); } }),
         U.btn('JSON', { icon: 'download', onClick: function () { download('/api/export/results.json', 'speedtest-all.json'); } }))));
     }
+    function passwordDialog() {
+      var cur = '', next = '', again = '', box = h('div'), layer;
+      function problem(msg) { U.clear(box); if (msg) box.appendChild(U.callout(msg, 'crit', 'alert')); }
+      layer = U.modal({ title: 'Change password',
+        body: h('div', { class: 'stack' },
+          U.field('Current password', U.input('', function (v) { cur = v; }, { type: 'password', autocomplete: 'current-password' })),
+          U.field('New password', U.input('', function (v) { next = v; }, { type: 'password', autocomplete: 'new-password' }), 'Use a long, unique passphrase (at least 12 characters).'),
+          U.field('New password again', U.input('', function (v) { again = v; }, { type: 'password', autocomplete: 'new-password' })), box),
+        actions: function (l) {
+          return [U.btn('Cancel', { onClick: l.close }), U.btn('Change password', { variant: 'primary', onClick: function (e) {
+            if (!cur) return problem('Enter your current password.');
+            if (next.length < 12) return problem('The new password needs at least 12 characters.');
+            if (next !== again) return problem('The two new passwords are not the same.');
+            var button = e.currentTarget; button.disabled = true; problem(null);
+            ST.changePassword(cur, next).then(function () { l.close(); U.toast('Password changed'); }, function (error) {
+              button.disabled = false;
+              problem(error.status === 401 || error.status === 403 ? 'The current password is not right.' : error.status === 422 ? 'That password is not allowed. Choose a longer or less common one.' : error.message);
+            });
+          } })];
+        } });
+    }
     function realAccess() {
       var keyBox = h('div');
+      body.appendChild(row('Password', 'Change the password you sign in with. Other sessions are signed out.', U.btn('Change password…', { size: 'sm', onClick: passwordDialog })));
       body.appendChild(row('Dashboard address', 'Nodes report to this address.', U.input(s.centerUrl, function (v) { set({ centerUrl: v }, true); }, { 'aria-label': 'Dashboard address', placeholder: location.origin })));
       body.appendChild(h('div', { class: 'setting', style: 'align-items:flex-start' }, h('div', null, h('div', { style: 'font-weight:600' }, 'Enrolment key'),
         h('div', { class: 'hint' }, 'A new key is shown once, here. Treat it like a password. Machines that already joined are not affected.')),

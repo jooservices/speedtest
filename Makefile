@@ -108,3 +108,12 @@ integration-e2e:
 	$(GO) test -race -p 1 -tags integration ./...
 	node tests/e2e/main.mjs
 	python3 scripts/mutation-check.py
+
+.PHONY: ui-coverage
+## ui-coverage runs every browser and unit run that records UI coverage, then fails when a ui/assets/js file is under 85% of lines.
+ui-coverage:
+	node tests/e2e/main.mjs
+	node tests/ui/smoke.mjs
+	node tests/ui/wizard.mjs
+	node tests/ui/coverage.mjs
+	node scripts/ui-coverage.mjs --min 85

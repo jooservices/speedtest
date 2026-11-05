@@ -9,9 +9,9 @@ Operations: 65. Without a test: 0.
 | getSession | GET | `/api/auth/me` | `cmd/center/notifications_integration_test.go`<br>`internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/installer_test.go`<br>+5 more |
 | login | POST | `/api/auth/login` | `cmd/center/notifications_integration_test.go`<br>`internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/installer_test.go`<br>+2 more |
 | logout | POST | `/api/auth/logout` | `internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go` |
-| changePassword | POST | `/api/auth/password` | `internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go` |
+| changePassword | POST | `/api/auth/password` | `internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>`tests/ui/api.test.mjs` |
 | listNodes | GET | `/api/nodes` | `internal/center/server/auth_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>+8 more |
-| createNode | POST | `/api/nodes` | `internal/center/server/auth_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>+7 more |
+| createNode | POST | `/api/nodes` | `internal/center/server/auth_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>+6 more |
 | createEnrollmentToken | POST | `/api/agent/tokens` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go` |
 | enroll | POST | `/api/agent/enroll` | `cmd/center/main_integration_test.go`<br>`internal/agent/enroll/enroll_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/server/installer_integration_test.go`<br>+3 more |
 | getNode | GET | `/api/nodes/{id}` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>+3 more |
@@ -33,7 +33,7 @@ Operations: 65. Without a test: 0.
 | exportFilteredCSV | GET | `/api/results/export.csv` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | exportAllCSV | GET | `/api/export/results.csv` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | exportAllJSON | GET | `/api/export/results.json` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
-| getSummary | GET | `/api/stats/summary` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/e2e/steps.mjs`<br>`tests/perf/dashboard.mjs`<br>+1 more |
+| getSummary | GET | `/api/stats/summary` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/e2e/suites/statistics.mjs`<br>`tests/perf/dashboard.mjs`<br>+1 more |
 | getTrend | GET | `/api/stats/trend` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
 | getHourOfDay | GET | `/api/stats/hour-of-day` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
 | getHeatmap | GET | `/api/stats/heatmap` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
@@ -57,12 +57,12 @@ Operations: 65. Without a test: 0.
 | testNotification | POST | `/api/notifications/test/{channel}` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/ownernotifications_test.go` |
 | listDeliveries | GET | `/api/notifications/deliveries` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/ownernotifications_test.go` |
 | getDelivery | GET | `/api/notifications/deliveries/{id}` | `internal/center/server/ownernotifications_test.go` |
-| getSettings | GET | `/api/settings` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>`tests/e2e/steps.mjs`<br>+5 more |
+| getSettings | GET | `/api/settings` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>`tests/e2e/suites/settings.mjs`<br>+5 more |
 | replaceSettings | PUT | `/api/settings` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>`tests/ui/api.test.mjs`<br>+2 more |
 | rotateEnrollmentKey | POST | `/api/settings/enrolment-key` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>+1 more |
 | listIPChanges | GET | `/api/ip/history` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go`<br>`tests/ui/contract.test.mjs`<br>`tests/ui/store.test.mjs`<br>+1 more |
 | listIPAddresses | GET | `/api/ip/addresses` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go`<br>`tests/ui/contract.test.mjs`<br>`tests/ui/store.test.mjs`<br>+1 more |
-| lookupIP | GET | `/api/ip/lookup` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go`<br>`tests/e2e/steps.mjs` |
+| lookupIP | GET | `/api/ip/lookup` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go`<br>`tests/e2e/suites/network.mjs` |
 | getMap | GET | `/api/ip/map` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go` |
 | getJob | GET | `/api/jobs/{id}` | `internal/center/server/owneralerts_test.go`<br>`internal/center/server/ownerjobs_test.go` |
 | probeSSH | POST | `/api/installer/probes` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
