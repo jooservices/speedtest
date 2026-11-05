@@ -302,3 +302,23 @@ test('quick successive writes to one resource run one after the other, each with
   assert.equal(steps[0], 'GET');
   for (let i = 0; i < steps.length; i++) if (steps[i] === 'PUT') assert.equal(steps[i - 1], 'GET', 'a write directly follows its own ETag read: ' + steps.join(','));
 });
+
+test('a write refused with 412 is retried once with a fresh ETag, and a second refusal is reported', async t => {
+  const { ST, control } = await setup(t);
+  await ST.load();
+  control.requests.length = 0; control.failWrites = 1;
+  await ST.setSettings({ range: '30d' });
+  assert.equal(control.requests.filter(r => r.path === '/api/settings' && r.method === 'PUT').length, 2, 'one refused write and one retry');
+  control.failWrites = 2;
+  await assert.rejects(ST.setSettings({ range: '24h' }), error => error.status === 412);
+  control.failWrites = 1; control.failWriteStatus = 409;
+  await assert.rejects(ST.setSettings({ range: '7d' }), error => error.status === 409, 'only 412 is retried');
+});
+
+test('changing the password posts both passwords to the center', async t => {
+  const { ST, control } = await setup(t);
+  await ST.load();
+  await ST.changePassword('current one', 'a much longer new passphrase');
+  const call = control.requests.filter(r => r.path === '/api/auth/password' && r.method === 'POST').at(-1);
+  assert.deepEqual(call.body, { currentPassword: 'current one', newPassword: 'a much longer new passphrase' });
+});

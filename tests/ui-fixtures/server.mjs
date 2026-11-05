@@ -35,7 +35,7 @@ export const problem = status => ({ type: `/problems/test-${status}`, title: `HT
 
 export async function startServer() {
   const data = fixture();
-  const control = { status: 0, empty: false, delay: 0, requests: [], responses: [], session: true };
+  const control = { status: 0, empty: false, delay: 0, requests: [], responses: [], session: true, failWrites: 0, failWriteStatus: 412 };
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname.startsWith('/api/')) {
@@ -52,6 +52,9 @@ export async function startServer() {
         res.end(JSON.stringify(value));
       };
       if (control.status) { send(control.status, problem(control.status)); return; }
+      // failWrites: the next N writes are refused with failWriteStatus (a stale ETag by default).
+      if (req.method !== 'GET' && control.failWrites > 0) { control.failWrites--; send(control.failWriteStatus, problem(control.failWriteStatus)); return; }
+      if (req.method === 'POST' && url.pathname === '/api/auth/password') { control.responses.push({ path: url.pathname, method: 'post', status: 204, value: null }); res.writeHead(204, { 'Cache-Control': 'no-store' }); res.end(); return; }
       const installId = '9b0f2c3e-1111-4222-8333-444455556666';
       if (url.pathname === `/api/installations/${installId}/events`) {
         control.responses.push({ path: url.pathname, method: 'get', status: 200, value: null });
