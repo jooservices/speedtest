@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -436,4 +437,77 @@ func TestWorkersDoNotStarveSmallConnectionPool(t *testing.T) {
 		t.Fatalf("small pool sent %d, want 8", count.Load())
 	}
 	t.Log("PASS: eight concurrent dispatchers send through a two-connection pool without starvation")
+}
+
+// Quiet hours hold alert deliveries (not test messages), let critical alerts through when allowed, and release the
+// held ones once the window is over.
+func TestQuietHoursHoldAlertDeliveries(t *testing.T) {
+	p, ctx := database(t)
+	var sent atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { sent.Add(1); w.WriteHeader(204) }))
+	defer remote.Close()
+	prefs := preferences(t, p, remote.URL+"/hook")
+	execute(t, p, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES('10000000-0000-4000-8000-000000000001','Fiber',100,50)`)
+	for i, sev := range []string{"warn", "crit"} {
+		id := fmt.Sprintf("a0000000-0000-4000-8000-00000000000%d", i+1)
+		execute(t, p, `INSERT INTO alert_events(id,node_id,severity,ts,title) VALUES($1,'10000000-0000-4000-8000-000000000001',$2,now(),'Alert')`, id, sev)
+		execute(t, p, `INSERT INTO alert_notification_outbox(event_id,channels) VALUES($1,ARRAY['webhook'])`, id)
+	}
+	execute(t, p, `INSERT INTO settings(key,value) VALUES ('notifyQuietStart','"22:00"'),('notifyQuietEnd','"07:00"'),('notifyQuietTimezone','"Asia/Ho_Chi_Minh"'),('notifyQuietCritical','true')`)
+	night := time.Date(2026, 11, 3, 18, 0, 0, 0, time.UTC) // 01:00 in Ho Chi Minh City
+	now := night
+	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: func() time.Time { return now }}
+	for range 2 {
+		if _, err := worker.Consume(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	test, err := worker.Test(ctx, "webhook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 3 { // critical alert and the test message go out, the warning waits
+		if _, err := worker.Dispatch(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	status := func(event string) string {
+		var s string
+		if err := p.QueryRow(ctx, `SELECT status FROM notification_deliveries WHERE event_id=$1`, event).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if status("a0000000-0000-4000-8000-000000000002") != "sent" || sent.Load() != 2 {
+		t.Fatalf("critical alert and test message are delivered at night: sent=%d", sent.Load())
+	}
+	if d, _ := worker.Delivery(ctx, test.ID); d.Status != "sent" {
+		t.Fatalf("a test message is never held: %+v", d)
+	}
+	if status("a0000000-0000-4000-8000-000000000001") != "pending" {
+		t.Fatal("the warning waits for the quiet hours to end")
+	}
+	// Still night a minute later: still held, nothing sent. After the window it goes out.
+	now = night.Add(time.Minute)
+	worker.Dispatch(ctx)
+	if status("a0000000-0000-4000-8000-000000000001") != "pending" || sent.Load() != 2 {
+		t.Fatal("still held during the window")
+	}
+	now = time.Date(2026, 11, 3, 0, 30, 0, 0, time.UTC) // 07:30 local, window over (and within 24 h of creation)
+	execute(t, p, `UPDATE notification_deliveries SET created_at=$1, next_attempt_at=$1 WHERE status='pending'`, now.Add(-time.Hour))
+	if _, err := worker.Dispatch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if status("a0000000-0000-4000-8000-000000000001") != "sent" || sent.Load() != 3 {
+		t.Fatalf("released after the window: sent=%d", sent.Load())
+	}
+	// With the critical exemption off, a critical alert waits as well.
+	execute(t, p, `UPDATE settings SET value='false' WHERE key='notifyQuietCritical'`)
+	held, err := heldByQuietHours(ctx, p, "a0000000-0000-4000-8000-000000000002", night)
+	if err != nil || !held {
+		t.Fatalf("critical alerts wait when the exemption is off: held=%v err=%v", held, err)
+	}
+	if held, _ := heldByQuietHours(ctx, p, "a0000000-0000-4000-8000-000000000002", now); held {
+		t.Fatal("nothing is held outside the window")
+	}
 }

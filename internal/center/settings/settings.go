@@ -81,6 +81,10 @@ type Settings struct {
 	Stagger             bool                 `json:"stagger"`
 	QuietStart          string               `json:"quietStart"`
 	QuietEnd            string               `json:"quietEnd"`
+	NotifyQuietStart    string               `json:"notifyQuietStart"`
+	NotifyQuietEnd      string               `json:"notifyQuietEnd"`
+	NotifyQuietZone     string               `json:"notifyQuietTimezone"`
+	NotifyQuietCritical bool                 `json:"notifyQuietCritical"`
 	CenterURL           string               `json:"centerUrl"`
 	GeoKeyConfigured    bool                 `json:"geoKeyConfigured"`
 	EnrollKeyConfigured bool                 `json:"enrollKeyConfigured"`
@@ -106,26 +110,30 @@ type NotificationSettingsWrite struct {
 // SettingsInput is the write model for PUT /api/settings. It replaces all
 // non-secret preferences; optional secrets replace only when supplied.
 type SettingsInput struct {
-	Theme          string                    `json:"theme"`
-	Range          string                    `json:"range"`
-	Units          string                    `json:"units"`
-	Timezone       string                    `json:"timezone"`
-	Hour12         bool                      `json:"hour12"`
-	Decimals       int                       `json:"decimals"`
-	RetentionDays  int                       `json:"retentionDays"`
-	GeoProvider    string                    `json:"geoProvider"`
-	GeoFallback    string                    `json:"geoFallback"`
-	GeoAutoUpdate  bool                      `json:"geoAutoUpdate"`
-	Engine         string                    `json:"engine"`
-	DefaultThreads int                       `json:"defaultThreads"`
-	ServerMode     string                    `json:"serverMode"`
-	MaxConcurrent  int                       `json:"maxConcurrent"`
-	Stagger        bool                      `json:"stagger"`
-	QuietStart     string                    `json:"quietStart"`
-	QuietEnd       string                    `json:"quietEnd"`
-	CenterURL      string                    `json:"centerUrl"`
-	GeoKey         *string                   `json:"geoKey,omitempty"`
-	Notify         NotificationSettingsWrite `json:"notify"`
+	Theme               string                    `json:"theme"`
+	Range               string                    `json:"range"`
+	Units               string                    `json:"units"`
+	Timezone            string                    `json:"timezone"`
+	Hour12              bool                      `json:"hour12"`
+	Decimals            int                       `json:"decimals"`
+	RetentionDays       int                       `json:"retentionDays"`
+	GeoProvider         string                    `json:"geoProvider"`
+	GeoFallback         string                    `json:"geoFallback"`
+	GeoAutoUpdate       bool                      `json:"geoAutoUpdate"`
+	Engine              string                    `json:"engine"`
+	DefaultThreads      int                       `json:"defaultThreads"`
+	ServerMode          string                    `json:"serverMode"`
+	MaxConcurrent       int                       `json:"maxConcurrent"`
+	Stagger             bool                      `json:"stagger"`
+	QuietStart          string                    `json:"quietStart"`
+	QuietEnd            string                    `json:"quietEnd"`
+	NotifyQuietStart    string                    `json:"notifyQuietStart"`
+	NotifyQuietEnd      string                    `json:"notifyQuietEnd"`
+	NotifyQuietZone     string                    `json:"notifyQuietTimezone"`
+	NotifyQuietCritical bool                      `json:"notifyQuietCritical"`
+	CenterURL           string                    `json:"centerUrl"`
+	GeoKey              *string                   `json:"geoKey,omitempty"`
+	Notify              NotificationSettingsWrite `json:"notify"`
 }
 
 // IssuedKey is a newly generated enrolment key, shown once at issuance.
@@ -138,24 +146,26 @@ type IssuedKey struct {
 // configured public origin from deployment configuration (empty until set).
 func Defaults(centerURL string) Settings {
 	return Settings{
-		Theme:          "dark",
-		Range:          "7d",
-		Units:          "auto",
-		Timezone:       "browser",
-		Hour12:         false,
-		Decimals:       1,
-		RetentionDays:  365,
-		GeoProvider:    "geolite2",
-		GeoFallback:    "ip-api",
-		GeoAutoUpdate:  true,
-		Engine:         "ookla",
-		DefaultThreads: 4,
-		ServerMode:     "auto",
-		MaxConcurrent:  1,
-		Stagger:        true,
-		QuietStart:     "",
-		QuietEnd:       "",
-		CenterURL:      centerURL,
+		Theme:               "dark",
+		Range:               "7d",
+		Units:               "auto",
+		Timezone:            "browser",
+		Hour12:              false,
+		Decimals:            1,
+		RetentionDays:       365,
+		GeoProvider:         "geolite2",
+		GeoFallback:         "ip-api",
+		GeoAutoUpdate:       true,
+		Engine:              "ookla",
+		DefaultThreads:      4,
+		ServerMode:          "auto",
+		MaxConcurrent:       1,
+		Stagger:             true,
+		QuietStart:          "",
+		QuietEnd:            "",
+		NotifyQuietZone:     "UTC",
+		NotifyQuietCritical: true,
+		CenterURL:           centerURL,
 		Notify: NotificationSettings{
 			Email: ChannelConfig{On: true, To: "ops@example.com"},
 		},
@@ -231,6 +241,14 @@ func Validate(input SettingsInput) error {
 	}
 	if field, message, ok := validQuietHours(input.QuietStart, input.QuietEnd); !ok {
 		add(field, message)
+	}
+	if field, message, ok := validQuietHours(input.NotifyQuietStart, input.NotifyQuietEnd); !ok {
+		add("notify"+strings.ToUpper(field[:1])+field[1:], message)
+	}
+	if zone := input.NotifyQuietZone; zone != "" {
+		if _, err := time.LoadLocation(zone); err != nil {
+			add("notifyQuietTimezone", "must be an IANA time zone")
+		}
 	}
 	if err := validCenterURL(input.CenterURL); err != nil {
 		add("centerUrl", err.Error())

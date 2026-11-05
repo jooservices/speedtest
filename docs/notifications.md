@@ -103,3 +103,11 @@ local fake server, while `TestSharedMailpitSMTP` uses only the shared developmen
 Mailpit and explicitly skips if it is unreachable. No real SMTP account or real
 Telegram/Slack/webhook destination is used. This ticket changes no UI files;
 JOOST-48 owns the shared browser harness.
+
+## Quiet hours for messages
+
+Settings > Notifications > Quiet hours holds alert messages between two times of day (the window may cross midnight and is read in
+the owner's time zone, stored with it as `notifyQuietTimezone`). Alerts are still recorded and appear in the dashboard immediately; only
+their delivery waits, and the worker looks again every minute until the window ends. Test messages ("Send a test") are never held.
+"Critical alerts are still delivered" (default on) lets `crit` alerts through; turn it off to hold those too. A message that has waited
+24 hours expires like any other delivery, so avoid windows longer than that. Both ends must be set or both empty.

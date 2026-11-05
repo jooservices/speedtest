@@ -173,6 +173,10 @@ func (s *PostgresStore) Replace(ctx context.Context, ifMatch string, input Setti
 		Stagger:             input.Stagger,
 		QuietStart:          input.QuietStart,
 		QuietEnd:            input.QuietEnd,
+		NotifyQuietStart:    input.NotifyQuietStart,
+		NotifyQuietEnd:      input.NotifyQuietEnd,
+		NotifyQuietZone:     input.NotifyQuietZone,
+		NotifyQuietCritical: input.NotifyQuietCritical,
 		CenterURL:           input.CenterURL,
 		GeoKeyConfigured:    geoConfigured,
 		EnrollKeyConfigured: enrolConfigured,
@@ -320,7 +324,7 @@ func hashToken(token string) string {
 // sharedKeys are the settings other components read as their own rows: the retention job, the agent configuration
 // and the schedule rules. They are the single source of truth for those values; the "display" row keeps a copy only
 // so that older rows still decode.
-var sharedKeys = []string{"retentionDays", "engine", "quietStart", "quietEnd", "stagger", "maxConcurrent"}
+var sharedKeys = []string{"retentionDays", "engine", "quietStart", "quietEnd", "stagger", "maxConcurrent", "notifyQuietStart", "notifyQuietEnd", "notifyQuietTimezone", "notifyQuietCritical"}
 
 // overlayShared replaces the stored copy of the shared values with the rows the other components use.
 func overlayShared(ctx context.Context, d interface {
@@ -346,6 +350,14 @@ func overlayShared(ctx context.Context, d interface {
 			_ = json.Unmarshal(raw, &view.QuietStart)
 		case "quietEnd":
 			_ = json.Unmarshal(raw, &view.QuietEnd)
+		case "notifyQuietStart":
+			_ = json.Unmarshal(raw, &view.NotifyQuietStart)
+		case "notifyQuietEnd":
+			_ = json.Unmarshal(raw, &view.NotifyQuietEnd)
+		case "notifyQuietTimezone":
+			_ = json.Unmarshal(raw, &view.NotifyQuietZone)
+		case "notifyQuietCritical":
+			_ = json.Unmarshal(raw, &view.NotifyQuietCritical)
 		case "stagger":
 			_ = json.Unmarshal(raw, &view.Stagger)
 		case "maxConcurrent":
@@ -363,7 +375,8 @@ func writeShared(ctx context.Context, tx pgx.Tx, view Settings) error {
 		return err
 	}
 	values := map[string]any{"retentionDays": view.RetentionDays, "engine": view.Engine, "quietStart": view.QuietStart,
-		"quietEnd": view.QuietEnd, "stagger": view.Stagger, "maxConcurrent": view.MaxConcurrent}
+		"quietEnd": view.QuietEnd, "stagger": view.Stagger, "maxConcurrent": view.MaxConcurrent,
+		"notifyQuietStart": view.NotifyQuietStart, "notifyQuietEnd": view.NotifyQuietEnd, "notifyQuietTimezone": view.NotifyQuietZone, "notifyQuietCritical": view.NotifyQuietCritical}
 	for _, key := range sharedKeys {
 		raw, err := json.Marshal(values[key])
 		if err != nil {

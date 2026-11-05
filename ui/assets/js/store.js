@@ -20,7 +20,7 @@
     return {
       theme: 'dark', range: '7d', units: 'auto', timezone: 'browser', hour12: false, decimals: 1,
       retentionDays: 365, geoProvider: 'geolite2', geoFallback: 'ip-api', geoKey: '', geoAutoUpdate: true,
-      engine: 'ookla', defaultThreads: 4, serverMode: 'auto', maxConcurrent: 1, stagger: true, quietStart: '', quietEnd: '',
+      engine: 'ookla', defaultThreads: 4, serverMode: 'auto', maxConcurrent: 1, stagger: true, quietStart: '', quietEnd: '', notifyQuietStart: '', notifyQuietEnd: '', notifyQuietTimezone: 'UTC', notifyQuietCritical: true,
       notify: { email: { on: true, to: 'ops@example.com' }, telegram: { on: false, to: '' }, slack: { on: false, to: '' }, webhook: { on: false, to: '' } },
       enrollToken: 'st_enroll_' + Math.random().toString(36).slice(2, 10) + Math.random().toString(36).slice(2, 10),
       centerUrl: 'https://speedtest.example.com'

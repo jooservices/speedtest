@@ -17,7 +17,7 @@ export function fixture() {
   const notify = Object.fromEntries(['email', 'telegram', 'slack', 'webhook'].map(key => [key, { on: false, to: '', configured: false }]));
   const settings = { theme: 'dark', range: '7d', units: 'auto', timezone: 'browser', hour12: false, decimals: 1,
     retentionDays: 365, geoProvider: 'geolite2', geoFallback: 'ip-api', geoAutoUpdate: true, engine: 'ookla',
-    defaultThreads: 4, serverMode: 'auto', maxConcurrent: 1, stagger: true, quietStart: '', quietEnd: '',
+    defaultThreads: 4, serverMode: 'auto', maxConcurrent: 1, stagger: true, quietStart: '', quietEnd: '', notifyQuietStart: '', notifyQuietEnd: '', notifyQuietTimezone: 'UTC', notifyQuietCritical: true,
     centerUrl: 'http://localhost', geoKeyConfigured: false, enrollKeyConfigured: false, notify };
   const rule = { id: 'rule-fixture', name: 'Slow connection', metric: 'down_pct', op: '<', value: 60, forTests: 3,
     nodes: 'all', severity: 'warn', channels: ['email'], enabled: true };

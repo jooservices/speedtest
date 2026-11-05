@@ -212,21 +212,22 @@ func TestValidateNotificationChannels(t *testing.T) {
 func TestDefaultsMatchPreview(t *testing.T) {
 	got := Defaults("")
 	want := Settings{
-		Theme:          "dark",
-		Range:          "7d",
-		Units:          "auto",
-		Timezone:       "browser",
-		Hour12:         false,
-		Decimals:       1,
-		RetentionDays:  365,
-		GeoProvider:    "geolite2",
-		GeoFallback:    "ip-api",
-		GeoAutoUpdate:  true,
-		Engine:         "ookla",
-		DefaultThreads: 4,
-		ServerMode:     "auto",
-		MaxConcurrent:  1,
-		Stagger:        true,
+		Theme:           "dark",
+		Range:           "7d",
+		Units:           "auto",
+		Timezone:        "browser",
+		Hour12:          false,
+		Decimals:        1,
+		RetentionDays:   365,
+		GeoProvider:     "geolite2",
+		GeoFallback:     "ip-api",
+		GeoAutoUpdate:   true,
+		Engine:          "ookla",
+		DefaultThreads:  4,
+		ServerMode:      "auto",
+		MaxConcurrent:   1,
+		Stagger:         true,
+		NotifyQuietZone: "UTC", NotifyQuietCritical: true,
 		Notify: NotificationSettings{
 			Email: ChannelConfig{On: true, To: "ops@example.com"},
 		},
@@ -258,5 +259,40 @@ func TestReadModelMasksSecrets(t *testing.T) {
 		if strings.Contains(raw, forbidden) {
 			t.Errorf("read model %s must not contain %q", raw, forbidden)
 		}
+	}
+}
+
+func TestValidateNotificationQuietHours(t *testing.T) {
+	cases := []struct {
+		name             string
+		start, end, zone string
+		wantField        string
+	}{
+		{name: "none", wantField: ""},
+		{name: "night window", start: "22:00", end: "07:00", zone: "Asia/Ho_Chi_Minh", wantField: ""},
+		{name: "only start", start: "22:00", wantField: "notifyQuietEnd"},
+		{name: "bad start", start: "25:00", end: "07:00", wantField: "notifyQuietStart"},
+		{name: "equal ends", start: "07:00", end: "07:00", wantField: "notifyQuietEnd"},
+		{name: "unknown zone", start: "22:00", end: "07:00", zone: "Mars/Base", wantField: "notifyQuietTimezone"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			input := validInput()
+			input.NotifyQuietStart, input.NotifyQuietEnd, input.NotifyQuietZone = tc.start, tc.end, tc.zone
+			err := Validate(input)
+			if tc.wantField == "" {
+				if err != nil {
+					t.Fatalf("Validate() = %v", err)
+				}
+				return
+			}
+			var ve *ValidationError
+			if !errors.As(err, &ve) || len(ve.Fields[tc.wantField]) == 0 {
+				t.Fatalf("Validate() = %v, want an error on %s", err, tc.wantField)
+			}
+		})
+	}
+	if d := Defaults(""); !d.NotifyQuietCritical || d.NotifyQuietZone != "UTC" || d.NotifyQuietStart != "" {
+		t.Fatalf("defaults: %+v", d)
 	}
 }
