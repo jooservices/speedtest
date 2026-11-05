@@ -297,3 +297,20 @@ the multi-connection acceptance. Bridge-per-node networking (`NODE_NETWORK=bridg
 containers reach the host's center port; on the dev VM that path is closed, so the default is host networking.
 `scripts/test-netpath-namespace.sh` can run in a throwaway container with `--cap-add NET_ADMIN --cap-add SYS_ADMIN`
 and unconfined seccomp/AppArmor (it passed that way on 2026-11-04).
+
+## APP_KEY rotation maintenance
+
+Changing APP_KEY alone makes stored integration secrets and idempotency responses
+unreadable. Follow [the offline rotation procedure](operations.md#rotate-app_key):
+stop all center instances, back up and verify the database and OLD key separately,
+run `speedtest-center rotate-app-key` with OLD/NEW via protected stdin or environment,
+then update the private APP_KEY and restart only after verified commit. No schema
+migration or agent re-enrollment is required. Preserve OLD for pre-rotation dumps;
+a restore must use the matching key. On failure keep writers stopped until the
+transaction outcome is known; do not restart with a guessed key.
+
+Finish queued/running SSH installations before stopping the center for key rotation.
+The command refuses active jobs and atomically clears APP_KEY-HMAC installer
+idempotency records, reporting their count. Pre-rotation installation retries are
+new requests without replay; node/alert ciphertext replays remain valid. See the
+operations runbook for backup, failure recovery and retry semantics.

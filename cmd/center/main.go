@@ -52,6 +52,8 @@ func mainRun(args []string, stdout, stderr io.Writer) int {
 	logger := slog.New(slog.NewJSONHandler(stdout, nil))
 	var err error
 	switch {
+	case len(args) > 0 && args[0] == "rotate-app-key":
+		err = runRotateAppKey(ctx, args[1:], os.Stdin, stdout)
 	case len(args) > 0 && args[0] == "seed-admin":
 		err = runSeedAdmin(ctx, args[1:], stdout)
 	case len(args) > 0 && args[0] == "reset-owner-password":
