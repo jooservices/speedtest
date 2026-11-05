@@ -256,7 +256,7 @@ func TestMigrationBackfillAndRollbackIntegration(t *testing.T) {
 	for i := range 8 {
 		save(t, s, nodeA, result(i+1, i, fmt.Sprintf("203.0.113.%d", i%2+1)))
 	}
-	for range 3 {
+	for range 4 {
 		if err := db.Migrate(t.Context(), p, "down"); err != nil {
 			t.Fatal(err)
 		}

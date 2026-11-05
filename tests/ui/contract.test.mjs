@@ -15,7 +15,7 @@ test('all fake read responses validate against their exact OpenAPI operation sch
   const server = await startServer(); t.after(server.close);
   for (const path of ['/api/auth/me', '/api/settings', '/api/nodes', '/api/results', '/api/alerts/rules',
     '/api/alerts/events', '/api/ip/addresses', '/api/ip/history', '/api/stats/summary', '/api/stats/trend',
-    '/api/stats/hour-of-day', '/api/stats/heatmap', '/api/stats/distribution']) {
+    '/api/stats/hour-of-day', '/api/stats/heatmap', '/api/stats/distribution', '/api/audit']) {
     const response = await fetch(server.origin + path);
     const body = await response.json();
     const schema = contract.paths[path].get.responses['200'].content['application/json'].schema.$ref;

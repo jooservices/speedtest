@@ -16,6 +16,7 @@
   }
   // Demo mode keeps its instant local edits. With a real center nothing is saved until the owner finishes typing (the
   // change event) or picks a value, because every save is a request that the center validates.
+  var activityFilter = '';
   function set(patch, silent) {
     if (!real) return ST.setSettings(patch, silent);
     Object.assign(pending, patch);
@@ -33,7 +34,7 @@
     root.appendChild(U.pageHead('Settings', 'Preferences for this dashboard and for every node.'));
     root.appendChild(U.tabs([
       { value: 'general', label: 'General' }, { value: 'engine', label: 'Speed test' }, { value: 'geo', label: 'Location' },
-      { value: 'notify', label: 'Notifications' }, { value: 'data', label: 'Data' }, { value: 'access', label: 'Access' }], tab, function (v) { tab = v; ST.refresh(); }));
+      { value: 'notify', label: 'Notifications' }, { value: 'data', label: 'Data' }, { value: 'access', label: 'Access' }].concat(real ? [{ value: 'activity', label: 'Activity log' }] : []), tab, function (v) { tab = v; ST.refresh(); }));
     var body = h('div', { class: 'card card-pad', style: 'max-width:860px' });
     if (real) body.addEventListener('change', function () { flush(); });
     root.appendChild(body);
@@ -176,6 +177,35 @@
       } })));
     }
 
+    // The log of owner changes: who changed what and when, newest first, with a filter and "Show more".
+    function realActivity() {
+      var kinds = [{ value: '', label: 'Everything' }, { value: 'node.', label: 'Nodes' }, { value: 'schedule.', label: 'Schedules' }, { value: 'alert.', label: 'Alerts' },
+        { value: 'settings.', label: 'Settings' }, { value: 'notification.', label: 'Notifications' }, { value: 'auth.', label: 'Password' }];
+      var host = h('div'), more = h('div', { class: 'mt' }), rows = [], page = 0, total = 0, loading = false;
+      function draw() {
+        U.clear(host); U.clear(more);
+        host.appendChild(U.table({ columns: [
+          { key: 'ts', label: 'When', render: function (r) { return F.date(Date.parse(r.ts), 'full'); } },
+          { key: 'actor', label: 'Who', render: function (r) { return r.actor; } },
+          { key: 'summary', label: 'What', render: function (r) { return r.summary; } },
+          { key: 'target', label: 'Item', render: function (r) { return h('span', { class: 'mono' }, r.targetId ? r.targetId.slice(0, 8) : '—'); } },
+          { key: 'remote', label: 'From', render: function (r) { return h('span', { class: 'mono' }, r.remote || '—'); } }],
+          rows: rows, empty: U.empty('No changes recorded yet', 'Changes you make from now on appear here.') }));
+        if (rows.length < total) more.appendChild(U.btn('Show more', { size: 'sm', onClick: function () { load(); } }));
+        else if (rows.length) more.appendChild(h('p', { class: 'hint' }, rows.length + ' changes shown.'));
+      }
+      function load() {
+        if (loading) return; loading = true; page++;
+        ST.api.request('/api/audit?page=' + page + '&size=50' + (activityFilter ? '&action=' + encodeURIComponent(activityFilter) : '')).then(function (res) {
+          rows = rows.concat(res.data); total = res.meta.pagination.total; loading = false; draw();
+        }, function (error) { loading = false; page--; U.toast(error.message, 'error'); });
+      }
+      body.appendChild(row('Show', 'Every change made from this dashboard, newest first. Passwords, keys and message contents are never recorded.',
+        U.select(kinds, activityFilter, function (v) { activityFilter = v; ST.refresh(); })));
+      body.appendChild(host); body.appendChild(more);
+      draw(); load();
+    }
+    if (tab === 'activity' && real) realActivity();
     if (tab === 'access' && real) realAccess();
     else if (tab === 'access') {
       var tokenBox = h('div');

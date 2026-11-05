@@ -49,6 +49,8 @@ export function scenarios({ T, S }) {
     { id: 'SC-NODE-05', area: 'nodes', title: 'a node is added with the install command and reports', covers: 'wizard, real agent enrolment, first result, run test', run: S.nodes.addWithCommandAndRunTest },
     { id: 'SC-NODE-06', area: 'nodes', title: 'a node can be removed from the dashboard', covers: 'node removal', run: () => S.nodes.removeFromDashboard('E2E-1') },
 
+    { id: 'SC-SET-08', area: 'settings', title: 'the activity log lists owner changes without secrets', covers: 'audit log, filter, no secrets', run: S.settings.activityLog },
+
     { id: 'SC-AUTH-02', area: 'auth', title: 'the owner can change the password', covers: 'change password, old password refused, new one works', run: () => S.auth.changePassword('a brand new passphrase 2026') },
     { id: 'SC-AUTH-03', area: 'auth', title: 'signing out ends the session', covers: 'sign out, API refuses visitor', run: S.auth.signOutEndsSession },
   ];

@@ -34,8 +34,8 @@ connections around the clock, is told when something degrades, and can prove it 
 4. **Privacy:** the offline MaxMind database answers first; the ip-api.com fallback sends public IPs of the
    owner's own connections to a third party. Decision: documented here; the fallback can be left unconfigured in
    Settings. No change.
-5. **Not in 1.0.0 (consciously deferred):** several users or roles, an audit log, scheduled summary e-mails,
-   notification quiet hours, high availability. A single-owner monitoring tool does not need them to be useful;
+5. **Not in 1.0.0 (consciously deferred):** several users or roles, scheduled summary e-mails, high availability.
+   (An activity log of owner changes and quiet hours for notifications were added after the first review.) A single-owner monitoring tool does not need them to be useful;
    each can be added without a data migration of existing results.
 6. **Real-world acceptance still open:** the multi-connection setup (four uplinks plus a combined node) was
    rehearsed with Docker node containers and the Linux namespace proof, not with the owner's own machines.

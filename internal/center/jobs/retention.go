@@ -31,8 +31,10 @@ type DB interface {
 type Result struct {
 	RetentionDays int
 	Deleted       int64
-	Batches       int
-	Duration      time.Duration
+	// AuditDeleted counts change-log entries removed with the same cut-off.
+	AuditDeleted int64
+	Batches      int
+	Duration     time.Duration
 	// Skipped is set when nothing was deleted on purpose, for example because retention is "keep forever".
 	Skipped string
 }
@@ -115,6 +117,12 @@ func (r *Retention) run(ctx context.Context) (Result, error) {
 	if pause <= 0 {
 		pause = defaultPause
 	}
+	// The owner's change log follows the same retention period.
+	audit, err := r.DB.Exec(ctx, `DELETE FROM audit_log WHERE ts < $1`, cutoff)
+	if err != nil {
+		return res, err
+	}
+	res.AuditDeleted = audit.RowsAffected()
 	for {
 		tag, err := r.DB.Exec(ctx, `DELETE FROM results WHERE id IN (SELECT id FROM results WHERE ts < $1 ORDER BY ts, id LIMIT $2)`, cutoff, batch)
 		if err != nil {

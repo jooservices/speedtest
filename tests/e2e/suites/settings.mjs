@@ -128,6 +128,27 @@ export function settingsSuite(T, ctx) {
       await T.choose(setting('Keep results for').locator('select'), '365'); await T.settled();
     },
 
+    // The activity log lists the changes made earlier in the run, filters by kind and never shows secrets.
+    async activityLog() {
+      await T.open('#/settings', 'Settings');
+      await T.tab('Activity log');
+      await T.see('Changed settings');
+      await T.see('Added a node');
+      await T.see('Removed a node');
+      assert.ok(await page.getByRole('row').count() > 5, 'the earlier changes are listed');
+      assert.ok(!(await page.content()).includes('e2e-secret-path'), 'no secret value appears in the log');
+      await T.choose(T.selectWith('Nodes'), 'node.');
+      await T.settled();
+      assert.equal(await page.getByText('Changed settings').count(), 0, 'the node filter hides settings changes');
+      await T.see('Added a node');
+      const entries = (await T.api('/api/audit?size=100')).body.data;
+      assert.ok(entries.every(e => e.actor === 'jooservices@gmail.com' && e.summary && !/secret|password/i.test(JSON.stringify(e).replace('Changed the password', ''))), 'entries name the owner and hold no secrets');
+      assert.ok(Number(T.db('select count(*) from audit_log')) >= entries.length, 'the entries are stored on the center');
+      const refused = await T.api('/api/audit?action=' + 'a'.repeat(61));
+      assert.equal(refused.status, 422);
+      T.expectRefusal(422);
+    },
+
     // Access: the enrolment key is shown once; the dashboard address is editable.
     async enrolmentKeyShownOnce() {
       await T.open('#/settings', 'Settings');
