@@ -16,7 +16,7 @@ Operations: 65. Without a test: 0.
 | enroll | POST | `/api/agent/enroll` | `cmd/center/main_integration_test.go`<br>`internal/agent/enroll/enroll_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/server/installer_integration_test.go`<br>+3 more |
 | getNode | GET | `/api/nodes/{id}` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>+3 more |
 | updateNode | PATCH | `/api/nodes/{id}` | `internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>`tests/ui/store.test.mjs` |
-| deleteNode | DELETE | `/api/nodes/{id}` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go` |
+| deleteNode | DELETE | `/api/nodes/{id}` | `internal/center/server/installer_test.go`<br>`internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>+1 more |
 | runNode | POST | `/api/nodes/{id}/run` | `internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go` |
 | createCommand | POST | `/api/nodes/{id}/commands` | `internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go` |
 | getCommand | GET | `/api/nodes/{id}/commands/{commandId}` | `internal/center/server/ownernodes_test.go` |
@@ -57,9 +57,9 @@ Operations: 65. Without a test: 0.
 | testNotification | POST | `/api/notifications/test/{channel}` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/ownernotifications_test.go` |
 | listDeliveries | GET | `/api/notifications/deliveries` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/ownernotifications_test.go` |
 | getDelivery | GET | `/api/notifications/deliveries/{id}` | `internal/center/server/ownernotifications_test.go` |
-| getSettings | GET | `/api/settings` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>`tests/e2e/steps.mjs`<br>+5 more |
-| replaceSettings | PUT | `/api/settings` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>`tests/ui/api.test.mjs`<br>+2 more |
-| rotateEnrollmentKey | POST | `/api/settings/enrolment-key` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>+1 more |
+| getSettings | GET | `/api/settings` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/settings_failures_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>+6 more |
+| replaceSettings | PUT | `/api/settings` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/settings_failures_test.go`<br>`internal/center/server/settings_integration_test.go`<br>`internal/center/server/settings_test.go`<br>+3 more |
+| rotateEnrollmentKey | POST | `/api/settings/enrolment-key` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/settings_failures_test.go`<br>`internal/center/server/settings_integration_test.go`<br>+2 more |
 | listIPChanges | GET | `/api/ip/history` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go`<br>`tests/ui/contract.test.mjs`<br>`tests/ui/store.test.mjs`<br>+1 more |
 | listIPAddresses | GET | `/api/ip/addresses` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go`<br>`tests/ui/contract.test.mjs`<br>`tests/ui/store.test.mjs`<br>+1 more |
 | lookupIP | GET | `/api/ip/lookup` | `internal/center/server/ownerip_integration_test.go`<br>`internal/center/server/ownerip_test.go`<br>`tests/e2e/steps.mjs` |

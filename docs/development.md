@@ -262,3 +262,35 @@ Claude's decision in JOOST-37 comment 24579 defers real-backend browser E2E to
 JOOST-48. The fake API checks do not claim staging deployment, real-agent
 verification or a complete sign-in implementation. No migration is needed for
 this UI-only foundation.
+
+## Go coverage
+
+JOOST-55 requires at least 85% statement coverage in every executable Go source
+file and a test exercising every function. The percentage is calculated from
+statement counts, not by averaging the percentages of functions. Files containing
+only package declarations or embedded assets have no executable statements.
+
+Use a verified worktree/test database from `.env`. Run database suites serially
+with `-p 1`, and wait for the entire command to exit before starting another
+integration, migration, race or browser suite against that database.
+
+```bash
+mkdir -p .tmp
+python3 scripts/geo-test-fixtures.py
+# Explicitly include the fixture executable: Go's ./... excludes testdata.
+go test -count=1 -p 1 -tags integration -coverprofile=.tmp/cover.out ./... ./internal/agent/testdata/fake-speedtest
+go tool cover -func=.tmp/cover.out > .tmp/functions.txt
+# Fail if any function has never run.
+awk '$NF == "0.0%" { print; bad=1 } END { exit bad }' .tmp/functions.txt
+# Print each file's statement coverage and fail below 85%.
+awk 'NR > 1 { split($1, loc, ":"); total[loc[1]] += $2; if ($3 > 0) covered[loc[1]] += $2 }
+END { for (file in total) { percent=100*covered[file]/total[file]; printf "%s %.2f%%\n", file, percent; if (percent < 85) bad=1 } exit bad }' .tmp/cover.out
+go test -race -count=1 -p 1 -tags integration ./... ./internal/agent/testdata/fake-speedtest
+```
+
+CLI entry-point tests execute the instrumented test binary in a child process,
+asserting its exit code and output while retaining coverage of `main`. Preserve
+the inherited environment when spawning that binary. Detailed command logic is
+tested through the existing `run` functions. Keep genuinely unreachable defensive
+returns, and record their reasons and every remaining function below 100% in the
+ticket's verification comment.

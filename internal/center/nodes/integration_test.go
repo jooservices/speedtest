@@ -288,3 +288,66 @@ func testHash(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
 }
+
+func TestInstallerTokenRotationAndRevocationIntegration(t *testing.T) {
+	pool, ctx := openIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	service := NewService(pool, bytes.Repeat([]byte{0x6c}, 32))
+	created, _, err := service.CreateNode(ctx, Input{Name: "installer-node", ExpectedDown: 100, ExpectedUp: 50, Enabled: true, Threads: 4}, "owner:test", "installer-node")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		Node struct {
+			ID string `json:"id"`
+		} `json:"node"`
+	}
+	if err := json.Unmarshal(created, &response); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := service.IssueInstallToken(ctx, "invalid"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("invalid node: %v", err)
+	}
+	if _, _, err := service.IssueInstallToken(ctx, "00000000-0000-4000-8000-000000000099"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing node: %v", err)
+	}
+	first, name, err := service.IssueInstallToken(ctx, response.Node.ID)
+	if err != nil || first == "" || name != "installer-node" {
+		t.Fatalf("issue token name=%q err=%v", name, err)
+	}
+	second, _, err := service.IssueInstallToken(ctx, response.Node.ID)
+	if err != nil || first == second {
+		t.Fatal("rotation failed", err)
+	}
+	if _, err := service.Enroll(ctx, first, name, "host", "test"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("rotated token accepted: %v", err)
+	}
+	if err := service.RevokeInstallToken(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+	if err := service.RevokeInstallToken(ctx, second); err != nil {
+		t.Fatal("repeated revocation", err)
+	}
+	if err := service.RevokeInstallToken(ctx, ""); err != nil {
+		t.Fatal("empty revocation", err)
+	}
+	if _, err := service.Enroll(ctx, second, name, "host", "test"); !errors.Is(err, ErrInvalidToken) {
+		t.Fatalf("revoked token accepted: %v", err)
+	}
+	third, _, err := service.IssueInstallToken(ctx, response.Node.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Enroll(ctx, third, name, "host", "test"); err != nil {
+		t.Fatal("fresh token enrollment", err)
+	}
+	if err := service.RevokeInstallToken(ctx, third); err != nil {
+		t.Fatal("consumed token revocation", err)
+	}
+	var consumed, revoked bool
+	if err := pool.QueryRow(ctx, `SELECT consumed_at IS NOT NULL,revoked_at IS NOT NULL FROM node_credentials WHERE token_hash=$1`, hashSecret(third)).Scan(&consumed, &revoked); err != nil || !consumed || revoked {
+		t.Fatalf("historical token consumed=%t revoked=%t err=%v", consumed, revoked, err)
+	}
+}

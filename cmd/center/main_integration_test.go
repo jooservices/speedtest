@@ -51,6 +51,9 @@ func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
 		t.Fatal("integration database identity and ownership marker verification failed")
 	}
 	t.Log("PASS: command-center startup is checked against the verified Speedtest worktree database")
+	if err := (poolPinger{pool: pool}).PingContext(ctx); err != nil {
+		t.Fatal("database readiness ping", err)
+	}
 
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })

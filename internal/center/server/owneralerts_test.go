@@ -232,3 +232,46 @@ func TestOwnerAlertsAcknowledgeAll(t *testing.T) {
 		t.Fatalf("store failure = %d %s", rec.Code, rec.Body.String())
 	}
 }
+
+func TestOwnerAlertStorageFailuresAcrossEndpoints(t *testing.T) {
+	h := alertsHandlerFor(&fakeOwnerAlerts{err: errors.New("private database detail")})
+	for _, tc := range []struct{ method, path, body string }{
+		{"GET", "/api/alerts/rules", ""}, {"GET", "/api/alerts/rules/" + nodeID, ""},
+		{"PUT", "/api/alerts/rules/" + nodeID, alertRuleJSON}, {"DELETE", "/api/alerts/rules/" + nodeID, ""},
+		{"POST", "/api/alerts/rules", alertRuleJSON}, {"GET", "/api/alerts/events", ""},
+		{"GET", "/api/alerts/events/" + nodeID, ""}, {"PUT", "/api/alerts/events/" + nodeID + "/ack", `{"acked":true}`},
+		{"POST", "/api/alerts/acknowledgements", ""},
+	} {
+		t.Run(tc.method+tc.path, func(t *testing.T) {
+			rec := do(h, tc.method, tc.path, tc.body, func(r *http.Request) {
+				ownerWrite(r)
+				r.Header.Set("If-Match", `"current"`)
+				r.Header.Set("Idempotency-Key", "failure-key")
+			})
+			if rec.Code != 500 || strings.Contains(rec.Body.String(), "private database detail") {
+				t.Fatalf("response %d %s", rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAlertInvalidMethodsAndRequestBodies(t *testing.T) {
+	h := alertsHandlerFor(&fakeOwnerAlerts{})
+	for _, tc := range []struct {
+		method, path, body string
+		want               int
+	}{
+		{"POST", "/api/alerts/events", "", 405}, {"POST", "/api/alerts/events/" + nodeID, "", 405},
+		{"GET", "/api/alerts/events/" + nodeID + "/ack", "", 405}, {"GET", "/api/alerts/events/invalid/ack", "", 404},
+		{"GET", "/api/alerts/events/invalid", "", 404}, {"GET", "/api/alerts/rules/invalid", "", 404},
+		{"POST", "/api/alerts/rules", `null`, 400}, {"POST", "/api/alerts/rules", `[]`, 400},
+		{"POST", "/api/alerts/rules", `{"name":false}`, 400},
+		{"POST", "/api/alerts/rules", strings.Replace(alertRuleJSON, `"nodes":"all"`, `"nodes":null`, 1), 422},
+		{"POST", "/api/alerts/rules", strings.Replace(alertRuleJSON, `"nodes":"all"`, `"nodes":["invalid"]`, 1), 422},
+	} {
+		rec := do(h, tc.method, tc.path, tc.body, func(r *http.Request) { ownerWrite(r); r.Header.Set("Idempotency-Key", "invalid-input") })
+		if rec.Code != tc.want {
+			t.Fatalf("%s %s: %d %s", tc.method, tc.path, rec.Code, rec.Body.String())
+		}
+	}
+}

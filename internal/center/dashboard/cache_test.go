@@ -86,3 +86,65 @@ func TestCachedWithoutTTLPassesThrough(t *testing.T) {
 		t.Fatal("no caching expected")
 	}
 }
+
+type seriesSource struct {
+	countingSource
+	ctx     context.Context
+	query   stats.Query
+	percent bool
+	limit   int
+}
+
+func (s *seriesSource) Series(ctx context.Context, q stats.Query, percent bool, limit int) ([]stats.Series, error) {
+	s.ctx, s.query, s.percent, s.limit = ctx, q, percent, limit
+	return []stats.Series{{Name: "fixture series"}}, s.err
+}
+func TestCachedSeriesPassesThrough(t *testing.T) {
+	expected := errors.New("series unavailable")
+	src := &seriesSource{countingSource: countingSource{err: expected}}
+	c := &Cached{Source: src, TTL: time.Hour}
+	q := stats.Query{Timezone: "UTC", Bucket: "hour"}
+	ctx := t.Context()
+	got, err := c.Series(ctx, q, true, 17)
+	if !errors.Is(err, expected) || len(got) != 1 || got[0].Name != "fixture series" || src.ctx != ctx || src.query.Timezone != q.Timezone || src.query.Bucket != q.Bucket || !src.percent || src.limit != 17 {
+		t.Fatalf("series forwarding result=%v err=%v source=%+v", got, err, src)
+	}
+}
+
+func TestCachedCancelledWaiterDoesNotCancelComputation(t *testing.T) {
+	src := &countingSource{gate: make(chan struct{})}
+	c := &Cached{Source: src, TTL: time.Minute}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := c.Snapshot(ctx, stats.Query{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled waiter: %v", err)
+	}
+	close(src.gate)
+	got, err := c.Snapshot(t.Context(), stats.Query{})
+	if err != nil || got.OpenAlertCount != 7 || src.calls.Load() != 1 {
+		t.Fatalf("shared computation: %+v %v calls=%d", got, err, src.calls.Load())
+	}
+}
+
+func TestCachePrunesExpiredWindowsAndRefreshesSameKey(t *testing.T) {
+	now := time.Now()
+	src := &countingSource{}
+	c := &Cached{Source: src, TTL: time.Minute, Now: func() time.Time { return now }, entries: map[string]*entry{}}
+	for i := range 65 {
+		c.entries[time.Unix(int64(i), 0).String()] = &entry{expires: now.Add(-time.Second)}
+	}
+	q := stats.Query{}
+	if _, err := c.Snapshot(t.Context(), q); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.entries) != 1 {
+		t.Fatalf("expired entries retained: %d", len(c.entries))
+	}
+	now = now.Add(2 * time.Minute)
+	if _, err := c.Snapshot(t.Context(), q); err != nil {
+		t.Fatal(err)
+	}
+	if src.calls.Load() != 2 {
+		t.Fatal("same-key expiration did not refresh")
+	}
+}

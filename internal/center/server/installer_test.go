@@ -329,3 +329,175 @@ func TestInstallerAPIUninstallRoute(t *testing.T) {
 		t.Fatalf("invalid input = %d", rec.Code)
 	}
 }
+
+func TestInstallerSessionValidity(t *testing.T) {
+	store := newAuthMemoryStore()
+	service, err := auth.NewService(store, auth.Config{SessionTTL: time.Hour, LoginMaxAttempts: 5, LoginWindow: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &installerAPI{auth: &serverAuth{service: service}}
+	r := httptest.NewRequest(http.MethodGet, "/api/installations/job/events", nil)
+	if h.sessionValid(r) {
+		t.Fatal("missing cookie accepted")
+	}
+	r.Header.Set("Cookie", "speedtest_session=invalid")
+	if h.sessionValid(r) {
+		t.Fatal("invalid session accepted")
+	}
+}
+
+func TestInstallerSessionRequiresAuthenticatedIdentity(t *testing.T) {
+	r := httptest.NewRequest("GET", "/events", nil)
+	r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "token"})
+	for _, tc := range []struct {
+		identity *auth.Identity
+		err      error
+		want     bool
+	}{
+		{nil, nil, false}, {&auth.Identity{}, nil, false}, {&auth.Identity{ID: "owner"}, nil, true}, {&auth.Identity{ID: "owner"}, errors.New("session unavailable"), false},
+	} {
+		h := &installerAPI{auth: &serverAuth{service: scriptedAuthService{session: func(context.Context, string) (auth.SessionView, error) {
+			return auth.SessionView{Identity: tc.identity}, tc.err
+		}}}}
+		if got := h.sessionValid(r); got != tc.want {
+			t.Fatalf("session validity=%t want=%t", got, tc.want)
+		}
+	}
+}
+
+func TestInstallerMethodRoutingAndErrors(t *testing.T) {
+	api := &installerAPI{service: &fakeInstallerService{}, limiter: newNodeRateLimiter(1000, 1000)}
+	for _, path := range []string{"/api/installer/probes", "/api/nodes/" + installerTestNodeID + "/installations", "/api/nodes/" + installerTestNodeID + "/uninstallations", "/api/installations/" + installerTestJobID, "/api/installations/" + installerTestJobID + "/events"} {
+		r := httptest.NewRequest(http.MethodDelete, path, nil)
+		r = r.WithContext(context.WithValue(r.Context(), ownerIdentityContextKey{}, "owner-id"))
+		w := httptest.NewRecorder()
+		api.serve(w, r)
+		if w.Code != 405 {
+			t.Fatalf("method %s: %d %s", path, w.Code, w.Body.String())
+		}
+	}
+	for _, tc := range []struct {
+		err   error
+		probe bool
+		want  int
+	}{
+		{installer.ErrInvalid, false, 422}, {installer.ErrNotFound, false, 404}, {installer.ErrConflict, false, 409}, {installer.ErrDisconnect, true, 422}, {installer.ErrDisconnect, false, 500},
+	} {
+		w := httptest.NewRecorder()
+		api.writeError(w, httptest.NewRequest("GET", "/", nil), tc.err, tc.probe)
+		if w.Code != tc.want {
+			t.Fatalf("error %v: %d", tc.err, w.Code)
+		}
+	}
+	for _, path := range []string{"/wrong", "/api/installations/a/b", "/api/installations/a/events/extra"} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("GET", path, nil)
+		api.get(w, r)
+		if w.Code != 404 {
+			t.Fatalf("invalid path: %d", w.Code)
+		}
+	}
+	for _, body := range []string{`{"unknown":true}`, `{} {}`, `{"host":"` + strings.Repeat("x", maxInstallerRequestBody) + `"}`, `{} ` + strings.Repeat(" ", maxInstallerRequestBody)} {
+		w := httptest.NewRecorder()
+		r := httptest.NewRequest("POST", "/", strings.NewReader(body))
+		var input installer.ProbeInput
+		if decodeInstallerJSON(w, r, &input) || (w.Code != 400 && w.Code != 413) {
+			t.Fatalf("bad JSON accepted: %d", w.Code)
+		}
+	}
+	api.service = &fakeInstallerService{serviceErr: installer.ErrNotFound}
+	w := httptest.NewRecorder()
+	api.get(w, httptest.NewRequest("GET", "/api/installations/"+installerTestJobID, nil))
+	if w.Code != 404 {
+		t.Fatalf("missing job: %d", w.Code)
+	}
+	w = httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/installations/"+installerTestJobID+"/events", nil)
+	r.Header.Add("Last-Event-ID", "a")
+	r.Header.Add("Last-Event-ID", "b")
+	api.stream(w, r)
+	if w.Code != 400 {
+		t.Fatalf("multiple cursors: %d", w.Code)
+	}
+	r.Header.Del("Last-Event-ID")
+	w = httptest.NewRecorder()
+	api.stream(w, r)
+	if w.Code != 404 {
+		t.Fatalf("missing stream: %d", w.Code)
+	}
+}
+
+type brokenEventWriter struct{ http.ResponseWriter }
+
+func (brokenEventWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+func TestInstallEventWriteFailures(t *testing.T) {
+	event := installer.Event{ID: "event", Status: "running"}
+	if writeInstallEvents(brokenEventWriter{httptest.NewRecorder()}, func() error { return nil }, []installer.Event{event}) {
+		t.Fatal("write failure swallowed")
+	}
+	if writeInstallEvents(httptest.NewRecorder(), func() error { return io.ErrClosedPipe }, []installer.Event{event}) {
+		t.Fatal("flush failure swallowed")
+	}
+	event.TS = time.Date(10000, 1, 1, 0, 0, 0, 0, time.UTC)
+	if writeInstallEvents(httptest.NewRecorder(), func() error { return nil }, []installer.Event{event}) {
+		t.Fatal("invalid event timestamp marshalled")
+	}
+	if supportsFlush(brokenEventWriter{httptest.NewRecorder()}) {
+		t.Fatal("non-flushing writer accepted")
+	}
+}
+
+type pollingInstaller struct {
+	fakeInstallerService
+	calls int
+	fail  bool
+}
+
+func (s *pollingInstaller) Events(context.Context, string, string) ([]installer.Event, installer.Installation, error) {
+	s.calls++
+	if s.calls == 1 {
+		return nil, installer.Installation{Status: "running"}, nil
+	}
+	if s.fail {
+		return nil, installer.Installation{}, errors.New("private poll failure")
+	}
+	return []installer.Event{{ID: "next", Step: "complete", Status: "succeeded", Message: "Installed"}}, installer.Installation{Status: "succeeded"}, nil
+}
+func TestInstallerStreamPollsAndEndsOnCompletionOrFailure(t *testing.T) {
+	for _, fail := range []bool{false, true} {
+		service := &pollingInstaller{fail: fail}
+		h := &installerAPI{service: service}
+		ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+		r := httptest.NewRequest("GET", "/api/installations/"+installerTestJobID+"/events", nil).WithContext(ctx)
+		w := httptest.NewRecorder()
+		h.stream(w, r)
+		cancel()
+		if service.calls != 2 || w.Code != 200 || !strings.Contains(w.Body.String(), "event: progress") || strings.Contains(w.Body.String(), "private poll failure") {
+			t.Fatalf("calls=%d response=%d %s", service.calls, w.Code, w.Body.String())
+		}
+		want := "Installed"
+		if fail {
+			want = "Reconnect"
+		}
+		if !strings.Contains(w.Body.String(), want) {
+			t.Fatalf("missing %s: %s", want, w.Body.String())
+		}
+	}
+}
+func TestInstallerStreamCancellationAndUnsupportedWriter(t *testing.T) {
+	h := &installerAPI{service: &pollingInstaller{}}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	w := httptest.NewRecorder()
+	h.stream(w, httptest.NewRequest("GET", "/api/installations/"+installerTestJobID+"/events", nil).WithContext(ctx))
+	if w.Code != 200 || w.Body.Len() != 0 {
+		t.Fatalf("cancelled stream: %d %s", w.Code, w.Body.String())
+	}
+	w = httptest.NewRecorder()
+	h.service = &fakeInstallerService{}
+	h.stream(brokenEventWriter{w}, httptest.NewRequest("GET", "/api/installations/"+installerTestJobID+"/events", nil))
+	if w.Code != 500 {
+		t.Fatalf("unsupported stream writer: %d", w.Code)
+	}
+}
