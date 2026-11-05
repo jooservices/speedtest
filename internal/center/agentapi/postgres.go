@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jooservices/speedtest/internal/center/release"
 )
 
 // ResultHook runs after insertion in the same transaction. Implementations must
@@ -42,8 +43,9 @@ type Database interface {
 }
 
 type Postgres struct {
-	Pool Database
-	Hook ResultHook
+	Releases *release.Catalog
+	Pool     Database
+	Hook     ResultHook
 }
 
 func jsonValue(value any) any {
@@ -132,6 +134,15 @@ func (s *Postgres) Config(ctx context.Context, node string) (map[string]any, err
 	defaults := map[string]any{"engine": "ookla", "quietStart": "", "quietEnd": "", "timezone": "UTC", "agentRelease": nil}
 	if err = json.Unmarshal(settings, &defaults); err != nil {
 		return nil, err
+	}
+	if defaults["agentRelease"] == nil && s.Releases != nil {
+		var agent string
+		if err := s.Pool.QueryRow(ctx, `SELECT agent FROM nodes WHERE id=$1`, node).Scan(&agent); err != nil {
+			return nil, err
+		}
+		if advertised := s.Releases.Advertisement(agent); advertised != nil {
+			defaults["agentRelease"] = advertised
+		}
 	}
 	var serverValue any = "auto"
 	if server != nil {

@@ -14,6 +14,8 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jooservices/speedtest/internal/center/nodes"
+	"github.com/jooservices/speedtest/internal/center/release"
+	"github.com/jooservices/speedtest/internal/shared/agentid"
 )
 
 var (
@@ -39,8 +41,9 @@ type DB interface {
 
 // Store reads and changes nodes and their commands for the signed-in owner.
 type Store struct {
-	DB  DB
-	Now func() time.Time
+	Releases *release.Catalog
+	DB       DB
+	Now      func() time.Time
 }
 
 func (s *Store) now() time.Time {
@@ -121,7 +124,7 @@ func (n nodeRow) view(now time.Time, latest, latestGood map[string]any, currentI
 		"expectedDown": n.Down, "expectedUp": n.Up, "threads": int64(n.Threads), "server": server, "note": n.Note,
 		"enabled": n.Enabled, "autoUpdate": n.AutoUpdate,
 		"binding":   map[string]any{"iface": n.Iface, "sourceIp": nullable(n.SourceIP)},
-		"colorSlot": int64(n.ColorSlot), "interval": int64(n.Interval), "offset": int64(n.Offset), "host": n.Host, "agent": n.Agent,
+		"colorSlot": int64(n.ColorSlot), "interval": int64(n.Interval), "offset": int64(n.Offset), "host": n.Host, "agent": displayAgent(n.Agent),
 		"createdAt": n.CreatedAt.UTC().Format(time.RFC3339Nano), "lastSeen": lastSeen,
 		"status": n.status(now, latest), "latest": nilMap(latest), "latestGood": nilMap(latestGood),
 		"currentIp": ip, "geo": nilMap(geo), "updateVersion": nil,
@@ -232,7 +235,7 @@ func (s *Store) List(ctx context.Context, page, size int) ([]map[string]any, int
 	now := s.now()
 	out := make([]map[string]any, 0, len(list))
 	for _, n := range list {
-		out = append(out, n.view(now, ex.latest[n.ID], ex.latestGood[n.ID], ex.ip[n.ID], ex.geo[n.ID]))
+		out = append(out, s.nodeView(ctx, s.DB, n, now, ex.latest[n.ID], ex.latestGood[n.ID], ex.ip[n.ID], ex.geo[n.ID]))
 	}
 	return out, total, nil
 }
@@ -256,7 +259,7 @@ func (s *Store) one(ctx context.Context, q interface {
 	if err != nil {
 		return nil, nodeRow{}, err
 	}
-	return n.view(s.now(), ex.latest[id], ex.latestGood[id], ex.ip[id], ex.geo[id]), n, nil
+	return s.nodeView(ctx, q, n, s.now(), ex.latest[id], ex.latestGood[id], ex.ip[id], ex.geo[id]), n, nil
 }
 
 // Get returns one node and its strong entity tag.
@@ -491,4 +494,24 @@ func newUUID() (string, error) {
 	b[8] = b[8]&0x3f | 0x80
 	h := hex.EncodeToString(b[:])
 	return h[0:8] + "-" + h[8:12] + "-" + h[12:16] + "-" + h[16:20] + "-" + h[20:], nil
+}
+
+func displayAgent(agent string) string { display, _ := agentid.Parse(agent); return display }
+
+func (s *Store) nodeView(ctx context.Context, q interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, n nodeRow, now time.Time, latest, latestGood map[string]any, ip string, geo map[string]any) map[string]any {
+	view := n.view(now, latest, latestGood, ip, geo)
+	if s.Releases != nil {
+		var raw []byte
+		err := q.QueryRow(ctx, `SELECT value FROM settings WHERE key='agentRelease'`).Scan(&raw)
+		var advertised map[string]any
+		if errors.Is(err, pgx.ErrNoRows) || err == nil && (len(raw) == 0 || string(raw) == "null") {
+			advertised = s.Releases.Advertisement(n.Agent)
+		} else if err == nil {
+			_ = json.Unmarshal(raw, &advertised)
+		}
+		view["updateVersion"] = release.UpdateVersion(n.Agent, advertised)
+	}
+	return view
 }

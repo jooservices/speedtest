@@ -1,4 +1,5 @@
 // End-to-end harness: a real command center on a throw-away worktree database, real agents driven by a fake speed test.
+import { createHash } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -54,8 +55,14 @@ export async function startStack({ seed = true } = {}) {
   run('go', ['build', '-o', join(out, 'bin', 'fake-speedtest'), './internal/agent/testdata/fake-speedtest']);
   sql(db, 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
   const port = await freePort();
+  const releaseDir = join(out, 'release');
+  mkdirSync(releaseDir, { recursive: true });
+  const artifact = 'speedtest-agent-linux-amd64';
+  const binary = 'e2e-release-artifact';
+  writeFileSync(join(releaseDir, artifact), binary);
+  writeFileSync(join(releaseDir, 'release.json'), JSON.stringify({ version: '2.0.0', commit: 'e2e', builtAt: new Date().toISOString(), files: { [artifact]: createHash('sha256').update(binary).digest('hex') } }));
   const centerEnv = { ...process.env, ...env, APP_ENV: 'local', APP_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=', SPEEDTEST_HTTP_ADDR: `127.0.0.1:${port}`, // gitleaks:allow (fixed test-only key)
-    SPEEDTEST_ADMIN_EMAIL: '' };
+    SPEEDTEST_PUBLIC_URL: `http://127.0.0.1:${port}`, SPEEDTEST_RELEASE_DIR: releaseDir, SPEEDTEST_ADMIN_EMAIL: '' };
   run('go', ['run', './internal/center/db/cmd/migrate', 'up'], { env: centerEnv });
   run(join(out, 'bin', 'center'), ['seed-admin'], { env: centerEnv });
   if (seed) sqlFile(db, join(root, 'tests', 'e2e', 'seed.sql'));

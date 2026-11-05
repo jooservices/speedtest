@@ -18,6 +18,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-NODE-07', area: 'nodes', title: 'the node list is a list of cards on a phone', covers: 'mobile layout without sideways scrolling', run: S.nodes.cardsOnPhone },
     { id: 'SC-NODE-02', area: 'nodes', title: 'the add-node wizard refuses incomplete and duplicate input', covers: 'wizard validation', run: S.nodes.wizardValidation },
     { id: 'SC-NODE-03', area: 'nodes', title: 'node settings validate, save and refuse a duplicate name', covers: 'node edit', run: S.nodes.detailAndSettings },
+    { id: 'SC-NODE-08', area: 'nodes', title: 'a published release enables the agent update action', covers: 'release manifest, owner indicator, update command', run: S.nodes.publishedUpdate },
     { id: 'SC-NODE-04', area: 'nodes', title: 'a node can be paused and resumed', covers: 'pause/resume', run: S.nodes.pauseAndResume },
 
     { id: 'SC-RES-01', area: 'results', title: 'results can be filtered, opened and exported', covers: 'results filter, detail, CSV export', run: S.results.filterOpenExport },

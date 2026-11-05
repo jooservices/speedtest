@@ -12,6 +12,7 @@ import (
 	"github.com/jooservices/speedtest/internal/agent/control"
 	"github.com/jooservices/speedtest/internal/agent/enroll"
 	"github.com/jooservices/speedtest/internal/agent/update"
+	"github.com/jooservices/speedtest/internal/shared/agentid"
 )
 
 // updateHTTPClient downloads releases; tests replace it to trust their own TLS server.
@@ -52,7 +53,7 @@ func releaseSource() func(context.Context) (*update.Release, error) {
 		if err != nil {
 			return nil, fmt.Errorf("credential unavailable")
 		}
-		client := control.Client{BaseURL: centerURL, Credential: credential, Agent: "speedtest-agent/" + version}
+		client := control.Client{BaseURL: centerURL, Credential: credential, Agent: agentid.Current(version)}
 		cfg, _, _, err := client.Config(ctx, "")
 		if err != nil {
 			return nil, fmt.Errorf("configuration unavailable")

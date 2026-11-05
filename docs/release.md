@@ -2,14 +2,16 @@
 
 ## Build a release
 
+Requires Go 1.27+, Git, Python 3 and `sha256sum` (the existing development tools).
+
 ```bash
-make release VERSION=1.2.3          # VERSION defaults to `git describe`
+make release VERSION=1.2.3          # VERSION uses the exact tag, otherwise 0.0.0-dev+<sha>
 ```
 
 Writes to `dist/` (git-ignored): static binaries (`CGO_ENABLED=0`, stamped with the
 version) `speedtest-agent-linux-amd64`, `speedtest-agent-linux-arm64`,
 `speedtest-center-linux-amd64`, `speedtest-migrate-linux-amd64`, the agent unit
-`speedtest-agent.service` and `SHA256SUMS`. Verify with
+`speedtest-agent.service`, `SHA256SUMS` and `release.json`. Verify with
 `cd dist && sha256sum -c SHA256SUMS`. `speedtest-agent-linux-amd64 version` prints the
 stamped version.
 
@@ -81,3 +83,45 @@ Attach `SHA256SUMS`.
 ## Self-update
 
 Installed agents can update themselves from an advertised release; see [agent-update.md](agent-update.md).
+
+## Release advertisement manifest
+
+`make release` writes `dist/release.json` from the same version stamp used in the
+binaries and the entries in `SHA256SUMS`:
+
+```json
+{"version":"1.2.3","commit":"<git sha>","builtAt":"2026-11-05T00:00:00Z","files":{"speedtest-agent-linux-amd64":"<64 hex sha256>","speedtest-agent-linux-arm64":"<64 hex sha256>"}}
+```
+
+The actual inventory also includes the center, migrator and service unit. Exact
+version tags strip the optional `v` prefix; untagged builds use
+`0.0.0-dev+<short sha>`. `VERSION=x.y.z` overrides the stamp. Publish the whole
+directory atomically so binaries, checksums and manifest always agree.
+
+The center reads `SPEEDTEST_RELEASE_DIR/release.json` at most once per minute,
+including failed reads. It validates SemVer, nonempty commit, RFC3339 build time,
+64-digit hexadecimal hashes, fixed artifact names and existing regular files.
+Missing or invalid manifests produce a warning once per refresh and no update
+indicator; they never make node/configuration responses fail. Validation checks
+the inventory; the updater still verifies the downloaded bytes against its hash.
+
+Agents identify themselves as `speedtest-agent/<version> (<goos>/<goarch>)` in
+enrollment and control. The existing node agent column retains this string; owner
+responses omit the platform suffix. Old identifiers default to linux/amd64.
+Unsupported platforms are never offered an artifact.
+
+When no explicit non-null `settings.agentRelease` exists, `/api/agent/config`
+returns the matching `speedtest-agent-<os>-<arch>` entry as `release` (version,
+configured public download URL, sha256) only for older stable agents, preventing
+automatic downgrades or replacement of development builds. Its existing content
+ETag changes with the advertisement. Owner node views use the same release source and set
+`updateVersion` only for a strictly newer SemVer version. Equal/newer agents and
+development/prerelease agent builds have a null indicator. Explicit stored
+`settings.agentRelease` remains authoritative for both views. The signed update
+flow is unchanged. `release.json` itself is not publicly served.
+
+Verification: `TestPublishedReleaseFlow` is a browser-free integration test of
+publication, per-platform heartbeat storage, owner list/detail, agent config,
+real artifact downloads, explicit overrides and invalid-manifest fallback.
+Browser scenario `SC-NODE-08` verifies that a published release enables the Update
+action and queues the advertised version through the real center.

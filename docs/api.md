@@ -534,3 +534,13 @@ page/size and optional event UUID, newest first. No delivery response exposes a
 destination, payload, URL or credential. Notification pages are limited to
 1,000,000. See [notification delivery](notifications.md) for transport Settings,
 retry/expiry behavior, the exactly-once transaction boundary and verification.
+
+### Published agent releases
+
+Agent identifiers accept `speedtest-agent/<version> (<goos>/<goarch>)`; legacy
+identifiers default to linux/amd64. Owner `node.agent` omits the platform suffix.
+`node.updateVersion` is the strictly newer advertised SemVer version, or null for
+current/newer, development/prerelease or unsupported agents. With no explicit
+`settings.agentRelease`, agent config `release` uses the node-platform entry in
+the cached release manifest for older stable agents only, preventing automatic
+downgrades. See [the manifest contract](release.md#release-advertisement-manifest).
