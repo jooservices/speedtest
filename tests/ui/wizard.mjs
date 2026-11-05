@@ -2,11 +2,13 @@
 import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { startServer } from '../ui-fixtures/server.mjs';
+import { trackCoverage } from '../lib/v8cov.mjs';
 
 const server = await startServer();
 const browser = process.env.PW_TEST_CONNECT_WS_ENDPOINT ? await chromium.connect(process.env.PW_TEST_CONNECT_WS_ENDPOINT)
   : await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}) });
 const page = await browser.newPage();
+const coverage = await trackCoverage(page);
 const problems = [];
 page.on('pageerror', e => problems.push(e.message));
 page.on('console', m => { if (['error', 'warning'].includes(m.type())) problems.push(m.text()); });
@@ -111,6 +113,7 @@ try {
   assert.deepEqual(problems, [], 'no console problems');
   console.log('PASS wizard: SSH install with confirmation, live progress, failure and validation; node removal with uninstall');
 } finally {
+  await coverage.finish('wizard');
   await browser.close();
   await server.close();
 }

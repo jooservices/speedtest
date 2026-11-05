@@ -409,7 +409,8 @@
           API.list('/api/nodes', options),
           API.list('/api/results?range=' + encodeURIComponent(range), options),
           API.list('/api/alerts/rules', options),
-          API.list('/api/alerts/events?range=' + encodeURIComponent(range), options),
+          // state=all: acknowledged alerts stay visible under "All" and can be reopened (the center's default is open only).
+          API.list('/api/alerts/events?state=all&range=' + encodeURIComponent(range), options),
           API.list('/api/ip/addresses', options),
           API.list('/api/ip/history', options),
           API.request('/api/schedules', options)
@@ -452,6 +453,7 @@
     }
     // Read the current ETag, write with it, and try once more with a fresh one when the center says the
     // resource changed in between (for example by the owner's own previous change still being applied).
+    var writeChains = {};
     function conditional(path, send) {
       function attempt(again) {
         return API.request(path).then(send).catch(function (error) {
@@ -459,7 +461,11 @@
           throw error;
         });
       }
-      return attempt(true);
+      // Writes to one resource go one after the other: two quick changes (a select changed twice) must not use the
+      // same ETag, which would make the second one fail with 412.
+      var turn = (writeChains[path] || Promise.resolve()).catch(function () {}).then(function () { return attempt(true); });
+      writeChains[path] = turn;
+      return turn;
     }
     function editable(path, method, body, contentType) {
       return conditional(path, function (response) {
@@ -484,13 +490,13 @@
     ST.deleteRule = function (id) { return editable('/api/alerts/rules/' + encodeURIComponent(id), 'DELETE'); };
     ST.ack = function (id, on) {
       var path = '/api/alerts/events/' + encodeURIComponent(id);
-      return API.request(path).then(function (response) {
+      return conditional(path, function (response) {
         return mutation(path + '/ack', 'PUT', { acked: on !== false }, { ifMatch: response.etag });
       });
     };
     ST.ackAll = function () { return mutation('/api/alerts/acknowledgements', 'POST', undefined, { idempotencyKey: API.key() }); };
     ST.setSettings = function (patch) {
-      return API.request('/api/settings').then(function (response) {
+      return conditional('/api/settings', function (response) {
         var input = Object.assign({}, response.data, patch);
         delete input.geoKeyConfigured; delete input.enrollKeyConfigured;
         delete input.enrollToken;
@@ -509,9 +515,14 @@
       if (zone && zone !== 'browser') return zone;
       return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     }
+    ST.timezone = quietZone;
+    // Changes the owner's password; the center rotates this session, so the owner stays signed in.
+    ST.changePassword = function (currentPassword, newPassword) {
+      return API.request('/api/auth/password', { method: 'POST', body: { currentPassword: currentPassword, newPassword: newPassword } });
+    };
     ST.saveSchedule = function (id, input) {
       var path = '/api/schedules/' + encodeURIComponent(id);
-      return API.request(path).then(function (response) { return mutation(path, 'PUT', input, { ifMatch: response.etag }); });
+      return conditional(path, function (response) { return mutation(path, 'PUT', input, { ifMatch: response.etag }); });
     };
     ST.saveScheduleRules = function (patch) {
       return conditional('/api/schedules', function (response) {

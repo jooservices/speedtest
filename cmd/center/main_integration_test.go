@@ -315,3 +315,64 @@ func TestCreateOwnerIntegration(t *testing.T) {
 		t.Fatal("invalid email accepted")
 	}
 }
+
+func TestResetOwnerPasswordIntegration(t *testing.T) {
+	values, err := godotenv.Read("../../.env")
+	if err != nil {
+		t.Fatal("worktree configuration required")
+	}
+	for key, value := range values {
+		t.Setenv(key, value)
+	}
+	cfg, err := config.LoadCenter()
+	if err != nil {
+		t.Fatal("invalid worktree test configuration")
+	}
+	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := db.Open(t.Context(), cfg.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	t.Setenv("SPEEDTEST_OWNER_EMAIL", "")
+	if err := runResetOwnerPassword(t.Context(), nil, strings.NewReader("a long unique passphrase 42\n"), io.Discard); err == nil {
+		t.Fatal("reset worked with no account")
+	}
+	t.Setenv("SPEEDTEST_OWNER_EMAIL", "owner@example.com")
+	if err := runCreateOwner(t.Context(), nil, strings.NewReader("first long passphrase 41\n"), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `INSERT INTO sessions(token_hash,user_id,csrf_token_hash,expires_at) SELECT 'h',id,'c',now()+interval '1 hour' FROM users`); err != nil {
+		t.Fatal(err)
+	}
+	var before string
+	_ = pool.QueryRow(t.Context(), `SELECT password_hash FROM users`).Scan(&before)
+	for _, bad := range []string{"", "password\n", "short\n"} {
+		if err := runResetOwnerPassword(t.Context(), nil, strings.NewReader(bad), io.Discard); err == nil {
+			t.Fatalf("password %q accepted", bad)
+		}
+	}
+	t.Setenv("SPEEDTEST_OWNER_EMAIL", "nobody@example.com")
+	if err := runResetOwnerPassword(t.Context(), nil, strings.NewReader("a long unique passphrase 42\n"), io.Discard); err == nil {
+		t.Fatal("unknown account accepted")
+	}
+	t.Setenv("SPEEDTEST_OWNER_EMAIL", "")
+	if err := runResetOwnerPassword(t.Context(), nil, strings.NewReader("a long unique passphrase 42\n"), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	var after string
+	var sessions int
+	_ = pool.QueryRow(t.Context(), `SELECT password_hash FROM users`).Scan(&after)
+	_ = pool.QueryRow(t.Context(), `SELECT count(*) FROM sessions`).Scan(&sessions)
+	if after == before || sessions != 0 {
+		t.Fatalf("password changed=%v sessions left=%d", after != before, sessions)
+	}
+	if err := runResetOwnerPassword(t.Context(), []string{"x"}, strings.NewReader("a long unique passphrase 42\n"), io.Discard); err == nil {
+		t.Fatal("arguments accepted")
+	}
+}

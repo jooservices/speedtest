@@ -298,3 +298,16 @@ func TestCalendarBucketLimitUsesLocalWallTime(t *testing.T) {
 		t.Errorf("invalid timezone buckets = %d, want 0", got)
 	}
 }
+
+func TestCanonicalZoneMapsLegacyAliasesToPostgresNames(t *testing.T) {
+	for alias, want := range map[string]string{"Asia/Saigon": "Asia/Ho_Chi_Minh", "Asia/Calcutta": "Asia/Kolkata", "Europe/Kiev": "Europe/Kyiv", "UTC": "UTC", "Asia/Ho_Chi_Minh": "Asia/Ho_Chi_Minh"} {
+		if got := canonicalZone(alias); got != want {
+			t.Errorf("canonicalZone(%q) = %q, want %q", alias, got, want)
+		}
+	}
+	for alias, canonical := range zoneAliases {
+		if _, err := time.LoadLocation(canonical); err != nil {
+			t.Errorf("alias %q targets %q which Go cannot load", alias, canonical)
+		}
+	}
+}

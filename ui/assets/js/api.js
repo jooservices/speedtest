@@ -51,7 +51,8 @@
       if (error.name === 'AbortError' || (options.signal && options.signal.aborted)) throw error;
       throw problem(0, 'Cannot reach the command center. Check your connection and retry.');
     }
-    if (response.status === 401) API.signIn();
+    // A wrong current password also answers 401 here, which is not an expired session: stay on the page.
+    if (response.status === 401 && path !== '/api/auth/password') API.signIn();
     if (response.status === 204 || response.status === 304) {
       if (!read) { csrf = null; API.clear(); }
       return { data: null, meta: {}, etag: response.headers.get('ETag'), status: response.status };
