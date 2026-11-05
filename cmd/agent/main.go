@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/joho/godotenv"
+	"github.com/jooservices/speedtest/internal/shared/agentid"
 
 	agentconfig "github.com/jooservices/speedtest/internal/agent/config"
 	"github.com/jooservices/speedtest/internal/agent/enroll"
@@ -147,7 +148,7 @@ func runEnrollWithInput(ctx context.Context, args []string, stdin io.Reader, std
 		Token: *token,
 		Name:  *name,
 		Host:  *host,
-		Agent: "speedtest-agent/" + version,
+		Agent: agentid.Current(version),
 	})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent enroll: %v\n", err)

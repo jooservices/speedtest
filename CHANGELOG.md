@@ -9,5 +9,6 @@ All notable changes to Speedtest are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Advertise published agent releases by platform and show updates for older stable agents.
 - Release packaging (`make release`) and the one-line agent installer served by the
   command center at `/install.sh`.

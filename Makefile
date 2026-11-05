@@ -52,7 +52,12 @@ shellcheck:
 test-install: shellcheck
 	sh scripts/test-install.sh
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null | sed 's/^v//' || true)
+ifeq ($(strip $(VERSION)),)
+VERSION := 0.0.0-dev+$(shell git rev-parse --short HEAD)
+endif
+COMMIT := $(shell git rev-parse HEAD)
+BUILT_AT := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 DIST ?= dist
 LDFLAGS = -s -w -X main.version=$(VERSION)
 
@@ -67,6 +72,7 @@ release:
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "$(LDFLAGS)" -o $(DIST)/speedtest-migrate-linux-amd64 ./internal/center/db/cmd/migrate
 	cp deploy/speedtest-agent.service $(DIST)/speedtest-agent.service
 	cd $(DIST) && sha256sum speedtest-agent-linux-amd64 speedtest-agent-linux-arm64 speedtest-center-linux-amd64 speedtest-migrate-linux-amd64 speedtest-agent.service > SHA256SUMS
+	python3 scripts/release-manifest.py "$(DIST)" "$(VERSION)" "$(COMMIT)" "$(BUILT_AT)"
 	@echo "release $(VERSION) written to $(DIST)/"
 
 

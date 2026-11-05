@@ -23,7 +23,7 @@ Operations: 66. Without a test: 0.
 | rotateCredential | POST | `/api/nodes/{id}/credential` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_test.go` |
 | revokeCredential | DELETE | `/api/nodes/{id}/credential` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_test.go` |
 | ingestResults | POST | `/api/agent/results` | `cmd/center/main_integration_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>`internal/center/audit/audit_test.go`<br>+5 more |
-| getAgentConfig | GET | `/api/agent/config` | `cmd/agent/main_test.go`<br>`cmd/agent/update_test.go`<br>`internal/agent/control/regression_test.go`<br>`internal/agent/control/update_test.go`<br>+5 more |
+| getAgentConfig | GET | `/api/agent/config` | `cmd/agent/main_test.go`<br>`cmd/agent/update_test.go`<br>`internal/agent/control/regression_test.go`<br>`internal/agent/control/update_test.go`<br>+6 more |
 | heartbeat | POST | `/api/agent/heartbeat` | `internal/agent/control/control_test.go`<br>`internal/agent/control/regression_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>+4 more |
 | pollCommands | GET | `/api/agent/commands` | `internal/agent/control/update_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>`internal/center/server/agentapi_integration_test.go`<br>+2 more |
 | ackCommand | POST | `/api/agent/commands/{id}/ack` | `internal/agent/control/control_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>`internal/center/server/agentapi_integration_test.go`<br>+1 more |
@@ -50,7 +50,7 @@ Operations: 66. Without a test: 0.
 | getRule | GET | `/api/alerts/rules/{id}` | `internal/center/server/owneralerts_test.go` |
 | replaceRule | PUT | `/api/alerts/rules/{id}` | `internal/center/server/owneralerts_test.go` |
 | deleteRule | DELETE | `/api/alerts/rules/{id}` | `internal/center/server/owneralerts_test.go` |
-| listAudit | GET | `/api/audit` | `internal/center/server/audit_test.go` |
+| listAudit | GET | `/api/audit` | `internal/center/server/audit_test.go`<br>`tests/e2e/suites/settings.mjs`<br>`tests/ui/contract.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | listEvents | GET | `/api/alerts/events` | `internal/center/server/owneralerts_integration_test.go`<br>`internal/center/server/owneralerts_test.go`<br>`tests/perf/dashboard.mjs`<br>`tests/ui/contract.test.mjs`<br>+2 more |
 | getEvent | GET | `/api/alerts/events/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/owneralerts_integration_test.go`<br>`internal/center/server/owneralerts_test.go` |
 | ackEvent | PUT | `/api/alerts/events/{id}/ack` | `internal/center/audit/audit_test.go`<br>`internal/center/server/owneralerts_integration_test.go`<br>`internal/center/server/owneralerts_test.go` |

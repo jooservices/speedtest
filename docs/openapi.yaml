@@ -4048,6 +4048,7 @@ components:
           type: string
         agent:
           type: string
+          description: Agent version identifier; enrollment and heartbeat may append (goos/goarch). Owner views omit that suffix.
         createdAt:
           $ref: "#/components/schemas/Timestamp"
         lastSeen:
@@ -4146,6 +4147,7 @@ components:
           maxLength: 255
         agent:
           type: string
+          description: Agent version identifier; enrollment and heartbeat may append (goos/goarch). Owner views omit that suffix.
           maxLength: 64
       required:
         - token
@@ -4181,6 +4183,7 @@ components:
       properties:
         agent:
           type: string
+          description: Agent version identifier; enrollment and heartbeat may append (goos/goarch). Owner views omit that suffix.
           maxLength: 64
         uptime:
           type: integer

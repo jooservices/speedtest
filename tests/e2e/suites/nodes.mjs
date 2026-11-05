@@ -2,6 +2,21 @@ export function nodesSuite(T, ctx) {
   const { page, assert } = T;
   const { stack, startAgent } = ctx;
   return {
+    async publishedUpdate() {
+      T.db("update nodes set agent='speedtest-agent/1.0.0 (linux/amd64)' where name='VM3'");
+      try {
+        await T.open('#/nodes', 'Nodes');
+        await T.row('VM3').click();
+        await T.tab('Agent');
+        await page.getByRole('button', { name: 'Update to v2.0.0' }).waitFor();
+        if (process.env.E2E_SHOTS) await page.screenshot({ path: `${process.env.E2E_SHOTS}/published-agent-update.png` });
+        await T.press('Update to v2.0.0');
+        await T.toast('Update queued').waitFor();
+        assert.equal(T.db("select count(*) from agent_commands c join nodes n on n.id=c.node_id where n.name='VM3' and c.type='update_agent' and c.version='2.0.0'"), '1');
+      } finally {
+        T.db("update nodes set agent='speedtest-agent/2.0.0' where name='VM3'");
+      }
+    },
     async listSortsAndOpens() {
       await T.open('#/nodes', 'Nodes');
       for (const name of ['VM1', 'VM2', 'VM3', 'VM4', 'VM5']) await T.row(name).waitFor();

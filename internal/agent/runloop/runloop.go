@@ -19,6 +19,7 @@ import (
 	"github.com/jooservices/speedtest/internal/agent/report"
 	"github.com/jooservices/speedtest/internal/agent/sched"
 	"github.com/jooservices/speedtest/internal/agent/update"
+	"github.com/jooservices/speedtest/internal/shared/agentid"
 )
 
 // restartDelay lets the acknowledgement of an update command reach the center before the process exits.
@@ -114,7 +115,7 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 	l.reporter = report.NewReporter(spool, &report.Client{BaseURL: center, Credential: credential}, report.WithLogger(logger), report.WithDeliveryObserver(l.delivered))
 	l.Scheduler = sched.New(l, logger, schedulerOptions...)
 	l.Scheduler.SetSchedule(sched.Schedule{Interval: cfg.Interval, Enabled: true})
-	l.Controller = control.New(control.Client{BaseURL: center, Credential: credential, Agent: "speedtest-agent/" + version}, l.Scheduler, control.WithLogger(logger))
+	l.Controller = control.New(control.Client{BaseURL: center, Credential: credential, Agent: agentid.Current(version)}, l.Scheduler, control.WithLogger(logger))
 	l.Controller.ApplyConfig = l.applyConfig
 	l.Controller.RunCommand = l.command
 	l.Updater = &update.Agent{Paths: update.DefaultPaths(), Version: version, Logger: logger, Restart: l.restartSoon}

@@ -36,6 +36,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/nodes"
 	"github.com/jooservices/speedtest/internal/center/notify"
 	"github.com/jooservices/speedtest/internal/center/ownerapi"
+	"github.com/jooservices/speedtest/internal/center/release"
 	"github.com/jooservices/speedtest/internal/center/server"
 	"github.com/jooservices/speedtest/internal/center/settings"
 	"github.com/jooservices/speedtest/internal/center/stats"
@@ -117,7 +118,8 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 	}
 	defer func() { _ = closeGeo() }()
 	nodeService := nodes.NewService(pool, cfg.AppKey)
-	owner := &ownerapi.Store{DB: pool}
+	releases := &release.Catalog{Dir: cfg.ReleaseDir, PublicURL: cfg.PublicURL, Logger: logger}
+	owner := &ownerapi.Store{DB: pool, Releases: releases}
 	statsStore := &stats.Store{DB: pool}
 	// Without APP_KEY nothing secret can be stored, so the settings API stays off, like node issuance.
 	var settingsStore settings.Store
@@ -154,7 +156,7 @@ func runWithDatabase(ctx context.Context, args []string, logger *slog.Logger, st
 		NodeCredential:     nodeService,
 		Pinger:             poolPinger{pool: pool},
 		Metrics:            metrics.Collector{DB: pool},
-		Agent:              &agentapi.Postgres{Pool: pool, Hook: agentapi.ResultHookChain{watcher, alertStore}},
+		Agent:              &agentapi.Postgres{Pool: pool, Releases: releases, Hook: agentapi.ResultHookChain{watcher, alertStore}},
 		OwnerNodes:         owner,
 		OwnerResults:       owner,
 		OwnerSchedules:     owner,
