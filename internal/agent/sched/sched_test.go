@@ -546,3 +546,21 @@ func (e *errorRunner) Run(_ context.Context) error {
 	e.started <- struct{}{}
 	return errors.New("boom")
 }
+
+func TestRequestRunQueuePreservesDistinctCommandsAndBackpressure(t *testing.T) {
+	s := &Scheduler{manual: make(chan string, 2)}
+	if !s.RequestRun("first") || !s.RequestRun("second") || s.RequestRun("third") {
+		t.Fatal("queue acceptance/backpressure incorrect")
+	}
+	if got := <-s.manual; got != "first" {
+		t.Fatalf("first command = %q", got)
+	}
+	if !s.RequestRun("third") {
+		t.Fatal("queue did not recover after draining")
+	}
+	for _, want := range []string{"second", "third"} {
+		if got := <-s.manual; got != want {
+			t.Fatalf("command = %q, want %q", got, want)
+		}
+	}
+}

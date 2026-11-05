@@ -101,8 +101,9 @@ type config struct {
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	os.Exit(run(ctx, os.Args[1:], os.Stdout, os.Stderr))
+	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
+	stop()
+	os.Exit(code)
 }
 
 // run parses args, emulates the requested scenario and returns the process exit
@@ -111,7 +112,7 @@ func main() {
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	cfg, err := parseFlags(args, stderr)
 	if err != nil {
-		fmt.Fprintf(stderr, "speedtest: %v\n", err)
+		_, _ = fmt.Fprintf(stderr, "speedtest: %v\n", err)
 		return 2
 	}
 
@@ -120,11 +121,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		<-ctx.Done()
 		return 1
 	case "crash":
-		fmt.Fprintln(stderr, "speedtest: fatal: simulated engine crash")
+		_, _ = fmt.Fprintln(stderr, "speedtest: fatal: simulated engine crash")
 		return 2
 	default:
 		if err := json.NewEncoder(stdout).Encode(buildResult(cfg)); err != nil {
-			fmt.Fprintf(stderr, "speedtest: write result: %v\n", err)
+			_, _ = fmt.Fprintf(stderr, "speedtest: write result: %v\n", err)
 			return 2
 		}
 		return 0
@@ -137,8 +138,8 @@ func parseFlags(args []string, errw io.Writer) (config, error) {
 	fs := flag.NewFlagSet("fake-speedtest", flag.ContinueOnError)
 	fs.SetOutput(errw)
 	fs.Usage = func() {
-		fmt.Fprintln(errw, "usage: fake-speedtest [flags]")
-		fmt.Fprintln(errw, "emulates the Ookla speedtest CLI --format=json output.")
+		_, _ = fmt.Fprintln(errw, "usage: fake-speedtest [flags]")
+		_, _ = fmt.Fprintln(errw, "emulates the Ookla speedtest CLI --format=json output.")
 		fs.PrintDefaults()
 	}
 

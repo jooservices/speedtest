@@ -10,8 +10,12 @@ import (
 // before a result is spooled, which is what makes retries idempotent at the
 // command center.
 func newID() (string, error) {
+	return newIDFrom(rand.Reader)
+}
+
+func newIDFrom(random io.Reader) (string, error) {
 	var b [16]byte
-	if _, err := io.ReadFull(rand.Reader, b[:]); err != nil {
+	if _, err := io.ReadFull(random, b[:]); err != nil {
 		return "", fmt.Errorf("generate result UUID: %w", err)
 	}
 	b[6] = (b[6] & 0x0f) | 0x40 // version 4

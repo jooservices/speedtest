@@ -779,3 +779,44 @@ func TestCredentialRotationAndRevocationTransactionPaths(t *testing.T) {
 		})
 	}
 }
+
+func TestInstallTokenFailuresReturnNoCredential(t *testing.T) {
+	const id = "00000000-0000-4000-8000-000000000043"
+	injected := errors.New("injected token failure")
+	for _, stage := range []string{"begin", "lookup", "secret", "uuid", "revoke-old", "insert", "commit"} {
+		t.Run(stage, func(t *testing.T) {
+			tx := &scriptedTx{queryRow: func(string, ...any) pgx.Row { return scriptedRow{values: []any{"node"}} }}
+			database := &scriptedDatabase{tx: tx}
+			random := &testRandomReader{}
+			switch stage {
+			case "begin":
+				database.beginErr = injected
+			case "lookup":
+				tx.queryRow = func(string, ...any) pgx.Row { return scriptedRow{err: injected} }
+			case "secret":
+				random.failAt = 1
+			case "uuid":
+				random.failAt = 2
+			case "revoke-old", "insert":
+				tx.exec = func(query string, _ ...any) error {
+					if (stage == "insert" && strings.HasPrefix(query, "INSERT")) || (stage == "revoke-old" && strings.HasPrefix(query, "UPDATE")) {
+						return injected
+					}
+					return nil
+				}
+			case "commit":
+				tx.commitErr = injected
+			}
+			s := NewService(database, nil)
+			s.random = random
+			token, name, err := s.IssueInstallToken(t.Context(), id)
+			if err == nil || token != "" || name != "" {
+				t.Fatalf("%s returned a credential or swallowed failure: token present=%t name=%q err=%v", stage, token != "", name, err)
+			}
+		})
+	}
+	s := NewService(&scriptedDatabase{execErr: injected}, nil)
+	if err := s.RevokeInstallToken(t.Context(), "fixture"); !errors.Is(err, injected) {
+		t.Fatalf("revocation error: %v", err)
+	}
+}

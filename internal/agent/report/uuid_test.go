@@ -1,6 +1,8 @@
 package report
 
 import (
+	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -47,4 +49,11 @@ func validUUIDv4(id string) bool {
 		}
 	}
 	return true
+}
+
+func TestNewIDEntropyFailure(t *testing.T) {
+	id, err := newIDFrom(strings.NewReader("short"))
+	if id != "" || !errors.Is(err, io.ErrUnexpectedEOF) || !strings.Contains(err.Error(), "generate result UUID") {
+		t.Fatalf("id=%q err=%v", id, err)
+	}
 }
