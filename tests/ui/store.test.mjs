@@ -290,3 +290,15 @@ test('installation helpers probe, start, follow progress and fall back to the fi
   await new Promise(r => setTimeout(r, 50));
   assert.equal(quiet.length, 0);
 });
+
+test('quick successive writes to one resource run one after the other, each with a fresh ETag', async t => {
+  const { ST, control } = await setup(t);
+  await ST.load();
+  control.requests.length = 0;
+  await Promise.all([ST.setSettings({ range: '24h' }), ST.setSettings({ range: '30d' }), ST.setSettings({ range: '7d' })]);
+  const steps = control.requests.filter(r => r.path === '/api/settings').map(r => r.method);
+  assert.equal(steps.filter(m => m === 'PUT').length, 3);
+  // Every write is preceded by its own read of the ETag and the next read only starts after the previous write.
+  assert.equal(steps[0], 'GET');
+  for (let i = 0; i < steps.length; i++) if (steps[i] === 'PUT') assert.equal(steps[i - 1], 'GET', 'a write directly follows its own ETag read: ' + steps.join(','));
+});

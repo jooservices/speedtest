@@ -38,6 +38,14 @@ test('401 redirects to sign-in and clears cache and CSRF', async t => {
   await ST.api.request('/api/settings', { cacheMs: 5000 });
   assert.equal(control.requests.filter(r => r.path === '/api/settings').length, 2);
 });
+test('a wrong current password (401 from the password endpoint) does not look like an expired session', async t => {
+  const { ST, control, context } = await setup(t);
+  context.location.hash = '#/settings';
+  await ST.api.session(); // the CSRF token comes from a valid session
+  control.status = 401;
+  await assert.rejects(ST.api.request('/api/auth/password', { method: 'POST', body: { currentPassword: 'x', newPassword: 'y' } }), error => error.status === 401);
+  assert.equal(context.location.hash, '#/settings', 'the owner stays where they are');
+});
 test('short bounded cache is opt-in, isolated and invalidated by writes', async t => {
   const { ST, control } = await setup(t);
   const first = await ST.api.request('/api/settings', { cacheMs: 5000 });

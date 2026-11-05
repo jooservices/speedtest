@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import assert from 'node:assert/strict';
 import { mkdir } from 'node:fs/promises';
 import { startServer } from '../ui-fixtures/server.mjs';
+import { trackCoverage } from '../lib/v8cov.mjs';
 
 const server = await startServer();
 let browser;
@@ -15,6 +16,7 @@ try {
 const routes = ['/', '/nodes', '/nodes/node-contract', '/history', '/stats', '/network', '/schedules', '/alerts', '/settings'];
 const diagnostics = [];
 const page = await browser.newPage();
+const coverage = await trackCoverage(page);
 page.on('pageerror', error => diagnostics.push(error.message));
 page.on('console', message => { if (['error', 'warning'].includes(message.type())) diagnostics.push(message.text()); });
 const goto = async (route, demo = false) => {
@@ -82,6 +84,7 @@ try {
   await page.goto(`${server.origin}/#/history`);
   await page.waitForURL('**/#/signin');
   await page.getByRole('heading', { name: 'Sign in', exact: true }).waitFor();
+  await coverage.finish('smoke');
   console.log('PASS loading/error/retry/empty on all routes; 401 redirects to sign-in; no unexpected console warnings/errors');
 } finally {
   await browser.close(); await server.close();

@@ -1,0 +1,52 @@
+// Scenarios: numbered test cases. Each names what it proves (covers) and is a short script of suites and steps.
+// Order matters: scenarios share one seeded center, so ones that change the whole fleet or the password come last.
+export function scenarios({ T, S }) {
+  return [
+    { id: 'SC-AUTH-01', area: 'auth', title: 'signing in needs the right password', covers: 'sign-in rules, hidden menu before sign-in', run: S.auth.signInRules },
+
+    { id: 'SC-DASH-01', area: 'dashboard', title: 'the dashboard shows the seeded fleet', covers: 'fleet tiles, node cards, IP change count', run: S.dashboard.showsFleet },
+    { id: 'SC-DASH-02', area: 'dashboard', title: 'the comparison chart offers every metric, table view and node toggle', covers: 'dashboard compare card', run: S.dashboard.compareConnections },
+    { id: 'SC-DASH-03', area: 'dashboard', title: 'dashboard shortcuts lead to the right pages and dialogs', covers: 'navigation links, add node, run all', run: S.dashboard.shortcuts },
+    { id: 'SC-DASH-04', area: 'dashboard', title: 'the time range in the top bar drives the pages', covers: 'time range', run: S.dashboard.timeRange },
+
+    { id: 'SC-QA-01', area: 'quality', title: 'every page draws real data without console errors', covers: 'all routes', run: S.quality.everyPageDraws },
+    { id: 'SC-QA-02', area: 'quality', title: 'every page holds its layout at 390, 768 and 1440 px in both themes', covers: 'responsive layout, themes', run: S.quality.layoutHolds },
+    { id: 'SC-QA-03', area: 'quality', title: 'controls have names and the keyboard reaches them on every page', covers: 'accessibility basics', run: S.quality.accessibility },
+    { id: 'SC-QA-04', area: 'quality', title: 'the theme switch persists', covers: 'theme preference stored on the center', run: S.quality.themeSwitch },
+
+    { id: 'SC-NODE-01', area: 'nodes', title: 'the node list sorts and opens a node', covers: 'nodes list, detail', run: S.nodes.listSortsAndOpens },
+    { id: 'SC-NODE-02', area: 'nodes', title: 'the add-node wizard refuses incomplete and duplicate input', covers: 'wizard validation', run: S.nodes.wizardValidation },
+    { id: 'SC-NODE-03', area: 'nodes', title: 'node settings validate, save and refuse a duplicate name', covers: 'node edit', run: S.nodes.detailAndSettings },
+    { id: 'SC-NODE-04', area: 'nodes', title: 'a node can be paused and resumed', covers: 'pause/resume', run: S.nodes.pauseAndResume },
+
+    { id: 'SC-RES-01', area: 'results', title: 'results can be filtered, opened and exported', covers: 'results filter, detail, CSV export', run: S.results.filterOpenExport },
+    { id: 'SC-RES-02', area: 'results', title: 'results sort, page and filter by node and speed', covers: 'results sorting, paging, chips', run: S.results.sortPageAndChips },
+
+    { id: 'SC-STAT-01', area: 'statistics', title: 'statistics show the center figures', covers: '/api/stats summary on the page', run: S.statistics.summaryMatchesApi },
+    { id: 'SC-STAT-02', area: 'statistics', title: 'every statistics control works', covers: 'metric tabs, chips, combined total, table, heat map, range', run: S.statistics.everyControl },
+
+    { id: 'SC-IP-01', area: 'ip', title: 'the map, lookup and address details work', covers: 'map, lookup, details', run: S.network.mapLookupAndDetails },
+    { id: 'SC-IP-02', area: 'ip', title: 'the IP page filters by node and lists address changes', covers: 'node filter, change timeline', run: S.network.filterAndHistory },
+
+    { id: 'SC-SCH-01', area: 'schedules', title: 'schedules are saved on the center', covers: 'interval, stagger, quiet hours', run: S.schedules.intervalStaggerQuietHours },
+    { id: 'SC-SCH-02', area: 'schedules', title: 'per-node schedule controls and global rules work', covers: 'offset, active switch, run now, overlap rule, concurrency', run: S.schedules.perNodeControls },
+
+    { id: 'SC-ALR-01', area: 'alerts', title: 'alert rules can be created, edited, switched and deleted', covers: 'alert rule lifecycle', run: S.alerts.ruleLifecycle },
+    { id: 'SC-ALR-02', area: 'alerts', title: 'alert rules are validated and every rule type is offered', covers: 'rule validation, rule types', run: S.alerts.ruleValidationAndTypes },
+    { id: 'SC-ALR-03', area: 'alerts', title: 'alerts can be acknowledged, reopened and filtered', covers: 'ack, reopen, ack all, filters', run: S.alerts.activityAcknowledge },
+
+    { id: 'SC-SET-01', area: 'settings', title: 'preferences are saved and survive a reload', covers: 'decimals, units, time zone, 12-hour, range, theme', run: S.settings.preferences },
+    { id: 'SC-SET-02', area: 'settings', title: 'speed test and location settings are kept; the licence key is write-only', covers: 'engine, location', run: S.settings.engineAndLocation },
+    { id: 'SC-SET-03', area: 'settings', title: 'notification secrets are write-only and encrypted', covers: 'secrets', run: S.settings.notificationSecrets },
+    { id: 'SC-SET-04', area: 'settings', title: 'a test notification reaches the configured channel', covers: 'webhook test, unset channel refused', run: S.settings.notificationTest },
+    { id: 'SC-SET-05', area: 'settings', title: 'retention and the full exports work', covers: 'retention, CSV and JSON export', run: S.settings.dataRetentionAndExport },
+    { id: 'SC-SET-06', area: 'settings', title: 'the enrolment key is shown once', covers: 'enrolment key rotation', run: S.settings.enrolmentKeyShownOnce },
+
+    // Adds a real agent and a node; the removal scenario below deletes it again.
+    { id: 'SC-NODE-05', area: 'nodes', title: 'a node is added with the install command and reports', covers: 'wizard, real agent enrolment, first result, run test', run: S.nodes.addWithCommandAndRunTest },
+    { id: 'SC-NODE-06', area: 'nodes', title: 'a node can be removed from the dashboard', covers: 'node removal', run: () => S.nodes.removeFromDashboard('E2E-1') },
+
+    { id: 'SC-AUTH-02', area: 'auth', title: 'the owner can change the password', covers: 'change password, old password refused, new one works', run: () => S.auth.changePassword('a brand new passphrase 2026') },
+    { id: 'SC-AUTH-03', area: 'auth', title: 'signing out ends the session', covers: 'sign out, API refuses visitor', run: S.auth.signOutEndsSession },
+  ];
+}

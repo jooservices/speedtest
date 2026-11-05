@@ -18,7 +18,7 @@ connections around the clock, is told when something degrades, and can prove it 
 | Alerts: slow, failing, jitter/loss/ping, IP changed, node offline; acknowledge | Covered | docs/alerts.md |
 | Notifications by e-mail, Telegram, Slack, webhook, with retries and a test button | Covered | docs/notifications.md |
 | Settings: units, decimals, time zone, retention, secrets write-only, enrolment key | Covered | Settings page |
-| Single owner login, password change, secure first install | Covered | `create-owner`, sign-in rules |
+| Single owner login, password change (Settings > Access), secure first install | Covered | `create-owner`, sign-in rules, SC-AUTH-02 |
 | Backup, restore, monitoring, runbook | Covered | docs/operations.md |
 
 ## Gaps found and decisions
@@ -40,6 +40,11 @@ connections around the clock, is told when something degrades, and can prove it 
 6. **Real-world acceptance still open:** the multi-connection setup (four uplinks plus a combined node) was
    rehearsed with Docker node containers and the Linux namespace proof, not with the owner's own machines.
    The owner chose to accept that for now.
+
+7. **No way to change the password from the UI** (only the API had it). Added Settings > Access > Change password
+   (current password, new password twice, at least 12 characters, other sessions end), covered by SC-AUTH-02.
+8. **Acknowledged alerts disappeared from the UI** (it loaded open alerts only), so "All" and "Reopen" never worked.
+   The store now loads all alerts (SC-ALR-03).
 
 ## Business rules checked
 
