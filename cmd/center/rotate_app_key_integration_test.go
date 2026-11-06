@@ -479,3 +479,35 @@ func rotationInstallerConsumer(t *testing.T, pool *pgxpool.Pool, key []byte) *in
 	}
 	return service
 }
+
+func TestRotateAppKeyReencryptsTwoFactorSecretsIntegration(t *testing.T) {
+	pool := rotationPool(t)
+	oldKey, newKey, _, _ := rotationTestKeys()
+	oldAEAD, err := rotationCipher(oldKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nonce := bytes.Repeat([]byte{5}, oldAEAD.NonceSize())
+	sealed := oldAEAD.Seal(nonce, nonce, []byte("JBSWY3DPEHPK3PXP"), nil)
+	rotationExec(t, pool, `INSERT INTO users(id,email,password_hash) VALUES('00000000-0000-4000-8000-0000000000aa','owner@example.test','x')`)
+	rotationExec(t, pool, `INSERT INTO user_two_factor(user_id,secret_enc,enabled,recovery_hashes) VALUES('00000000-0000-4000-8000-0000000000aa',$1,true,'{h1,h2}')`, sealed)
+	count, err := rotateAppKey(t.Context(), pool, oldKey, newKey)
+	if err != nil || count.values != 1 {
+		t.Fatal("rotation", count, err)
+	}
+	var stored []byte
+	var hashes []string
+	if err := pool.QueryRow(t.Context(), `SELECT secret_enc, recovery_hashes FROM user_two_factor`).Scan(&stored, &hashes); err != nil {
+		t.Fatal(err)
+	}
+	newAEAD, _ := rotationCipher(newKey)
+	if plain, err := openRotationValue(newAEAD, stored, nil); err != nil || string(plain) != "JBSWY3DPEHPK3PXP" {
+		t.Fatal("the new key cannot open the rotated two-factor secret", err)
+	}
+	if _, err := openRotationValue(oldAEAD, stored, nil); err == nil {
+		t.Fatal("the old key still opens the rotated two-factor secret")
+	}
+	if len(hashes) != 2 {
+		t.Fatalf("recovery digests changed: %v", hashes)
+	}
+}

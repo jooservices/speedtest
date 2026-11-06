@@ -82,7 +82,9 @@ paths:
       summary: Create authenticated session
       description: Requires anonymous session cookie, matching CSRF token, and same-origin Origin.
         HTTPS is required outside local/test. Generic invalid-credentials error; per-IP and
-        per-account rate limits. Rotates session ID and CSRF token.
+        per-account rate limits. Rotates session ID and CSRF token. When two-factor sign-in is on and the
+        password is right, a missing code answers 401 /problems/two-factor-required and a wrong or reused code
+        answers 401 "Invalid authentication code".
       security:
         - {}
         - SessionCookie: []
@@ -189,6 +191,161 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/PasswordChange"
+  /api/auth/2fa:
+    get:
+      operationId: getTwoFactorStatus
+      tags:
+        - Auth
+      summary: Two-factor sign-in status
+      description: Whether two-factor sign-in can be used (needs APP_KEY), whether it is on, and how many
+        recovery codes are left. Requires a session; never returns secrets.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/twoFactorStatusResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/auth/2fa/setup:
+    post:
+      operationId: startTwoFactorSetup
+      tags:
+        - Auth
+      summary: Start two-factor setup
+      description: Requires the current password. Creates a pending secret (replacing an earlier pending one)
+        and returns it once for the authenticator app as a QR code (PNG data URI), an otpauth URI and the
+        base32 secret. Two-factor sign-in stays off until the code is confirmed. Fails with 409 while it is on.
+      security:
+        - SessionCookie: []
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/twoFactorSetupResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TwoFactorRequest"
+  /api/auth/2fa/enable:
+    post:
+      operationId: enableTwoFactor
+      tags:
+        - Auth
+      summary: Turn two-factor sign-in on
+      description: Confirms the pending setup with a current authenticator code and returns ten single-use
+        recovery codes, shown only in this response and stored as digests. 409 when there is no pending setup
+        or it is already on.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/twoFactorEnableResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TwoFactorRequest"
+  /api/auth/2fa/disable:
+    post:
+      operationId: disableTwoFactor
+      tags:
+        - Auth
+      summary: Turn two-factor sign-in off
+      description: Requires the current password and a current authenticator code or an unused recovery code.
+        409 when it is not on.
+      security:
+        - SessionCookie: []
+      responses:
+        "204":
+          description: No content
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TwoFactorRequest"
   /api/nodes:
     get:
       operationId: listNodes
@@ -4386,6 +4543,11 @@ components:
           format: email
         password:
           $ref: "#/components/schemas/Secret"
+        code:
+          type: string
+          maxLength: 32
+          description: Authenticator code or recovery code. Needed only when two-factor sign-in is on; without it
+            the answer is 401 with problem type /problems/two-factor-required.
       required:
         - email
         - password
@@ -4408,6 +4570,59 @@ components:
         - expiresAt
       description: "Anonymous bootstrap: user=null. Authenticated session: user is present.
         Invalid/expired existing cookie returns 401."
+    TwoFactorRequest:
+      type: object
+      additionalProperties: false
+      properties:
+        currentPassword:
+          $ref: "#/components/schemas/Secret"
+        code:
+          type: string
+          maxLength: 32
+    TwoFactorStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        available:
+          type: boolean
+        enabled:
+          type: boolean
+        recoveryRemaining:
+          type: integer
+          minimum: 0
+      required:
+        - available
+        - enabled
+        - recoveryRemaining
+    TwoFactorSetup:
+      type: object
+      additionalProperties: false
+      properties:
+        secret:
+          type: string
+          description: Base32 secret for manual entry; returned once.
+        uri:
+          type: string
+          description: otpauth provisioning URI.
+        qr:
+          type: string
+          description: PNG data URI of the QR code.
+      required:
+        - secret
+        - uri
+        - qr
+    TwoFactorRecoveryCodes:
+      type: object
+      additionalProperties: false
+      properties:
+        recoveryCodes:
+          type: array
+          items:
+            type: string
+          minItems: 10
+          maxItems: 10
+      required:
+        - recoveryCodes
     PasswordChange:
       type: object
       additionalProperties: false
@@ -5673,6 +5888,33 @@ components:
               const: 200
             data:
               $ref: "#/components/schemas/Session"
+    twoFactorStatusResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/TwoFactorStatus"
+    twoFactorSetupResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 201
+            data:
+              $ref: "#/components/schemas/TwoFactorSetup"
+    twoFactorEnableResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/TwoFactorRecoveryCodes"
     listNodesResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
