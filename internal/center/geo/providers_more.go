@@ -36,6 +36,9 @@ func extraProviderEnv(cfg *ProviderConfig) error {
 			return errors.New("geolocation provider request rates cannot be negative")
 		}
 	}
+	if cfg.IPGeoEnabled && strings.TrimSpace(cfg.IPGeoKey) == "" {
+		return errors.New("SPEEDTEST_GEO_IPGEOLOCATION_KEY is required when ipgeolocation.io is enabled")
+	}
 	cfg.Consensus, err = envBool("SPEEDTEST_GEO_CONSENSUS", cfg.Consensus)
 	return err
 }

@@ -177,7 +177,7 @@ IP and location as "Looked up with".
 from the free DB-IP Lite files (same format, CC BY 4.0). It checks every 24 hours and replaces a file only when it is
 missing or older than 25 days, tries the previous month when the current month is not published yet, verifies the
 database before the atomic swap, and keeps the old file and reader when anything fails.
-`SPEEDTEST_GEO_DBIP_AUTO_UPDATE=false` turns it off; with a MaxMind key the GeoLite2 updater runs instead. Wherever the
+It is on by default in production (`APP_ENV=production`) and off elsewhere; `SPEEDTEST_GEO_DBIP_AUTO_UPDATE=true|false` overrides; with a MaxMind key the GeoLite2 updater runs instead. Wherever the
 data is shown, the attribution **IP Geolocation by DB-IP** (https://db-ip.com) applies; this page and the application
 documentation carry it. Providers are configured through the environment; moving their keys into Settings is a follow-up.
 

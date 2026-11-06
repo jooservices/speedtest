@@ -35,9 +35,10 @@ type DBIPConfig struct {
 	Now func() time.Time
 }
 
-// DBIPConfigFromEnv reads SPEEDTEST_GEO_DBIP_AUTO_UPDATE (default true) and SPEEDTEST_GEO_DBIP_URL.
+// DBIPConfigFromEnv reads SPEEDTEST_GEO_DBIP_AUTO_UPDATE and SPEEDTEST_GEO_DBIP_URL. The updater is on by default only when
+// APP_ENV=production, so development, tests and E2E runs never download a 130 MB database unasked.
 func DBIPConfigFromEnv() (DBIPConfig, error) {
-	cfg := DBIPConfig{Enabled: true, URL: envDefault("SPEEDTEST_GEO_DBIP_URL", "https://download.db-ip.com")}
+	cfg := DBIPConfig{Enabled: os.Getenv("APP_ENV") == "production", URL: envDefault("SPEEDTEST_GEO_DBIP_URL", "https://download.db-ip.com")}
 	if raw := os.Getenv("SPEEDTEST_GEO_DBIP_AUTO_UPDATE"); raw != "" {
 		value, err := strconv.ParseBool(raw)
 		if err != nil {

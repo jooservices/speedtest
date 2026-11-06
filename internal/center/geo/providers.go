@@ -107,9 +107,6 @@ func ProviderConfigFromEnv() (ProviderConfig, error) {
 	if cfg.IPInfoEnabled && strings.TrimSpace(cfg.IPInfoToken) == "" {
 		return ProviderConfig{}, errors.New("SPEEDTEST_GEO_IPINFO_TOKEN is required when IPinfo Lite is enabled")
 	}
-	if cfg.IPGeoEnabled && strings.TrimSpace(cfg.IPGeoKey) == "" {
-		return ProviderConfig{}, errors.New("SPEEDTEST_GEO_IPGEOLOCATION_KEY is required when ipgeolocation.io is enabled")
-	}
 	return cfg, nil
 }
 
