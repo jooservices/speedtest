@@ -212,3 +212,62 @@ code such as `node.update`), the item id and the address it came from. Request b
 stored. Read it in Settings > Activity log or with `GET /api/audit?action=node.`. Entries follow the results retention period and are
 removed by the same nightly job; with retention set to "keep everything" they are kept. A failure to write an entry is logged and never
 blocks the change itself. Sign-ins and sign-outs are not recorded (they carry no change).
+
+## Runbook
+
+Each alert in [observability.md](observability.md#alerts) links here. Commands assume the systemd install; for the Docker staging stack
+use `sg docker -c "docker logs speedtest-staging"` and `deploy/docker/stg.sh status`.
+
+### center-down
+The probe cannot reach `/readyz`. 1) `systemctl --user status speedtest-center` and `journalctl --user -u speedtest-center -n 100`. 2) Is
+the process listening (`ss -ltnp | grep 8080`) and does `curl -sS http://127.0.0.1:8080/healthz` answer? 3) A crash loop with
+`invalid configuration` means a bad `.env` edit; `database identity` errors mean the wrong database name. 4) Restart with
+`systemctl --user restart speedtest-center`. Agents keep their results and deliver them after the center is back (nothing is lost).
+
+### readyz-failing
+The center runs but the database check fails. 1) `curl -sS http://127.0.0.1:8080/readyz` (the reason is in the body). 2) `psql` to the
+database with the center's settings: is PostgreSQL up, is the password still valid, is the disk full (see disk-space)? 3) Check
+`speedtest_db_pool_*` on the dashboard. The pool reconnects by itself when the database returns.
+
+### server-errors
+5xx answers or ERROR lines. 1) Sentry shows the grouped issue with its release; open it first. 2) In OpenObserve logs:
+`SELECT * FROM "speedtest_logs" WHERE level='ERROR' ORDER BY _timestamp DESC LIMIT 50`; use `request_id` to follow one request.
+3) After a deployment, roll back to the previous binary (docs/deployment.md) if the errors started with it.
+
+### slow-requests
+p95 above 1 s. 1) Dashboard: is the database pool saturated, is CPU high? 2) The statistics and dashboard queries are the heaviest;
+check the data volume (`SELECT count(*) FROM results`) and the retention period (Settings > Data). 3) `EXPLAIN ANALYZE` the query named
+in the slow log line; `make perf` reproduces the load.
+
+### no-results
+No node reported for two hours. 1) Nodes page: are all nodes offline (center or network problem) or one (see nodes-offline)? 2) Is the
+schedule paused by quiet hours or by every node being paused (Schedules page)? 3) `speedtest_results_ingested_total{status="rejected"}`
+rising means agents are sending results the center refuses: read the center's WARN lines.
+
+### nodes-offline
+A node stopped sending heartbeats. 1) On the node: `systemctl status speedtest-agent`, `journalctl -u speedtest-agent -n 100`. 2) Can it reach
+the center URL (`curl -sS <center>/healthz`)? A changed IP, a firewall or an expired certificate are the usual causes. 3) A rejected
+credential shows as `401` in the agent log: re-enrol it from the node's page or run `speedtest-agent enroll --repair`.
+
+### notifications-stuck
+Messages are failing or waiting. 1) Settings > Notifications > Send a test for the channel: the answer names the failure class.
+2) `curl -sS .../metrics | grep notification` for backlog, failures and the age of the oldest message. 3) Wrong chat id, revoked token
+or an unreachable SMTP/webhook host are the usual causes; fix the setting and the held messages are retried by themselves
+(they expire after 24 h). Notification quiet hours also hold alert messages on purpose.
+
+### database-pool
+The pool is almost fully used. 1) `SPEEDTEST_DB_MAX_CONNS` (default 10): raise it if PostgreSQL has room (`SHOW max_connections`).
+2) A slow query holding connections shows in `pg_stat_activity`. 3) Restart is a last resort and only hides the cause.
+
+### background-jobs
+A loop (alerts, notifications, retention) has not succeeded for 15 minutes. 1) Sentry has the failure with `loop=` tag; the log line
+names the step. 2) Most causes are the database (see readyz-failing). 3) The nightly retention job is checked separately: Settings > Data
+shows its last run.
+
+### disk-space
+Less than 15% free. 1) `df -h` and `du -sh` of the PostgreSQL data directory, the backups directory and the journal. 2) Lower the
+retention period (Settings > Data) and run `VACUUM`; prune old dumps (`KEEP=` in `deploy/backup.sh`); `journalctl --vacuum-size=500M`.
+
+### certificate-expiry
+The TLS certificate expires in under 14 days. Renew it (certbot/ACME or your CA), reload nginx (`nginx -t && systemctl reload nginx`),
+and check `curl -vI https://<host>/readyz`. The probe's `cert_days` confirms the new date within a minute.
