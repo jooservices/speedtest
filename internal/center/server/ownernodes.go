@@ -88,42 +88,57 @@ func (h *ownerNodes) serve(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 3:
 		h.node(w, r, parts[2])
 	case len(parts) == 4 && parts[3] == "run":
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w, r, http.MethodPost)
-			return
-		}
-		h.command(w, r, parts[2], "run_now", "")
+		h.runNow(w, r, parts[2])
 	case len(parts) == 4 && parts[3] == "commands":
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w, r, http.MethodPost)
-			return
-		}
-		var in struct {
-			Type    string `json:"type"`
-			Version string `json:"version"`
-		}
-		if !decodeJSON(w, r, &in) {
-			return
-		}
-		h.command(w, r, parts[2], in.Type, in.Version)
+		h.createCommand(w, r, parts[2])
 	case len(parts) == 5:
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, r, http.MethodGet)
-			return
-		}
-		if !uuidPattern.MatchString(parts[4]) {
-			writeNotFoundProblem(w, r)
-			return
-		}
-		cmd, err := h.store.Command(r.Context(), parts[2], parts[4])
-		if err != nil {
-			writeOwnerError(w, r, err)
-			return
-		}
-		writeEnvelope(w, http.StatusOK, "Command progress", cmd)
+		h.commandProgress(w, r, parts[2], parts[4])
 	default:
 		writeNotFoundProblem(w, r)
 	}
+}
+
+// runNow queues a speed test (POST /api/nodes/{id}/run).
+func (h *ownerNodes) runNow(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, r, http.MethodPost)
+		return
+	}
+	h.command(w, r, nodeID, "run_now", "")
+}
+
+// createCommand queues a typed command such as an agent update (POST /api/nodes/{id}/commands).
+func (h *ownerNodes) createCommand(w http.ResponseWriter, r *http.Request, nodeID string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, r, http.MethodPost)
+		return
+	}
+	var in struct {
+		Type    string `json:"type"`
+		Version string `json:"version"`
+	}
+	if !decodeJSON(w, r, &in) {
+		return
+	}
+	h.command(w, r, nodeID, in.Type, in.Version)
+}
+
+// commandProgress reports how a queued command is doing (GET /api/nodes/{id}/commands/{commandId}).
+func (h *ownerNodes) commandProgress(w http.ResponseWriter, r *http.Request, nodeID, commandID string) {
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, r, http.MethodGet)
+		return
+	}
+	if !uuidPattern.MatchString(commandID) {
+		writeNotFoundProblem(w, r)
+		return
+	}
+	cmd, err := h.store.Command(r.Context(), nodeID, commandID)
+	if err != nil {
+		writeOwnerError(w, r, err)
+		return
+	}
+	writeEnvelope(w, http.StatusOK, "Command progress", cmd)
 }
 
 func (h *ownerNodes) list(w http.ResponseWriter, r *http.Request, method string) {
@@ -140,12 +155,7 @@ func (h *ownerNodes) list(w http.ResponseWriter, r *http.Request, method string)
 		writeOwnerError(w, r, err)
 		return
 	}
-	last := (total + size - 1) / size
-	if last < 1 {
-		last = 1
-	}
-	writeJSON(w, http.StatusOK, apiEnvelope{Success: true, Code: http.StatusOK, Message: "Success", Data: items,
-		Meta: map[string]any{"pagination": map[string]any{"current_page": page, "per_page": size, "total": total, "last_page": last}}})
+	writePage(w, items, page, size, total)
 }
 
 func paging(w http.ResponseWriter, r *http.Request) (int, int, bool) {

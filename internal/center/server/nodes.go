@@ -3,14 +3,8 @@ package server
 import (
 	"context"
 	"encoding/json"
-	"errors"
-	"fmt"
-	"io"
-	"net"
 	"net/http"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/nodes"
@@ -107,80 +101,11 @@ type enrollWire struct {
 	Agent string `json:"agent"`
 }
 
-type rateBucket struct {
-	tokens float64
-	last   time.Time
-	seen   time.Time
-}
-
-// nodeRateLimiter applies a process-local token bucket per authenticated node.
-type nodeRateLimiter struct {
-	mu        sync.Mutex
-	buckets   map[string]rateBucket
-	perMinute int
-	burst     int
-	now       func() time.Time
-}
-
 // The owner works through the dashboard, which loads many pages of data at once; the limit only stops runaway scripts.
 const (
 	ownerRequestsPerMinute = 3000
 	ownerBurst             = 400
 )
-
-func newOwnerRateLimiter() *nodeRateLimiter {
-	return newNodeRateLimiter(ownerRequestsPerMinute, ownerBurst)
-}
-
-func newNodeRateLimiter(perMinute, burst int) *nodeRateLimiter {
-	if perMinute < 1 {
-		perMinute = defaultAgentRequestsPerMinute
-	}
-	if burst < 1 {
-		burst = defaultAgentBurst
-	}
-	return &nodeRateLimiter{buckets: make(map[string]rateBucket), perMinute: perMinute, burst: burst, now: time.Now}
-}
-
-func (l *nodeRateLimiter) allow(key string) (bool, time.Duration) {
-	now := l.now()
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	if len(l.buckets) >= 100000 || len(l.buckets)%256 == 0 {
-		for candidate, bucket := range l.buckets {
-			if now.Sub(bucket.seen) > time.Hour {
-				delete(l.buckets, candidate)
-			}
-		}
-	}
-	bucket, exists := l.buckets[key]
-	if !exists {
-		if len(l.buckets) >= 100000 {
-			return false, time.Second
-		}
-		bucket = rateBucket{tokens: float64(l.burst), last: now}
-	}
-	elapsed := now.Sub(bucket.last).Seconds()
-	if elapsed > 0 {
-		bucket.tokens += elapsed * float64(l.perMinute) / 60
-		if bucket.tokens > float64(l.burst) {
-			bucket.tokens = float64(l.burst)
-		}
-		bucket.last = now
-	}
-	bucket.seen = now
-	if bucket.tokens < 1 {
-		l.buckets[key] = bucket
-		wait := time.Duration((1 - bucket.tokens) * 60 / float64(l.perMinute) * float64(time.Second))
-		if wait < time.Second {
-			wait = time.Second
-		}
-		return false, wait
-	}
-	bucket.tokens--
-	l.buckets[key] = bucket
-	return true, 0
-}
 
 func newAPIHandler(service NodeCredentialService, perMinute int, ownerAuth *serverAuth, agentStore agentapi.Store) http.Handler {
 	limiter := newNodeRateLimiter(perMinute, defaultAgentBurst)
@@ -451,123 +376,4 @@ func handleAgentProtected(service NodeCredentialService, limiter *nodeRateLimite
 		return
 	}
 	writeNotFoundProblem(w, r)
-}
-
-func ownerPrincipal(r *http.Request) (string, error) {
-	principal, ok := r.Context().Value(ownerIdentityContextKey{}).(string)
-	if !ok || principal == "" {
-		return "", nodes.ErrUnauthorized
-	}
-	return principal, nil
-}
-
-func bearerValue(r *http.Request) (string, bool) {
-	values := r.Header.Values("Authorization")
-	if len(values) != 1 {
-		return "", false
-	}
-	parts := strings.Fields(values[0])
-	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") || len(parts[1]) > 8192 {
-		return "", false
-	}
-	return parts[1], true
-}
-
-func idempotencyKey(w http.ResponseWriter, r *http.Request) (string, bool) {
-	values := r.Header.Values("Idempotency-Key")
-	if len(values) != 1 || len(values[0]) == 0 || len(values[0]) > 128 {
-		writeAPIProblem(w, r, http.StatusBadRequest, "Bad request", "A valid Idempotency-Key header is required.")
-		return "", false
-	}
-	return values[0], true
-}
-
-func decodeJSON(w http.ResponseWriter, r *http.Request, target any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxNodeRequestBody)
-	decoder := json.NewDecoder(r.Body)
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		var maxErr *http.MaxBytesError
-		if errors.As(err, &maxErr) {
-			writeAPIProblem(w, r, http.StatusRequestEntityTooLarge, "Request too large", "The request body exceeds the allowed size.")
-		} else {
-			writeAPIProblem(w, r, http.StatusBadRequest, "Bad request", "The JSON request body is invalid.")
-		}
-		return false
-	}
-	if err := decoder.Decode(new(any)); !errors.Is(err, io.EOF) {
-		writeAPIProblem(w, r, http.StatusBadRequest, "Bad request", "The request body must contain one JSON value.")
-		return false
-	}
-	return true
-}
-
-func allowRate(limiter *nodeRateLimiter, key string, w http.ResponseWriter, r *http.Request) bool {
-	allowed, retry := limiter.allow(key)
-	if allowed {
-		return true
-	}
-	seconds := int((retry + time.Second - 1) / time.Second)
-	if seconds < 1 {
-		seconds = 1
-	}
-	w.Header().Set("Retry-After", fmt.Sprint(seconds))
-	writeAPIProblem(w, r, http.StatusTooManyRequests, "Rate limited", "Rate limited.")
-	return false
-}
-
-func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err == nil {
-		return host
-	}
-	return r.RemoteAddr
-}
-
-func setLocation(w http.ResponseWriter, data json.RawMessage, prefix string) {
-	var decoded struct {
-		Node struct {
-			ID string `json:"id"`
-		} `json:"node"`
-	}
-	if json.Unmarshal(data, &decoded) == nil && decoded.Node.ID != "" {
-		w.Header().Set("Location", prefix+decoded.Node.ID)
-	}
-}
-
-func methodNotAllowed(w http.ResponseWriter, r *http.Request, methods ...string) {
-	w.Header().Set("Allow", strings.Join(methods, ", "))
-	writeMethodNotAllowedProblem(w, r)
-}
-
-func writeEnvelope(w http.ResponseWriter, status int, message string, data any) {
-	var payload = data
-	if raw, ok := data.(json.RawMessage); ok {
-		payload = json.RawMessage(raw)
-	}
-	writeJSON(w, status, apiEnvelope{Success: true, Code: status, Message: message, Data: payload, Meta: map[string]any{}, Errors: nil})
-}
-
-func writeServiceError(w http.ResponseWriter, r *http.Request, err error) {
-	switch {
-	case errors.Is(err, nodes.ErrUnauthorized), errors.Is(err, nodes.ErrInvalidAuth), errors.Is(err, nodes.ErrInvalidToken):
-		writeAPIProblem(w, r, http.StatusUnauthorized, "Unauthorized", "Authentication is required or invalid.")
-	case errors.Is(err, nodes.ErrForbidden):
-		writeAPIProblem(w, r, http.StatusForbidden, "Forbidden", "The request failed authorization checks.")
-	case errors.Is(err, nodes.ErrNotFound):
-		writeNotFoundProblem(w, r)
-	case errors.Is(err, nodes.ErrConflict):
-		writeAPIProblem(w, r, http.StatusConflict, "Conflict", "The request conflicts with current resource state.")
-	case errors.Is(err, nodes.ErrInvalidInput):
-		writeAPIProblem(w, r, http.StatusUnprocessableEntity, "Validation failed", "The request configuration is invalid.")
-	case errors.Is(err, nodes.ErrCryptoKeyUnset):
-		writeAPIProblem(w, r, http.StatusServiceUnavailable, "Service unavailable", "Secure issuance is not configured.")
-	default:
-		writeAPIProblem(w, r, http.StatusInternalServerError, "Internal failure", "Internal failure; safe detail only.")
-	}
-}
-
-func writeAPIProblem(w http.ResponseWriter, r *http.Request, status int, title, detail string) {
-	types := map[int]string{http.StatusBadRequest: "/problems/badrequest", http.StatusUnauthorized: "/problems/unauthorized", http.StatusForbidden: "/problems/forbidden", http.StatusNotFound: "/problems/notfound", http.StatusConflict: "/problems/conflict", http.StatusRequestEntityTooLarge: "/problems/toolarge", http.StatusUnprocessableEntity: "/problems/validation", http.StatusTooManyRequests: "/problems/ratelimited", http.StatusServiceUnavailable: "/problems/servererror", http.StatusInternalServerError: "/problems/servererror"}
-	writeProblemResponse(w, status, problemResponse{Type: types[status], Title: title, Status: status, Detail: detail, TraceID: requestIDFromContext(r.Context())})
 }

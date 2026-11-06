@@ -58,71 +58,74 @@ func (h *ownerNotifications) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rest := strings.TrimPrefix(r.URL.Path, "/api/notifications/")
-	if strings.HasPrefix(rest, "test/") {
-		if r.Method != http.MethodPost {
-			methodNotAllowed(w, r, http.MethodPost)
-			return
-		}
-		channel := strings.TrimPrefix(rest, "test/")
-		if _, ok := notify.Channel(settings.Settings{}, channel); !ok {
-			writeNotFoundProblem(w, r)
-			return
-		}
-		d, err := h.store.Test(r.Context(), channel)
-		if err != nil {
-			notificationError(w, r, err)
-			return
-		}
-		w.Header().Set("Location", "/api/notifications/deliveries/"+d.ID)
-		writeEnvelope(w, 202, "Notification queued", d)
-		return
-	}
-	if r.Method != http.MethodGet {
+	switch {
+	case strings.HasPrefix(rest, "test/"):
+		h.queueTest(w, r, strings.TrimPrefix(rest, "test/"))
+	case r.Method != http.MethodGet:
 		methodNotAllowed(w, r, http.MethodGet)
+	case rest == "deliveries":
+		h.listDeliveries(w, r)
+	case strings.HasPrefix(rest, "deliveries/"):
+		h.getDelivery(w, r, strings.TrimPrefix(rest, "deliveries/"))
+	default:
+		writeNotFoundProblem(w, r)
+	}
+}
+
+// queueTest sends a test message through one channel (POST /api/notifications/test/{channel}).
+func (h *ownerNotifications) queueTest(w http.ResponseWriter, r *http.Request, channel string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, r, http.MethodPost)
 		return
 	}
-	if rest == "deliveries" {
-		page, size, ok := paging(w, r)
-		if !ok {
-			return
-		}
-		if page > 1000000 {
-			invalid(w, r, "page must be at most 1000000.")
-			return
-		}
-		event := ""
-		if v, present := r.URL.Query()["event"]; present {
-			if len(v) != 1 || !uuidPattern.MatchString(v[0]) {
-				invalid(w, r, "event must be an alert event ID.")
-				return
-			}
-			event = v[0]
-		}
-		items, total, err := h.store.Deliveries(r.Context(), event, page, size)
-		if err != nil {
-			notificationError(w, r, err)
-			return
-		}
-		last := (total + size - 1) / size
-		if last < 1 {
-			last = 1
-		}
-		writeJSON(w, 200, apiEnvelope{Success: true, Code: 200, Message: "Success", Data: items, Meta: map[string]any{"pagination": map[string]any{"current_page": page, "per_page": size, "total": total, "last_page": last}}})
+	if _, ok := notify.Channel(settings.Settings{}, channel); !ok {
+		writeNotFoundProblem(w, r)
 		return
 	}
-	if strings.HasPrefix(rest, "deliveries/") {
-		id := strings.TrimPrefix(rest, "deliveries/")
-		if !uuidPattern.MatchString(id) {
-			writeNotFoundProblem(w, r)
-			return
-		}
-		d, err := h.store.Delivery(r.Context(), id)
-		if err != nil {
-			notificationError(w, r, err)
-			return
-		}
-		writeEnvelope(w, 200, "Success", d)
+	d, err := h.store.Test(r.Context(), channel)
+	if err != nil {
+		notificationError(w, r, err)
 		return
 	}
-	writeNotFoundProblem(w, r)
+	w.Header().Set("Location", "/api/notifications/deliveries/"+d.ID)
+	writeEnvelope(w, http.StatusAccepted, "Notification queued", d)
+}
+
+// listDeliveries pages the delivery attempts, optionally for one alert event.
+func (h *ownerNotifications) listDeliveries(w http.ResponseWriter, r *http.Request) {
+	page, size, ok := paging(w, r)
+	if !ok {
+		return
+	}
+	if page > 1000000 {
+		invalid(w, r, "page must be at most 1000000.")
+		return
+	}
+	event := ""
+	if v, present := r.URL.Query()["event"]; present {
+		if len(v) != 1 || !uuidPattern.MatchString(v[0]) {
+			invalid(w, r, "event must be an alert event ID.")
+			return
+		}
+		event = v[0]
+	}
+	items, total, err := h.store.Deliveries(r.Context(), event, page, size)
+	if err != nil {
+		notificationError(w, r, err)
+		return
+	}
+	writePage(w, items, page, size, total)
+}
+
+func (h *ownerNotifications) getDelivery(w http.ResponseWriter, r *http.Request, id string) {
+	if !uuidPattern.MatchString(id) {
+		writeNotFoundProblem(w, r)
+		return
+	}
+	d, err := h.store.Delivery(r.Context(), id)
+	if err != nil {
+		notificationError(w, r, err)
+		return
+	}
+	writeEnvelope(w, http.StatusOK, "Success", d)
 }

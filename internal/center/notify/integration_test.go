@@ -489,7 +489,7 @@ func TestQuietHoursHoldAlertDeliveries(t *testing.T) {
 	}
 	// Still night a minute later: still held, nothing sent. After the window it goes out.
 	now = night.Add(time.Minute)
-	worker.Dispatch(ctx)
+	_, _ = worker.Dispatch(ctx)
 	if status("a0000000-0000-4000-8000-000000000001") != "pending" || sent.Load() != 2 {
 		t.Fatal("still held during the window")
 	}
