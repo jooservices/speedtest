@@ -376,3 +376,66 @@ func TestResetOwnerPasswordIntegration(t *testing.T) {
 		t.Fatal("arguments accepted")
 	}
 }
+
+func TestDisableTwoFactorIntegration(t *testing.T) {
+	values, err := godotenv.Read("../../.env")
+	if err != nil {
+		t.Fatal("worktree configuration required")
+	}
+	for key, value := range values {
+		t.Setenv(key, value)
+	}
+	cfg, err := config.LoadCenter()
+	if err != nil {
+		t.Fatal("invalid worktree test configuration")
+	}
+	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := db.Open(t.Context(), cfg.Database)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	if err := runDisableTwoFactor(t.Context(), []string{"x"}, io.Discard); err == nil {
+		t.Fatal("arguments accepted")
+	}
+	t.Setenv("SPEEDTEST_OWNER_EMAIL", "")
+	if err := runDisableTwoFactor(t.Context(), nil, io.Discard); err == nil {
+		t.Fatal("worked with no account")
+	}
+	t.Setenv("SPEEDTEST_OWNER_EMAIL", "owner@example.com")
+	if err := runCreateOwner(t.Context(), nil, strings.NewReader("first long passphrase 41\n"), io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `INSERT INTO user_two_factor(user_id, secret_enc, enabled) SELECT id, 'x', true FROM users`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(t.Context(), `INSERT INTO sessions(token_hash,user_id,csrf_token_hash,expires_at) SELECT 'h',id,'c',now()+interval '1 hour' FROM users`); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SPEEDTEST_OWNER_EMAIL", "nobody@example.com")
+	if err := runDisableTwoFactor(t.Context(), nil, io.Discard); err == nil {
+		t.Fatal("unknown account accepted")
+	}
+	var out strings.Builder
+	t.Setenv("SPEEDTEST_OWNER_EMAIL", "")
+	if err := runDisableTwoFactor(t.Context(), nil, &out); err != nil || !strings.Contains(out.String(), "removed") {
+		t.Fatalf("disable: %v %q", err, out.String())
+	}
+	var factors, sessions int
+	_ = pool.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM user_two_factor), (SELECT count(*) FROM sessions)`).Scan(&factors, &sessions)
+	if factors != 0 || sessions != 0 {
+		t.Fatalf("factors=%d sessions=%d", factors, sessions)
+	}
+	if err := runDisableTwoFactor(t.Context(), nil, io.Discard); err != nil {
+		t.Fatalf("idempotent disable: %v", err)
+	}
+	t.Setenv("SPEEDTEST_DB_PORT", "1")
+	if err := runDisableTwoFactor(t.Context(), nil, io.Discard); err == nil {
+		t.Fatal("an unreachable database must fail")
+	}
+}
