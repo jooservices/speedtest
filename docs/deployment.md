@@ -328,7 +328,7 @@ Live since 2026-11-06 (release 1.0.0). All values below are names or addresses; 
 | Edge | HAProxy on gatekeeper `192.168.10.4`: vhost `speedtest.soulevil.com` (backend `speedtest-web`, health check `/readyz`, `/metrics` answers 404), Let's Encrypt certificate renewed by certbot with the standard deploy hook |
 | Error tracking | Sentry project `speedtest` in organization `jooservices` on `192.168.10.17`; the DSN is in `center.env` (`SPEEDTEST_SENTRY_DSN`, environment `production`) |
 | Geolocation | DB-IP Lite City and ASN databases in `/opt/speedtest/geoip` (CC BY 4.0, attribution: IP Geolocation by DB-IP); refresh monthly with `deploy/prod/geoip.sh` then redeploy |
-| Logs | container `speedtest-vector` on the monitor VM (config `deploy/prod/vector-loki.yaml` in `/opt/speedtest`) ships the center's JSON logs to Loki `192.168.10.10:3100`; query `{app="speedtest"} | json | level="ERROR"` |
+| Logs | Application logs and metrics belong in OpenObserve (as XCrawler does, with a dedicated per-app account); Loki on the monitor VM stays for system-level logs (syslog through Alloy). The OpenObserve account for Speedtest is not created yet, so the center writes JSON logs to the container stdout only (`sudo docker logs speedtest-center`) |
 | Monitoring | Prometheus on the monitor VM scrapes `127.0.0.1:18090/metrics` (job `speedtest`) and probes `https://speedtest.soulevil.com/readyz`; rules in `/etc/prometheus/rules/16-speedtest.yml`; Alertmanager sends them to Telegram |
 
 Deploy and roll back from the repository root with `deploy/prod/prod.sh deploy|rollback|status|logs`. A deploy builds the
