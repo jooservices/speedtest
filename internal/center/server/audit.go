@@ -69,20 +69,7 @@ func (s *serverAuth) actor(r *http.Request) string {
 func auditRoute(path string) bool { return path == "/api/audit" }
 
 func newOwnerAuditHandler(store AuditStore, auth *serverAuth) http.Handler {
-	limiter := newOwnerRateLimiter()
-	return auth.requireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		principal, err := ownerPrincipal(r)
-		if err != nil {
-			writeUnauthorized(w, r)
-			return
-		}
-		if !allowRate(limiter, "owner:"+principal, w, r) {
-			return
-		}
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, r, http.MethodGet)
-			return
-		}
+	return ownerReader(auth, newOwnerRateLimiter(), func(w http.ResponseWriter, r *http.Request) {
 		page, size, ok := paging(w, r)
 		if !ok {
 			return
@@ -97,11 +84,6 @@ func newOwnerAuditHandler(store AuditStore, auth *serverAuth) http.Handler {
 			writeAPIProblem(w, r, http.StatusInternalServerError, "Internal failure", "Internal failure; safe detail only.")
 			return
 		}
-		last := (total + size - 1) / size
-		if last < 1 {
-			last = 1
-		}
-		writeJSON(w, http.StatusOK, apiEnvelope{Success: true, Code: http.StatusOK, Message: "Success", Data: items,
-			Meta: map[string]any{"pagination": map[string]any{"current_page": page, "per_page": size, "total": total, "last_page": last}}})
-	}))
+		writePage(w, items, page, size, total)
+	})
 }

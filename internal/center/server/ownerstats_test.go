@@ -131,7 +131,7 @@ func TestOwnerStatsRouteAndDirectServeGuards(t *testing.T) {
 	}
 
 	h := &ownerStats{store: &fakeOwnerStats{}, limiter: newNodeRateLimiter(60, 10), now: time.Now}
-	serve := http.HandlerFunc(h.serve)
+	serve := ownerGuards(h.limiter, h.serve)
 	directOwner := func(r *http.Request) {
 		*r = *r.WithContext(context.WithValue(r.Context(), ownerIdentityContextKey{}, "test-owner"))
 	}
@@ -147,7 +147,8 @@ func TestOwnerStatsRouteAndDirectServeGuards(t *testing.T) {
 	if rec := do(serve, http.MethodGet, "/api/stats/summary", "", directOwner); rec.Code != http.StatusOK {
 		t.Fatalf("first limited request = %d", rec.Code)
 	}
-	limited := http.HandlerFunc((&ownerStats{store: &fakeOwnerStats{}, limiter: newNodeRateLimiter(60, 1), now: time.Now}).serve)
+	limitedStats := &ownerStats{store: &fakeOwnerStats{}, limiter: newNodeRateLimiter(60, 1), now: time.Now}
+	limited := ownerGuards(limitedStats.limiter, limitedStats.serve)
 	if rec := do(limited, http.MethodGet, "/api/stats/summary", "", directOwner); rec.Code != http.StatusOK {
 		t.Fatalf("first rate-limited request = %d", rec.Code)
 	}

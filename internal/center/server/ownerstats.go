@@ -33,7 +33,7 @@ type ownerStats struct {
 
 func newOwnerStatsHandler(store OwnerStatsStore, auth *serverAuth) http.Handler {
 	h := &ownerStats{store: store, limiter: newOwnerRateLimiter(), now: time.Now}
-	return auth.requireSession(http.HandlerFunc(h.serve))
+	return ownerReader(auth, h.limiter, h.serve)
 }
 
 func ownerStatsRoute(path string) bool {
@@ -46,18 +46,6 @@ func ownerStatsRoute(path string) bool {
 }
 
 func (h *ownerStats) serve(w http.ResponseWriter, r *http.Request) {
-	principal, err := ownerPrincipal(r)
-	if err != nil {
-		writeUnauthorized(w, r)
-		return
-	}
-	if !allowRate(h.limiter, "owner:"+principal, w, r) {
-		return
-	}
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, r, http.MethodGet)
-		return
-	}
 	switch r.URL.Path {
 	case "/api/stats/summary":
 		h.summary(w, r)

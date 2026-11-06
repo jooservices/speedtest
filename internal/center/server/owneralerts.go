@@ -92,21 +92,7 @@ func (h *ownerAlerts) serve(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if len(parts) == 4 && parts[2] == "events" {
-		if !uuidPattern.MatchString(parts[3]) {
-			writeNotFoundProblem(w, r)
-			return
-		}
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, r, http.MethodGet)
-			return
-		}
-		event, etag, err := h.store.GetEvent(r.Context(), strings.ToLower(parts[3]))
-		if err != nil {
-			writeAlertError(w, r, err)
-			return
-		}
-		w.Header().Set("ETag", etag)
-		writeEnvelope(w, http.StatusOK, "Success", event)
+		h.getEvent(w, r, parts[3])
 		return
 	}
 	if len(parts) == 5 && parts[2] == "events" && parts[4] == "ack" {
@@ -124,6 +110,25 @@ func (h *ownerAlerts) serve(w http.ResponseWriter, r *http.Request) {
 	writeNotFoundProblem(w, r)
 }
 
+// getEvent returns one alert event with its ETag (GET /api/alerts/events/{id}).
+func (h *ownerAlerts) getEvent(w http.ResponseWriter, r *http.Request, id string) {
+	if !uuidPattern.MatchString(id) {
+		writeNotFoundProblem(w, r)
+		return
+	}
+	if r.Method != http.MethodGet {
+		methodNotAllowed(w, r, http.MethodGet)
+		return
+	}
+	event, etag, err := h.store.GetEvent(r.Context(), strings.ToLower(id))
+	if err != nil {
+		writeAlertError(w, r, err)
+		return
+	}
+	w.Header().Set("ETag", etag)
+	writeEnvelope(w, http.StatusOK, "Success", event)
+}
+
 func (h *ownerAlerts) ruleCollection(w http.ResponseWriter, r *http.Request, principal string) {
 	switch r.Method {
 	case http.MethodGet:
@@ -136,7 +141,7 @@ func (h *ownerAlerts) ruleCollection(w http.ResponseWriter, r *http.Request, pri
 			writeAlertError(w, r, err)
 			return
 		}
-		writeAlertPage(w, http.StatusOK, items, page, size, total)
+		writePage(w, items, page, size, total)
 	case http.MethodPost:
 		in, ok := decodeAlertRule(w, r)
 		if !ok {
@@ -237,7 +242,7 @@ func (h *ownerAlerts) eventCollection(w http.ResponseWriter, r *http.Request) {
 		writeAlertError(w, r, err)
 		return
 	}
-	writeAlertPage(w, http.StatusOK, items, page, size, total)
+	writePage(w, items, page, size, total)
 }
 
 func (h *ownerAlerts) acknowledge(w http.ResponseWriter, r *http.Request, id string) {
@@ -339,15 +344,6 @@ func decodeExactJSON(w http.ResponseWriter, r *http.Request, target any, fields 
 		return false
 	}
 	return true
-}
-
-func writeAlertPage(w http.ResponseWriter, status int, data any, page, size, total int) {
-	last := (total + size - 1) / size
-	if last < 1 {
-		last = 1
-	}
-	writeJSON(w, status, apiEnvelope{Success: true, Code: status, Message: "Success", Data: data,
-		Meta: map[string]any{"pagination": map[string]any{"current_page": page, "per_page": size, "total": total, "last_page": last}}, Errors: nil})
 }
 
 func writeAlertError(w http.ResponseWriter, r *http.Request, err error) {

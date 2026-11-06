@@ -24,24 +24,12 @@ type ownerDashboard struct {
 
 func newOwnerDashboardHandler(store OwnerDashboardStore, auth *serverAuth) http.Handler {
 	h := &ownerDashboard{store: store, limiter: newOwnerRateLimiter(), window: &ownerStats{now: time.Now}}
-	return auth.requireSession(http.HandlerFunc(h.serve))
+	return ownerReader(auth, h.limiter, h.serve)
 }
 
 func ownerDashboardRoute(path string) bool { return path == "/api/dashboard" || path == "/api/series" }
 
 func (h *ownerDashboard) serve(w http.ResponseWriter, r *http.Request) {
-	principal, err := ownerPrincipal(r)
-	if err != nil {
-		writeUnauthorized(w, r)
-		return
-	}
-	if !allowRate(h.limiter, "owner:"+principal, w, r) {
-		return
-	}
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, r, http.MethodGet)
-		return
-	}
 	q, ok := h.window.window(w, r)
 	if !ok {
 		return
