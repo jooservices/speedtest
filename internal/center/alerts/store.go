@@ -27,11 +27,13 @@ type DB interface {
 
 // Store owns alert rule/event reads and writes and the incremental evaluator.
 type Store struct {
-	DB     DB
-	AppKey []byte
-	Now    func() time.Time
-	Random io.Reader
-	Logger *slog.Logger
+	// ObserveRun reports pass success without changing worker behavior.
+	ObserveRun func(bool)
+	DB         DB
+	AppKey     []byte
+	Now        func() time.Time
+	Random     io.Reader
+	Logger     *slog.Logger
 }
 
 func (s *Store) now() time.Time {
