@@ -123,3 +123,9 @@ ui-coverage:
 	node tests/ui/wizard.mjs
 	node tests/ui/coverage.mjs
 	node scripts/ui-coverage.mjs --min 85
+
+.PHONY: test-observability
+## test-observability checks the dashboard/alert definitions and runs the Vector config's own tests (needs Docker).
+test-observability:
+	python3 -m unittest discover -s tests/observability
+	docker run --rm -e OPENOBSERVE_URL=http://127.0.0.1:5080 -e OPENOBSERVE_USER=u -e OPENOBSERVE_PASSWORD=p -v "$(PWD)/deploy/observability/vector.yaml":/etc/vector/vector.yaml:ro timberio/vector:0.43.1-alpine test /etc/vector/vector.yaml

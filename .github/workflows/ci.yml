@@ -60,3 +60,9 @@ jobs:
         run: |
           node scripts/test-matrix.mjs
           node scripts/e2e-scenarios.mjs
+
+      - name: Observability tooling (dashboard and alert definitions, Vector config)
+        run: |
+          python3 -m unittest discover -s tests/observability
+          docker run --rm -e OPENOBSERVE_URL=http://127.0.0.1:5080 -e OPENOBSERVE_USER=u -e OPENOBSERVE_PASSWORD=p \
+            -v "$PWD/deploy/observability/vector.yaml":/etc/vector/vector.yaml:ro timberio/vector:0.43.1-alpine test /etc/vector/vector.yaml
