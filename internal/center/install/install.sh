@@ -109,6 +109,11 @@ if [ -z "$ROOT" ]; then
 		useradd --system --home-dir /var/lib/speedtest-agent --create-home --shell /usr/sbin/nologin speedtest-agent
 	install -d -m 0750 -o speedtest-agent -g speedtest-agent /etc/speedtest-agent
 	runuser -u speedtest-agent -- /usr/local/bin/speedtest-agent enroll --center "$CENTER_URL" --token "$token" --name "$name"
+	# The service refuses to start without the center address; it reads it (and the local seed config) from here.
+	printf 'SPEEDTEST_AGENT_CENTER=%s\n' "$CENTER_URL" >/etc/speedtest-agent/.env
+	printf 'name: %s\n' "$name" >/etc/speedtest-agent/config.yaml
+	chown speedtest-agent:speedtest-agent /etc/speedtest-agent/.env /etc/speedtest-agent/config.yaml
+	chmod 0640 /etc/speedtest-agent/.env /etc/speedtest-agent/config.yaml
 	install -m 0644 "$tmp/speedtest-agent.service" /etc/systemd/system/speedtest-agent.service
 	systemctl daemon-reload
 	systemctl enable --now speedtest-agent
@@ -118,6 +123,8 @@ else
 	SPEEDTEST_AGENT_CREDENTIAL="$ROOT/etc/speedtest-agent/credential" \
 		SPEEDTEST_AGENT_CONFIG="$ROOT/etc/speedtest-agent/config.yaml" \
 		"$ROOT/usr/local/bin/speedtest-agent" enroll --center "$CENTER_URL" --token "$token" --name "$name"
+	printf 'SPEEDTEST_AGENT_CENTER=%s\n' "$CENTER_URL" >"$ROOT/etc/speedtest-agent/.env"
+	printf 'name: %s\n' "$name" >"$ROOT/etc/speedtest-agent/config.yaml"
 	install -d -m 0755 "$ROOT/etc/systemd/system"
 	install -m 0644 "$tmp/speedtest-agent.service" "$ROOT/etc/systemd/system/speedtest-agent.service"
 	printf 'Installed under %s (test mode: no user, no systemd).\n' "$ROOT"

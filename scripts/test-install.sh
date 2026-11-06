@@ -60,6 +60,8 @@ run_install SPEEDTEST_INSTALL_UNAME_M=x86_64 sh "$work/install.sh" --token tok12
 args="$(cat "$work/root/etc/speedtest-agent/enroll-args")"
 [ "$args" = "enroll --center $url --token tok123 --name vm 1" ] || fail "unexpected enrol arguments: $args"
 [ -f "$work/root/etc/speedtest-agent/credential" ] || fail "credential not written"
+grep -q "^SPEEDTEST_AGENT_CENTER=" "$work/root/etc/speedtest-agent/.env" || fail "center address not written for the service"
+grep -q "^name: " "$work/root/etc/speedtest-agent/config.yaml" || fail "node name not written"
 grep -q "Checksum verified" "$work/out1.log" || fail "no checksum confirmation printed"
 printf 'ok: install on amd64\n'
 
