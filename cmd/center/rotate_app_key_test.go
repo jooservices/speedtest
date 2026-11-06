@@ -213,7 +213,7 @@ func TestRotateTransactionUnit(t *testing.T) {
 			}
 			count, err := rotateAppKey(t.Context(), rotationFakeDB{tx: tx, fail: failure == "BEGIN"}, oldKey, newKey)
 			if failure == "" {
-				if err != nil || count.values != 2 || !tx.committed {
+				if err != nil || count.values != 3 || !tx.committed {
 					t.Fatal("valid rotation failed", count, err)
 				}
 			} else if err == nil || count != (rotationCounts{}) || tx.committed || strings.Contains(err.Error(), "private") {
