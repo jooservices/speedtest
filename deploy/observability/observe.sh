@@ -23,6 +23,8 @@ env)
   ;;
 up)
   [ -f "$ENV_FILE" ] || { echo "missing $ENV_FILE: run observe.sh env"; exit 1; }
+  # The error branch must run when either grep fails, so the A && B || C chain is intended.
+  # shellcheck disable=SC2015
   grep -q '^OPENOBSERVE_USER=.' "$ENV_FILE" && grep -q '^OPENOBSERVE_PASSWORD=.' "$ENV_FILE" || { echo "fill in OPENOBSERVE_USER and OPENOBSERVE_PASSWORD in $ENV_FILE"; exit 1; }
   [ "$(stat -c %a "$ENV_FILE")" = 600 ] || { echo "$ENV_FILE must be mode 0600"; exit 1; }
   docker rm -f "$NAME" >/dev/null 2>&1 || true
