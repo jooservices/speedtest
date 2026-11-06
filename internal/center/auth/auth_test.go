@@ -26,6 +26,8 @@ type memoryStore struct {
 	deleteErr    error
 	changeErr    error
 	seedErr      error
+	tf           map[string]*TwoFactor
+	tfErr        error
 }
 
 func newMemoryStore() *memoryStore {

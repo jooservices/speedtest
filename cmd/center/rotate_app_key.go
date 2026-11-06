@@ -124,7 +124,7 @@ func rotateAppKey(ctx context.Context, pool rotationDatabase, oldKey, newKey []b
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	// Block readers/writers until commit; the runbook also requires stopping old-key processes.
-	if _, err = tx.Exec(ctx, `LOCK TABLE installer_jobs, installer_idempotency, settings, api_idempotency IN ACCESS EXCLUSIVE MODE`); err != nil {
+	if _, err = tx.Exec(ctx, `LOCK TABLE installer_jobs, installer_idempotency, settings, api_idempotency, user_two_factor IN ACCESS EXCLUSIVE MODE`); err != nil {
 		return rotationCounts{}, errors.New("could not lock APP_KEY storage")
 	}
 	var active bool
@@ -141,6 +141,7 @@ func rotateAppKey(ctx context.Context, pool rotationDatabase, oldKey, newKey []b
 	total := 0
 	for _, table := range []struct{ query, update string }{
 		{`SELECT ctid::text, secret_ciphertext, '', '', '' FROM settings WHERE secret_ciphertext IS NOT NULL AND key <> 'enrollment_key'`, `UPDATE settings SET secret_ciphertext=$2 WHERE ctid=$1::tid RETURNING secret_ciphertext`},
+		{`SELECT ctid::text, secret_enc, '', '', '' FROM user_two_factor`, `UPDATE user_two_factor SET secret_enc=$2 WHERE ctid=$1::tid RETURNING secret_enc`},
 		{`SELECT ctid::text, response_ciphertext, principal, operation, key_hash FROM api_idempotency`, `UPDATE api_idempotency SET response_ciphertext=$2 WHERE ctid=$1::tid RETURNING response_ciphertext`},
 	} {
 		count, err := rotateTable(ctx, tx, table.query, table.update, oldCipher, newCipher)

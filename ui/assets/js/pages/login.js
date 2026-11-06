@@ -21,6 +21,9 @@
     var state = { busy: false };
     var email = U.input('', null, { type: 'email', autocomplete: 'username', required: true, id: 'signin-email', name: 'email' });
     var password = U.input('', null, { type: 'password', autocomplete: 'current-password', required: true, id: 'signin-password', name: 'password' });
+    var code = U.input('', null, { type: 'text', inputmode: 'text', autocomplete: 'one-time-code', id: 'signin-code', name: 'code', maxlength: 32 });
+    var codeField = U.field('Authentication code', code, 'The 6-digit code from your authenticator app, or one of your recovery codes.');
+    codeField.style.display = 'none';
     var message = h('div', { class: 'form-error', role: 'alert', 'aria-live': 'polite' });
     var submit = h('button', { type: 'submit', class: 'btn primary' }, 'Sign in');
     function show(text) { message.textContent = text || ''; message.style.display = text ? '' : 'none'; }
@@ -29,16 +32,26 @@
       event.preventDefault();
       if (state.busy) return;
       if (!email.value.trim() || !password.value) { show('Enter your email and password.'); (email.value.trim() ? password : email).focus(); return; }
+      var asking = codeField.style.display !== 'none';
+      if (asking && !code.value.trim()) { show('Enter the code from your authenticator app.'); code.focus(); return; }
       state.busy = true; submit.disabled = true; submit.textContent = 'Signing in…'; show('');
-      API.request('/api/auth/login', { method: 'POST', body: { email: email.value.trim(), password: password.value } }).then(function () {
-        password.value = '';
+      var body = { email: email.value.trim(), password: password.value };
+      if (asking) body.code = code.value.trim();
+      API.request('/api/auth/login', { method: 'POST', body: body }).then(function () {
+        password.value = ''; code.value = '';
         location.hash = '#/';
         return ST.load();
       }).catch(function (error) {
-        show(explain(error)); password.value = ''; password.focus();
+        if (error.type === '/problems/two-factor-required') {
+          // The password was right; the second step asks for the code and keeps the password in the form.
+          codeField.style.display = ''; show('Enter the code from your authenticator app to finish signing in.'); code.focus();
+          return;
+        }
+        if (asking && error.status === 401) { show('That code is not right, or it was already used. Try the next code.'); code.value = ''; code.focus(); return; }
+        show(explain(error)); password.value = ''; code.value = ''; password.focus();
       }).then(function () { state.busy = false; submit.disabled = false; submit.textContent = 'Sign in'; });
     } },
-      U.field('Email', email, null), U.field('Password', password, null), message, submit);
+      U.field('Email', email, null), U.field('Password', password, null), codeField, message, submit);
     root.appendChild(h('div', { class: 'signin' },
       h('div', { class: 'card card-pad signin-card' },
         h('div', { class: 'brand', style: 'margin-bottom:12px' }, h('div', { class: 'brand-mark' }, U.icon('gauge', 18)),

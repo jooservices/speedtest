@@ -532,6 +532,11 @@
       return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
     }
     ST.timezone = quietZone;
+    // Two-factor sign-in (authenticator app): status, start setup, confirm, turn off.
+    ST.twoFactorStatus = function () { return API.request('/api/auth/2fa').then(function (r) { return r.data; }); };
+    ST.twoFactorSetup = function (currentPassword) { return API.request('/api/auth/2fa/setup', { method: 'POST', body: { currentPassword: currentPassword } }).then(function (r) { return r.data; }); };
+    ST.twoFactorEnable = function (code) { return API.request('/api/auth/2fa/enable', { method: 'POST', body: { code: code } }).then(function (r) { return r.data.recoveryCodes; }); };
+    ST.twoFactorDisable = function (currentPassword, code) { return API.request('/api/auth/2fa/disable', { method: 'POST', body: { currentPassword: currentPassword, code: code } }); };
     // Changes the owner's password; the center rotates this session, so the owner stays signed in.
     ST.changePassword = function (currentPassword, newPassword) {
       return API.request('/api/auth/password', { method: 'POST', body: { currentPassword: currentPassword, newPassword: newPassword } });

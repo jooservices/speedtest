@@ -21,6 +21,7 @@ type authMemoryStore struct {
 	mu       sync.Mutex
 	users    map[string]auth.Credential
 	sessions map[string]auth.SessionRecord
+	tf       map[string]*auth.TwoFactor
 }
 
 func newAuthMemoryStore() *authMemoryStore {
@@ -487,6 +488,12 @@ type scriptedAuthService struct {
 	login     func(context.Context, string, string, string, string) (auth.SessionView, error)
 	logout    func(context.Context, string) error
 	password  func(context.Context, string, string, string) (auth.SessionView, error)
+	// loginCode sees the second-factor code; login (without it) is used when unset.
+	loginCode func(context.Context, string, string, string, string, string) (auth.SessionView, error)
+	status    func(context.Context, string) (auth.TwoFactorStatus, error)
+	begin     func(context.Context, string, string) (auth.TwoFactorSetup, error)
+	enable    func(context.Context, string, string) ([]string, error)
+	disable   func(context.Context, string, string, string) error
 }
 
 func (s scriptedAuthService) Bootstrap(ctx context.Context) (auth.SessionView, error) {
@@ -503,11 +510,42 @@ func (s scriptedAuthService) Session(ctx context.Context, token string) (auth.Se
 	return testSessionView(), nil
 }
 
-func (s scriptedAuthService) Login(ctx context.Context, token, email, password, ip string) (auth.SessionView, error) {
+func (s scriptedAuthService) LoginWithCode(ctx context.Context, token, email, password, code, ip string) (auth.SessionView, error) {
+	if s.loginCode != nil {
+		return s.loginCode(ctx, token, email, password, code, ip)
+	}
 	if s.login != nil {
 		return s.login(ctx, token, email, password, ip)
 	}
 	return testSessionView(), nil
+}
+
+func (s scriptedAuthService) TwoFactorStatus(ctx context.Context, token string) (auth.TwoFactorStatus, error) {
+	if s.status != nil {
+		return s.status(ctx, token)
+	}
+	return auth.TwoFactorStatus{Available: true}, nil
+}
+
+func (s scriptedAuthService) BeginTwoFactor(ctx context.Context, token, password string) (auth.TwoFactorSetup, error) {
+	if s.begin != nil {
+		return s.begin(ctx, token, password)
+	}
+	return auth.TwoFactorSetup{Secret: "SECRET", URI: "otpauth://totp/x", QR: "data:image/png;base64,AA"}, nil
+}
+
+func (s scriptedAuthService) EnableTwoFactor(ctx context.Context, token, code string) ([]string, error) {
+	if s.enable != nil {
+		return s.enable(ctx, token, code)
+	}
+	return []string{"aaaaa-bbbbb"}, nil
+}
+
+func (s scriptedAuthService) DisableTwoFactor(ctx context.Context, token, password, code string) error {
+	if s.disable != nil {
+		return s.disable(ctx, token, password, code)
+	}
+	return nil
 }
 
 func (s scriptedAuthService) Logout(ctx context.Context, token string) error {

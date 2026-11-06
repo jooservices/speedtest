@@ -155,3 +155,42 @@ func validateExplicitDefaultSeedEnvironment(appEnv string, configured bool) erro
 	}
 	return validateDefaultSeedEnvironment(strings.ToLower(strings.TrimSpace(appEnv)))
 }
+
+// runDisableTwoFactor removes the owner's two-factor sign-in and signs every session out. It is the recovery path
+// when the authenticator and the recovery codes are lost; whoever can run it already controls the center host.
+func runDisableTwoFactor(ctx context.Context, args []string, stdout io.Writer) error {
+	if len(args) != 0 {
+		return errors.New("usage: [SPEEDTEST_OWNER_EMAIL=you@example.com] center disable-2fa")
+	}
+	pool, _, err := openCenterDatabase(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer pool.Close()
+	email := ownerEmail()
+	tx, err := pool.Begin(ctx)
+	if err != nil {
+		return errors.New("could not start the two-factor reset")
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	var id string
+	if email == "" {
+		var users int
+		if err := tx.QueryRow(ctx, `SELECT count(*), coalesce(min(id::text), '') FROM users`).Scan(&users, &id); err != nil || users != 1 {
+			return errors.New("set SPEEDTEST_OWNER_EMAIL: there is not exactly one account")
+		}
+	} else if err := tx.QueryRow(ctx, `SELECT id::text FROM users WHERE email=$1`, email).Scan(&id); err != nil {
+		return errors.New("no account has that email address")
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM user_two_factor WHERE user_id=$1`, id); err != nil {
+		return errors.New("could not remove two-factor sign-in")
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM sessions`); err != nil {
+		return errors.New("could not sign existing sessions out")
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return errors.New("could not save the change")
+	}
+	_, _ = fmt.Fprintln(stdout, "two-factor sign-in removed; all sessions were signed out")
+	return nil
+}

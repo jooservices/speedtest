@@ -9,7 +9,7 @@ CREATE INDEX results_node_engine_ts_idx ON results(node_id, engine, ts DESC);
 CREATE TABLE engine_schedules (
     node_id uuid NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     engine text NOT NULL CHECK (engine IN ('ookla','librespeed')),
-    interval_minutes integer NOT NULL DEFAULT 30 CHECK (interval_minutes BETWEEN 5 AND 1440),
+    interval_minutes integer NOT NULL DEFAULT 60 CHECK (interval_minutes BETWEEN 5 AND 1440),
     offset_minutes integer NOT NULL DEFAULT 0 CHECK (offset_minutes >= 0 AND offset_minutes < interval_minutes),
     enabled boolean NOT NULL DEFAULT true,
     revision bigint NOT NULL DEFAULT 1 CHECK (revision > 0),

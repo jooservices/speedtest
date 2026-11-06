@@ -387,7 +387,8 @@ const paths = [
   '/api/dashboard', '/api/series', '/api/schedules/{node}', '/api/alerts/rules',
   '/api/alerts/events', '/api/notifications/test/{channel}', '/api/settings',
   '/api/ip/history', '/api/ip/addresses', '/api/ip/lookup', '/api/ip/map',
-  '/api/auth/login', '/api/auth/logout', '/api/auth/me', '/api/auth/password'
+  '/api/auth/login', '/api/auth/logout', '/api/auth/me', '/api/auth/password',
+  '/api/auth/2fa', '/api/auth/2fa/setup', '/api/auth/2fa/enable', '/api/auth/2fa/disable'
 ];
 for (const path of paths) assert(api.paths[path], path);
 for (const o of operations) {

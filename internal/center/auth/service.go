@@ -21,6 +21,13 @@ var (
 	ErrInvalidCurrentPass = errors.New("current password is incorrect")
 	ErrSessionConflict    = errors.New("session state conflict")
 	ErrRateLimited        = errors.New("login rate limit exceeded")
+
+	ErrTwoFactorRequired    = errors.New("two-factor code required")
+	ErrInvalidTwoFactorCode = errors.New("invalid two-factor code")
+	ErrTwoFactorUnavailable = errors.New("two-factor sign-in needs APP_KEY")
+	ErrTwoFactorEnabled     = errors.New("two-factor sign-in is already enabled")
+	ErrTwoFactorNotPending  = errors.New("start two-factor setup first")
+	ErrTwoFactorNotEnabled  = errors.New("two-factor sign-in is not enabled")
 )
 
 // Identity is the public user information returned by auth/me and login.
@@ -63,6 +70,7 @@ type Store interface {
 	DeleteSession(context.Context, string) error
 	ChangePassword(context.Context, string, string, string, string, string, string, time.Time) error
 	SeedAdmin(context.Context, string, string) error
+	TwoFactorStore
 }
 
 // Config controls session lifetime and login rate limits.
@@ -70,6 +78,8 @@ type Config struct {
 	SessionTTL       time.Duration
 	LoginMaxAttempts int
 	LoginWindow      time.Duration
+	// AppKey (32 bytes) encrypts the two-factor secrets; without it two-factor sign-in is unavailable.
+	AppKey []byte
 }
 
 // Service implements password and session operations over a Store.
@@ -128,6 +138,13 @@ func (s *Service) Session(ctx context.Context, token string) (SessionView, error
 
 // Login consumes an anonymous session and creates a new authenticated session.
 func (s *Service) Login(ctx context.Context, currentToken, email, password, clientIP string) (SessionView, error) {
+	return s.LoginWithCode(ctx, currentToken, email, password, "", clientIP)
+}
+
+// LoginWithCode is Login with the optional second factor: a six-digit authenticator code or a recovery code. When the
+// account has two-factor sign-in enabled and the code is empty it returns ErrTwoFactorRequired after the password
+// was verified, so the caller can ask for the code.
+func (s *Service) LoginWithCode(ctx context.Context, currentToken, email, password, code, clientIP string) (SessionView, error) {
 	current, err := s.Session(ctx, currentToken)
 	if err != nil {
 		return SessionView{}, err
@@ -149,6 +166,9 @@ func (s *Service) Login(ctx context.Context, currentToken, email, password, clie
 	}
 	if !VerifyPassword(password, credential.PasswordHash) {
 		return SessionView{}, ErrInvalidCredentials
+	}
+	if err := s.checkSecondFactor(ctx, credential.ID, code); err != nil {
+		return SessionView{}, err
 	}
 	newToken, err := newOpaqueToken()
 	if err != nil {

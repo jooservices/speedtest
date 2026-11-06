@@ -36,7 +36,7 @@ func Reset(t testReporter, pool *pgxpool.Pool) {
 	defer cancel()
 	verify(t, ctx, pool)
 	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS
- public.audit_log, public.installer_idempotency, public.installer_events, public.installer_jobs, public.installer_probe_idempotency, public.installer_probes,
+ public.user_two_factor, public.audit_log, public.installer_idempotency, public.installer_events, public.installer_jobs, public.installer_probe_idempotency, public.installer_probes,
  public.notification_deliveries, public.ip_change_signals, public.alert_notification_outbox, public.maintenance_jobs, public.node_ip_addresses, public.agent_commands, public.alert_state, public.alert_events, public.alert_rules,
  public.engine_schedules, public.schedules, public.node_ip_history, public.results, public.node_credentials,
  public.sessions, public.users, public.nodes, public.ip_addresses, public.settings,
