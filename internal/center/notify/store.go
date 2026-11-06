@@ -41,11 +41,13 @@ const columns = `id::text,event_id::text,channel,status,attempts,created_at,last
 
 // Store owns durable delivery creation and dispatch. Now is injectable for retry tests.
 type Store struct {
-	DB       *pgxpool.Pool
-	Settings Preferences
-	Sender   Sender
-	Now      func() time.Time
-	Logger   *slog.Logger
+	// ObserveRun reports pass success without changing worker behavior.
+	ObserveRun func(bool)
+	DB         *pgxpool.Pool
+	Settings   Preferences
+	Sender     Sender
+	Now        func() time.Time
+	Logger     *slog.Logger
 }
 
 func (s *Store) now() time.Time {
@@ -293,10 +295,12 @@ func (s *Store) Loop(ctx context.Context) {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	for {
+		ok := true
 		for i := 0; i < 100 && ctx.Err() == nil; i++ {
 			consumed, e1 := s.Consume(ctx)
 			dispatched, e2 := s.Dispatch(ctx)
 			if e1 != nil || e2 != nil {
+				ok = false
 				if ctx.Err() == nil {
 					if s.Logger != nil {
 						s.Logger.Error("notification worker iteration failed")
@@ -308,6 +312,9 @@ func (s *Store) Loop(ctx context.Context) {
 			if !consumed && !dispatched {
 				break
 			}
+		}
+		if s.ObserveRun != nil {
+			s.ObserveRun(ok && ctx.Err() == nil)
 		}
 		select {
 		case <-ctx.Done():

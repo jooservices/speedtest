@@ -219,3 +219,20 @@ func TestAlertLoopImmediateWorkAndCancellationIntegration(t *testing.T) {
 }
 
 func strPointer(s string) *string { return &s }
+
+func TestAlertLoopObserverIntegration(t *testing.T) {
+	p, ctx := integrationDB(t)
+	run, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var outcomes []bool
+	store := &alerts.Store{DB: p, ObserveRun: func(ok bool) { outcomes = append(outcomes, ok); cancel() }}
+	store.Loop(run)
+	if len(outcomes) != 1 || !outcomes[0] {
+		t.Fatal(outcomes)
+	}
+	outcomes = nil
+	store.Loop(run)
+	if len(outcomes) != 1 || outcomes[0] {
+		t.Fatal("failed pass must not advance success", outcomes)
+	}
+}

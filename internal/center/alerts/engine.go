@@ -385,9 +385,11 @@ func (s *Store) Loop(ctx context.Context) {
 	ticker := time.NewTicker(15 * time.Second)
 	defer ticker.Stop()
 	for {
+		ok := true
 		for {
 			count, err := s.DrainSignals(ctx)
 			if err != nil {
+				ok = false
 				s.logger().ErrorContext(ctx, "alert IP signal drain failed", "error", err)
 				errtrack.CaptureError(err, map[string]string{"loop": "alerts", "step": "ip-signals"})
 				break
@@ -397,8 +399,12 @@ func (s *Store) Loop(ctx context.Context) {
 			}
 		}
 		if err := s.EvaluateOffline(ctx); err != nil {
+			ok = false
 			s.logger().ErrorContext(ctx, "alert offline check failed", "error", err)
 			errtrack.CaptureError(err, map[string]string{"loop": "alerts", "step": "offline-check"})
+		}
+		if s.ObserveRun != nil {
+			s.ObserveRun(ok)
 		}
 		select {
 		case <-ctx.Done():

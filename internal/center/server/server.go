@@ -18,6 +18,7 @@ import (
 
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/settings"
+	"github.com/jooservices/speedtest/internal/center/telemetry"
 	"github.com/jooservices/speedtest/internal/shared/errtrack"
 )
 
@@ -36,8 +37,10 @@ type Pinger interface {
 type Options struct {
 	Pinger Pinger
 	// Metrics optionally serves GET /metrics; MetricsToken, when set, is the bearer token required.
-	Metrics           MetricsSource
-	MetricsToken      string
+	Metrics      MetricsSource
+	MetricsToken string
+	// Telemetry wraps the entire chain when configured.
+	Telemetry         *telemetry.Telemetry
 	Auth              AuthService
 	RequireHTTPS      bool
 	TrustedProxyCIDRs string
@@ -93,6 +96,9 @@ func NewHandler(options Options) http.Handler {
 	handler = recoverPanics(handler, logger)
 	handler = logRequests(handler, logger)
 	handler = withRequestID(handler)
+	if options.Telemetry != nil {
+		handler = options.Telemetry.Middleware(handler)
+	}
 	return handler
 }
 

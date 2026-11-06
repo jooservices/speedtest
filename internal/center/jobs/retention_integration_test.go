@@ -218,3 +218,20 @@ func TestRetentionAlsoPrunesTheAuditLog(t *testing.T) {
 		t.Fatalf("keep-everything run: %+v %v", res, err)
 	}
 }
+
+func TestRetentionObserverIntegration(t *testing.T) {
+	pool, ctx := openPool(t)
+	var outcomes []bool
+	r := &Retention{DB: pool, ObserveRun: func(ok bool) { outcomes = append(outcomes, ok) }}
+	if _, err := r.Run(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := r.Run(cancelled); err == nil {
+		t.Fatal("cancelled run succeeded")
+	}
+	if len(outcomes) != 2 || !outcomes[0] || outcomes[1] {
+		t.Fatal(outcomes)
+	}
+}

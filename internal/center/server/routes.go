@@ -96,7 +96,7 @@ func platformAreas(o Options, auth *serverAuth, readiness http.Handler) routeTab
 	}
 	t.add(getOnly(http.HandlerFunc(healthz)), onPath(func(p string) bool { return p == "/healthz" }))
 	if o.Metrics != nil {
-		t.add(getOnly(metricsHandler(o.Metrics, o.MetricsToken)), onPath(func(p string) bool { return p == "/metrics" }))
+		t.add(getOnly(metricsHandler(o.Metrics, o.MetricsToken, o.Telemetry)), onPath(func(p string) bool { return p == "/metrics" }))
 	}
 	t.add(getOnly(readiness), onPath(func(p string) bool { return p == "/readyz" }))
 	return t
