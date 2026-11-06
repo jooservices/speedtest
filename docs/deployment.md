@@ -326,6 +326,8 @@ Live since 2026-11-06 (release 1.0.0). All values below are names or addresses; 
 | Database | `speedtest` database and role on the shared PostgreSQL `192.168.10.12`, `sslmode=require` |
 | Agent downloads | `/opt/speedtest/release` on the VM (agent binaries, `release.json`), mounted read-only into the container |
 | Edge | HAProxy on gatekeeper `192.168.10.4`: vhost `speedtest.soulevil.com` (backend `speedtest-web`, health check `/readyz`, `/metrics` answers 404), Let's Encrypt certificate renewed by certbot with the standard deploy hook |
+| Error tracking | Sentry project `speedtest` in organization `jooservices` on `192.168.10.17`; the DSN is in `center.env` (`SPEEDTEST_SENTRY_DSN`, environment `production`) |
+| Geolocation | DB-IP Lite City and ASN databases in `/opt/speedtest/geoip` (CC BY 4.0, attribution: IP Geolocation by DB-IP); refresh monthly with `deploy/prod/geoip.sh` then redeploy |
 | Monitoring | Prometheus on the monitor VM scrapes `127.0.0.1:18090/metrics` (job `speedtest`) and probes `https://speedtest.soulevil.com/readyz`; rules in `/etc/prometheus/rules/16-speedtest.yml`; Alertmanager sends them to Telegram |
 
 Deploy and roll back from the repository root with `deploy/prod/prod.sh deploy|rollback|status|logs`. A deploy builds the
