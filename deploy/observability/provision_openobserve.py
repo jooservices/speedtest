@@ -166,6 +166,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--env-file")
+    ap.add_argument("--dashboard-only", action="store_true", help="skip destinations and alerts (production alerts run in Prometheus/Alertmanager)")
     args = ap.parse_args()
     read_env_file(args.env_file)
     url = os.environ.get("OPENOBSERVE_URL", "http://127.0.0.1:15080")
@@ -202,6 +203,8 @@ def main() -> int:
         ensure(c, "destinations", name, {"name": name, "url": url, "method": "post", "skip_tls_verify": False, "template": name, "headers": {}, "type": "http"})
         destinations.append(name)
 
+    if args.dashboard_only:
+        return 0
     if webhook:
         destination("speedtest-webhook", webhook, json.dumps({"text": "Speedtest alert {alert_name}: {alert_description}"}))
     if bot and chat:
