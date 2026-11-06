@@ -21,7 +21,7 @@ run_container() { # image tag
 		--env-file /etc/speedtest/center.env -e SPEEDTEST_PORT=$PORT -e SPEEDTEST_RELEASE_DIR=/var/lib/speedtest/release \\
 		-e SPEEDTEST_GEOLITE2_AUTO_UPDATE=false \
 		-v speedtest-center-data:/var/lib/speedtest -v /opt/speedtest/release:/var/lib/speedtest/release:ro \\
-		-v /opt/speedtest/geoip:/var/lib/speedtest/data/geoip:ro $1"
+		-v /opt/speedtest/geoip:/var/lib/speedtest/data/geoip $1"
 }
 wait_ready() {
 	for _ in $(seq 1 40); do
@@ -37,6 +37,9 @@ deploy)
 	make release VERSION="${VERSION#v}"
 	docker build -f deploy/prod/Dockerfile -t "speedtest-center:$VERSION" .
 	docker save "speedtest-center:$VERSION" | remote "sudo docker load"
+	# The built-in DB-IP Lite updater writes the geolocation databases, so the directory belongs to the container user.
+	uid="$(docker run --rm --entrypoint id "speedtest-center:$VERSION" -u speedtest)"
+	remote "sudo install -d -m 755 /opt/speedtest/geoip && sudo chown -R $uid /opt/speedtest/geoip"
 	# Agent binaries and release.json are served to nodes (installer and self-update); the center binaries stay in the image.
 	remote "sudo mkdir -p /opt/speedtest/release && sudo chown joos /opt/speedtest/release"
 	tar -C dist -cf - release.json SHA256SUMS speedtest-agent-linux-amd64 speedtest-agent-linux-arm64 speedtest-agent.service | remote "tar -C /opt/speedtest/release -xf -"
