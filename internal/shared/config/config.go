@@ -121,22 +121,14 @@ func LoadCenter() (CenterConfig, error) {
 	}
 
 	cfg := CenterConfig{
-		HTTPAddr:          getString("SPEEDTEST_HTTP_ADDR", "127.0.0.1:8080"),
-		AppEnv:            strings.ToLower(strings.TrimSpace(getString("APP_ENV", "local"))),
-		UIDir:             getString("SPEEDTEST_UI_DIR", ""),
-		SessionTTL:        sessionTTL,
-		LoginMaxAttempts:  loginMaxAttempts,
-		LoginWindow:       loginWindow,
-		TrustedProxyCIDRs: getString("SPEEDTEST_TRUSTED_PROXY_CIDRS", ""),
-		Database: DatabaseConfig{
-			Host:     getString("SPEEDTEST_DB_HOST", "127.0.0.1"),
-			Port:     port,
-			Name:     getString("SPEEDTEST_DB_NAME", "speedtest_test"),
-			User:     getString("SPEEDTEST_DB_USER", "speedtest"),
-			Password: getString("SPEEDTEST_DB_PASSWORD", ""),
-			SSLMode:  getString("SPEEDTEST_DB_SSLMODE", "disable"),
-			MaxConns: maxConns,
-		},
+		HTTPAddr:               getString("SPEEDTEST_HTTP_ADDR", "127.0.0.1:8080"),
+		AppEnv:                 strings.ToLower(strings.TrimSpace(getString("APP_ENV", "local"))),
+		UIDir:                  getString("SPEEDTEST_UI_DIR", ""),
+		SessionTTL:             sessionTTL,
+		LoginMaxAttempts:       loginMaxAttempts,
+		LoginWindow:            loginWindow,
+		TrustedProxyCIDRs:      getString("SPEEDTEST_TRUSTED_PROXY_CIDRS", ""),
+		Database:               centerDatabase(port, maxConns),
 		AppKey:                 appKey,
 		AgentRequestsPerMinute: rateLimit,
 		SMTPAddr:               getString("SPEEDTEST_SMTP_ADDR", "127.0.0.1:11025"),
@@ -257,4 +249,16 @@ func getDuration(key string, def time.Duration) (time.Duration, error) {
 		return 0, fmt.Errorf("%s must be a Go duration, got %q: %w", key, v, err)
 	}
 	return d, nil
+}
+
+func centerDatabase(port, maxConns int) DatabaseConfig {
+	return DatabaseConfig{
+		Host:     getString("SPEEDTEST_DB_HOST", "127.0.0.1"),
+		Port:     port,
+		Name:     getString("SPEEDTEST_DB_NAME", "speedtest_test"),
+		User:     getString("SPEEDTEST_DB_USER", "speedtest"),
+		Password: getString("SPEEDTEST_DB_PASSWORD", ""),
+		SSLMode:  getString("SPEEDTEST_DB_SSLMODE", "disable"),
+		MaxConns: maxConns,
+	}
 }

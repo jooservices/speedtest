@@ -259,50 +259,7 @@ func (s *Service) run(job jobRequest) {
 		return
 	}
 
-	var heartbeatBaseline *time.Time
-	var heartbeatBaselineErr error
-	stage, err := runInstallScript(ctx, client, job.installation.ID, pass, token, func(stage string, pct float64) {
-		if stage == "start" {
-			heartbeatBaseline, heartbeatBaselineErr = s.store.lastHeartbeat(ctx, job.installation.NodeID)
-		}
-		message := generatedMessage(stage)
-		if stage == "prepared" {
-			message = "The service is running. Checking its first heartbeat."
-		}
-		_ = s.progress(ctx, job.installation.ID, stage, message, pct)
-	})
-	if err != nil {
-		s.rollback(client, job.installation.ID, pass, input.SSH, input.Fingerprint)
-		message := messageForFailure(err, stage)
-		s.fail(job.installation.ID, message)
-		s.logger.Warn("SSH installation failed", "installation_id", job.installation.ID, "reason", message)
-		return
-	}
-	if heartbeatBaselineErr != nil {
-		s.rollback(client, job.installation.ID, pass, input.SSH, input.Fingerprint)
-		message := "The command center could not verify the node heartbeat before starting the agent."
-		s.fail(job.installation.ID, message)
-		s.logger.Warn("SSH installation failed", "installation_id", job.installation.ID, "reason", message)
-		return
-	}
-
-	_ = s.progress(ctx, job.installation.ID, "heartbeat", generatedMessage("heartbeat"), 93)
-	if err := s.waitHeartbeat(ctx, job.installation.NodeID, heartbeatBaseline); err != nil {
-		s.rollback(client, job.installation.ID, pass, input.SSH, input.Fingerprint)
-		message := "The agent service started but the command center did not receive a heartbeat."
-		s.fail(job.installation.ID, message)
-		s.logger.Warn("SSH installation failed", "installation_id", job.installation.ID, "reason", message)
-		return
-	}
-	if err := commitRemote(client, job.installation.ID, pass); err != nil {
-		s.rollback(client, job.installation.ID, pass, input.SSH, input.Fingerprint)
-		message := "The agent is running, but temporary installer files could not be removed."
-		s.fail(job.installation.ID, message)
-		s.logger.Warn("SSH installation failed", "installation_id", job.installation.ID, "reason", message)
-		return
-	}
-	_ = s.complete(job.installation.ID)
-	s.logger.Info("SSH installation succeeded", "installation_id", job.installation.ID)
+	s.finishInstall(ctx, client, job, pass, token)
 }
 
 // runUninstall connects exactly like an installation (pinned host key, sudo check) and runs the fixed removal script.
@@ -400,4 +357,52 @@ func (s *Service) complete(id string) error {
 	defer cancel()
 	message := "The agent is installed and its first heartbeat was received."
 	return s.store.appendEvent(ctx, id, "complete", message, 100, "succeeded", nil)
+}
+
+func (s *Service) finishInstall(ctx context.Context, client *ssh.Client, job jobRequest, pass, token string) {
+	input := job.input
+	var heartbeatBaseline *time.Time
+	var heartbeatBaselineErr error
+	stage, err := runInstallScript(ctx, client, job.installation.ID, pass, token, func(stage string, pct float64) {
+		if stage == "start" {
+			heartbeatBaseline, heartbeatBaselineErr = s.store.lastHeartbeat(ctx, job.installation.NodeID)
+		}
+		message := generatedMessage(stage)
+		if stage == "prepared" {
+			message = "The service is running. Checking its first heartbeat."
+		}
+		_ = s.progress(ctx, job.installation.ID, stage, message, pct)
+	})
+	if err != nil {
+		s.rollback(client, job.installation.ID, pass, input.SSH, input.Fingerprint)
+		message := messageForFailure(err, stage)
+		s.fail(job.installation.ID, message)
+		s.logger.Warn("SSH installation failed", "installation_id", job.installation.ID, "reason", message)
+		return
+	}
+	if heartbeatBaselineErr != nil {
+		s.rollback(client, job.installation.ID, pass, input.SSH, input.Fingerprint)
+		message := "The command center could not verify the node heartbeat before starting the agent."
+		s.fail(job.installation.ID, message)
+		s.logger.Warn("SSH installation failed", "installation_id", job.installation.ID, "reason", message)
+		return
+	}
+
+	_ = s.progress(ctx, job.installation.ID, "heartbeat", generatedMessage("heartbeat"), 93)
+	if err := s.waitHeartbeat(ctx, job.installation.NodeID, heartbeatBaseline); err != nil {
+		s.rollback(client, job.installation.ID, pass, input.SSH, input.Fingerprint)
+		message := "The agent service started but the command center did not receive a heartbeat."
+		s.fail(job.installation.ID, message)
+		s.logger.Warn("SSH installation failed", "installation_id", job.installation.ID, "reason", message)
+		return
+	}
+	if err := commitRemote(client, job.installation.ID, pass); err != nil {
+		s.rollback(client, job.installation.ID, pass, input.SSH, input.Fingerprint)
+		message := "The agent is running, but temporary installer files could not be removed."
+		s.fail(job.installation.ID, message)
+		s.logger.Warn("SSH installation failed", "installation_id", job.installation.ID, "reason", message)
+		return
+	}
+	_ = s.complete(job.installation.ID)
+	s.logger.Info("SSH installation succeeded", "installation_id", job.installation.ID)
 }

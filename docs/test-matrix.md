@@ -6,15 +6,15 @@ Operations: 66. Without a test: 0.
 
 | Operation | Method | Path | Tests |
 |---|---|---|---|
-| getSession | GET | `/api/auth/me` | `cmd/center/notifications_integration_test.go`<br>`internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/installer_test.go`<br>+5 more |
+| getSession | GET | `/api/auth/me` | `cmd/center/notifications_integration_test.go`<br>`internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/installer_test.go`<br>+6 more |
 | login | POST | `/api/auth/login` | `cmd/center/notifications_integration_test.go`<br>`internal/center/audit/audit_test.go`<br>`internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>+3 more |
 | logout | POST | `/api/auth/logout` | `internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go` |
 | changePassword | POST | `/api/auth/password` | `internal/center/audit/audit_test.go`<br>`internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>`tests/ui/api.test.mjs`<br>+2 more |
-| listNodes | GET | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/nodes_test.go`<br>+10 more |
+| listNodes | GET | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/errtrack_test.go`<br>+12 more |
 | createNode | POST | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/nodes_test.go`<br>+8 more |
 | createEnrollmentToken | POST | `/api/agent/tokens` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go` |
 | enroll | POST | `/api/agent/enroll` | `cmd/center/main_integration_test.go`<br>`internal/agent/enroll/enroll_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/server/installer_integration_test.go`<br>+3 more |
-| getNode | GET | `/api/nodes/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>+6 more |
+| getNode | GET | `/api/nodes/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/errtrack_test.go`<br>`internal/center/server/httpx_test.go`<br>+8 more |
 | updateNode | PATCH | `/api/nodes/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>+2 more |
 | deleteNode | DELETE | `/api/nodes/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/installer_test.go`<br>`internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>+2 more |
 | runNode | POST | `/api/nodes/{id}/run` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>`internal/center/telemetry/telemetry_test.go` |
@@ -31,9 +31,9 @@ Operations: 66. Without a test: 0.
 | listResults | GET | `/api/results` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go`<br>`tests/perf/dashboard.mjs`<br>`tests/ui/api.test.mjs`<br>+3 more |
 | getResult | GET | `/api/results/{id}` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | exportFilteredCSV | GET | `/api/results/export.csv` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
-| exportAllCSV | GET | `/api/export/results.csv` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
+| exportAllCSV | GET | `/api/export/results.csv` | `internal/center/server/httpx_test.go`<br>`internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | exportAllJSON | GET | `/api/export/results.json` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
-| getSummary | GET | `/api/stats/summary` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/e2e/suites/statistics.mjs`<br>`tests/perf/dashboard.mjs`<br>+1 more |
+| getSummary | GET | `/api/stats/summary` | `internal/center/server/httpx_test.go`<br>`internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/e2e/suites/statistics.mjs`<br>+2 more |
 | getTrend | GET | `/api/stats/trend` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
 | getHourOfDay | GET | `/api/stats/hour-of-day` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
 | getHeatmap | GET | `/api/stats/heatmap` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
@@ -41,7 +41,7 @@ Operations: 66. Without a test: 0.
 | getDashboard | GET | `/api/dashboard` | `internal/center/server/ownerdashboard_integration_test.go`<br>`internal/center/server/ownerdashboard_test.go`<br>`tests/perf/dashboard.mjs` |
 | getSeries | GET | `/api/series` | `internal/center/server/ownerdashboard_integration_test.go`<br>`internal/center/server/ownerdashboard_test.go` |
 | getSchedules | GET | `/api/schedules` | `internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/perf/dashboard.mjs`<br>`tests/ui-fixtures/server.mjs` |
-| getSchedule | GET | `/api/schedules/{node}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/e2e/contract.mjs`<br>+2 more |
+| getSchedule | GET | `/api/schedules/{node}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/httpx_test.go`<br>`internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>+3 more |
 | replaceSchedule | PUT | `/api/schedules/{node}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/ui/store.test.mjs`<br>+1 more |
 | replaceScheduleRules | PUT | `/api/schedules/rules` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/ui/store.test.mjs`<br>+1 more |
 | staggerSchedules | POST | `/api/schedules/stagger` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/ui/store.test.mjs`<br>+1 more |
@@ -52,7 +52,7 @@ Operations: 66. Without a test: 0.
 | deleteRule | DELETE | `/api/alerts/rules/{id}` | `internal/center/server/owneralerts_test.go` |
 | listAudit | GET | `/api/audit` | `internal/center/server/audit_test.go`<br>`tests/e2e/suites/settings.mjs`<br>`tests/ui/contract.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | listEvents | GET | `/api/alerts/events` | `internal/center/server/owneralerts_integration_test.go`<br>`internal/center/server/owneralerts_test.go`<br>`tests/perf/dashboard.mjs`<br>`tests/ui/contract.test.mjs`<br>+2 more |
-| getEvent | GET | `/api/alerts/events/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/owneralerts_integration_test.go`<br>`internal/center/server/owneralerts_test.go` |
+| getEvent | GET | `/api/alerts/events/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/httpx_test.go`<br>`internal/center/server/owneralerts_integration_test.go`<br>`internal/center/server/owneralerts_test.go` |
 | ackEvent | PUT | `/api/alerts/events/{id}/ack` | `internal/center/audit/audit_test.go`<br>`internal/center/server/owneralerts_integration_test.go`<br>`internal/center/server/owneralerts_test.go` |
 | ackAllEvents | POST | `/api/alerts/acknowledgements` | `internal/center/server/owneralerts_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | testNotification | POST | `/api/notifications/test/{channel}` | `cmd/center/notifications_integration_test.go`<br>`internal/center/audit/audit_test.go`<br>`internal/center/server/ownernotifications_test.go` |
