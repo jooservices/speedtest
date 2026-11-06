@@ -18,7 +18,8 @@ remote() { ssh -o BatchMode=yes "$HOST" "$@"; }
 
 run_container() { # image tag
 	remote "sudo docker rm -f $NAME >/dev/null 2>&1 || true; sudo docker run -d --name $NAME --restart unless-stopped --network host \
-		--env-file /etc/speedtest/center.env -e SPEEDTEST_PORT=$PORT -v speedtest-center-data:/var/lib/speedtest $1"
+		--env-file /etc/speedtest/center.env -e SPEEDTEST_PORT=$PORT -e SPEEDTEST_RELEASE_DIR=/var/lib/speedtest/release \
+		-v speedtest-center-data:/var/lib/speedtest -v /opt/speedtest/release:/var/lib/speedtest/release:ro $1"
 }
 wait_ready() {
 	for _ in $(seq 1 40); do
@@ -34,6 +35,9 @@ deploy)
 	make release VERSION="${VERSION#v}"
 	docker build -f deploy/prod/Dockerfile -t "speedtest-center:$VERSION" .
 	docker save "speedtest-center:$VERSION" | remote "sudo docker load"
+	# Agent binaries and release.json are served to nodes (installer and self-update); the center binaries stay in the image.
+	remote "sudo mkdir -p /opt/speedtest/release && sudo chown joos /opt/speedtest/release"
+	tar -C dist -cf - release.json SHA256SUMS speedtest-agent-linux-amd64 speedtest-agent-linux-arm64 speedtest-agent.service | remote "tar -C /opt/speedtest/release -xf -"
 	prev="$(remote "sudo docker inspect $NAME --format '{{.Config.Image}}' 2>/dev/null" || true)"
 	[ -n "$prev" ] && remote "sudo docker tag $prev speedtest-center:previous"
 	run_container "speedtest-center:$VERSION"
