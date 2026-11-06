@@ -12,6 +12,9 @@ import (
 	"syscall"
 )
 
+// version is stamped by the release build (-ldflags "-X main.version=...").
+var version = "dev"
+
 func main() {
 	os.Exit(mainRun(os.Args[1:], os.Stdout, os.Stderr))
 }
@@ -35,6 +38,8 @@ func mainRun(args []string, stdout, stderr io.Writer) int {
 	defer stop()
 
 	logger := slog.New(slog.NewJSONHandler(stdout, nil))
+	flush := startErrorTracking("center", logger)
+	defer flush()
 	var err error
 	switch {
 	case len(args) > 0 && subcommands[args[0]] != nil:
