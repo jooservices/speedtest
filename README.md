@@ -247,3 +247,5 @@ Remote SSH installation, repair, progress and rollback: [SSH installer runbook](
 
 See [notification delivery](docs/notifications.md) for SMTP, Telegram, Slack and
 JSON webhook configuration, delivery APIs, durable retries and verification.
+
+Operational metrics, access controls and alert signals: [observability](docs/observability.md).

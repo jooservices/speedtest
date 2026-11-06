@@ -3,7 +3,9 @@
 [openapi.yaml](openapi.yaml) is the OpenAPI 3.1 source of truth for JOOST-9.
 It defines the product API endpoints; the static `ui/` preview still runs on
 local demo state. The command center also exposes the operational `/healthz`
-and `/readyz` checks outside that product API contract. When database settings
+and `/readyz` checks outside that product API contract. Operational `GET /metrics`
+uses Prometheus text exposition and separate loopback/bearer access rules; see
+[the metric catalog and alert signals](observability.md#metrics). When database settings
 are configured, readiness pings PostgreSQL and reports `ok` or `unavailable`;
 without database settings it reports `not configured`.
 See the [OpenAPI specification](https://spec.openapis.org/oas/v3.1.0) and

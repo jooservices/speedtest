@@ -133,6 +133,7 @@ func buildHandler(cfg config.CenterConfig, svc services, logger *slog.Logger, ui
 		UI:                 ui,
 		Pinger:             svc.Pinger,
 		Metrics:            svc.Metrics,
+		Telemetry:          svc.Telemetry,
 		MetricsToken:       os.Getenv("SPEEDTEST_METRICS_TOKEN"),
 		Auth:               svc.Auth,
 		RequireHTTPS:       cfg.AppEnv != "local" && cfg.AppEnv != "test",

@@ -181,3 +181,28 @@ func TestInvalidItemIdentityIsExactCase(t *testing.T) {
 		t.Fatal(w.Body.String())
 	}
 }
+
+func TestIngestionObserverCountsCommittedItemOutcomes(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+		store            *fakeStore
+		code             int
+	}{
+		{"accepted", `{"results":[` + validResult + `]}`, "accepted", &fakeStore{}, 207},
+		{"duplicate", `{"results":[` + validResult + `]}`, "duplicate", &fakeStore{duplicate: true}, 207},
+		{"invalid item", `{"results":[{}]}`, "rejected", &fakeStore{}, 207},
+		{"conflict", `{"results":[` + validResult + `]}`, "rejected", &fakeStore{err: ErrConflict}, 207},
+		{"store error", `{"results":[` + validResult + `]}`, "rejected", &fakeStore{err: errors.New("failure")}, 500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var outcomes []string
+			r := httptest.NewRequest("POST", "/api/agent/results", strings.NewReader(tc.body))
+			r = r.WithContext(WithIngestObserver(r.Context(), func(status string) { outcomes = append(outcomes, status) }))
+			w := httptest.NewRecorder()
+			(Handler{Store: tc.store}).ServeNode(w, r, "node", "203.0.113.1")
+			if w.Code != tc.code || len(outcomes) != 1 || outcomes[0] != tc.want {
+				t.Fatal(w.Code, outcomes)
+			}
+		})
+	}
+}

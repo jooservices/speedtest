@@ -25,6 +25,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/server"
 	"github.com/jooservices/speedtest/internal/center/settings"
 	"github.com/jooservices/speedtest/internal/center/stats"
+	"github.com/jooservices/speedtest/internal/center/telemetry"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
 
@@ -34,6 +35,7 @@ func (p poolPinger) PingContext(ctx context.Context) error { return p.pool.Ping(
 
 // services are the database-backed collaborators of the server; any may be nil in tests.
 type services struct {
+	Telemetry          *telemetry.Telemetry
 	Auth               *auth.Service
 	NodeCredential     server.NodeCredentialService
 	Pinger             server.Pinger
@@ -88,8 +90,13 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		cleanup()
 		return services{}, nil, err
 	}
-	alertStore := &alerts.Store{DB: pool, AppKey: cfg.AppKey, Logger: logger}
-	retention := &jobs.Retention{DB: pool, Logger: logger}
+	operational := telemetry.New(version)
+	operational.RegisterDatabase(pool)
+	if notifications != nil {
+		notifications.ObserveRun = func(ok bool) { operational.Job("notification", ok) }
+	}
+	alertStore := &alerts.Store{DB: pool, AppKey: cfg.AppKey, Logger: logger, ObserveRun: func(ok bool) { operational.Job("alerts", ok) }}
+	retention := &jobs.Retention{DB: pool, Logger: logger, ObserveRun: func(ok bool) { operational.Job("retention", ok) }}
 	installerService, err := buildInstaller(ctx, pool, cfg, nodeService, logger)
 	if err != nil {
 		cleanup()
@@ -100,6 +107,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		notificationAPI = notifications
 	}
 	return services{
+		Telemetry:          operational,
 		OwnerNotifications: notificationAPI,
 		Auth:               authService,
 		NodeCredential:     nodeService,
