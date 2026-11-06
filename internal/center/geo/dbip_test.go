@@ -164,8 +164,12 @@ func TestUpdateDBIPRejectsUnsafeOriginsAndCancellation(t *testing.T) {
 
 func TestDBIPConfigFromEnvironment(t *testing.T) {
 	cfg, err := DBIPConfigFromEnv()
-	if err != nil || !cfg.Enabled || cfg.URL != "https://download.db-ip.com" {
-		t.Fatalf("defaults = %+v, %v", cfg, err)
+	if err != nil || cfg.Enabled || cfg.URL != "https://download.db-ip.com" {
+		t.Fatalf("defaults outside production = %+v, %v", cfg, err)
+	}
+	t.Setenv("APP_ENV", "production")
+	if cfg, err = DBIPConfigFromEnv(); err != nil || !cfg.Enabled {
+		t.Fatalf("defaults in production = %+v, %v", cfg, err)
 	}
 	t.Setenv("SPEEDTEST_GEO_DBIP_AUTO_UPDATE", "false")
 	t.Setenv("SPEEDTEST_GEO_DBIP_URL", "https://mirror.example")
