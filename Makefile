@@ -46,7 +46,7 @@ test-db:
 
 ## shellcheck lints the shell scripts shipped or used by the project.
 shellcheck:
-	shellcheck internal/center/install/install.sh scripts/test-install.sh internal/center/installer/*_remote.sh
+	shellcheck internal/center/install/install.sh scripts/test-install.sh internal/center/installer/*_remote.sh deploy/prod/prod.sh deploy/prod/entrypoint.sh deploy/observability/observe.sh deploy/observability/probe.sh
 
 ## test-install runs ShellCheck and the installer test against a fake download server.
 test-install: shellcheck
