@@ -155,7 +155,7 @@ func TestEditionMatches(t *testing.T) {
 		want      bool
 	}{
 		{"GeoLite2-City", "City", true}, {"GeoIP2-City", "City", true}, {"DBIP-City-Lite", "City", true},
-		{"DBIP-ASN-Lite", "ASN", true}, {"GeoLite2-ASN", "ASN", true},
+		{"DBIP-ASN-Lite", "ASN", true}, {"DBIP-ASN-Lite (compat=GeoLite2-ASN)", "ASN", true}, {"DBIP-ASN-Lite (compat=GeoLite2-ASN)", "City", false}, {"GeoLite2-ASN", "ASN", true},
 		{"DBIP-ASN-Lite", "City", false}, {"GeoLite2-Country", "City", false}, {"City", "City", false},
 	} {
 		if got := editionMatches(c.typ, c.kind); got != c.want {
