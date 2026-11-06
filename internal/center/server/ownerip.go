@@ -23,7 +23,7 @@ type ownerIP struct {
 
 func newOwnerIPHandler(store OwnerIPStore, auth *serverAuth) http.Handler {
 	h := &ownerIP{store: store, limiter: newOwnerRateLimiter()}
-	return auth.requireSession(http.HandlerFunc(h.serve))
+	return ownerReader(auth, h.limiter, h.serve)
 }
 
 func ownerIPRoute(path string) bool {
@@ -35,18 +35,6 @@ func ownerIPRoute(path string) bool {
 }
 
 func (h *ownerIP) serve(w http.ResponseWriter, r *http.Request) {
-	principal, err := ownerPrincipal(r)
-	if err != nil {
-		writeUnauthorized(w, r)
-		return
-	}
-	if !allowRate(h.limiter, "owner:"+principal, w, r) {
-		return
-	}
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, r, http.MethodGet)
-		return
-	}
 	switch r.URL.Path {
 	case "/api/ip/lookup":
 		h.lookup(w, r)
@@ -100,12 +88,7 @@ func (h *ownerIP) list(w http.ResponseWriter, r *http.Request) {
 		writeIPError(w, r, err)
 		return
 	}
-	last := (total + size - 1) / size
-	if last < 1 {
-		last = 1
-	}
-	writeJSON(w, http.StatusOK, apiEnvelope{Success: true, Code: http.StatusOK, Message: "Success", Data: items,
-		Meta: map[string]any{"pagination": map[string]any{"current_page": page, "per_page": size, "total": total, "last_page": last}}})
+	writePage(w, items, page, size, total)
 }
 
 func (h *ownerIP) lookup(w http.ResponseWriter, r *http.Request) {

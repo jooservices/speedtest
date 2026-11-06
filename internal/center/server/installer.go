@@ -180,14 +180,9 @@ func (h *installerAPI) stream(w http.ResponseWriter, r *http.Request) {
 		writeNotFoundProblem(w, r)
 		return
 	}
-	headers := r.Header.Values("Last-Event-ID")
-	if len(headers) > 1 {
-		writeAPIProblem(w, r, http.StatusBadRequest, "Bad request", "Only one Last-Event-ID value is allowed.")
+	cursor, ok := lastEventID(w, r)
+	if !ok {
 		return
-	}
-	cursor := ""
-	if len(headers) == 1 {
-		cursor = headers[0]
 	}
 	events, job, err := h.service.Events(r.Context(), id, cursor)
 	if err != nil {
@@ -206,7 +201,6 @@ func (h *installerAPI) stream(w http.ResponseWriter, r *http.Request) {
 	if err := controller.Flush(); err != nil {
 		return
 	}
-
 	last := cursor
 	if !writeInstallEvents(w, controller.Flush, events) {
 		return
@@ -217,6 +211,24 @@ func (h *installerAPI) stream(w http.ResponseWriter, r *http.Request) {
 	if terminal(job.Status) {
 		return
 	}
+	h.follow(w, r, controller, id, last)
+}
+
+// lastEventID reads the optional single Last-Event-ID header used to resume a stream.
+func lastEventID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	headers := r.Header.Values("Last-Event-ID")
+	if len(headers) > 1 {
+		writeAPIProblem(w, r, http.StatusBadRequest, "Bad request", "Only one Last-Event-ID value is allowed.")
+		return "", false
+	}
+	if len(headers) == 1 {
+		return headers[0], true
+	}
+	return "", true
+}
+
+// follow streams new progress events until the job ends, the client leaves or the owner's session expires.
+func (h *installerAPI) follow(w http.ResponseWriter, r *http.Request, controller *http.ResponseController, id, last string) {
 	poll := time.NewTicker(250 * time.Millisecond)
 	defer poll.Stop()
 	sessionCheck := time.NewTicker(10 * time.Second)
@@ -230,7 +242,7 @@ func (h *installerAPI) stream(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		case <-poll.C:
-			events, job, err = h.service.Events(r.Context(), id, last)
+			events, job, err := h.service.Events(r.Context(), id, last)
 			if err != nil {
 				_ = writeInstallEvents(w, controller.Flush, []installer.Event{{ID: last, TS: time.Now().UTC(), Step: "failed", Message: "Progress is unavailable. Reconnect to check the installation status.", Pct: 0, Status: "failed"}})
 				return

@@ -91,7 +91,16 @@ func runEnroll(ctx context.Context, args []string, stdout, stderr io.Writer) int
 	return runEnrollWithInput(ctx, args, os.Stdin, stdout, stderr)
 }
 
-func runEnrollWithInput(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+// enrollOptions are the validated arguments of `agent enroll`.
+type enrollOptions struct {
+	center            *url.URL
+	token, name, host string
+	repair            bool
+}
+
+// parseEnrollFlags reads and validates the command line (and the token from stdin when asked). A non-zero second
+// result is the exit code to return; the reason has already been written to stderr.
+func parseEnrollFlags(args []string, stdin io.Reader, stderr io.Writer) (enrollOptions, int) {
 	fs := flag.NewFlagSet("enroll", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	center := fs.String("center", "", "command-center URL")
@@ -101,35 +110,39 @@ func runEnrollWithInput(ctx context.Context, args []string, stdin io.Reader, std
 	name := fs.String("name", "", "node name")
 	host := fs.String("host", "", "optional node host")
 	if err := fs.Parse(args); err != nil {
-		return 2
+		return enrollOptions{}, 2
 	}
 	if fs.NArg() != 0 {
 		_, _ = fmt.Fprintln(stderr, "agent enroll: unexpected arguments:", fs.Args())
-		return 2
+		return enrollOptions{}, 2
 	}
 	if *tokenStdin {
 		if *token != "" {
 			_, _ = fmt.Fprintln(stderr, "agent enroll: use either --token or --token-stdin")
-			return 2
+			return enrollOptions{}, 2
 		}
 		var err error
-		*token, err = readEnrollmentToken(stdin)
-		if err != nil {
+		if *token, err = readEnrollmentToken(stdin); err != nil {
 			_, _ = fmt.Fprintln(stderr, "agent enroll: could not read enrollment token from standard input")
-			return 2
+			return enrollOptions{}, 2
 		}
 	}
-
 	baseURL, err := url.Parse(*center)
 	if err != nil || (baseURL.Scheme != "http" && baseURL.Scheme != "https") || baseURL.Host == "" {
 		_, _ = fmt.Fprintln(stderr, "agent enroll: --center must be an absolute http or https URL")
-		return 2
+		return enrollOptions{}, 2
 	}
+	return enrollOptions{center: baseURL, token: *token, name: *name, host: *host, repair: *repair}, 0
+}
 
+func runEnrollWithInput(ctx context.Context, args []string, stdin io.Reader, stdout, stderr io.Writer) int {
+	opts, code := parseEnrollFlags(args, stdin, stderr)
+	if code != 0 {
+		return code
+	}
 	credentialPath := getenv("SPEEDTEST_AGENT_CREDENTIAL", enroll.DefaultCredentialPath)
-
-	if *repair {
-		valid, err := existingEnrollmentValid(ctx, baseURL, credentialPath)
+	if opts.repair {
+		valid, err := existingEnrollmentValid(ctx, opts.center, credentialPath)
 		if err != nil {
 			_, _ = fmt.Fprintln(stderr, "agent enroll: could not verify existing enrollment")
 			return 1
@@ -139,28 +152,17 @@ func runEnrollWithInput(ctx context.Context, args []string, stdin io.Reader, std
 			return 0
 		}
 	}
-
-	client := enroll.Client{
-		BaseURL: baseURL,
-		HTTP:    &http.Client{Timeout: 30 * time.Second},
-	}
-	result, err := client.Enroll(ctx, enroll.Request{
-		Token: *token,
-		Name:  *name,
-		Host:  *host,
-		Agent: agentid.Current(version),
-	})
+	client := enroll.Client{BaseURL: opts.center, HTTP: &http.Client{Timeout: 30 * time.Second}}
+	result, err := client.Enroll(ctx, enroll.Request{Token: opts.token, Name: opts.name, Host: opts.host, Agent: agentid.Current(version)})
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent enroll: %v\n", err)
 		return 1
 	}
-
 	if err := enroll.StoreCredential(credentialPath, result.Credential); err != nil {
 		_, _ = fmt.Fprintf(stderr, "agent enroll: %v\n", err)
 		return 1
 	}
-
-	_, _ = fmt.Fprintf(stdout, "agent: enrolled node %q (%s)\n", *name, result.NodeID)
+	_, _ = fmt.Fprintf(stdout, "agent: enrolled node %q (%s)\n", opts.name, result.NodeID)
 	_, _ = fmt.Fprintf(stdout, "agent: credential stored at %s\n", credentialPath)
 	return 0
 }
@@ -195,34 +197,11 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		return 1
 	}
 
-	configPath := getenv("SPEEDTEST_AGENT_CONFIG", agentconfig.DefaultPath)
-	credentialPath := getenv("SPEEDTEST_AGENT_CREDENTIAL", enroll.DefaultCredentialPath)
-	centerRaw := getenv("SPEEDTEST_AGENT_CENTER", "")
-
-	cfg, err := agentconfig.Load(configPath)
-	if err != nil {
-		logger.Error("invalid configuration", "config", configPath, "error", err.Error())
+	in, ok := loadAgentInputs(logger)
+	if !ok {
 		return 1
 	}
-
-	// LoadCredential also refuses to start when the file is world-readable. The
-	// value is a secret and is only handed to the control client.
-	credential, err := enroll.LoadCredential(credentialPath)
-	if err != nil {
-		logger.Error("invalid credential", "credential", credentialPath, "error", err.Error())
-		return 1
-	}
-	path, err := netpath.Resolve(netpath.Binding{Interface: cfg.NetworkInterface, SourceIP: cfg.SourceIP})
-	if err != nil {
-		logger.Error("invalid network path", "error", err.Error())
-		return 1
-	}
-
-	centerURL, err := url.Parse(centerRaw)
-	if err != nil || centerRaw == "" || (centerURL.Scheme != "http" && centerURL.Scheme != "https") || centerURL.Host == "" || centerURL.User != nil || centerURL.RawQuery != "" || centerURL.Fragment != "" {
-		logger.Error("invalid center URL", "error", "SPEEDTEST_AGENT_CENTER must be an absolute http or https URL without userinfo, query or fragment")
-		return 1
-	}
+	cfg, centerURL, credential, path := in.cfg, in.centerURL, in.credential, in.path
 
 	loop, err := runloop.New(cfg, centerURL, credential, version, logger)
 	if err != nil {
@@ -248,6 +227,53 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 
 	logger.Info("agent stopped", "name", cfg.Name)
 	return 0
+}
+
+// agentInputs is everything `agent run` needs before it starts: configuration, credential, network path and center.
+type agentInputs struct {
+	cfg        agentconfig.Config
+	credential string
+	path       netpath.Path
+	centerURL  *url.URL
+}
+
+// loadAgentInputs reads and validates the configuration, the credential, the network binding and the center URL.
+// Every failure is logged without secrets and reported as false.
+func loadAgentInputs(logger *slog.Logger) (agentInputs, bool) {
+	configPath := getenv("SPEEDTEST_AGENT_CONFIG", agentconfig.DefaultPath)
+	credentialPath := getenv("SPEEDTEST_AGENT_CREDENTIAL", enroll.DefaultCredentialPath)
+	cfg, err := agentconfig.Load(configPath)
+	if err != nil {
+		logger.Error("invalid configuration", "config", configPath, "error", err.Error())
+		return agentInputs{}, false
+	}
+	// LoadCredential also refuses to start when the file is world-readable. The value is a secret and is only
+	// handed to the control client.
+	credential, err := enroll.LoadCredential(credentialPath)
+	if err != nil {
+		logger.Error("invalid credential", "credential", credentialPath, "error", err.Error())
+		return agentInputs{}, false
+	}
+	path, err := netpath.Resolve(netpath.Binding{Interface: cfg.NetworkInterface, SourceIP: cfg.SourceIP})
+	if err != nil {
+		logger.Error("invalid network path", "error", err.Error())
+		return agentInputs{}, false
+	}
+	centerURL, ok := parseCenterURL(getenv("SPEEDTEST_AGENT_CENTER", ""))
+	if !ok {
+		logger.Error("invalid center URL", "error", "SPEEDTEST_AGENT_CENTER must be an absolute http or https URL without userinfo, query or fragment")
+		return agentInputs{}, false
+	}
+	return agentInputs{cfg: cfg, credential: credential, path: path, centerURL: centerURL}, true
+}
+
+// parseCenterURL accepts only an absolute http or https URL without userinfo, query or fragment.
+func parseCenterURL(raw string) (*url.URL, bool) {
+	u, err := url.Parse(raw)
+	if err != nil || raw == "" || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return nil, false
+	}
+	return u, true
 }
 
 func runUninstall(args []string, stdout, stderr io.Writer) int {
