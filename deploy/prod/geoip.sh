@@ -15,4 +15,4 @@ for kind in city asn; do
 	name=GeoLite2-$( [ $kind = city ] && echo City || echo ASN ).mmdb
 	scp -q "$tmp/$kind.mmdb" "$HOST:/tmp/$name" && ssh -o BatchMode=yes "$HOST" "sudo install -m 644 /tmp/$name /opt/speedtest/geoip/$name && rm -f /tmp/$name"
 done
-echo "installed; the center reopens the files when they change (or restart: deploy/prod/prod.sh deploy)"
+echo "installed; the center need a restart to be read: deploy/prod/prod.sh deploy"
