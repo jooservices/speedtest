@@ -17,6 +17,8 @@ func validUUID(id string) bool { return uuidText.MatchString(id) }
 
 // ResultFilter selects results for the list and the exports.
 type ResultFilter struct {
+	Engine     string
+	AllEngines bool
 	// Nodes limits results to these node IDs. NodesSet with no IDs matches nothing.
 	Nodes    []string
 	NodesSet bool
@@ -56,6 +58,13 @@ func (f ResultFilter) where() (clause string, args []any, ok bool) {
 	add := func(cond string, value any) {
 		args = append(args, value)
 		conds = append(conds, strings.ReplaceAll(cond, "?", fmt.Sprintf("$%d", len(args))))
+	}
+	if !f.AllEngines {
+		if f.Engine == "" {
+			conds = append(conds, "r.engine = n.primary_engine")
+		} else {
+			add("r.engine = ?", f.Engine)
+		}
 	}
 	if f.NodesSet {
 		if len(f.Nodes) == 0 {

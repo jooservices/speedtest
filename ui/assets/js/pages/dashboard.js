@@ -11,6 +11,7 @@
   ST.pages.dashboard = function (root) {
     var s = ST.settings(), P = ST.ranges[s.range], now = Date.now(), from = now - P, prevFrom = now - 2 * P;
     var nodes = ST.nodes();
+    root.appendChild(ST.engineSelector());
     root.appendChild(U.pageHead('Dashboard', 'How every connection is performing — ' + ST.rangeLabels[s.range].toLowerCase() + '.'));
 
     if (!nodes.length) {

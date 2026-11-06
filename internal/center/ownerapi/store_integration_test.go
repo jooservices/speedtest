@@ -54,7 +54,7 @@ func seedNode(t *testing.T, ctx context.Context, pool *pgxpool.Pool, n int, name
 	if _, err := pool.Exec(ctx, `INSERT INTO nodes (id,name,label,expected_down_mbps,expected_up_mbps,color_slot,last_seen_at,host,agent) VALUES ($1,$2,'lbl',300,100,$3,$4,'host','agent/1')`, id, name, n, lastSeen); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO schedules (node_id,interval_minutes,offset_minutes) VALUES ($1,30,$2)`, id, n*3); err != nil {
+	if _, err := pool.Exec(ctx, `WITH legacy AS (INSERT INTO schedules (node_id,interval_minutes,offset_minutes) VALUES ($1,30,$2) RETURNING *) INSERT INTO engine_schedules SELECT node_id,'ookla',interval_minutes,offset_minutes,enabled,revision FROM legacy`, id, n*3); err != nil {
 		t.Fatal(err)
 	}
 	return id

@@ -125,3 +125,14 @@ publication, per-platform heartbeat storage, owner list/detail, agent config,
 real artifact downloads, explicit overrides and invalid-manifest fallback.
 Browser scenario `SC-NODE-08` verifies that a published release enables the Update
 action and queues the advertised version through the real center.
+
+## LibreSpeed installation
+
+The public installer also installs `librespeed-cli` next to the agent. The default
+upstream release is 1.0.14; it downloads the architecture-specific Linux archive
+and `checksums.txt`, verifies SHA-256 before installing either executable, and
+extracts only the CLI member. `SPEEDTEST_LIBRESPEED_INSTALL_VERSION` and
+`SPEEDTEST_LIBRESPEED_INSTALL_URL` select an approved version/mirror (defaults in
+`.env.example`); pass these environment values to the installer process. An
+invalid checksum aborts installation. Existing installer ownership and enrollment
+behavior is unchanged.

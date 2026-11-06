@@ -279,6 +279,7 @@ type alertRuleWire struct {
 	Severity *string         `json:"severity"`
 	Channels *[]string       `json:"channels"`
 	Enabled  *bool           `json:"enabled"`
+	Engine   string          `json:"engine"`
 }
 
 func decodeAlertRule(w http.ResponseWriter, r *http.Request) (alerts.RuleInput, bool) {
@@ -291,7 +292,7 @@ func decodeAlertRule(w http.ResponseWriter, r *http.Request) (alerts.RuleInput, 
 		invalid(w, r, "All alert rule fields are required.")
 		return alerts.RuleInput{}, false
 	}
-	in := alerts.RuleInput{Name: *wire.Name, Metric: *wire.Metric, Op: *wire.Op, Value: *wire.Value, ForTests: *wire.ForTests,
+	in := alerts.RuleInput{Engine: wire.Engine, Name: *wire.Name, Metric: *wire.Metric, Op: *wire.Op, Value: *wire.Value, ForTests: *wire.ForTests,
 		Severity: *wire.Severity, Channels: *wire.Channels, Enabled: *wire.Enabled}
 	if bytes.Equal(bytes.TrimSpace(wire.Nodes), []byte(`"all"`)) {
 		in.AllNodes = true

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"os/exec"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -46,18 +47,19 @@ type Loop struct {
 	Scheduler  *sched.Scheduler
 	Controller *control.Controller
 	// Updater decides on self-updates; its paths come from the environment.
-	Updater    *update.Agent
-	stop       atomic.Pointer[context.CancelFunc]
-	spool      *report.Spool
-	reporter   *report.Reporter
-	logger     *slog.Logger
-	center     string
-	credential string
-	mu         sync.Mutex
-	cfg        measurementConfig
-	commands   map[string]commandState
-	notify     chan struct{}
-	fatal      chan error
+	Updater       *update.Agent
+	stop          atomic.Pointer[context.CancelFunc]
+	spool         *report.Spool
+	reporter      *report.Reporter
+	logger        *slog.Logger
+	center        string
+	credential    string
+	mu            sync.Mutex
+	cfg           measurementConfig
+	engineConfigs map[string]measurementConfig
+	commands      map[string]commandState
+	notify        chan struct{}
+	fatal         chan error
 }
 
 // New validates bootstrap configuration before opening durable storage.
@@ -104,6 +106,7 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 	l.Scheduler = sched.New(l, logger, schedulerOptions...)
 	l.Scheduler.SetSchedule(sched.Schedule{Interval: cfg.Interval, Enabled: true})
 	l.Controller = control.New(control.Client{BaseURL: center, Credential: credential, Agent: agentid.Current(version)}, l.Scheduler, control.WithLogger(logger))
+	l.Controller.Engines = installedEngines
 	l.Controller.ApplyConfig = l.applyConfig
 	l.Controller.RunCommand = l.command
 	l.Updater = &update.Agent{Paths: update.DefaultPaths(), Version: version, Logger: logger, Restart: l.restartSoon}
@@ -224,9 +227,24 @@ func (l *Loop) Run(ctx context.Context) error { return l.measure(ctx, "") }
 // RunCommand executes the scheduler's distinct manual request.
 func (l *Loop) RunCommand(ctx context.Context, id string) error { return l.measure(ctx, id) }
 
-func (l *Loop) measure(ctx context.Context, id string) error {
+func (l *Loop) measure(ctx context.Context, id string) error { return l.measureEngine(ctx, id, "") }
+
+// RunEngine executes a scheduled engine on the scheduler single worker.
+func (l *Loop) RunEngine(ctx context.Context, name string) error {
+	return l.measureEngine(ctx, "", name)
+}
+
+func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 	l.mu.Lock()
 	cfg := l.cfg
+	if name != "" {
+		var ok bool
+		cfg, ok = l.engineConfigs[name]
+		if !ok {
+			l.mu.Unlock()
+			return errors.New("engine schedule was removed")
+		}
+	}
 	l.progress(id, "testing", 20)
 	l.mu.Unlock()
 	runner, err := netpath.NewRunner(cfg.engine, l.center, l.credential, cfg.binding)
@@ -247,6 +265,7 @@ func (l *Loop) measure(ctx context.Context, id string) error {
 		l.fail(errors.New("measurement could not be represented by reporting contract"))
 		return err
 	}
+	res.Engine = cfg.name
 	res.Warnings = out.Warnings
 	// Enqueue is independent of cancellation: an interrupted test is still durable.
 	l.mu.Lock()
@@ -383,8 +402,14 @@ func (l *Loop) applyConfig(remote control.AgentConfig, schedule sched.Schedule) 
 		return err
 	}
 	cfg.engine = runner
+	configs, engineSchedules, err := configuredEngines(remote.Schedules, cfg, schedule)
+	if err != nil {
+		return err
+	}
 	l.cfg = cfg
+	l.engineConfigs = configs
 	l.Scheduler.SetSchedule(schedule)
+	l.Scheduler.SetEngines(engineSchedules)
 	return nil
 }
 
@@ -405,4 +430,54 @@ func (l *Loop) restoreCommands() error {
 		}
 	}
 	return nil
+}
+
+func installedEngines() []string {
+	names := []string{}
+	ookla, err := engine.ConfigFromEnv()
+	if ookla.Binary == "" {
+		ookla.Binary = "speedtest"
+	}
+	if err == nil {
+		if _, err := exec.LookPath(ookla.Binary); err == nil {
+			names = append(names, "ookla")
+		}
+	}
+	libre, err := engine.LibreSpeedConfigFromEnv()
+	if libre.Binary == "" {
+		libre.Binary = "librespeed-cli"
+	}
+	if err == nil {
+		if _, err := exec.LookPath(libre.Binary); err == nil {
+			names = append(names, "librespeed")
+		}
+	}
+	return names
+}
+
+func configuredEngines(inputs []control.ScheduleInput, cfg measurementConfig, schedule sched.Schedule) (map[string]measurementConfig, []sched.Schedule, error) {
+	configs := map[string]measurementConfig{}
+	var engineSchedules []sched.Schedule
+	seen := map[string]bool{}
+	for _, input := range inputs {
+		if seen[input.Engine] || (input.Engine != "ookla" && input.Engine != "librespeed") {
+			return nil, nil, errors.New("invalid engine schedule")
+		}
+		seen[input.Engine] = true
+		next := cfg
+		next.name = input.Engine
+		var err error
+		next.engine, err = engine.NewConfigured(next.name, next.threads)
+		if err != nil {
+			return nil, nil, err
+		}
+		sch := schedule
+		sch.Engine, sch.Interval, sch.Offset, sch.Enabled = input.Engine, time.Duration(input.Interval)*time.Minute, time.Duration(input.Offset)*time.Minute, input.Enabled
+		if err := sch.Validate(); err != nil {
+			return nil, nil, err
+		}
+		configs[next.name] = next
+		engineSchedules = append(engineSchedules, sch)
+	}
+	return configs, engineSchedules, nil
 }
