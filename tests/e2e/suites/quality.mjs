@@ -42,6 +42,28 @@ export function qualitySuite(T) {
       await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
     },
 
+    // On a phone the top bar stays one row, keeps "Run all tests" and the page does not scroll sideways;
+    // download buttons carry the download icon, not the info icon.
+    async phoneTopBar() {
+      const original = page.viewportSize();
+      try {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await T.open('#/', 'Dashboard');
+        const box = await page.locator('#topbar').boundingBox();
+        assert.ok(box.height <= 64, `the top bar must fit on one row on a phone (was ${box.height}px)`);
+        assert.ok(await page.getByRole('button', { name: 'Run all tests' }).isVisible(), 'Run all tests must stay visible on a phone');
+        const sideways = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+        assert.ok(sideways <= 1, `the page scrolls sideways by ${sideways}px on a phone`);
+        const signOut = await page.getByRole('button', { name: 'Sign out' }).boundingBox();
+        assert.ok(signOut && signOut.width >= 20, 'Sign out must stay visible (as an icon) on a phone');
+        await T.open('#/history', 'Results');
+        const path = await page.getByRole('button', { name: 'Export CSV' }).locator('svg path').first().getAttribute('d');
+        assert.ok(path.startsWith('M12 3v12'), `Export CSV must use the download icon (path was ${path})`);
+      } finally {
+        await page.setViewportSize(original);
+      }
+    },
+
     // The top-bar button flips the theme and the choice survives a reload (stored on the center).
     async themeSwitch() {
       await T.open('#/', 'Dashboard');
