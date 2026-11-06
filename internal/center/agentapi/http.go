@@ -23,6 +23,18 @@ type Store interface {
 
 type Handler struct{ Store Store }
 
+type ingestObserverKey struct{}
+
+// WithIngestObserver attaches the optional operational item observer to authenticated requests.
+func WithIngestObserver(ctx context.Context, observer func(string)) context.Context {
+	return context.WithValue(ctx, ingestObserverKey{}, observer)
+}
+func observeIngest(ctx context.Context, status string) {
+	if observer, ok := ctx.Value(ingestObserverKey{}).(func(string)); ok {
+		observer(status)
+	}
+}
+
 // Method reports the method for a recognized agent operation.
 func Method(path string) string {
 	switch path {
@@ -222,6 +234,7 @@ func (h Handler) results(w http.ResponseWriter, r *http.Request, node string) {
 			case errors.Is(err, ErrConflict):
 				outcome.Status = 409
 			default:
+				observeIngest(r.Context(), "rejected")
 				storeError(w, err)
 				return
 			}
@@ -230,6 +243,7 @@ func (h Handler) results(w http.ResponseWriter, r *http.Request, node string) {
 			p := problem(outcome.Status, w.Header().Get("X-Request-ID"))
 			outcome.Problem = &p
 		}
+		observeIngest(r.Context(), outcome.Outcome)
 		outcomes = append(outcomes, outcome)
 	}
 	success(w, 207, outcomes)

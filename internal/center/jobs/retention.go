@@ -41,10 +41,12 @@ type Result struct {
 
 // Retention deletes results older than the retention setting, in small batches so that ingestion is never blocked.
 type Retention struct {
-	DB        DB
-	Logger    *slog.Logger
-	Now       func() time.Time
-	BatchSize int
+	// ObserveRun reports pass success without changing worker behavior.
+	ObserveRun func(bool)
+	DB         DB
+	Logger     *slog.Logger
+	Now        func() time.Time
+	BatchSize  int
 	// Pause is the rest between two full batches that lets other transactions in.
 	Pause time.Duration
 }
@@ -84,6 +86,9 @@ func (r *Retention) days(ctx context.Context) (int, error) {
 func (r *Retention) Run(ctx context.Context) (Result, error) {
 	start := time.Now()
 	res, err := r.run(ctx)
+	if r.ObserveRun != nil {
+		r.ObserveRun(err == nil)
+	}
 	res.Duration = time.Since(start)
 	log := r.logger().With("job", "retention", "retention_days", res.RetentionDays, "rows_deleted", res.Deleted,
 		"batches", res.Batches, "duration_ms", res.Duration.Milliseconds())

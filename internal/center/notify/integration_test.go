@@ -511,3 +511,20 @@ func TestQuietHoursHoldAlertDeliveries(t *testing.T) {
 		t.Fatal("nothing is held outside the window")
 	}
 }
+
+func TestNotificationLoopObserverIntegration(t *testing.T) {
+	p, ctx := database(t)
+	run, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var outcomes []bool
+	store := &Store{DB: p, ObserveRun: func(ok bool) { outcomes = append(outcomes, ok); cancel() }}
+	store.Loop(run)
+	if len(outcomes) != 1 || !outcomes[0] {
+		t.Fatal(outcomes)
+	}
+	outcomes = nil
+	store.Loop(run)
+	if len(outcomes) != 1 || outcomes[0] {
+		t.Fatal("cancelled pass advanced success", outcomes)
+	}
+}

@@ -12,6 +12,8 @@ import (
 	"syscall"
 )
 
+var version = "dev"
+
 func main() {
 	os.Exit(mainRun(os.Args[1:], os.Stdout, os.Stderr))
 }
