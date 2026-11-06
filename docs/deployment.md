@@ -314,3 +314,22 @@ The command refuses active jobs and atomically clears APP_KEY-HMAC installer
 idempotency records, reporting their count. Pre-rotation installation retries are
 new requests without replay; node/alert ciphertext replays remain valid. See the
 operations runbook for backup, failure recovery and retry semantics.
+
+## Production (speedtest.soulevil.com)
+
+Live since 2026-11-06 (release 1.0.0). All values below are names or addresses; no secret is stored in the repository.
+
+| Part | Where |
+| --- | --- |
+| Command center | container `speedtest-center` on the monitor VM `192.168.10.10`, host network, port `18090`, `--restart unless-stopped` |
+| Settings | `/etc/speedtest/center.env` on that VM (root, mode 0600): `SPEEDTEST_DB_*`, `APP_KEY`, `SPEEDTEST_TRUSTED_PROXY_CIDRS=192.168.10.4/32`, `SPEEDTEST_PUBLIC_URL` |
+| Database | `speedtest` database and role on the shared PostgreSQL `192.168.10.12`, `sslmode=require` |
+| Agent downloads | `/opt/speedtest/release` on the VM (agent binaries, `release.json`), mounted read-only into the container |
+| Edge | HAProxy on gatekeeper `192.168.10.4`: vhost `speedtest.soulevil.com` (backend `speedtest-web`, health check `/readyz`, `/metrics` answers 404), Let's Encrypt certificate renewed by certbot with the standard deploy hook |
+| Monitoring | Prometheus on the monitor VM scrapes `127.0.0.1:18090/metrics` (job `speedtest`) and probes `https://speedtest.soulevil.com/readyz`; rules in `/etc/prometheus/rules/16-speedtest.yml`; Alertmanager sends them to Telegram |
+
+Deploy and roll back from the repository root with `deploy/prod/prod.sh deploy|rollback|status|logs`. A deploy builds the
+release, ships the image, applies pending migrations when the container starts and waits for `/readyz`; the previous image stays
+as `speedtest-center:previous`. Back up `APP_KEY` separately from the database dumps: without it stored integration secrets
+cannot be decrypted. Rotate it with `speedtest-center rotate-app-key`.
+Backups: take `pg_dump -Fc speedtest` of the database before each deploy that migrates (see [Backup and restore](#backup-and-restore)).
