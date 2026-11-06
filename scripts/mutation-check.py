@@ -10,7 +10,7 @@ MUTATIONS = [
     ("alert streak off by one", "internal/center/alerts/model.go", "opened := !active && count >= threshold", "opened := !active && count > threshold", "./internal/center/alerts/..."),
     ("stats average replaced by maximum", "internal/center/stats/stats.go", '"avg(" + column + ") FILTER', '"max(" + column + ") FILTER', "./internal/center/stats/..."),
     ("retention keeps one day too many", "internal/center/jobs/retention.go", "AddDate(0, 0, -days)", "AddDate(0, 0, -days-1)", "./internal/center/jobs/..."),
-    ("owner same-origin check removed", "internal/center/server/auth.go", "if !s.sameOrigin(r) {\n\t\t\twriteForbidden(w, r)\n\t\t\treturn\n\t\t}\n\t\t_, session, ok := s.validSessionAndCSRF(w, r)", "if false && !s.sameOrigin(r) {\n\t\t\twriteForbidden(w, r)\n\t\t\treturn\n\t\t}\n\t\t_, session, ok := s.validSessionAndCSRF(w, r)", "./internal/center/server/..."),
+    ("owner same-origin check removed", "internal/center/server/auth_session.go", "if !s.sameOrigin(r) {\n\t\t\twriteForbidden(w, r)\n\t\t\treturn\n\t\t}\n\t\t_, session, ok := s.validSessionAndCSRF(w, r)", "if false && !s.sameOrigin(r) {\n\t\t\twriteForbidden(w, r)\n\t\t\treturn\n\t\t}\n\t\t_, session, ok := s.validSessionAndCSRF(w, r)", "./internal/center/server/..."),
 ]
 
 def run(pkg):
