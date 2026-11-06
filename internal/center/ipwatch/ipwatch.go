@@ -16,8 +16,12 @@ import (
 // Watcher uses transaction-local geo caching and shared provider rate limits.
 // Callers must serialize ingestion by locking the node before result insertion.
 type Watcher struct {
-	Offline   geo.Geo
+	Offline geo.Geo
+	// Reader is the offline reader behind Offline; the center runs its database updaters on it.
+	Reader    *geo.Reader
 	Fallbacks []geo.Fallback
+	// Consensus asks every fallback provider and keeps the majority answer (SPEEDTEST_GEO_CONSENSUS).
+	Consensus bool
 	Logger    *slog.Logger
 }
 
@@ -35,7 +39,7 @@ func Open(logger *slog.Logger) (*Watcher, func() error, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	return &Watcher{Offline: reader, Fallbacks: providers, Logger: logger}, reader.Close, nil
+	return &Watcher{Offline: reader, Reader: reader, Fallbacks: providers, Consensus: cfg.Consensus, Logger: logger}, reader.Close, nil
 }
 
 // boundCache retains the inet key already locked by ingestion. Resolver may
@@ -124,7 +128,7 @@ func (w *Watcher) AfterResultStored(ctx context.Context, tx pgx.Tx, node string,
 	if _, err = tx.Exec(ctx, `SELECT ip FROM ip_addresses WHERE ip=$1 FOR NO KEY UPDATE`, ip); err != nil {
 		return err
 	}
-	resolver := geo.NewResolver(boundCache{Cache: geo.NewPostgresCache(tx), ip: ip}, w.Offline, w.Fallbacks...)
+	resolver := geo.NewResolver(boundCache{Cache: geo.NewPostgresCache(tx), ip: ip}, w.Offline, w.Fallbacks...).WithConsensus(w.Consensus, w.Logger)
 	if _, err = resolver.Lookup(ctx, ip); err != nil {
 		if !errors.Is(err, geo.ErrNotFound) {
 			return err

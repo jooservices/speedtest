@@ -40,6 +40,7 @@ func TestNotificationCenterEndToEndIntegration(t *testing.T) {
 	t.Setenv("SPEEDTEST_RELEASE_DIR", "")
 	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "false")
 	t.Setenv("SPEEDTEST_GEO_IPINFO_ENABLED", "false")
+	t.Setenv("SPEEDTEST_GEO_DBIP_AUTO_UPDATE", "false")
 	cfg, err := config.LoadCenter()
 	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
 		t.Fatal("verified worktree configuration required")
