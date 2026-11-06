@@ -19,20 +19,7 @@ func ownerJobsRoute(path string) bool {
 }
 
 func newOwnerJobsHandler(store OwnerJobsStore, auth *serverAuth) http.Handler {
-	limiter := newOwnerRateLimiter()
-	return auth.requireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		principal, err := ownerPrincipal(r)
-		if err != nil {
-			writeUnauthorized(w, r)
-			return
-		}
-		if !allowRate(limiter, "owner:"+principal, w, r) {
-			return
-		}
-		if r.Method != http.MethodGet {
-			methodNotAllowed(w, r, http.MethodGet)
-			return
-		}
+	return ownerReader(auth, newOwnerRateLimiter(), func(w http.ResponseWriter, r *http.Request) {
 		id := strings.TrimPrefix(r.URL.Path, "/api/jobs/")
 		if !uuidPattern.MatchString(id) {
 			writeNotFoundProblem(w, r)
@@ -47,5 +34,5 @@ func newOwnerJobsHandler(store OwnerJobsStore, auth *serverAuth) http.Handler {
 		default:
 			writeEnvelope(w, http.StatusOK, "Success", job)
 		}
-	}))
+	})
 }

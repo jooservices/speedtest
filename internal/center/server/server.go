@@ -12,7 +12,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"strings"
 	"sync/atomic"
 	"time"
 
@@ -73,127 +72,37 @@ type Options struct {
 	AgentAPI agentapi.Store
 }
 
-// NewHandler builds the health, readiness, and static UI routes.
+// NewHandler builds the whole HTTP handler: owner APIs, agent API, health endpoints and the static UI, wrapped in
+// the request id, access log, panic recovery, security headers and audit middleware.
 func NewHandler(options Options) http.Handler {
 	logger := options.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
-
 	readinessTimeout := options.ReadinessTimeout
 	if readinessTimeout <= 0 {
 		readinessTimeout = defaultReadinessTimeout
 	}
+	auth := &serverAuth{service: options.Auth, requireHTTPS: options.RequireHTTPS, trustedProxyCIDRs: options.TrustedProxyCIDRs}
+	areas := append(ownerAreas(options, auth), platformAreas(options, auth, readyz(options.Pinger, readinessTimeout))...)
 
-	var uiHandler http.Handler
-	if options.UI == nil {
-		uiHandler = http.NotFoundHandler()
-	} else {
-		uiHandler = http.FileServer(http.FS(options.UI))
-	}
-	uiMux := http.NewServeMux()
-	uiMux.Handle("GET /", uiHandler)
-
-	readinessHandler := readyz(options.Pinger, readinessTimeout)
-	authHandler := &serverAuth{service: options.Auth, requireHTTPS: options.RequireHTTPS, trustedProxyCIDRs: options.TrustedProxyCIDRs}
-	apiHandler := newAPIHandler(options.NodeCredentials, options.AgentRateLimit, authHandler, options.AgentAPI)
-	var ownerNodesHandler http.Handler
-	if options.OwnerNodes != nil {
-		ownerNodesHandler = newOwnerNodesHandler(options.OwnerNodes, authHandler)
-	}
-	var ownerSchedulesHandler http.Handler
-	if options.OwnerSchedules != nil {
-		ownerSchedulesHandler = newOwnerSchedulesHandler(options.OwnerSchedules, authHandler)
-	}
-	var ownerJobsHandler http.Handler
-	var auditHandler http.Handler
-	if options.Audit != nil {
-		auditHandler = newOwnerAuditHandler(options.Audit, authHandler)
-	}
-	if options.OwnerJobs != nil {
-		ownerJobsHandler = newOwnerJobsHandler(options.OwnerJobs, authHandler)
-	}
-	var ownerDashboardHandler http.Handler
-	if options.OwnerDashboard != nil {
-		ownerDashboardHandler = newOwnerDashboardHandler(options.OwnerDashboard, authHandler)
-	}
-	var notificationHandler http.Handler
-	if options.OwnerNotifications != nil {
-		notificationHandler = newOwnerNotificationsHandler(options.OwnerNotifications, authHandler, options.AgentRateLimit)
-	}
-	var ownerIPHandler http.Handler
-	if options.OwnerIP != nil {
-		ownerIPHandler = newOwnerIPHandler(options.OwnerIP, authHandler)
-	}
-	var settingsHandler http.Handler
-	if options.Settings != nil {
-		settingsHandler = newOwnerSettingsHandler(options.Settings, authHandler)
-	}
-	var ownerResultsHandler http.Handler
-	if options.OwnerResults != nil {
-		ownerResultsHandler = newOwnerResultsHandler(options.OwnerResults, authHandler)
-	}
-	var ownerStatsHandler http.Handler
-	if options.OwnerStats != nil {
-		ownerStatsHandler = newOwnerStatsHandler(options.OwnerStats, authHandler)
-	}
-	var ownerAlertsHandler http.Handler
-	if options.OwnerAlerts != nil {
-		ownerAlertsHandler = newOwnerAlertsHandler(options.OwnerAlerts, authHandler)
-	}
-	var installerHandler http.Handler
-	if options.Installer != nil {
-		installerHandler = newInstallerHandler(options.Installer, authHandler, options.AgentRateLimit)
-	}
-	dispatch := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/auth" || strings.HasPrefix(r.URL.Path, "/api/auth/"):
-			authHandler.serve(w, r)
-		case auditHandler != nil && auditRoute(r.URL.Path):
-			auditHandler.ServeHTTP(w, r)
-		case installerHandler != nil && installerRoute(r.URL.Path):
-			installerHandler.ServeHTTP(w, r)
-		case ownerNodesHandler != nil && ownerNodesRoute(r.URL.Path) && (r.Method != http.MethodPost || r.URL.Path != "/api/nodes"):
-			ownerNodesHandler.ServeHTTP(w, r)
-		case ownerSchedulesHandler != nil && ownerSchedulesRoute(r.URL.Path):
-			ownerSchedulesHandler.ServeHTTP(w, r)
-		case ownerJobsHandler != nil && ownerJobsRoute(r.URL.Path):
-			ownerJobsHandler.ServeHTTP(w, r)
-		case ownerDashboardHandler != nil && ownerDashboardRoute(r.URL.Path):
-			ownerDashboardHandler.ServeHTTP(w, r)
-		case notificationHandler != nil && ownerNotificationsRoute(r.URL.Path):
-			notificationHandler.ServeHTTP(w, r)
-		case ownerIPHandler != nil && ownerIPRoute(r.URL.Path):
-			ownerIPHandler.ServeHTTP(w, r)
-		case settingsHandler != nil && ownerSettingsRoute(r.URL.Path):
-			settingsHandler.ServeHTTP(w, r)
-		case ownerResultsHandler != nil && ownerResultsRoute(r.URL.Path):
-			ownerResultsHandler.ServeHTTP(w, r)
-		case ownerStatsHandler != nil && ownerStatsRoute(r.URL.Path):
-			ownerStatsHandler.ServeHTTP(w, r)
-		case ownerAlertsHandler != nil && ownerAlertsRoute(r.URL.Path):
-			ownerAlertsHandler.ServeHTTP(w, r)
-		case r.URL.Path == "/api" || strings.HasPrefix(r.URL.Path, "/api/"):
-			apiHandler.ServeHTTP(w, r)
-		case options.Install != nil && (r.URL.Path == "/install.sh" || strings.HasPrefix(r.URL.Path, "/download/")):
-			options.Install.ServeHTTP(w, r)
-		case r.URL.Path == "/healthz":
-			serveGetRoute(w, r, http.HandlerFunc(healthz))
-		case options.Metrics != nil && r.URL.Path == "/metrics":
-			serveGetRoute(w, r, metricsHandler(options.Metrics, options.MetricsToken))
-		case r.URL.Path == "/readyz":
-			serveGetRoute(w, r, readinessHandler)
-		default:
-			uiMux.ServeHTTP(w, r)
-		}
-	})
-
-	var handler http.Handler = withAudit(dispatch, options.Audit, authHandler, logger)
+	handler := withAudit(dispatcher(areas, uiHandler(options.UI)), options.Audit, auth, logger)
 	handler = withSecurityHeaders(handler)
 	handler = recoverPanics(handler, logger)
 	handler = logRequests(handler, logger)
 	handler = withRequestID(handler)
 	return handler
+}
+
+// uiHandler serves the single-page UI files; GET only, anything else under it is a 404/405 from the file server.
+func uiHandler(files fs.FS) http.Handler {
+	handler := http.NotFoundHandler()
+	if files != nil {
+		handler = http.FileServer(http.FS(files))
+	}
+	mux := http.NewServeMux()
+	mux.Handle("GET /", handler)
+	return mux
 }
 
 // Serve runs an HTTP server on listener until it returns an error or ctx is

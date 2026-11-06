@@ -37,7 +37,7 @@ type ownerResults struct {
 
 func newOwnerResultsHandler(store OwnerResultsStore, auth *serverAuth) http.Handler {
 	h := &ownerResults{store: store, limiter: newOwnerRateLimiter(), now: time.Now}
-	return auth.requireSession(http.HandlerFunc(h.serve))
+	return ownerReader(auth, h.limiter, h.serve)
 }
 
 // ownerResultsRoute reports whether the path belongs to the result API.
@@ -47,18 +47,6 @@ func ownerResultsRoute(path string) bool {
 }
 
 func (h *ownerResults) serve(w http.ResponseWriter, r *http.Request) {
-	principal, err := ownerPrincipal(r)
-	if err != nil {
-		writeUnauthorized(w, r)
-		return
-	}
-	if !allowRate(h.limiter, "owner:"+principal, w, r) {
-		return
-	}
-	if r.Method != http.MethodGet {
-		methodNotAllowed(w, r, http.MethodGet)
-		return
-	}
 	switch r.URL.Path {
 	case "/api/export/results.csv":
 		h.exportCSV(w, r, ownerapi.ResultFilter{Sort: "ts", Dir: "asc"})
@@ -101,12 +89,7 @@ func (h *ownerResults) list(w http.ResponseWriter, r *http.Request) {
 		writeOwnerError(w, r, err)
 		return
 	}
-	last := (total + size - 1) / size
-	if last < 1 {
-		last = 1
-	}
-	writeJSON(w, http.StatusOK, apiEnvelope{Success: true, Code: http.StatusOK, Message: "Success", Data: items,
-		Meta: map[string]any{"pagination": map[string]any{"current_page": page, "per_page": size, "total": total, "last_page": last}}})
+	writePage(w, items, page, size, total)
 }
 
 func (h *ownerResults) exportCSV(w http.ResponseWriter, r *http.Request, filter ownerapi.ResultFilter) {
