@@ -18,8 +18,10 @@ remote() { ssh -o BatchMode=yes "$HOST" "$@"; }
 
 run_container() { # image tag
 	remote "sudo docker rm -f $NAME >/dev/null 2>&1 || true; sudo docker run -d --name $NAME --restart unless-stopped --network host \
-		--env-file /etc/speedtest/center.env -e SPEEDTEST_PORT=$PORT -e SPEEDTEST_RELEASE_DIR=/var/lib/speedtest/release \
-		-v speedtest-center-data:/var/lib/speedtest -v /opt/speedtest/release:/var/lib/speedtest/release:ro $1"
+		--env-file /etc/speedtest/center.env -e SPEEDTEST_PORT=$PORT -e SPEEDTEST_RELEASE_DIR=/var/lib/speedtest/release \\
+		-e SPEEDTEST_GEOLITE2_AUTO_UPDATE=false \
+		-v speedtest-center-data:/var/lib/speedtest -v /opt/speedtest/release:/var/lib/speedtest/release:ro \\
+		-v /opt/speedtest/geoip:/var/lib/speedtest/data/geoip:ro $1"
 }
 wait_ready() {
 	for _ in $(seq 1 40); do
