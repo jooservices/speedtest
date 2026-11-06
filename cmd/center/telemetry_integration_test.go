@@ -19,6 +19,7 @@ func TestTelemetryCompositionIntegration(t *testing.T) {
 	pool := rotationPool(t)
 	t.Setenv("SPEEDTEST_METRICS_TOKEN", "")
 	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "false")
+	t.Setenv("SPEEDTEST_GEO_DBIP_AUTO_UPDATE", "false")
 	t.Setenv("SPEEDTEST_GEO_IPINFO_ENABLED", "false")
 	cfg, err := config.LoadCenter()
 	if err != nil {

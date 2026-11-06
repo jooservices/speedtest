@@ -32,6 +32,20 @@ type ProviderConfig struct {
 	IPInfoURL               string
 	IPInfoToken             string
 	IPInfoRequestsPerMinute int
+
+	// Optional extra providers, all off by default (JOOST-75).
+	IPWhoEnabled             bool
+	IPWhoURL                 string
+	IPWhoRequestsPerMinute   int
+	IPAPICoEnabled           bool
+	IPAPICoURL               string
+	IPAPICoRequestsPerMinute int
+	IPGeoEnabled             bool
+	IPGeoURL                 string
+	IPGeoKey                 string // secret; never log
+	IPGeoRequestsPerMinute   int
+	// Consensus asks every enabled provider and keeps the answer most of them agree on.
+	Consensus bool
 }
 
 // ProviderConfigFromEnv reads fallback settings. The free ip-api endpoint is
@@ -39,16 +53,23 @@ type ProviderConfig struct {
 // requires an access token and is opt-in; its published free limit is unlimited.
 func ProviderConfigFromEnv() (ProviderConfig, error) {
 	cfg := ProviderConfig{
-		Timeout:                 5 * time.Second,
-		FailureThreshold:        5,
-		BreakerReset:            time.Minute,
-		IPAPIEnabled:            true,
-		IPAPIURL:                "http://ip-api.com/json",
-		IPAPIRequestsPerMinute:  45,
-		IPInfoEnabled:           false,
-		IPInfoURL:               "https://api.ipinfo.io/lite",
-		IPInfoRequestsPerMinute: 0,
-		IPInfoToken:             os.Getenv("SPEEDTEST_GEO_IPINFO_TOKEN"),
+		Timeout:                  5 * time.Second,
+		FailureThreshold:         5,
+		BreakerReset:             time.Minute,
+		IPAPIEnabled:             true,
+		IPAPIURL:                 "http://ip-api.com/json",
+		IPAPIRequestsPerMinute:   45,
+		IPInfoEnabled:            false,
+		IPInfoURL:                "https://api.ipinfo.io/lite",
+		IPInfoRequestsPerMinute:  0,
+		IPInfoToken:              os.Getenv("SPEEDTEST_GEO_IPINFO_TOKEN"),
+		IPWhoURL:                 "https://ipwho.is",
+		IPWhoRequestsPerMinute:   30,
+		IPAPICoURL:               "https://ipapi.co",
+		IPAPICoRequestsPerMinute: 10,
+		IPGeoURL:                 "https://api.ipgeolocation.io/ipgeo",
+		IPGeoRequestsPerMinute:   30,
+		IPGeoKey:                 os.Getenv("SPEEDTEST_GEO_IPGEOLOCATION_KEY"),
 	}
 	var err error
 	if cfg.Timeout, err = envDuration("SPEEDTEST_GEO_PROVIDER_TIMEOUT", cfg.Timeout); err != nil {
@@ -72,6 +93,9 @@ func ProviderConfigFromEnv() (ProviderConfig, error) {
 	}
 	cfg.IPInfoURL = envValue("SPEEDTEST_GEO_IPINFO_URL", cfg.IPInfoURL)
 	if cfg.IPInfoRequestsPerMinute, err = envInt("SPEEDTEST_GEO_IPINFO_REQUESTS_PER_MINUTE", cfg.IPInfoRequestsPerMinute); err != nil {
+		return ProviderConfig{}, err
+	}
+	if err := extraProviderEnv(&cfg); err != nil {
 		return ProviderConfig{}, err
 	}
 	if cfg.Timeout <= 0 || cfg.FailureThreshold < 1 || cfg.BreakerReset <= 0 || cfg.IPAPIRequestsPerMinute < 0 || cfg.IPInfoRequestsPerMinute < 0 {
@@ -147,7 +171,7 @@ func NewFallbackProviders(cfg ProviderConfig) ([]Fallback, error) {
 		}
 		providers = append(providers, provider)
 	}
-	return providers, nil
+	return extraProviders(cfg, providers)
 }
 
 // IPAPIProvider implements the free ip-api.com JSON endpoint.
@@ -293,8 +317,8 @@ func newProviderCore(name, endpoint string, requestsPerMinute int, cfg ProviderC
 	if err != nil || u.Host == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || (u.Scheme != "http" && u.Scheme != "https") {
 		return nil, errors.New("provider endpoint must be an absolute HTTP URL without credentials or query")
 	}
-	if name == "ipinfo-lite" && u.Scheme != "https" && !isLoopbackHost(u.Hostname()) {
-		return nil, errors.New("IPinfo endpoint requires HTTPS outside loopback")
+	if (name == "ipinfo-lite" || name == "ipgeolocation") && u.Scheme != "https" && !isLoopbackHost(u.Hostname()) {
+		return nil, errors.New("this provider endpoint requires HTTPS outside loopback")
 	}
 	if cfg.Timeout <= 0 || cfg.FailureThreshold < 1 || cfg.BreakerReset <= 0 || requestsPerMinute < 0 {
 		return nil, errors.New("invalid geolocation provider limits")
