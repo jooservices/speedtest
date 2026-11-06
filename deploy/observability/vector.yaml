@@ -7,7 +7,7 @@ sources:
   # For a systemd install replace this source with `journald` (units speedtest-center, speedtest-agent).
   docker:
     type: docker_logs
-    include_containers: ["speedtest-staging", "speedtest-node-", "speedtest-probe"]
+    include_containers: ["speedtest-staging", "speedtest-center", "speedtest-node-", "speedtest-probe"]
 
   # Metrics: the center's /metrics (loopback needs no token; set SPEEDTEST_METRICS_TOKEN if scraping from elsewhere).
   center_metrics:
