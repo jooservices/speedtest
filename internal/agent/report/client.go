@@ -113,6 +113,37 @@ func (c *Client) SendBatch(ctx context.Context, results []Result) ([]Outcome, er
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	return batchResponse(resp, results)
+}
+
+func (c *Client) endpoint() string {
+	return c.BaseURL.JoinPath("api", "agent", "results").String()
+}
+
+// decodeOutcomes parses the 207 multi-status envelope into ordered outcomes.
+func decodeOutcomes(body []byte) ([]Outcome, error) {
+	var env struct {
+		Success bool            `json:"success"`
+		Code    int             `json:"code"`
+		Data    json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, &SendError{Retryable: true, Status: http.StatusMultiStatus, Err: fmt.Errorf("decode response: %w", err)}
+	}
+	if !env.Success || env.Code != 207 {
+		return nil, &SendError{Retryable: true, Err: errors.New("invalid batch envelope")}
+	}
+	var outcomes []Outcome
+	if err := json.Unmarshal(env.Data, &outcomes); err != nil {
+		return nil, &SendError{Retryable: true, Status: http.StatusMultiStatus, Err: fmt.Errorf("decode outcomes: %w", err)}
+	}
+	if outcomes == nil {
+		outcomes = []Outcome{}
+	}
+	return outcomes, nil
+}
+
+func batchResponse(resp *http.Response, results []Result) ([]Outcome, error) {
 	respBody, err := io.ReadAll(io.LimitReader(resp.Body, maxResponseBody+1))
 	if err != nil {
 		return nil, &SendError{Retryable: true, Err: fmt.Errorf("read response: %w", err)}
@@ -141,31 +172,4 @@ func (c *Client) SendBatch(ctx context.Context, results []Result) ([]Outcome, er
 	default:
 		return nil, &SendError{Status: resp.StatusCode, Err: fmt.Errorf("unexpected status %d", resp.StatusCode)}
 	}
-}
-
-func (c *Client) endpoint() string {
-	return c.BaseURL.JoinPath("api", "agent", "results").String()
-}
-
-// decodeOutcomes parses the 207 multi-status envelope into ordered outcomes.
-func decodeOutcomes(body []byte) ([]Outcome, error) {
-	var env struct {
-		Success bool            `json:"success"`
-		Code    int             `json:"code"`
-		Data    json.RawMessage `json:"data"`
-	}
-	if err := json.Unmarshal(body, &env); err != nil {
-		return nil, &SendError{Retryable: true, Status: http.StatusMultiStatus, Err: fmt.Errorf("decode response: %w", err)}
-	}
-	if !env.Success || env.Code != 207 {
-		return nil, &SendError{Retryable: true, Err: errors.New("invalid batch envelope")}
-	}
-	var outcomes []Outcome
-	if err := json.Unmarshal(env.Data, &outcomes); err != nil {
-		return nil, &SendError{Retryable: true, Status: http.StatusMultiStatus, Err: fmt.Errorf("decode outcomes: %w", err)}
-	}
-	if outcomes == nil {
-		outcomes = []Outcome{}
-	}
-	return outcomes, nil
 }

@@ -258,18 +258,7 @@ func storeCredential(path, credential string, ops credentialStoreOps) (resultErr
 	}
 	renamed = true
 
-	dirFile, err := ops.openDir(dir)
-	if err != nil {
-		return fmt.Errorf("open credential directory: %w", err)
-	}
-	if err := dirFile.Sync(); err != nil {
-		_ = dirFile.Close()
-		return fmt.Errorf("sync credential directory: %w", err)
-	}
-	if err := dirFile.Close(); err != nil {
-		return fmt.Errorf("close credential directory: %w", err)
-	}
-	return nil
+	return syncCredentialDirectory(dir, ops)
 }
 
 // LoadCredential reads the credential file and refuses to start the node if the
@@ -292,4 +281,19 @@ func LoadCredential(path string) (string, error) {
 		return "", fmt.Errorf("credential %s is empty", path)
 	}
 	return credential, nil
+}
+
+func syncCredentialDirectory(dir string, ops credentialStoreOps) error {
+	dirFile, err := ops.openDir(dir)
+	if err != nil {
+		return fmt.Errorf("open credential directory: %w", err)
+	}
+	if err := dirFile.Sync(); err != nil {
+		_ = dirFile.Close()
+		return fmt.Errorf("sync credential directory: %w", err)
+	}
+	if err := dirFile.Close(); err != nil {
+		return fmt.Errorf("close credential directory: %w", err)
+	}
+	return nil
 }

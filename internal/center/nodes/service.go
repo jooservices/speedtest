@@ -272,14 +272,8 @@ func (s *Service) Enroll(ctx context.Context, token, name, host, agent string) (
 	if err != nil {
 		return nil, err
 	}
-	var expiresAt time.Time
-	var consumedAt, revokedAt pgtype.Timestamptz
-	err = tx.QueryRow(ctx, `SELECT expires_at,consumed_at,revoked_at FROM node_credentials WHERE id=$1 FOR UPDATE`, credentialID).Scan(&expiresAt, &consumedAt, &revokedAt)
-	if err != nil {
+	if err := s.validateEnrollment(ctx, tx, credentialID, node.Name, name); err != nil {
 		return nil, err
-	}
-	if node.Name != name || !expiresAt.After(s.now()) || consumedAt.Valid || revokedAt.Valid {
-		return nil, ErrInvalidToken
 	}
 	bearer, err := s.secret("sp_")
 	if err != nil {
@@ -559,4 +553,17 @@ func translateDBError(err error) error {
 		return ErrConflict
 	}
 	return err
+}
+
+func (s *Service) validateEnrollment(ctx context.Context, tx pgx.Tx, credentialID, storedName, name string) error {
+	var expiresAt time.Time
+	var consumedAt, revokedAt pgtype.Timestamptz
+	err := tx.QueryRow(ctx, `SELECT expires_at,consumed_at,revoked_at FROM node_credentials WHERE id=$1 FOR UPDATE`, credentialID).Scan(&expiresAt, &consumedAt, &revokedAt)
+	if err != nil {
+		return err
+	}
+	if storedName != name || !expiresAt.After(s.now()) || consumedAt.Valid || revokedAt.Valid {
+		return ErrInvalidToken
+	}
+	return nil
 }

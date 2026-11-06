@@ -114,6 +114,53 @@ func (r Result) Validate() error {
 		return fmt.Errorf("result loss must be between 0 and 100, got %f", *r.Loss)
 	}
 
+	if err := r.validateDetails(); err != nil {
+		return err
+	}
+	switch r.Status {
+	case StatusFailed:
+		if r.Error == nil || *r.Error == "" {
+			return errors.New("a failed result requires a non-empty error")
+		}
+	case StatusOK, StatusDegraded:
+		if r.Error != nil {
+			return errors.New("an ok or degraded result must have a null error")
+		}
+		if r.Down == nil || r.Up == nil || r.Ping == nil {
+			return errors.New("an ok or degraded result requires down, up and ping")
+		}
+		if r.Server == nil {
+			return errors.New("an ok or degraded result requires a server identity")
+		}
+	default:
+		return fmt.Errorf("result status must be ok, degraded or failed, got %q", r.Status)
+	}
+	return nil
+}
+
+func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
+func isUUID(id string) bool {
+	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
+		return false
+	}
+	decoded, err := hex.DecodeString(strings.ReplaceAll(id, "-", ""))
+	return err == nil && len(decoded) == 16
+}
+
+// MarshalJSON emits an unknown failed-test IP as null, never an invented address.
+func (r Result) MarshalJSON() ([]byte, error) {
+	type wire Result
+	var ip *string
+	if r.IP != "" {
+		ip = &r.IP
+	}
+	return json.Marshal(struct {
+		wire
+		IP *string `json:"ip"`
+	}{wire(r), ip})
+}
+
+func (r Result) validateDetails() error {
 	if r.Error != nil && len([]rune(*r.Error)) > 2000 {
 		return errors.New("result error exceeds 2000 characters")
 	}
@@ -157,45 +204,5 @@ func (r Result) Validate() error {
 			return errors.New("engineResultUrl must be an absolute URI")
 		}
 	}
-	switch r.Status {
-	case StatusFailed:
-		if r.Error == nil || *r.Error == "" {
-			return errors.New("a failed result requires a non-empty error")
-		}
-	case StatusOK, StatusDegraded:
-		if r.Error != nil {
-			return errors.New("an ok or degraded result must have a null error")
-		}
-		if r.Down == nil || r.Up == nil || r.Ping == nil {
-			return errors.New("an ok or degraded result requires down, up and ping")
-		}
-		if r.Server == nil {
-			return errors.New("an ok or degraded result requires a server identity")
-		}
-	default:
-		return fmt.Errorf("result status must be ok, degraded or failed, got %q", r.Status)
-	}
 	return nil
-}
-
-func finite(v float64) bool { return !math.IsNaN(v) && !math.IsInf(v, 0) }
-func isUUID(id string) bool {
-	if len(id) != 36 || id[8] != '-' || id[13] != '-' || id[18] != '-' || id[23] != '-' {
-		return false
-	}
-	decoded, err := hex.DecodeString(strings.ReplaceAll(id, "-", ""))
-	return err == nil && len(decoded) == 16
-}
-
-// MarshalJSON emits an unknown failed-test IP as null, never an invented address.
-func (r Result) MarshalJSON() ([]byte, error) {
-	type wire Result
-	var ip *string
-	if r.IP != "" {
-		ip = &r.IP
-	}
-	return json.Marshal(struct {
-		wire
-		IP *string `json:"ip"`
-	}{wire(r), ip})
 }

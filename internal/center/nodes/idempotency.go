@@ -64,26 +64,7 @@ func (s *Service) idempotent(ctx context.Context, principal, operation, key stri
 	if _, err := tx.Exec(ctx, `DELETE FROM api_idempotency WHERE ctid IN (SELECT ctid FROM api_idempotency WHERE expires_at<=now() ORDER BY expires_at LIMIT 100 FOR UPDATE SKIP LOCKED)`); err != nil {
 		return nil, false, err
 	}
-	data, err := create(tx)
-	if err != nil {
-		return nil, false, err
-	}
-	responseJSON, err := json.Marshal(data)
-	if err != nil {
-		return nil, false, err
-	}
-	ciphertext, err := s.encryptReplay(responseJSON, principal, operation, keyHash)
-	if err != nil {
-		return nil, false, err
-	}
-	_, err = tx.Exec(ctx, `INSERT INTO api_idempotency (principal,operation,key_hash,request_hash,response_ciphertext,expires_at) VALUES ($1,$2,$3,$4,$5,now()+interval '24 hours')`, principal, operation, keyHash, hex.EncodeToString(requestSum[:]), ciphertext)
-	if err != nil {
-		return nil, false, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return nil, false, err
-	}
-	return json.RawMessage(responseJSON), false, nil
+	return s.createReplay(ctx, tx, principal, operation, keyHash, requestSum, create)
 }
 
 func (s *Service) encryptReplay(plain []byte, principal, operation, keyHash string) ([]byte, error) {
@@ -124,4 +105,27 @@ func (s *Service) decryptReplay(ciphertext []byte, principal, operation, keyHash
 
 func idempotencyAAD(principal, operation, keyHash string) []byte {
 	return []byte(principal + "\x00" + operation + "\x00" + keyHash)
+}
+
+func (s *Service) createReplay(ctx context.Context, tx pgx.Tx, principal, operation, keyHash string, requestSum [32]byte, create func(pgx.Tx) (any, error)) (json.RawMessage, bool, error) {
+	data, err := create(tx)
+	if err != nil {
+		return nil, false, err
+	}
+	responseJSON, err := json.Marshal(data)
+	if err != nil {
+		return nil, false, err
+	}
+	ciphertext, err := s.encryptReplay(responseJSON, principal, operation, keyHash)
+	if err != nil {
+		return nil, false, err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO api_idempotency (principal,operation,key_hash,request_hash,response_ciphertext,expires_at) VALUES ($1,$2,$3,$4,$5,now()+interval '24 hours')`, principal, operation, keyHash, hex.EncodeToString(requestSum[:]), ciphertext)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	return json.RawMessage(responseJSON), false, nil
 }

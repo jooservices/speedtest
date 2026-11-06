@@ -128,21 +128,8 @@ func (s *PostgresStore) createInstallation(ctx context.Context, principal, key, 
 		return Installation{}, false, err
 	}
 
-	var probeHost, probeFingerprint string
-	var probePort int
-	var expiresAt time.Time
-	var consumedAt pgtype.Timestamptz
-	err = tx.QueryRow(ctx, "SELECT host,port,fingerprint,expires_at,consumed_at FROM installer_probes WHERE id=$1 FOR UPDATE", input.ProbeID).Scan(&probeHost, &probePort, &probeFingerprint, &expiresAt, &consumedAt)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Installation{}, false, ErrNotFound
-	}
-	if err != nil {
+	if err := validateInstallProbe(ctx, tx, input); err != nil {
 		return Installation{}, false, err
-	}
-	if !expiresAt.After(time.Now().UTC()) || consumedAt.Valid ||
-		!strings.EqualFold(probeHost, input.SSH.Host) || probePort != input.SSH.Port ||
-		probeFingerprint != input.Fingerprint {
-		return Installation{}, false, ErrConflict
 	}
 	var exists bool
 	if err := tx.QueryRow(ctx, "SELECT EXISTS(SELECT 1 FROM nodes WHERE id=$1)", nodeID).Scan(&exists); err != nil {
@@ -162,26 +149,7 @@ func (s *PostgresStore) createInstallation(ctx context.Context, principal, key, 
 		}
 		return Installation{}, false, err
 	}
-	eventID, err := newID()
-	if err != nil {
-		return Installation{}, false, err
-	}
-	if _, err := tx.Exec(ctx, "INSERT INTO installer_events(id,installation_id,step,message,pct,status) VALUES($1,$2,'queued','The installation was queued.',0,'running')", eventID, job.ID); err != nil {
-		return Installation{}, false, err
-	}
-	if _, err := tx.Exec(ctx, "UPDATE installer_probes SET consumed_at=now() WHERE id=$1", input.ProbeID); err != nil {
-		return Installation{}, false, err
-	}
-	if _, err := tx.Exec(ctx, "DELETE FROM installer_idempotency WHERE expires_at<=now()"); err != nil {
-		return Installation{}, false, err
-	}
-	if _, err := tx.Exec(ctx, "INSERT INTO installer_idempotency(principal,key_hash,request_hash,installation_id,expires_at) VALUES($1,$2,$3,$4,now()+interval '24 hours')", principal, keyHash, requestHash, job.ID); err != nil {
-		return Installation{}, false, err
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return Installation{}, false, err
-	}
-	return job, false, nil
+	return finishInstallation(ctx, tx, job, input.ProbeID, principal, keyHash, requestHash)
 }
 
 func (s *PostgresStore) installation(ctx context.Context, id string) (Installation, error) {
@@ -400,4 +368,47 @@ func newID() (string, error) {
 	value[8] = value[8]&0x3f | 0x80
 	raw := hex.EncodeToString(value[:])
 	return fmt.Sprintf("%s-%s-%s-%s-%s", raw[:8], raw[8:12], raw[12:16], raw[16:20], raw[20:]), nil
+}
+
+func validateInstallProbe(ctx context.Context, tx pgx.Tx, input InstallInput) error {
+	var probeHost, probeFingerprint string
+	var probePort int
+	var expiresAt time.Time
+	var consumedAt pgtype.Timestamptz
+	err := tx.QueryRow(ctx, "SELECT host,port,fingerprint,expires_at,consumed_at FROM installer_probes WHERE id=$1 FOR UPDATE", input.ProbeID).Scan(&probeHost, &probePort, &probeFingerprint, &expiresAt, &consumedAt)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if !expiresAt.After(time.Now().UTC()) || consumedAt.Valid ||
+		!strings.EqualFold(probeHost, input.SSH.Host) || probePort != input.SSH.Port ||
+		probeFingerprint != input.Fingerprint {
+		return ErrConflict
+	}
+	return nil
+}
+
+func finishInstallation(ctx context.Context, tx pgx.Tx, job Installation, probeID, principal, keyHash, requestHash string) (Installation, bool, error) {
+	eventID, err := newID()
+	if err != nil {
+		return Installation{}, false, err
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO installer_events(id,installation_id,step,message,pct,status) VALUES($1,$2,'queued','The installation was queued.',0,'running')", eventID, job.ID); err != nil {
+		return Installation{}, false, err
+	}
+	if _, err := tx.Exec(ctx, "UPDATE installer_probes SET consumed_at=now() WHERE id=$1", probeID); err != nil {
+		return Installation{}, false, err
+	}
+	if _, err := tx.Exec(ctx, "DELETE FROM installer_idempotency WHERE expires_at<=now()"); err != nil {
+		return Installation{}, false, err
+	}
+	if _, err := tx.Exec(ctx, "INSERT INTO installer_idempotency(principal,key_hash,request_hash,installation_id,expires_at) VALUES($1,$2,$3,$4,now()+interval '24 hours')", principal, keyHash, requestHash, job.ID); err != nil {
+		return Installation{}, false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Installation{}, false, err
+	}
+	return job, false, nil
 }

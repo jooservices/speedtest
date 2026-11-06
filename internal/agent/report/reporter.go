@@ -142,30 +142,8 @@ func (r *Reporter) flush(ctx context.Context) error {
 			return err
 		}
 
-		for i, res := range batch {
-			out := byIndex[i]
-			switch out.Outcome {
-			case "accepted", "duplicate":
-				if r.delivered != nil {
-					if err := r.delivered(res, true); err != nil {
-						return err
-					}
-				}
-				if err := r.spool.Ack(res.ID); err != nil {
-					return err
-				}
-
-			default:
-				if r.delivered != nil {
-					if err := r.delivered(res, false); err != nil {
-						return err
-					}
-				}
-				if err := r.spool.Quarantine(res.ID, fmt.Sprintf("HTTP %d", out.Status)); err != nil {
-					return err
-				}
-
-			}
+		if err := r.applyOutcomes(batch, byIndex); err != nil {
+			return err
 		}
 	}
 }
@@ -248,4 +226,33 @@ func boundedBatch(batch []Result) ([]Result, error) {
 // The observer must not block or call Flush.
 func WithDeliveryObserver(fn func(Result, bool) error) Option {
 	return func(r *Reporter) { r.delivered = fn }
+}
+
+func (r *Reporter) applyOutcomes(batch []Result, byIndex map[int]Outcome) error {
+	for i, res := range batch {
+		out := byIndex[i]
+		switch out.Outcome {
+		case "accepted", "duplicate":
+			if r.delivered != nil {
+				if err := r.delivered(res, true); err != nil {
+					return err
+				}
+			}
+			if err := r.spool.Ack(res.ID); err != nil {
+				return err
+			}
+
+		default:
+			if r.delivered != nil {
+				if err := r.delivered(res, false); err != nil {
+					return err
+				}
+			}
+			if err := r.spool.Quarantine(res.ID, fmt.Sprintf("HTTP %d", out.Status)); err != nil {
+				return err
+			}
+
+		}
+	}
+	return nil
 }
