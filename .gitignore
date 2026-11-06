@@ -13,3 +13,5 @@ deploy/docker/*.env
 
 # Observability credentials (written by deploy/observability/observe.sh env)
 deploy/observability/vector.env
+__pycache__/
+*.pyc
