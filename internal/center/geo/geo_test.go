@@ -148,3 +148,18 @@ func TestEnvironment(t *testing.T) {
 		t.Fatal("invalid boolean")
 	}
 }
+
+func TestEditionMatches(t *testing.T) {
+	for _, c := range []struct {
+		typ, kind string
+		want      bool
+	}{
+		{"GeoLite2-City", "City", true}, {"GeoIP2-City", "City", true}, {"DBIP-City-Lite", "City", true},
+		{"DBIP-ASN-Lite", "ASN", true}, {"GeoLite2-ASN", "ASN", true},
+		{"DBIP-ASN-Lite", "City", false}, {"GeoLite2-Country", "City", false}, {"City", "City", false},
+	} {
+		if got := editionMatches(c.typ, c.kind); got != c.want {
+			t.Errorf("editionMatches(%q,%q)=%v want %v", c.typ, c.kind, got, c.want)
+		}
+	}
+}

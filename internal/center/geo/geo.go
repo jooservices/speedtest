@@ -106,11 +106,16 @@ func decode(data []byte, kind string) (*geoip2.Reader, error) {
 	if err != nil {
 		return nil, errors.New("invalid MMDB")
 	}
-	if !strings.HasSuffix(db.Metadata().DatabaseType, "-"+kind) {
+	if !editionMatches(db.Metadata().DatabaseType, kind) {
 		_ = db.Close()
 		return nil, errors.New("unexpected MMDB edition")
 	}
 	return db, nil
+}
+
+// editionMatches accepts MaxMind editions ("GeoLite2-City") and the DB-IP Lite editions in the same format ("DBIP-City-Lite").
+func editionMatches(databaseType, kind string) bool {
+	return strings.HasSuffix(databaseType, "-"+kind) || strings.HasSuffix(databaseType, "-"+kind+"-Lite")
 }
 
 func (r *Reader) warnMissing() {
