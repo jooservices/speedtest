@@ -66,7 +66,7 @@ func (s *Store) Series(ctx context.Context, q Query, percent bool, maxPoints int
 		return []Series{}, nil
 	}
 	query := seriesQuery(expr)
-	rows, err := s.DB.Query(ctx, query, q.nodeIDs(), q.From, q.To, buckets, width)
+	rows, err := s.query(ctx, q, query, q.nodeIDs(), q.From, q.To, buckets, width)
 	if err != nil {
 		return nil, fmt.Errorf("query series: %w", err)
 	}

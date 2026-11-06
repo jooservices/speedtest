@@ -249,3 +249,10 @@ See [notification delivery](docs/notifications.md) for SMTP, Telegram, Slack and
 JSON webhook configuration, delivery APIs, durable retries and verification.
 
 Operational metrics, access controls and alert signals: [observability](docs/observability.md).
+
+Nodes can additionally schedule LibreSpeed independently under Node → Settings →
+Test engines. Installed engines are discovered through heartbeats. Engines run
+serially and every result retains its identity. The engine selector in dashboard,
+results and statistics selects isolated measurements; omitting the API filter
+uses each node's primary engine (Ookla by default). See [operations](docs/operations.md)
+for shared-public-IP rate limits and migration/rollback behavior.

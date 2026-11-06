@@ -48,6 +48,7 @@ type Server struct {
 // values stay null, never zero. Required keys (down, up, ping, jitter, dLat,
 // uLat, loss, serverId, error) are always present, null when unavailable.
 type Result struct {
+	Engine string `json:"engine,omitempty"`
 	ID     string `json:"id"`
 	TS     string `json:"ts"`
 	Status string `json:"status"`
@@ -84,6 +85,9 @@ type Result struct {
 // Validate checks that r satisfies the wire schema constraints, so an invalid
 // result is rejected here rather than quarantined by the center after transport.
 func (r Result) Validate() error {
+	if r.Engine != "" && r.Engine != "ookla" && r.Engine != "librespeed" {
+		return errors.New("unsupported engine")
+	}
 	if !isUUID(r.ID) {
 		return errors.New("result id must be a UUID")
 	}

@@ -152,6 +152,10 @@ func (h *ownerStats) hourOfDay(w http.ResponseWriter, r *http.Request) {
 
 func (h *ownerStats) heatmap(w http.ResponseWriter, r *http.Request) {
 	q := stats.Query{Metric: stats.Download}
+	var engineOK bool
+	if q.Engine, engineOK = parseEngine(w, r); !engineOK {
+		return
+	}
 	var ok bool
 	if q.Metric, ok = parseStatsMetric(w, r); !ok {
 		return
@@ -212,6 +216,10 @@ func (h *ownerStats) distribution(w http.ResponseWriter, r *http.Request) {
 
 func (h *ownerStats) window(w http.ResponseWriter, r *http.Request) (stats.Query, bool) {
 	q := stats.Query{}
+	var engineOK bool
+	if q.Engine, engineOK = parseEngine(w, r); !engineOK {
+		return q, false
+	}
 	fromRaw, fromSet, valid := singleStatsParam(w, r, "from")
 	if !valid {
 		return q, false

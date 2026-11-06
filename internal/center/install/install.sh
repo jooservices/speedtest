@@ -101,7 +101,21 @@ actual="$(sha256sum "$tmp/$binary" | awk '{ print $1 }')"
 [ "$expected" = "$actual" ] || die "checksum mismatch for $binary; nothing was installed"
 printf 'Checksum verified.\n'
 
+# Verify LibreSpeed before installing either executable.
+libre_version="${SPEEDTEST_LIBRESPEED_INSTALL_VERSION:-1.0.14}"
+case "$libre_version" in *[!0-9.]* | '') die "invalid LibreSpeed version" ;; esac
+libre_base="${SPEEDTEST_LIBRESPEED_INSTALL_URL:-https://github.com/librespeed/speedtest-cli/releases/download/v$libre_version}"
+libre_archive="librespeed-cli_${libre_version}_linux_${arch}.tar.gz"
+fetch "$libre_base/$libre_archive" "$tmp/$libre_archive" || die "could not download LibreSpeed"
+fetch "$libre_base/checksums.txt" "$tmp/libre-checksums" || die "could not download LibreSpeed checksums"
+expected="$(awk -v f="$libre_archive" '$2 == f || $2 == "*" f { print $1 }' "$tmp/libre-checksums")"
+actual="$(sha256sum "$tmp/$libre_archive" | awk '{ print $1 }')"
+if [ -z "$expected" ] || [ "$expected" != "$actual" ]; then die "checksum mismatch for LibreSpeed; nothing was installed"; fi
+tar -xOzf "$tmp/$libre_archive" librespeed-cli >"$tmp/librespeed-cli" || die "invalid LibreSpeed archive"
+[ -s "$tmp/librespeed-cli" ] || die "empty LibreSpeed executable"
+
 install -d -m 0755 "$ROOT/usr/local/bin"
+install -m 0755 "$tmp/librespeed-cli" "$ROOT/usr/local/bin/librespeed-cli"
 install -m 0755 "$tmp/$binary" "$ROOT/usr/local/bin/speedtest-agent"
 
 if [ -z "$ROOT" ]; then

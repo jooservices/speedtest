@@ -55,16 +55,16 @@
   // (theme, resize, refresh) does not fetch again.
   function remoteData(sel, m, range, hourly, showSum, heatNode) {
     var ids = sel.map(function (n) { return n.id; }).join(','), zone = ST.timezone();
-    var key = [ids, m, range, hourly, showSum, heatNode.id, zone].join('|');
+    var key = [ids, m, range, hourly, showSum, heatNode.id, zone, ST.selectedEngine].join('|');
     if (remote.key === key && Date.now() - remote.at < 60000) return remote.error ? { error: remote.error } : remote.data;
     if (remote.pending !== key || remote.key === key) {
       remote.pending = key;
-      var base = 'range=' + encodeURIComponent(range) + '&metric=' + m + '&timezone=' + encodeURIComponent(zone) + '&nodes=' + encodeURIComponent(ids);
+      var base = 'range=' + encodeURIComponent(range) + '&metric=' + m + '&timezone=' + encodeURIComponent(zone) + '&nodes=' + encodeURIComponent(ids) + ST.engineQuery();
       Promise.all([
-        ST.api.request('/api/stats/summary?range=' + encodeURIComponent(range) + '&timezone=' + encodeURIComponent(zone) + '&nodes=' + encodeURIComponent(ids)),
+        ST.api.request('/api/stats/summary?range=' + encodeURIComponent(range) + '&timezone=' + encodeURIComponent(zone) + '&nodes=' + encodeURIComponent(ids) + ST.engineQuery()),
         ST.api.request('/api/stats/trend?' + base + '&bucket=' + (hourly ? 'hour' : 'day') + (showSum ? '&combined=true' : '')),
         ST.api.request('/api/stats/hour-of-day?' + base),
-        ST.api.request('/api/stats/heatmap?node=' + encodeURIComponent(heatNode.id) + '&metric=' + m + '&timezone=' + encodeURIComponent(zone)),
+        ST.api.request('/api/stats/heatmap?node=' + encodeURIComponent(heatNode.id) + '&metric=' + m + '&timezone=' + encodeURIComponent(zone) + ST.engineQuery()),
         ST.api.request('/api/stats/distribution?' + base)
       ]).then(function (r) {
         if (remote.pending !== key) return;
@@ -100,6 +100,7 @@
     var now = Date.now(), range = ST.settings().range, from = now - ST.ranges[range];
     var m = q.metric, sel = q.nodes.map(ST.node);
 
+    root.appendChild(ST.engineSelector());
     root.appendChild(U.pageHead('Statistics', 'How fast, how steady and when — ' + ST.rangeLabels[range].toLowerCase() + '.', [
       U.seg(Object.keys(ST.metrics).map(function (k) { return { value: k, label: ST.metrics[k].label }; }), m, function (v) { q.metric = v; ST.refresh(); })]));
 

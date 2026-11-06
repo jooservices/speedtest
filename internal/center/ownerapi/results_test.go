@@ -29,7 +29,7 @@ func TestWhereEdgeCases(t *testing.T) {
 	if _, _, ok := (ResultFilter{NodesSet: true}).where(); ok {
 		t.Fatal("an explicitly empty node list must match nothing")
 	}
-	if clause, args, ok := (ResultFilter{Status: "all", Query: "  "}).where(); !ok || clause != "" || len(args) != 0 {
+	if clause, args, ok := (ResultFilter{Status: "all", Query: "  "}).where(); !ok || clause != " WHERE r.engine = n.primary_engine" || len(args) != 0 {
 		t.Fatalf("no filter: %q %v %v", clause, args, ok)
 	}
 }

@@ -256,7 +256,7 @@ func TestMigrationBackfillAndRollbackIntegration(t *testing.T) {
 	for i := range 8 {
 		save(t, s, nodeA, result(i+1, i, fmt.Sprintf("203.0.113.%d", i%2+1)))
 	}
-	for range 4 {
+	for range 5 {
 		if err := db.Migrate(t.Context(), p, "down"); err != nil {
 			t.Fatal(err)
 		}
@@ -266,7 +266,7 @@ func TestMigrationBackfillAndRollbackIntegration(t *testing.T) {
 	}
 	// Populate version-3 data, including an obsolete history row, as a pre-upgrade fixture.
 	s.Hook = nil
-	save(t, s, nodeA, result(20, 3, "203.0.113.3"))
+	legacyResultFixture(t, p, result(20, 3, "203.0.113.3"))
 	unknown := result(21, 21, "203.0.113.4")
 	unknown.IP = nil
 	unknown.Status = "failed"
@@ -276,7 +276,7 @@ func TestMigrationBackfillAndRollbackIntegration(t *testing.T) {
 	unknown.Up = nil
 	unknown.Ping = nil
 	unknown.ServerID = nil
-	save(t, s, nodeA, unknown)
+	legacyResultFixture(t, p, unknown)
 	if err := db.Migrate(t.Context(), p, "up"); err != nil {
 		t.Fatal(err)
 	}
@@ -448,4 +448,17 @@ func TestCounterNullZeroAndDegradedIntegration(t *testing.T) {
 	}
 	assertDerived(t, p)
 	t.Log("PASS: all tests count; failed/partial speeds excluded; failed-only averages null; degraded zeros count; averages 5/10 Mbps")
+}
+
+// legacyResultFixture writes the pre-engine schema, as the deployed old binary would.
+func legacyResultFixture(t *testing.T, p *pgxpool.Pool, r agentapi.Result) {
+	t.Helper()
+	if r.IP != nil {
+		if _, err := p.Exec(t.Context(), `INSERT INTO ip_addresses(ip) VALUES($1) ON CONFLICT DO NOTHING`, r.IP); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := p.Exec(t.Context(), `INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,ip,threads,error) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, r.ID, nodeA, r.TS, r.Status, r.Down, r.Up, r.Ping, r.ServerID, r.IP, r.Threads, r.Error); err != nil {
+		t.Fatal(err)
+	}
 }
