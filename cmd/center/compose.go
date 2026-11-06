@@ -63,6 +63,7 @@ func newAuthService(store auth.Store, cfg config.CenterConfig) (*auth.Service, e
 		SessionTTL:       cfg.SessionTTL,
 		LoginMaxAttempts: cfg.LoginMaxAttempts,
 		LoginWindow:      cfg.LoginWindow,
+		AppKey:           cfg.AppKey,
 	})
 }
 
