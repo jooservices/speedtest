@@ -10,3 +10,6 @@ node_modules/
 data/geoip/
 dist/
 deploy/docker/*.env
+
+# Observability credentials (written by deploy/observability/observe.sh env)
+deploy/observability/vector.env

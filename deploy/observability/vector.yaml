@@ -1,0 +1,87 @@
+# Vector ships the center's logs and metrics to OpenObserve. Settings come from the environment (see
+# deploy/observability/observe.sh and docs/observability.md); nothing secret is written in this file.
+data_dir: /var/lib/vector
+
+sources:
+  # Logs: the center and agents write one JSON object per line to stdout; Docker keeps them.
+  # For a systemd install replace this source with `journald` (units speedtest-center, speedtest-agent).
+  docker:
+    type: docker_logs
+    include_containers: ["speedtest-staging", "speedtest-node-", "speedtest-probe"]
+
+  # Metrics: the center's /metrics (loopback needs no token; set SPEEDTEST_METRICS_TOKEN if scraping from elsewhere).
+  center_metrics:
+    type: prometheus_scrape
+    endpoints: ["${SPEEDTEST_METRICS_URL:-http://127.0.0.1:18090/metrics}"]
+    scrape_interval_secs: 30
+    scrape_timeout_secs: 10
+
+transforms:
+  logs:
+    type: remap
+    inputs: [docker]
+    source: |
+      # slog JSON lines become fields (level, msg, request_id, method, path, status, duration_ms, ...).
+      parsed, err = parse_json(.message)
+      if err == null && is_object(parsed) {
+        . = merge(., object!(parsed))
+        .message = parsed.msg
+      }
+      name = string!(.container_name)
+      .service = if starts_with(name, "speedtest-node-") { "agent" } else if starts_with(name, "speedtest-probe") { "probe" } else { "center" }
+      .node = replace(string!(.container_name), "speedtest-node-", "")
+      del(.label)
+      del(.source_type)
+
+sinks:
+  openobserve_logs:
+    type: http
+    inputs: [logs]
+    uri: "${OPENOBSERVE_URL}/api/${OPENOBSERVE_ORG:-default}/speedtest_logs/_multi"
+    method: post
+    auth:
+      strategy: basic
+      user: "${OPENOBSERVE_USER}"
+      password: "${OPENOBSERVE_PASSWORD}"
+    encoding:
+      codec: json
+    framing:
+      method: newline_delimited
+    request:
+      headers:
+        Content-Type: application/x-ndjson
+
+  openobserve_metrics:
+    type: prometheus_remote_write
+    inputs: [center_metrics]
+    endpoint: "${OPENOBSERVE_URL}/api/${OPENOBSERVE_ORG:-default}/prometheus/api/v1/write"
+    auth:
+      strategy: basic
+      user: "${OPENOBSERVE_USER}"
+      password: "${OPENOBSERVE_PASSWORD}"
+
+tests:
+  - name: the center's JSON log line becomes searchable fields
+    inputs:
+      - insert_at: logs
+        type: log
+        log_fields:
+          container_name: speedtest-staging
+          message: '{"time":"2026-11-06T01:00:00Z","level":"ERROR","msg":"request panic recovered","request_id":"abc","method":"GET"}'
+    outputs:
+      - extract_from: logs
+        conditions:
+          - type: vrl
+            source: '.service == "center" && .level == "ERROR" && .message == "request panic recovered" && .request_id == "abc"'
+  - name: an agent container is labelled with its node
+    inputs:
+      - insert_at: logs
+        type: log
+        log_fields:
+          container_name: speedtest-node-dock-a
+          message: not json at all
+    outputs:
+      - extract_from: logs
+        conditions:
+          - type: vrl
+            source: '.service == "agent" && .node == "dock-a" && .message == "not json at all"'
