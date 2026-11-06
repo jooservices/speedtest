@@ -75,27 +75,7 @@ func (s *Store) CreateRule(ctx context.Context, principal, key string, in RuleIn
 		(SELECT ctid FROM api_idempotency WHERE expires_at<=now() ORDER BY expires_at LIMIT 100 FOR UPDATE SKIP LOCKED)`); err != nil {
 		return nil, false, err
 	}
-	rule, err := s.createRuleTx(ctx, tx, clean)
-	if err != nil {
-		return nil, false, err
-	}
-	responseJSON, err := json.Marshal(rule)
-	if err != nil {
-		return nil, false, err
-	}
-	sealed, err := s.encryptReplay(responseJSON, principal, keyHash)
-	if err != nil {
-		return nil, false, err
-	}
-	if _, err = tx.Exec(ctx, `INSERT INTO api_idempotency
-		(principal,operation,key_hash,request_hash,response_ciphertext,expires_at)
-		VALUES ($1,$2,$3,$4,$5,now()+interval '24 hours')`, principal, createRuleOperation, keyHash, hex.EncodeToString(requestSum[:]), sealed); err != nil {
-		return nil, false, err
-	}
-	if err = tx.Commit(ctx); err != nil {
-		return nil, false, err
-	}
-	return json.RawMessage(responseJSON), false, nil
+	return s.storeNewRule(ctx, tx, clean, principal, keyHash, requestSum)
 }
 
 func (s *Store) createRuleTx(ctx context.Context, tx pgx.Tx, in RuleInput) (Rule, error) {
@@ -160,4 +140,28 @@ func (s *Store) decryptReplay(ciphertext []byte, principal, keyHash string) ([]b
 
 func idempotencyAAD(principal, keyHash string) []byte {
 	return []byte(principal + "\x00" + createRuleOperation + "\x00" + keyHash)
+}
+
+func (s *Store) storeNewRule(ctx context.Context, tx pgx.Tx, clean RuleInput, principal, keyHash string, requestSum [32]byte) (json.RawMessage, bool, error) {
+	rule, err := s.createRuleTx(ctx, tx, clean)
+	if err != nil {
+		return nil, false, err
+	}
+	responseJSON, err := json.Marshal(rule)
+	if err != nil {
+		return nil, false, err
+	}
+	sealed, err := s.encryptReplay(responseJSON, principal, keyHash)
+	if err != nil {
+		return nil, false, err
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO api_idempotency
+		(principal,operation,key_hash,request_hash,response_ciphertext,expires_at)
+		VALUES ($1,$2,$3,$4,$5,now()+interval '24 hours')`, principal, createRuleOperation, keyHash, hex.EncodeToString(requestSum[:]), sealed); err != nil {
+		return nil, false, err
+	}
+	if err = tx.Commit(ctx); err != nil {
+		return nil, false, err
+	}
+	return json.RawMessage(responseJSON), false, nil
 }

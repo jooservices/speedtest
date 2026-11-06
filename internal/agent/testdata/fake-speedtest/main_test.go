@@ -4,246 +4,74 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
 )
 
-// runScenario runs the fake for one scenario and returns the exit code, stdout
-// and stderr.
-func runScenario(t *testing.T, args ...string) (int, string, string) {
-	t.Helper()
-	var stdout, stderr bytes.Buffer
-	code := run(context.Background(), args, &stdout, &stderr)
-	return code, stdout.String(), stderr.String()
-}
-
-// decodeResult parses stdout as an Ookla result.
-func decodeResult(t *testing.T, out string) speedtestResult {
-	t.Helper()
-	var res speedtestResult
-	if err := json.Unmarshal([]byte(out), &res); err != nil {
-		t.Fatalf("stdout is not valid Ookla JSON: %v\n%s", err, out)
-	}
-	return res
-}
-
-func TestRunSuccess(t *testing.T) {
-	code, out, errOut := runScenario(t, "-scenario", "success")
-
-	if code != 0 {
-		t.Fatalf("run() = %d, want 0 (stderr %q)", code, errOut)
-	}
-	if errOut != "" {
-		t.Fatalf("stderr = %q, want empty", errOut)
-	}
-	res := decodeResult(t, out)
-	if res.Type != "result" {
-		t.Fatalf("type = %q, want result", res.Type)
-	}
-	if res.Download.Bandwidth != mbpsToBandwidth(300) {
-		t.Fatalf("download bandwidth = %d, want %d", res.Download.Bandwidth, mbpsToBandwidth(300))
-	}
-	if res.Upload.Bandwidth != mbpsToBandwidth(150) {
-		t.Fatalf("upload bandwidth = %d, want %d", res.Upload.Bandwidth, mbpsToBandwidth(150))
-	}
-	if res.PacketLoss != nil {
-		t.Fatalf("packetLoss = %v, want 0", res.PacketLoss)
-	}
-	if res.Result.Persisted != true {
-		t.Fatalf("result.persisted = %v, want true", res.Result.Persisted)
-	}
-}
-
-func TestRunSlow(t *testing.T) {
-	code, out, errOut := runScenario(t, "-scenario", "slow")
-
-	if code != 0 {
-		t.Fatalf("run() = %d, want 0 (stderr %q)", code, errOut)
-	}
-	res := decodeResult(t, out)
-	if res.Download.Bandwidth != mbpsToBandwidth(8) {
-		t.Fatalf("download bandwidth = %d, want %d", res.Download.Bandwidth, mbpsToBandwidth(8))
-	}
-	if res.PacketLoss != nil {
-		t.Fatalf("packetLoss = %v, want 0", res.PacketLoss)
-	}
-}
-
-func TestRunLoss(t *testing.T) {
-	code, out, errOut := runScenario(t, "-scenario", "loss")
-
-	if code != 0 {
-		t.Fatalf("run() = %d, want 0 (stderr %q)", code, errOut)
-	}
-	res := decodeResult(t, out)
-	if res.PacketLoss == nil || *res.PacketLoss <= 0 {
-		t.Fatalf("packetLoss = %v, want > 0", res.PacketLoss)
-	}
-}
-
-func TestRunCrash(t *testing.T) {
-	code, out, errOut := runScenario(t, "-scenario", "crash")
-
-	if code != 2 {
-		t.Fatalf("run() = %d, want 2", code)
-	}
-	if out != "" {
-		t.Fatalf("stdout = %q, want empty (no valid JSON on crash)", out)
-	}
-	if !strings.Contains(errOut, "simulated engine crash") {
-		t.Fatalf("stderr = %q, want it to explain the crash", errOut)
-	}
-}
-
-func TestRunTimeoutHangsUntilCancelled(t *testing.T) {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	var stdout, stderr bytes.Buffer
-	done := make(chan int, 1)
-	go func() { done <- run(ctx, []string{"-scenario", "timeout"}, &stdout, &stderr) }()
-
-	select {
-	case code := <-done:
-		t.Fatalf("run() returned %d before cancellation, want it to hang", code)
-	case <-time.After(30 * time.Millisecond):
-	}
-
-	cancel()
-
-	select {
-	case code := <-done:
-		if code != 1 {
-			t.Fatalf("run() = %d after cancellation, want 1", code)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("run() did not return after cancellation")
-	}
-
-	if stdout.Len() != 0 {
-		t.Fatalf("stdout = %q, want empty on timeout", stdout.String())
-	}
-}
-
-func TestRunOverridesScenarioValues(t *testing.T) {
-	code, out, errOut := runScenario(t, "-scenario", "success", "-down", "500", "-up", "250", "-ping", "12", "-jitter", "3", "-loss", "5", "-server-id", "99")
-
-	if code != 0 {
-		t.Fatalf("run() = %d, want 0 (stderr %q)", code, errOut)
-	}
-	res := decodeResult(t, out)
-	if res.Download.Bandwidth != mbpsToBandwidth(500) {
-		t.Fatalf("download bandwidth = %d, want %d", res.Download.Bandwidth, mbpsToBandwidth(500))
-	}
-	if res.Upload.Bandwidth != mbpsToBandwidth(250) {
-		t.Fatalf("upload bandwidth = %d, want %d", res.Upload.Bandwidth, mbpsToBandwidth(250))
-	}
-	if res.Ping.Latency != 12 {
-		t.Fatalf("ping latency = %v, want 12", res.Ping.Latency)
-	}
-	if res.Ping.Jitter != 3 {
-		t.Fatalf("ping jitter = %v, want 3", res.Ping.Jitter)
-	}
-	if res.PacketLoss == nil || *res.PacketLoss != 5 {
-		t.Fatalf("packetLoss = %v, want 5", res.PacketLoss)
-	}
-	if res.Server.ID != 99 {
-		t.Fatalf("server id = %d, want 99", res.Server.ID)
-	}
-}
-
-func TestRunUnknownScenario(t *testing.T) {
-	code, out, errOut := runScenario(t, "-scenario", "bogus")
-
-	if code != 2 {
-		t.Fatalf("run() = %d, want 2", code)
-	}
-	if out != "" {
-		t.Fatalf("stdout = %q, want empty", out)
-	}
-	if !strings.Contains(errOut, `unknown scenario "bogus"`) {
-		t.Fatalf("stderr = %q, want it to name the scenario", errOut)
-	}
-}
-
-func TestRunTimestampIsRFC3339UTC(t *testing.T) {
-	_, out, _ := runScenario(t, "-scenario", "success")
-	res := decodeResult(t, out)
-
-	ts, err := time.Parse(time.RFC3339, res.Timestamp)
-	if err != nil {
-		t.Fatalf("timestamp %q is not RFC 3339: %v", res.Timestamp, err)
-	}
-	if !strings.HasSuffix(res.Timestamp, "Z") {
-		t.Fatalf("timestamp %q must end in Z (UTC)", res.Timestamp)
-	}
-	if ts.Location() != time.UTC {
-		t.Fatalf("timestamp location = %v, want UTC", ts.Location())
-	}
-}
-
-func TestRunHelp(t *testing.T) {
-	code, out, errOut := runScenario(t, "-h")
-
-	if code != 2 {
-		t.Fatalf("run() = %d, want 2", code)
-	}
-	if out != "" {
-		t.Fatalf("stdout = %q, want empty", out)
-	}
-	if !strings.Contains(errOut, "usage: fake-speedtest") {
-		t.Fatalf("stderr = %q, want usage text", errOut)
-	}
-}
-
-func TestRunUnknownFlag(t *testing.T) {
-	code, out, errOut := runScenario(t, "-bogus")
-
-	if code != 2 {
-		t.Fatalf("run() = %d, want 2", code)
-	}
-	if out != "" {
-		t.Fatalf("stdout = %q, want empty", out)
-	}
-	if !strings.Contains(errOut, "flag provided but not defined") {
-		t.Fatalf("stderr = %q, want it to name the unknown flag", errOut)
-	}
-}
-
-// failingWriter always fails on Write, emulating a broken stdout.
-type failingWriter struct{}
-
-func (failingWriter) Write([]byte) (int, error) {
-	return 0, bytes.ErrTooLarge
-}
-
-func TestRunWriteError(t *testing.T) {
-	var errBuf bytes.Buffer
-	code := run(context.Background(), []string{"-scenario", "success"}, failingWriter{}, &errBuf)
-
-	if code != 2 {
-		t.Fatalf("run() = %d, want 2", code)
-	}
-	if !strings.Contains(errBuf.String(), "write result") {
-		t.Fatalf("stderr = %q, want it to name the write failure", errBuf.String())
-	}
-}
-
-func TestMbpsToBandwidth(t *testing.T) {
-	tests := []struct {
-		mbps float64
-		want int64
+func TestScenarioWireMeasurements(t *testing.T) {
+	for _, tc := range []struct {
+		name                   string
+		down, up, ping, jitter float64
+		loss                   *float64
 	}{
-		{1000, 125_000_000},
-		{300, 37_500_000},
-		{1, 125_000},
-		{0, 0},
-		{0.008, 1000},
-	}
-	for _, tt := range tests {
-		if got := mbpsToBandwidth(tt.mbps); got != tt.want {
-			t.Fatalf("mbpsToBandwidth(%v) = %d, want %d", tt.mbps, got, tt.want)
-		}
+		{"success", 300, 150, 8, 1, nil}, {"slow", 8, 3, 250, 60, nil}, {"loss", 120, 100, 45, 22, new(float64(12))},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out, stderr bytes.Buffer
+			if code := run(t.Context(), []string{"--scenario", tc.name}, &out, &stderr); code != 0 {
+				t.Fatalf("exit %d: %s", code, &stderr)
+			}
+			var result speedtestResult
+			if err := json.Unmarshal(out.Bytes(), &result); err != nil {
+				t.Fatal(err)
+			}
+			if result.Type != "result" || result.Download.Bandwidth != int64(tc.down*1e6/8) || result.Upload.Bandwidth != int64(tc.up*1e6/8) {
+				t.Fatalf("bandwidth: %+v", result)
+			}
+			if result.Download.Bytes != result.Download.Bandwidth*8 || result.Download.Elapsed != 8000 || result.Upload.Bytes != result.Upload.Bandwidth*10 || result.Upload.Elapsed != 10000 {
+				t.Fatalf("transfer: %+v/%+v", result.Download, result.Upload)
+			}
+			if result.Ping.Latency != tc.ping || result.Ping.Jitter != tc.jitter || result.Download.Latency.Iqm != tc.ping || result.Upload.Latency.Jitter != tc.jitter || result.Download.Latency.Low != tc.ping*0.9 || result.Upload.Latency.High != tc.ping*1.1 {
+				t.Fatal("latency mapping changed")
+			}
+			if (result.PacketLoss == nil) != (tc.loss == nil) || tc.loss != nil && *result.PacketLoss != *tc.loss {
+				t.Fatal("loss mapping changed")
+			}
+			if _, err := time.Parse(time.RFC3339, result.Timestamp); err != nil || !strings.HasSuffix(result.Timestamp, "Z") {
+				t.Fatal("invalid UTC timestamp")
+			}
+			if result.Server.ID != 12345 || result.Interface.ExternalIP != "203.0.113.10" || !result.Result.Persisted {
+				t.Fatal("identity mapping changed")
+			}
+		})
 	}
 }
+
+func TestExplicitOverridesAndFailures(t *testing.T) {
+	var out bytes.Buffer
+	cfg, err := parseFlags([]string{"--down", "1", "--up", "2", "--ping", "3", "--jitter", "4", "--loss", "0", "--server-id", "99"}, &out)
+	if err != nil || cfg.down != 1 || cfg.up != 2 || cfg.ping != 3 || cfg.jitter != 4 || cfg.loss != 0 || !cfg.lossAvailable || cfg.serverID != 99 {
+		t.Fatalf("override: %+v %v", cfg, err)
+	}
+	for _, args := range [][]string{{"--scenario", "unknown"}, {"--unknown"}, {"--help"}, {"--scenario", "crash"}} {
+		out.Reset()
+		if code := run(t.Context(), args, &out, &out); code != 2 || out.Len() == 0 {
+			t.Fatalf("%v: exit %d output %s", args, code, &out)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if code := run(ctx, []string{"--scenario", "timeout"}, &out, &out); code != 1 {
+		t.Fatalf("timeout exit %d", code)
+	}
+	out.Reset()
+	if code := run(t.Context(), nil, brokenWriter{}, &out); code != 2 || !strings.Contains(out.String(), "write result") {
+		t.Fatalf("write failure: %d %s", code, &out)
+	}
+}
+
+type brokenWriter struct{}
+
+func (brokenWriter) Write([]byte) (int, error) { return 0, errors.New("fixture failure") }

@@ -111,3 +111,26 @@ the owner's time zone, stored with it as `notifyQuietTimezone`). Alerts are stil
 their delivery waits, and the worker looks again every minute until the window ends. Test messages ("Send a test") are never held.
 "Critical alerts are still delivered" (default on) lets `crit` alerts through; turn it off to hold those too. A message that has waited
 24 hours expires like any other delivery, so avoid windows longer than that. Both ends must be set or both empty.
+
+### Shared validation catalog
+
+`internal/center/catalog` owns the notification channel names, destination kinds
+and secret requirements used by settings validation and notification delivery.
+It also owns alert metric names, threshold restrictions and supported comparison
+operators consumed by alert rule validation. Public wire structs remain typed;
+SQL migrations and OpenAPI remain explicit, reviewed contracts.
+
+Run `go test -v ./internal/center/catalog` to verify exact channel, metric and
+operator agreement with SQL CHECK constraints and OpenAPI enums. After verifying
+a disposable worktree database, `go test -tags integration ./internal/center/catalog`
+also migrates it and checks the effective PostgreSQL CHECK constraint values. The test also
+reads the UI source without changing it. The UI deliberately exposes seven
+metrics (all except `offline`) and only `<` and `>` in its operator selectors;
+event rules assign `=` internally. Catalog metadata explicitly marks omitted
+metrics and selector operators, so adding or removing a choice requires a
+conscious contract update. Both real and demo settings list every channel.
+
+The same suite parses Go syntax and rejects any non-test function longer than
+60 lines under `internal/`, excluding `internal/center/server/` (the HTTP-layer
+refactor is reviewed separately). This includes the fake speed-test executable.
+No endpoint, migration, configuration variable or UI behavior changes here.

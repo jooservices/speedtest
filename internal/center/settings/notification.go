@@ -5,14 +5,13 @@ import (
 	"errors"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jooservices/speedtest/internal/center/catalog"
 )
 
 // NotificationSecret decrypts a single channel credential for the delivery worker.
 // It is deliberately absent from the public Store interface and HTTP read model.
 func (s *PostgresStore) NotificationSecret(ctx context.Context, channel string) (string, error) {
-	switch channel {
-	case "email", "telegram", "slack", "webhook":
-	default:
+	if _, ok := catalog.LookupChannel(channel); !ok {
 		return "", errors.New("unknown notification channel")
 	}
 	var encrypted []byte

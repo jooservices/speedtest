@@ -218,28 +218,8 @@ func buildResult(cfg config) speedtestResult {
 			Low:     lat * 0.9,
 			High:    lat * 1.1,
 		},
-		Download: transfer{
-			Bandwidth: down,
-			Bytes:     down * 8,
-			Elapsed:   8000,
-			Latency: latency{
-				Iqm:    lat,
-				Low:    lat * 0.9,
-				High:   lat * 1.1,
-				Jitter: cfg.jitter,
-			},
-		},
-		Upload: transfer{
-			Bandwidth: up,
-			Bytes:     up * 10,
-			Elapsed:   10000,
-			Latency: latency{
-				Iqm:    lat,
-				Low:    lat * 0.9,
-				High:   lat * 1.1,
-				Jitter: cfg.jitter,
-			},
-		},
+		Download:   fakeTransfer(down, 8, lat, cfg.jitter),
+		Upload:     fakeTransfer(up, 10, lat, cfg.jitter),
 		PacketLoss: packetLoss,
 		ISP:        "Viettel",
 		Interface: iface{
@@ -269,4 +249,9 @@ func buildResult(cfg config) speedtestResult {
 // mbpsToBandwidth converts megabits per second to Ookla bytes per second.
 func mbpsToBandwidth(mbps float64) int64 {
 	return int64(mbps * 1_000_000 / 8)
+}
+
+func fakeTransfer(bandwidth, seconds int64, lat, jitter float64) transfer {
+	return transfer{Bandwidth: bandwidth, Bytes: bandwidth * seconds, Elapsed: seconds * 1000,
+		Latency: latency{Iqm: lat, Low: lat * 0.9, High: lat * 1.1, Jitter: jitter}}
 }

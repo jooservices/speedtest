@@ -21,6 +21,8 @@ import (
 	// Embed the IANA time zone database so timezone validation works on hosts
 	// without a system zoneinfo directory.
 	_ "time/tzdata"
+
+	"github.com/jooservices/speedtest/internal/center/catalog"
 )
 
 // Enrollment key values are reported only as a configured flag; the key itself
@@ -187,32 +189,7 @@ func Validate(input SettingsInput) error {
 		fields[field] = append(fields[field], message)
 	}
 
-	switch input.Theme {
-	case "dark", "light":
-	default:
-		add("theme", "must be dark or light")
-	}
-	switch input.Range {
-	case "6h", "24h", "7d", "30d":
-	default:
-		add("range", "must be one of 6h, 24h, 7d, 30d")
-	}
-	switch input.Units {
-	case "auto", "Mbps", "Gbps", "MBps":
-	default:
-		add("units", "must be one of auto, Mbps, Gbps, MBps")
-	}
-	if err := validTimezone(input.Timezone); err != nil {
-		add("timezone", err.Error())
-	}
-	if input.Decimals < 0 || input.Decimals > 2 {
-		add("decimals", "must be between 0 and 2")
-	}
-	switch input.RetentionDays {
-	case 0, 30, 90, 365, 1095:
-	default:
-		add("retentionDays", "must be one of 0, 30, 90, 365, 1095")
-	}
+	validateDisplay(input, add)
 	switch input.GeoProvider {
 	case "geolite2", "ipinfo", "ip-api":
 	default:
@@ -256,10 +233,10 @@ func Validate(input SettingsInput) error {
 	if err := validSecret("geoKey", input.GeoKey); err != nil {
 		add("geoKey", err.Error())
 	}
-	validateChannel(fields, "notify.email", input.Notify.Email, emailChannel)
-	validateChannel(fields, "notify.telegram", input.Notify.Telegram, telegramChannel)
-	validateChannel(fields, "notify.slack", input.Notify.Slack, webhookChannel)
-	validateChannel(fields, "notify.webhook", input.Notify.Webhook, webhookChannel)
+	writes := map[string]ChannelWrite{"email": input.Notify.Email, "telegram": input.Notify.Telegram, "slack": input.Notify.Slack, "webhook": input.Notify.Webhook}
+	for _, ch := range catalog.Channels() {
+		validateChannel(fields, "notify."+ch.Name, writes[ch.Name], ch.Destination)
+	}
 
 	if len(fields) > 0 {
 		return &ValidationError{Fields: fields}
@@ -268,12 +245,12 @@ func Validate(input SettingsInput) error {
 }
 
 // channelKind describes how a notification destination is validated.
-type channelKind int
+type channelKind = string
 
 const (
-	emailChannel channelKind = iota
-	telegramChannel
-	webhookChannel
+	emailChannel    channelKind = "email"
+	telegramChannel channelKind = "telegram"
+	webhookChannel  channelKind = "webhook"
 )
 
 func validateChannel(fields map[string][]string, path string, ch ChannelWrite, kind channelKind) {
@@ -394,4 +371,34 @@ func loopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+func validateDisplay(input SettingsInput, add func(string, string)) {
+	switch input.Theme {
+	case "dark", "light":
+	default:
+		add("theme", "must be dark or light")
+	}
+	switch input.Range {
+	case "6h", "24h", "7d", "30d":
+	default:
+		add("range", "must be one of 6h, 24h, 7d, 30d")
+	}
+	switch input.Units {
+	case "auto", "Mbps", "Gbps", "MBps":
+	default:
+		add("units", "must be one of auto, Mbps, Gbps, MBps")
+	}
+	if err := validTimezone(input.Timezone); err != nil {
+		add("timezone", err.Error())
+	}
+	if input.Decimals < 0 || input.Decimals > 2 {
+		add("decimals", "must be between 0 and 2")
+	}
+	switch input.RetentionDays {
+	case 0, 30, 90, 365, 1095:
+	default:
+		add("retentionDays", "must be one of 0, 30, 90, 365, 1095")
+	}
+
 }

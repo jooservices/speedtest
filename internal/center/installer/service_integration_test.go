@@ -353,3 +353,52 @@ func TestUninstallWorkflowIntegration(t *testing.T) {
 		t.Fatalf("empty principal = %v", err)
 	}
 }
+
+func TestInstallEnrollmentFailureStopsBeforeUploadIntegration(t *testing.T) {
+	pool, ctx, appKey := openInstallerIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	if _, err := pool.Exec(ctx, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES($1,'enrollment-failure-node',300,100)`, installerIntegrationNode); err != nil {
+		t.Fatal(err)
+	}
+	target := newFakeSSHServer(t, fakeSSHOptions{password: "fixture-password", sudo: true})
+	service, err := NewService(ctx, ServiceOptions{Database: pool, Enrollment: unavailableEnrollment{}, CenterURL: "https://center.example.test", AppKey: appKey})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := service.Close(context.Background()); err != nil {
+			t.Error(err)
+		}
+	}()
+	probe, err := service.Probe(ctx, "owner-failure", "probe-enrollment-failure", targetProbe(target))
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := InstallInput{ProbeID: probe.ID, Fingerprint: probe.Fingerprint, SSH: target.input()}
+	job, err := service.Start(ctx, "owner-failure", "install-enrollment-failure", installerIntegrationNode, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	failed := waitForInstallerState(t, ctx, service, job.ID, "failed")
+	if failed.Error == nil || *failed.Error != "The command center could not prepare the node for enrollment." {
+		t.Fatalf("unexpected enrollment error: %+v", failed)
+	}
+	events, _, err := service.Events(ctx, job.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range events {
+		if event.Step != "queued" && event.Step != "connect" && event.Step != "failed" {
+			t.Fatalf("installation continued after enrollment failure: %s", event.Step)
+		}
+	}
+	target.mu.Lock()
+	defer target.mu.Unlock()
+	for _, command := range target.commands {
+		if strings.Contains(command, "base64") || strings.Contains(command, "SPEEDTEST_ENROLL_TOKEN") {
+			t.Fatal("upload or installation started without an enrollment token")
+		}
+	}
+}
