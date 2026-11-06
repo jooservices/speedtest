@@ -8,6 +8,9 @@ All notable changes to Speedtest are recorded here. The format follows
 
 ## [Unreleased]
 
+### Added
+- Geolocation: ipwho.is, ipapi.co and ipgeolocation.io providers (off by default), consensus mode, and a built-in monthly DB-IP Lite database updater.
+
 ## [1.0.0] - 2026-11-06
 
 First production release: command center, agents, web UI, alerts and notifications, audit log, Sentry error tracking,
