@@ -114,9 +114,82 @@
           } })];
         } });
     }
+    // Two-factor sign-in: an authenticator app makes a 6-digit code at sign-in; ten one-time recovery codes are the way back in.
+    function twoFactorBox() {
+      var box = h('div');
+      function reload() {
+        ST.twoFactorStatus().then(function (status) {
+          U.clear(box);
+          if (!status.available) { box.appendChild(h('div', { class: 'hint' }, 'Not available: the center needs an APP_KEY to protect the secret.')); return; }
+          box.appendChild(h('div', { class: 'hint', style: 'margin-bottom:6px' }, status.enabled ? 'On. Recovery codes left: ' + status.recoveryRemaining + '.' : 'Off.'));
+          box.appendChild(U.btn(status.enabled ? 'Turn off…' : 'Turn on…', { size: 'sm', onClick: status.enabled ? turnOffDialog : turnOnDialog }));
+        }, function (error) { U.clear(box); box.appendChild(h('div', { class: 'hint' }, 'Could not read the status: ' + error.message)); });
+      }
+      function explainTwoFactor(error, subject) {
+        if (error.status === 429) return 'Too many attempts. Wait a minute and try again.';
+        if (error.status === 401 || error.status === 403) return subject === 'code' ? 'That code is not right, or it was already used.' : 'The current password is not right.';
+        if (error.status === 409) return 'Two-factor sign-in is already in that state. Close this window and look again.';
+        return error.message;
+      }
+      function turnOnDialog() {
+        var pw = '', code = '', note = h('div'), layer;
+        function problem(msg) { U.clear(note); if (msg) note.appendChild(U.callout(msg, 'crit', 'alert')); }
+        function step(content, buttons) { U.clear(layer.body); layer.body.appendChild(content); layer.setFoot(buttons); }
+        function recovery(codes) {
+          var text = codes.join('\n');
+          step(h('div', { class: 'stack' },
+            U.callout('Two-factor sign-in is on. Save these recovery codes now: each works once if you lose your phone, and they are not shown again.', 'warn'),
+            h('pre', { class: 'recovery-codes', 'aria-label': 'Recovery codes', style: 'font-family:var(--mono,monospace);user-select:all;margin:0' }, text)),
+          [U.btn('Copy codes', { icon: 'copy', onClick: function () { if (navigator.clipboard) navigator.clipboard.writeText(text).then(function () { U.toast('Codes copied'); }); } }),
+            U.btn('I saved them', { variant: 'primary', onClick: function () { layer.close(); reload(); } })]);
+        }
+        function confirmCode(setup) {
+          step(h('div', { class: 'stack' },
+            h('p', { class: 'muted', style: 'margin:0' }, 'Scan this code with an authenticator app (Google Authenticator, Authy, 1Password…), or enter the key by hand.'),
+            h('img', { src: setup.qr, alt: 'QR code for the authenticator app', width: 180, height: 180, style: 'background:#fff;padding:6px;border-radius:6px;align-self:flex-start' }),
+            h('div', { class: 'hint' }, 'Key: ', h('code', { 'data-testid': 'two-factor-key', style: 'user-select:all' }, setup.secret)),
+            h('a', { href: setup.uri, class: 'hint' }, 'Open in an authenticator app on this device'),
+            U.field('Code from the app', U.input('', function (v) { code = v; }, { type: 'text', inputmode: 'numeric', autocomplete: 'one-time-code', maxlength: 8 }), 'Six digits.'), note),
+          [U.btn('Cancel', { onClick: layer.close }), U.btn('Turn on', { variant: 'primary', onClick: function (e) {
+            if (!code.trim()) return problem('Enter the 6-digit code from the app.');
+            var button = e.currentTarget; button.disabled = true; problem(null);
+            ST.twoFactorEnable(code.trim()).then(recovery, function (error) { button.disabled = false; problem(explainTwoFactor(error, 'code')); });
+          } })]);
+        }
+        layer = U.modal({ title: 'Turn on two-factor sign-in', body: h('div'), onClose: reload, actions: function () { return []; } });
+        step(h('div', { class: 'stack' },
+          h('p', { class: 'muted', style: 'margin:0' }, 'Confirm it is you first.'),
+          U.field('Current password', U.input('', function (v) { pw = v; }, { type: 'password', autocomplete: 'current-password' })), note),
+        [U.btn('Cancel', { onClick: layer.close }), U.btn('Continue', { variant: 'primary', onClick: function (e) {
+          if (!pw) return problem('Enter your current password.');
+          var button = e.currentTarget; button.disabled = true; problem(null);
+          ST.twoFactorSetup(pw).then(confirmCode, function (error) { button.disabled = false; problem(explainTwoFactor(error, 'password')); });
+        } })]);
+      }
+      function turnOffDialog() {
+        var pw = '', code = '', note = h('div'), layer;
+        function problem(msg) { U.clear(note); if (msg) note.appendChild(U.callout(msg, 'crit', 'alert')); }
+        layer = U.modal({ title: 'Turn off two-factor sign-in',
+          body: h('div', { class: 'stack' },
+            U.field('Current password', U.input('', function (v) { pw = v; }, { type: 'password', autocomplete: 'current-password' })),
+            U.field('Code from the app, or a recovery code', U.input('', function (v) { code = v; }, { type: 'text', autocomplete: 'one-time-code', maxlength: 32 })), note),
+          actions: function (l) {
+            return [U.btn('Cancel', { onClick: l.close }), U.btn('Turn off', { variant: 'danger solid', onClick: function (e) {
+              if (!pw || !code.trim()) return problem('Enter your password and a code.');
+              var button = e.currentTarget; button.disabled = true; problem(null);
+              ST.twoFactorDisable(pw, code.trim()).then(function () { l.close(); U.toast('Two-factor sign-in is off'); reload(); }, function (error) {
+                button.disabled = false; problem(explainTwoFactor(error, error.status === 401 && /code/i.test(error.message) ? 'code' : 'password'));
+              });
+            } })];
+          } });
+      }
+      reload();
+      return box;
+    }
     function realAccess() {
       var keyBox = h('div');
       body.appendChild(row('Password', 'Change the password you sign in with. Other sessions are signed out.', U.btn('Change password…', { size: 'sm', onClick: passwordDialog })));
+      body.appendChild(row('Two-factor sign-in', 'Ask for a code from an authenticator app after the password.', twoFactorBox()));
       body.appendChild(row('Dashboard address', 'Nodes report to this address.', U.input(s.centerUrl, function (v) { set({ centerUrl: v }, true); }, { 'aria-label': 'Dashboard address', placeholder: location.origin })));
       body.appendChild(h('div', { class: 'setting', style: 'align-items:flex-start' }, h('div', null, h('div', { style: 'font-weight:600' }, 'Enrolment key'),
         h('div', { class: 'hint' }, 'A new key is shown once, here. Treat it like a password. Machines that already joined are not affected.')),

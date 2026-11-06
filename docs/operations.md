@@ -16,6 +16,23 @@ and what happens when parts fail.
 - Terminate TLS in a reverse proxy: see `deploy/speedtest-center.nginx.conf`.
   Outside `APP_ENV=local|test` the center requires HTTPS for sign-in.
 
+## Two-factor sign-in
+
+The owner can turn on an authenticator-app code (TOTP, RFC 6238: SHA-1, 6 digits, 30 seconds, one step of clock skew) in
+Settings > Access. It needs `APP_KEY`: the secret is stored AES-GCM encrypted with it and stays hidden after setup.
+
+- **Setup** (`POST /api/auth/2fa/setup`, needs the current password) shows a QR code, the key and an `otpauth://` link once;
+  the setting turns on only after a valid code (`POST /api/auth/2fa/enable`), which also returns ten one-time recovery codes
+  (shown once, stored as SHA-256 digests).
+- **Sign-in**: after the right password the API answers 401 `/problems/two-factor-required`; the UI then asks for the code and
+  repeats the request with `code` (an authenticator code or a recovery code). A used code step is never accepted twice and a
+  recovery code works once. Wrong codes count against the sign-in rate limit.
+- **Turn off** needs the password and a code (`POST /api/auth/2fa/disable`). Turning it on or off is written to the activity log.
+- **Lost phone and recovery codes**: on the center host run `[SPEEDTEST_OWNER_EMAIL=you@example.com] speedtest-center disable-2fa`
+  (container: `sudo docker exec speedtest-center speedtest-center disable-2fa`). It removes the second factor and signs every
+  session out; the password still protects the account. Whoever can run it already controls the host.
+- `rotate-app-key` also re-encrypts the stored two-factor secret, so rotating the key does not lock the owner out. A key changed without it makes the secret unreadable: run `disable-2fa`. New-login notifications are part of the notification catalog (JOOST-78).
+
 ## Monitoring
 
 `GET /metrics` serves Prometheus text gauges. Access: send
