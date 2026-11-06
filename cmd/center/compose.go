@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -62,6 +63,7 @@ func newAuthService(store auth.Store, cfg config.CenterConfig) (*auth.Service, e
 		SessionTTL:       cfg.SessionTTL,
 		LoginMaxAttempts: cfg.LoginMaxAttempts,
 		LoginWindow:      cfg.LoginWindow,
+		AppKey:           cfg.AppKey,
 	})
 }
 
@@ -96,6 +98,11 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		notifications.ObserveRun = func(ok bool) { operational.Job("notification", ok) }
 	}
 	alertStore := &alerts.Store{DB: pool, AppKey: cfg.AppKey, Logger: logger, ObserveRun: func(ok bool) { operational.Job("alerts", ok) }}
+	dbip, err := geo.DBIPConfigFromEnv()
+	if err != nil {
+		cleanup()
+		return services{}, nil, err
+	}
 	retention := &jobs.Retention{DB: pool, Logger: logger, ObserveRun: func(ok bool) { operational.Job("retention", ok) }}
 	installerService, err := buildInstaller(ctx, pool, cfg, nodeService, logger)
 	if err != nil {
@@ -119,7 +126,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		OwnerSchedules:     owner,
 		OwnerStats:         statsStore,
 		Settings:           preferences,
-		OwnerIP:            &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...)},
+		OwnerIP:            &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...).WithConsensus(watcher.Consensus, logger)},
 		OwnerDashboard:     &dashboard.Cached{Source: &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore}, TTL: 5 * time.Second},
 		OwnerAlerts:        alertStore,
 		OwnerJobs:          &jobs.Registry{DB: pool},
@@ -130,6 +137,13 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 				go notifications.Loop(ctx)
 			}
 			go retention.Loop(ctx)
+			if watcher.Reader != nil {
+				// GeoLite2 (weekly, needs a licence key) or DB-IP Lite (monthly, free): the first one configured wins.
+				if os.Getenv("SPEEDTEST_GEOLITE2_LICENSE_KEY") != "" {
+					go watcher.Reader.Run(ctx, geo.EnvironmentSettings{})
+				}
+				go watcher.Reader.RunDBIP(ctx, dbip)
+			}
 			alertStore.Loop(ctx)
 		},
 	}, cleanup, nil

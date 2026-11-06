@@ -67,7 +67,7 @@
     var tb = document.getElementById('topbar'); U.clear(tb);
     var s = ST.settings(), nodes = ST.nodes();
     tb.appendChild(U.btn('', { icon: 'menu', variant: 'ghost menu-btn', title: 'Open menu', onClick: function () { document.getElementById('sidebar').classList.toggle('open'); } }));
-    tb.appendChild(h('span', { class: 'row muted', style: 'gap:6px' }, U.icon('clock', 15), 'Time range'));
+    tb.appendChild(h('span', { class: 'row muted', style: 'gap:6px' }, U.icon('clock', 15), h('span', { class: 'hide-phone' }, 'Time range')));
     tb.appendChild(U.rangeSelect(s.range, function (v) { savePreferences({ range: v }); }));
     tb.appendChild(h('div', { class: 'spacer' }));
     tb.appendChild(h('span', { class: 'chip good', title: 'Nodes reporting' }, U.icon('activity', 12), nodes.filter(function (n) { return n.enabled; }).length + ' of ' + nodes.length + ' nodes active'));
@@ -78,7 +78,7 @@
     } }));
     var dark = s.theme !== 'light';
     tb.appendChild(U.btn('', { icon: dark ? 'sun' : 'moon', variant: 'ghost', title: dark ? 'Switch to light theme' : 'Switch to dark theme', aria: 'Toggle theme', onClick: ST.toggleTheme }));
-    if (!ST.demo) tb.appendChild(U.btn('Sign out', { variant: 'ghost', onClick: function () { ST.signOut(); } }));
+    if (!ST.demo) tb.appendChild(U.btn('Sign out', { icon: 'logout', variant: 'ghost signout', onClick: function () { ST.signOut(); } }));
   }
   function closeMenu() { document.getElementById('sidebar').classList.remove('open'); }
 

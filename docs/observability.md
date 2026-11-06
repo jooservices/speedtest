@@ -142,6 +142,16 @@ shared JOOST-45/48 scenarios continue to cover node and result flows. No schema
 migration or configuration default is added by telemetry. To disable it in an
 embedded server, omit `Options.Telemetry`; keep the legacy Metrics source.
 
+## Who alerts on what
+
+| Layer | Tool | Examples | Delivery |
+| --- | --- | --- | --- |
+| System | Prometheus, Alertmanager, Loki, Grafana (monitor VM) | container or edge down, certificate expiry, 5xx rate, latency, database pool, stuck background loops, host and container metrics | Alertmanager template to Telegram |
+| Application | Speedtest's own alert engine | node offline, failed tests in a row, speed below expected, IP change, bandwidth budget | Speedtest to Telegram, Slack, e-mail or webhook (Settings > Notifications) |
+| Errors and logs | Sentry, OpenObserve | exceptions, request logs, dashboards | Sentry issue alerts; OpenObserve search and dashboards |
+
+Do not add application rules to Prometheus: the speed and node rules belong to Speedtest alert rules.
+
 ## Error tracking (Sentry)
 
 The center and the agent send unexpected errors and panics to Sentry when `SPEEDTEST_SENTRY_DSN` is set; with it empty nothing is sent

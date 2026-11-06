@@ -78,6 +78,7 @@ printf '%s\n' 'choose-a-long-unique-passphrase' > /dev/shm/owner-pw && chmod 600
 SPEEDTEST_OWNER_EMAIL=you@example.com ./speedtest-center create-owner < /dev/shm/owner-pw; shred -u /dev/shm/owner-pw
 # (prompt-free alternative: type the passphrase on one line after `create-owner`, then press Ctrl-D)
 # Forgotten password later: same pattern with `reset-owner-password` (sets a new password, signs every session out).
+# Lost authenticator and recovery codes: `./speedtest-center disable-2fa` (see operations.md > Two-factor sign-in).
 
 # 4. Install and enable the user service.
 mkdir -p ~/.config/systemd/user
@@ -327,9 +328,10 @@ Live since 2026-11-06 (release 1.0.0). All values below are names or addresses; 
 | Agent downloads | `/opt/speedtest/release` on the VM (agent binaries, `release.json`), mounted read-only into the container |
 | Edge | HAProxy on gatekeeper `192.168.10.4`: vhost `speedtest.soulevil.com` (backend `speedtest-web`, health check `/readyz`, `/metrics` answers 404), Let's Encrypt certificate renewed by certbot with the standard deploy hook |
 | Error tracking | Sentry project `speedtest` in organization `jooservices` on `192.168.10.17`; the DSN is in `center.env` (`SPEEDTEST_SENTRY_DSN`, environment `production`) |
-| Geolocation | DB-IP Lite City and ASN databases in `/opt/speedtest/geoip` (CC BY 4.0, attribution: IP Geolocation by DB-IP); refresh monthly with `deploy/prod/geoip.sh` then redeploy |
+| Geolocation | DB-IP Lite City and ASN databases in `/opt/speedtest/geoip` (CC BY 4.0, attribution: IP Geolocation by DB-IP). The center refreshes them itself (built-in monthly updater, see docs/geolocation.md); `prod.sh` gives the container user write access to that directory |
 | Logs and metrics | `speedtest-vector` and `speedtest-probe` containers on the monitor VM (files in `/opt/speedtest/observability`, settings in `vector.env`, root 0600) ship the center logs (stream `speedtest_logs`), its `/metrics` and the uptime probe to OpenObserve `192.168.10.18` with the dedicated account `speedtest@jooservices.com` (the XCrawler pattern: application telemetry in OpenObserve, Loki only for system logs). Dashboard `Speedtest overview` is created by `provision_openobserve.py --apply --dashboard-only`; production alerts stay in Prometheus/Alertmanager |
-| Monitoring | Prometheus on the monitor VM scrapes `127.0.0.1:18090/metrics` (job `speedtest`) and probes `https://speedtest.soulevil.com/readyz`; rules in `/etc/prometheus/rules/16-speedtest.yml`; Alertmanager sends them to Telegram |
+| System monitoring | Prometheus on the monitor VM scrapes `127.0.0.1:18090/metrics` (job `speedtest`) and probes `https://speedtest.soulevil.com/readyz`; 9 system-level rules in `/etc/prometheus/rules/16-speedtest.yml` (center down, edge down, certificate, 5xx, slow requests, database pool, background jobs, retention, notification backlog) go through the existing Alertmanager. The Prometheus, Alertmanager, Loki and Grafana stack watches the system only |
+| Application alerts | Speedtest alerts about the product itself (node offline, failed tests, IP change, later speed and bandwidth rules) are Speedtest's own alert rules and are sent by Speedtest straight to Telegram (Settings > Notifications); they never go through Alertmanager |
 
 Deploy and roll back from the repository root with `deploy/prod/prod.sh deploy|rollback|status|logs`. A deploy builds the
 release, ships the image, applies pending migrations when the container starts and waits for `/readyz`; the previous image stays

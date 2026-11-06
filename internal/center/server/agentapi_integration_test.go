@@ -353,6 +353,7 @@ func TestAgentIngestionLoad1000PerMinuteIntegration(t *testing.T) {
 	t.Setenv("SPEEDTEST_HTTP_ADDR", addr)
 	t.Setenv("APP_ENV", "test")
 	t.Setenv("SPEEDTEST_UI_DIR", "")
+	t.Setenv("SPEEDTEST_GEO_DBIP_AUTO_UPDATE", "false")
 	process := exec.CommandContext(ctx, binary)
 	process.Dir = root
 	process.Stdout = io.Discard

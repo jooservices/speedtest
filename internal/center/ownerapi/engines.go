@@ -74,7 +74,7 @@ func validateEngines(engines []EngineSchedule) error {
 		}
 		seen[e.Engine] = true
 		if e.Interval == 0 {
-			e.Interval = 30
+			e.Interval = 60
 		}
 		if e.Interval < schedules.MinInterval || e.Interval > schedules.MaxInterval || e.Offset < 0 || e.Offset >= schedules.MaxInterval {
 			return ErrInvalid
