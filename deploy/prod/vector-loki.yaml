@@ -1,0 +1,25 @@
+# Ships the production center's JSON logs to Loki on the monitor VM. One label set only (low cardinality);
+# the JSON stays in the line body so LogQL can parse it: {app="speedtest"} | json | level="ERROR".
+sources:
+  center:
+    type: docker_logs
+    include_containers: ["speedtest-center"]
+transforms:
+  shape:
+    type: remap
+    inputs: [center]
+    source: |
+      .host = "monitor"
+sinks:
+  loki:
+    type: loki
+    inputs: [shape]
+    endpoint: http://192.168.10.10:3100
+    labels:
+      app: speedtest
+      host: "{{ host }}"
+      service_name: speedtest-center
+    encoding:
+      codec: text
+    healthcheck:
+      enabled: true
