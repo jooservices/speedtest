@@ -101,6 +101,10 @@ func connectSSH(ctx context.Context, input SSHInput, expectedFingerprint string)
 	}
 	_ = conn.SetDeadline(time.Time{})
 	client := ssh.NewClient(clientConn, channels, requests)
+	return client, closeSSHOnCancel(ctx, client), nil
+}
+
+func closeSSHOnCancel(ctx context.Context, client *ssh.Client) func() {
 	clientCtx, cancelClient := context.WithCancel(ctx)
 	stopped := make(chan struct{})
 	var once sync.Once
@@ -118,5 +122,5 @@ func connectSSH(ctx context.Context, input SSHInput, expectedFingerprint string)
 		case <-stopped:
 		}
 	}()
-	return client, closeClient, nil
+	return closeClient
 }

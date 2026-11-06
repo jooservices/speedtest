@@ -271,3 +271,32 @@ func TestStoreCommands(t *testing.T) {
 		t.Fatalf("command for an unknown node: %v", err)
 	}
 }
+
+func TestCanceledNodeRequestsDoNotMutateIntegration(t *testing.T) {
+	pool, ctx := openPool(t)
+	id := seedNode(t, ctx, pool, 1, "Cancellation fixture", nil)
+	store := &Store{DB: pool}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if rows, total, err := store.List(canceled, 1, 20); !errors.Is(err, context.Canceled) || rows != nil || total != 0 {
+		t.Fatalf("canceled list: %v %d %v", rows, total, err)
+	}
+	if row, tag, err := store.Update(canceled, id, raw(map[string]string{"name": `"Must not persist"`}), ETag(1)); !errors.Is(err, context.Canceled) || row != nil || tag != "" {
+		t.Fatalf("canceled update: %v %q %v", row, tag, err)
+	}
+	if err := store.Delete(canceled, id, ETag(1)); !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled delete: %v", err)
+	}
+	if command, err := store.QueueCommand(canceled, id, "pause", ""); !errors.Is(err, context.Canceled) || command != nil {
+		t.Fatalf("canceled command: %v %v", command, err)
+	}
+	var name string
+	var enabled bool
+	var commands int
+	if err := pool.QueryRow(ctx, `SELECT name,enabled,(SELECT count(*) FROM agent_commands WHERE node_id=$1) FROM nodes WHERE id=$1`, id).Scan(&name, &enabled, &commands); err != nil {
+		t.Fatal(err)
+	}
+	if name != "Cancellation fixture" || !enabled || commands != 0 {
+		t.Fatalf("cancellation changed persisted state: %q %t commands=%d", name, enabled, commands)
+	}
+}

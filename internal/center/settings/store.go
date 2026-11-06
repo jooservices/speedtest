@@ -130,62 +130,9 @@ func (s *PostgresStore) Replace(ctx context.Context, ifMatch string, input Setti
 		return Settings{}, "", ErrStale
 	}
 
-	geoConfigured, err := s.writeSecret(ctx, tx, keyGeoSecret, input.GeoKey)
+	view, err := s.replaceSecrets(ctx, tx, input)
 	if err != nil {
 		return Settings{}, "", err
-	}
-	emailConfigured, err := s.writeSecret(ctx, tx, keyEmailSecret, input.Notify.Email.Secret)
-	if err != nil {
-		return Settings{}, "", err
-	}
-	telegramConfigured, err := s.writeSecret(ctx, tx, keyTelegramSecret, input.Notify.Telegram.Secret)
-	if err != nil {
-		return Settings{}, "", err
-	}
-	slackConfigured, err := s.writeSecret(ctx, tx, keySlackSecret, input.Notify.Slack.Secret)
-	if err != nil {
-		return Settings{}, "", err
-	}
-	webhookConfigured, err := s.writeSecret(ctx, tx, keyWebhookSecret, input.Notify.Webhook.Secret)
-	if err != nil {
-		return Settings{}, "", err
-	}
-	enrolConfigured, err := enrolmentPresent(ctx, tx)
-	if err != nil {
-		return Settings{}, "", err
-	}
-
-	view := Settings{
-		Theme:               input.Theme,
-		Range:               input.Range,
-		Units:               input.Units,
-		Timezone:            input.Timezone,
-		Hour12:              input.Hour12,
-		Decimals:            input.Decimals,
-		RetentionDays:       input.RetentionDays,
-		GeoProvider:         input.GeoProvider,
-		GeoFallback:         input.GeoFallback,
-		GeoAutoUpdate:       input.GeoAutoUpdate,
-		Engine:              input.Engine,
-		DefaultThreads:      input.DefaultThreads,
-		ServerMode:          input.ServerMode,
-		MaxConcurrent:       input.MaxConcurrent,
-		Stagger:             input.Stagger,
-		QuietStart:          input.QuietStart,
-		QuietEnd:            input.QuietEnd,
-		NotifyQuietStart:    input.NotifyQuietStart,
-		NotifyQuietEnd:      input.NotifyQuietEnd,
-		NotifyQuietZone:     input.NotifyQuietZone,
-		NotifyQuietCritical: input.NotifyQuietCritical,
-		CenterURL:           input.CenterURL,
-		GeoKeyConfigured:    geoConfigured,
-		EnrollKeyConfigured: enrolConfigured,
-		Notify: NotificationSettings{
-			Email:    ChannelConfig{On: input.Notify.Email.On, To: input.Notify.Email.To, Configured: emailConfigured},
-			Telegram: ChannelConfig{On: input.Notify.Telegram.On, To: input.Notify.Telegram.To, Configured: telegramConfigured},
-			Slack:    ChannelConfig{On: input.Notify.Slack.On, To: input.Notify.Slack.To, Configured: slackConfigured},
-			Webhook:  ChannelConfig{On: input.Notify.Webhook.On, To: input.Notify.Webhook.To, Configured: webhookConfigured},
-		},
 	}
 
 	data, err := json.Marshal(view)
@@ -411,4 +358,69 @@ func writeShared(ctx context.Context, tx pgx.Tx, view Settings) error {
 		}
 	}
 	return nil
+}
+
+func replacementView(input SettingsInput, geoConfigured, enrolConfigured, emailConfigured, telegramConfigured, slackConfigured, webhookConfigured bool) Settings {
+	view := Settings{
+		Theme:               input.Theme,
+		Range:               input.Range,
+		Units:               input.Units,
+		Timezone:            input.Timezone,
+		Hour12:              input.Hour12,
+		Decimals:            input.Decimals,
+		RetentionDays:       input.RetentionDays,
+		GeoProvider:         input.GeoProvider,
+		GeoFallback:         input.GeoFallback,
+		GeoAutoUpdate:       input.GeoAutoUpdate,
+		Engine:              input.Engine,
+		DefaultThreads:      input.DefaultThreads,
+		ServerMode:          input.ServerMode,
+		MaxConcurrent:       input.MaxConcurrent,
+		Stagger:             input.Stagger,
+		QuietStart:          input.QuietStart,
+		QuietEnd:            input.QuietEnd,
+		NotifyQuietStart:    input.NotifyQuietStart,
+		NotifyQuietEnd:      input.NotifyQuietEnd,
+		NotifyQuietZone:     input.NotifyQuietZone,
+		NotifyQuietCritical: input.NotifyQuietCritical,
+		CenterURL:           input.CenterURL,
+		GeoKeyConfigured:    geoConfigured,
+		EnrollKeyConfigured: enrolConfigured,
+		Notify: NotificationSettings{
+			Email:    ChannelConfig{On: input.Notify.Email.On, To: input.Notify.Email.To, Configured: emailConfigured},
+			Telegram: ChannelConfig{On: input.Notify.Telegram.On, To: input.Notify.Telegram.To, Configured: telegramConfigured},
+			Slack:    ChannelConfig{On: input.Notify.Slack.On, To: input.Notify.Slack.To, Configured: slackConfigured},
+			Webhook:  ChannelConfig{On: input.Notify.Webhook.On, To: input.Notify.Webhook.To, Configured: webhookConfigured},
+		},
+	}
+	return view
+}
+
+func (s *PostgresStore) replaceSecrets(ctx context.Context, tx pgx.Tx, input SettingsInput) (Settings, error) {
+	geoConfigured, err := s.writeSecret(ctx, tx, keyGeoSecret, input.GeoKey)
+	if err != nil {
+		return Settings{}, err
+	}
+	emailConfigured, err := s.writeSecret(ctx, tx, keyEmailSecret, input.Notify.Email.Secret)
+	if err != nil {
+		return Settings{}, err
+	}
+	telegramConfigured, err := s.writeSecret(ctx, tx, keyTelegramSecret, input.Notify.Telegram.Secret)
+	if err != nil {
+		return Settings{}, err
+	}
+	slackConfigured, err := s.writeSecret(ctx, tx, keySlackSecret, input.Notify.Slack.Secret)
+	if err != nil {
+		return Settings{}, err
+	}
+	webhookConfigured, err := s.writeSecret(ctx, tx, keyWebhookSecret, input.Notify.Webhook.Secret)
+	if err != nil {
+		return Settings{}, err
+	}
+	enrolConfigured, err := enrolmentPresent(ctx, tx)
+	if err != nil {
+		return Settings{}, err
+	}
+
+	return replacementView(input, geoConfigured, enrolConfigured, emailConfigured, telegramConfigured, slackConfigured, webhookConfigured), nil
 }

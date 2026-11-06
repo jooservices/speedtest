@@ -65,17 +65,7 @@ func (s *Store) Series(ctx context.Context, q Query, percent bool, maxPoints int
 	if buckets == 0 {
 		return []Series{}, nil
 	}
-	query := `WITH selected_nodes AS (` + selectedNodes + `), grid AS (SELECT g AS k FROM generate_series(0, $4::int - 1) g),
-grouped AS (
- SELECT r.node_id, floor(extract(epoch FROM (r.ts - $2::timestamptz)) / $5::float8)::int AS k, count(*)::int AS c, avg(` + expr + `)::float8 AS v
- FROM results r JOIN selected_nodes n ON n.id = r.node_id
- WHERE r.ts >= $2 AND r.ts < $3 AND r.status <> 'failed' AND ` + expr + ` IS NOT NULL
- GROUP BY r.node_id, k
-)
-SELECT n.id::text, n.name, $2::timestamptz + (grid.k * $5::float8) * interval '1 second', coalesce(g.c, 0), g.v
-FROM selected_nodes n CROSS JOIN grid
-LEFT JOIN grouped g ON g.node_id = n.id AND g.k = grid.k
-ORDER BY n.name, n.id, grid.k`
+	query := seriesQuery(expr)
 	rows, err := s.DB.Query(ctx, query, q.nodeIDs(), q.From, q.To, buckets, width)
 	if err != nil {
 		return nil, fmt.Errorf("query series: %w", err)
@@ -116,4 +106,18 @@ ORDER BY n.name, n.id, grid.k`
 		items[i].Summary = summaries[*items[i].NodeID]
 	}
 	return items, nil
+}
+
+func seriesQuery(expr string) string {
+	return `WITH selected_nodes AS (` + selectedNodes + `), grid AS (SELECT g AS k FROM generate_series(0, $4::int - 1) g),
+grouped AS (
+ SELECT r.node_id, floor(extract(epoch FROM (r.ts - $2::timestamptz)) / $5::float8)::int AS k, count(*)::int AS c, avg(` + expr + `)::float8 AS v
+ FROM results r JOIN selected_nodes n ON n.id = r.node_id
+ WHERE r.ts >= $2 AND r.ts < $3 AND r.status <> 'failed' AND ` + expr + ` IS NOT NULL
+ GROUP BY r.node_id, k
+)
+SELECT n.id::text, n.name, $2::timestamptz + (grid.k * $5::float8) * interval '1 second', coalesce(g.c, 0), g.v
+FROM selected_nodes n CROSS JOIN grid
+LEFT JOIN grouped g ON g.node_id = n.id AND g.k = grid.k
+ORDER BY n.name, n.id, grid.k`
 }

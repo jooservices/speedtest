@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/jooservices/speedtest/internal/center/catalog"
 )
 
 var (
@@ -72,28 +74,15 @@ type EventFilter struct {
 	NodeID   string
 }
 
-var metrics = map[string]bool{
-	"down_pct": true, "up_pct": true, "ping": true, "jitter": true,
-	"loss": true, "failed": true, "ip_changed": true, "offline": true,
-}
-
-var operators = map[string]bool{"<": true, ">": true, "<=": true, ">=": true, "=": true}
 var severities = map[string]bool{"info": true, "warn": true, "crit": true}
-var channels = map[string]bool{"email": true, "telegram": true, "slack": true, "webhook": true}
 
 // NormalizeRule validates the OpenAPI rule constraints and returns stable IDs
 // and whitespace without changing the requested rule semantics.
 func NormalizeRule(in RuleInput) (RuleInput, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	if utf8.RuneCountInString(in.Name) < 1 || utf8.RuneCountInString(in.Name) > 200 ||
-		!metrics[in.Metric] || !operators[in.Op] || math.IsNaN(in.Value) || math.IsInf(in.Value, 0) || in.Value < 0 ||
-		in.ForTests < 1 || in.ForTests > 1000 || !severities[in.Severity] || len(in.Channels) < 1 || len(in.Channels) > 4 {
-		return RuleInput{}, ErrInvalid
-	}
-	if in.Metric == "loss" && in.Value > 100 {
-		return RuleInput{}, ErrInvalid
-	}
-	if (in.Metric == "ip_changed" || in.Metric == "offline") && (in.Op != "=" || in.Value != 1 || in.ForTests != 1) {
+		!catalog.ValidThreshold(in.Metric, in.Op, in.Value, in.ForTests) || !catalog.ValidOperator(in.Op) || math.IsNaN(in.Value) || math.IsInf(in.Value, 0) || in.Value < 0 ||
+		in.ForTests < 1 || in.ForTests > 1000 || !severities[in.Severity] || len(in.Channels) < 1 || len(in.Channels) > len(catalog.Channels()) {
 		return RuleInput{}, ErrInvalid
 	}
 	if in.AllNodes {
@@ -117,7 +106,7 @@ func NormalizeRule(in RuleInput) (RuleInput, error) {
 	}
 	seenChannels := make(map[string]bool, len(in.Channels))
 	for _, channel := range in.Channels {
-		if !channels[channel] || seenChannels[channel] {
+		if _, ok := catalog.LookupChannel(channel); !ok || seenChannels[channel] {
 			return RuleInput{}, ErrInvalid
 		}
 		seenChannels[channel] = true

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+	"github.com/jooservices/speedtest/internal/center/catalog"
 	"github.com/jooservices/speedtest/internal/center/schedules"
 	"github.com/jooservices/speedtest/internal/center/settings"
 	"github.com/jooservices/speedtest/internal/shared/errtrack"
@@ -79,10 +80,11 @@ func (s *Store) configurationTx(ctx context.Context, tx pgx.Tx, channel string) 
 		return view, settings.ChannelConfig{}, "", err
 	}
 	ch, ok := Channel(view, channel)
-	if !ok || !ch.On || ((channel == "email" || channel == "telegram") && ch.To == "") {
+	facts, known := catalog.LookupChannel(channel)
+	if !ok || !known || !ch.On || (facts.Destination != "webhook" && ch.To == "") {
 		return view, ch, "", ErrUnconfigured
 	}
-	if channel != "email" && secret == "" {
+	if facts.SecretRequired && secret == "" {
 		return view, ch, "", ErrUnconfigured
 	}
 	return view, ch, secret, nil
@@ -209,18 +211,7 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 		text := "delivery expired after 24 hours"
 		safeError = &text
 	default:
-		attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		view, ch, secret, sendErr := s.configurationTx(attemptCtx, tx, d.Channel)
-		if sendErr == nil {
-			what, node, since := "Test notification", "Command center", d.CreatedAt
-			if d.EventID != nil {
-				sendErr = tx.QueryRow(attemptCtx, `SELECT e.title,n.name,e.ts FROM alert_events e JOIN nodes n ON n.id=e.node_id WHERE e.id=$1`, *d.EventID).Scan(&what, &node, &since)
-			}
-			if sendErr == nil {
-				sendErr = s.Sender.Send(attemptCtx, d.Channel, ch.To, secret, Message(what, node, since, view.CenterURL))
-			}
-		}
-		cancel()
+		sendErr := s.attempt(ctx, tx, d)
 		attempts++
 		last = &now
 		status = "sent"
@@ -322,4 +313,20 @@ func (s *Store) Loop(ctx context.Context) {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (s *Store) attempt(ctx context.Context, tx pgx.Tx, d Delivery) error {
+	attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	view, ch, secret, sendErr := s.configurationTx(attemptCtx, tx, d.Channel)
+	if sendErr == nil {
+		what, node, since := "Test notification", "Command center", d.CreatedAt
+		if d.EventID != nil {
+			sendErr = tx.QueryRow(attemptCtx, `SELECT e.title,n.name,e.ts FROM alert_events e JOIN nodes n ON n.id=e.node_id WHERE e.id=$1`, *d.EventID).Scan(&what, &node, &since)
+		}
+		if sendErr == nil {
+			sendErr = s.Sender.Send(attemptCtx, d.Channel, ch.To, secret, Message(what, node, since, view.CenterURL))
+		}
+	}
+	cancel()
+	return sendErr
 }

@@ -97,20 +97,8 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 	}
 	l := &Loop{spool: spool, logger: logger, center: center.String(), credential: credential,
 		cfg: measurementConfig{runner, binding, cfg.ServerID, threads, cfg.Engine}, commands: make(map[string]commandState), notify: make(chan struct{}, 1), fatal: make(chan error, 1)}
-	saved, err := spool.Commands()
-	if err != nil {
-		_ = spool.Close()
+	if err := l.restoreCommands(); err != nil {
 		return nil, err
-	}
-	for id, data := range saved {
-		var state commandState
-		if json.Unmarshal(data, &state) != nil {
-			_ = spool.Close()
-			return nil, errors.New("invalid command journal")
-		}
-		if state.Result != "" || state.Ack.Status != "running" {
-			l.commands[id] = state
-		}
 	}
 	l.reporter = report.NewReporter(spool, &report.Client{BaseURL: center, Credential: credential}, report.WithLogger(logger), report.WithDeliveryObserver(l.delivered))
 	l.Scheduler = sched.New(l, logger, schedulerOptions...)
@@ -397,5 +385,24 @@ func (l *Loop) applyConfig(remote control.AgentConfig, schedule sched.Schedule) 
 	cfg.engine = runner
 	l.cfg = cfg
 	l.Scheduler.SetSchedule(schedule)
+	return nil
+}
+
+func (l *Loop) restoreCommands() error {
+	saved, err := l.spool.Commands()
+	if err != nil {
+		_ = l.spool.Close()
+		return err
+	}
+	for id, data := range saved {
+		var state commandState
+		if json.Unmarshal(data, &state) != nil {
+			_ = l.spool.Close()
+			return errors.New("invalid command journal")
+		}
+		if state.Result != "" || state.Ack.Status != "running" {
+			l.commands[id] = state
+		}
+	}
 	return nil
 }

@@ -50,36 +50,7 @@ func FromEngine(e engine.Result, o Options) (Result, error) {
 	}
 	r.TS = ts.UTC().Format(time.RFC3339)
 
-	r.Down, r.Up, r.Ping, r.Jitter, r.Loss = e.Down, e.Up, e.Ping, e.Jitter, e.Loss
-	if e.LoadedDown != nil {
-		r.LoadedDown = loaded(e.LoadedDown)
-		r.DLat = e.LoadedDown.IQM
-	}
-	if e.LoadedUp != nil {
-		r.LoadedUp = loaded(e.LoadedUp)
-		r.ULat = e.LoadedUp.IQM
-	}
-	if e.Server != nil {
-		id := e.Server.ID
-		if id > 0 {
-			r.ServerID = &id
-		}
-		r.Server = &Server{
-			ID:      e.Server.ID,
-			Name:    e.Server.Name,
-			City:    e.Server.Location,
-			Sponsor: "",
-			Host:    e.Server.Host,
-		}
-	}
-
-	r.IP = e.ExternalIP
-	if o.IP != "" {
-		r.IP = o.IP
-	}
-	r.BytesDown, r.BytesUp, r.Duration = e.BytesDown, e.BytesUp, e.Duration
-	r.EngineISP, r.EngineResultID, r.EngineResultURL, r.EngineIP =
-		e.ISP, e.ResultID, e.ResultURL, e.ExternalIP
+	r.copyMeasurement(e, o)
 
 	if len(e.Raw) > 0 {
 		r.Raw = append(json.RawMessage(nil), e.Raw...)
@@ -114,4 +85,37 @@ func loaded(l *engine.LoadedLatency) *LoadedLatency {
 		return nil
 	}
 	return &LoadedLatency{Low: l.Low, IQM: l.IQM, High: l.High}
+}
+
+func (r *Result) copyMeasurement(e engine.Result, o Options) {
+	r.Down, r.Up, r.Ping, r.Jitter, r.Loss = e.Down, e.Up, e.Ping, e.Jitter, e.Loss
+	if e.LoadedDown != nil {
+		r.LoadedDown = loaded(e.LoadedDown)
+		r.DLat = e.LoadedDown.IQM
+	}
+	if e.LoadedUp != nil {
+		r.LoadedUp = loaded(e.LoadedUp)
+		r.ULat = e.LoadedUp.IQM
+	}
+	if e.Server != nil {
+		id := e.Server.ID
+		if id > 0 {
+			r.ServerID = &id
+		}
+		r.Server = &Server{
+			ID:      e.Server.ID,
+			Name:    e.Server.Name,
+			City:    e.Server.Location,
+			Sponsor: "",
+			Host:    e.Server.Host,
+		}
+	}
+
+	r.IP = e.ExternalIP
+	if o.IP != "" {
+		r.IP = o.IP
+	}
+	r.BytesDown, r.BytesUp, r.Duration = e.BytesDown, e.BytesUp, e.Duration
+	r.EngineISP, r.EngineResultID, r.EngineResultURL, r.EngineIP =
+		e.ISP, e.ResultID, e.ResultURL, e.ExternalIP
 }

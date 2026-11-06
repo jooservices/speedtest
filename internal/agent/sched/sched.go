@@ -271,36 +271,20 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}
 
 		// Drain a prior wake before taking the current snapshot.
-		select {
-		case <-s.wake:
-		default:
-		}
-		s.mu.Lock()
-		sch := s.schedule
-		s.mu.Unlock()
+		sch := s.currentAfterWake()
 
 		if !sch.Enabled {
-			switch s.wait(ctx, 0) {
-			case wakeCancel:
+			if s.waitUnscheduled(ctx) {
 				return nil
-			case wakeManual:
-				s.runOne(ctx, s.manualID)
 			}
 			continue
 		}
 
 		now := s.clock.Now()
-		after := now
-		if !consumed.IsZero() && !after.After(consumed) {
-			after = consumed.Add(time.Nanosecond)
-		}
-		slot := sch.nextAllowed(after)
+		slot := nextUnconsumed(sch, now, consumed)
 		if slot.IsZero() {
-			switch s.wait(ctx, 0) {
-			case wakeCancel:
+			if s.waitUnscheduled(ctx) {
 				return nil
-			case wakeManual:
-				s.runOne(ctx, s.manualID)
 			}
 			continue
 		}
@@ -427,4 +411,33 @@ func (s *Scheduler) RequestRun(id string) bool {
 	default:
 		return false
 	}
+}
+
+func (s *Scheduler) currentAfterWake() Schedule {
+	select {
+	case <-s.wake:
+	default:
+	}
+	s.mu.Lock()
+	sch := s.schedule
+	s.mu.Unlock()
+	return sch
+}
+
+func (s *Scheduler) waitUnscheduled(ctx context.Context) bool {
+	switch s.wait(ctx, 0) {
+	case wakeCancel:
+		return true
+	case wakeManual:
+		s.runOne(ctx, s.manualID)
+	}
+	return false
+}
+
+func nextUnconsumed(sch Schedule, now, consumed time.Time) time.Time {
+	after := now
+	if !consumed.IsZero() && !after.After(consumed) {
+		after = consumed.Add(time.Nanosecond)
+	}
+	return sch.nextAllowed(after)
 }

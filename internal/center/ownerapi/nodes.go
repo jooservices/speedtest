@@ -353,30 +353,7 @@ func applyPatch(in *nodes.Input, patch map[string]json.RawMessage) error {
 		}
 		in.ServerID = sel.ID
 	}
-	if raw, ok := patch["binding"]; ok {
-		var b struct {
-			Iface    *string         `json:"iface"`
-			SourceIP json.RawMessage `json:"sourceIp"`
-		}
-		if json.Unmarshal(raw, &b) != nil {
-			return ErrInvalid
-		}
-		if b.Iface != nil {
-			in.Binding.Iface = *b.Iface
-		}
-		if len(b.SourceIP) > 0 {
-			if string(b.SourceIP) == "null" {
-				in.Binding.SourceIP = nil
-			} else {
-				var ip string
-				if json.Unmarshal(b.SourceIP, &ip) != nil || net.ParseIP(ip) == nil {
-					return ErrInvalid
-				}
-				in.Binding.SourceIP = &ip
-			}
-		}
-	}
-	return nil
+	return applyBindingPatch(in, patch)
 }
 
 // Delete removes a node and everything that belongs to it under an If-Match precondition.
@@ -514,4 +491,31 @@ func (s *Store) nodeView(ctx context.Context, q interface {
 		view["updateVersion"] = release.UpdateVersion(n.Agent, advertised)
 	}
 	return view
+}
+
+func applyBindingPatch(in *nodes.Input, patch map[string]json.RawMessage) error {
+	if raw, ok := patch["binding"]; ok {
+		var b struct {
+			Iface    *string         `json:"iface"`
+			SourceIP json.RawMessage `json:"sourceIp"`
+		}
+		if json.Unmarshal(raw, &b) != nil {
+			return ErrInvalid
+		}
+		if b.Iface != nil {
+			in.Binding.Iface = *b.Iface
+		}
+		if len(b.SourceIP) > 0 {
+			if string(b.SourceIP) == "null" {
+				in.Binding.SourceIP = nil
+			} else {
+				var ip string
+				if json.Unmarshal(b.SourceIP, &ip) != nil || net.ParseIP(ip) == nil {
+					return ErrInvalid
+				}
+				in.Binding.SourceIP = &ip
+			}
+		}
+	}
+	return nil
 }

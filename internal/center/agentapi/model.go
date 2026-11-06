@@ -204,38 +204,8 @@ func ParseResult(data []byte) (Result, error) {
 	if len(r.Raw) > 64<<10 || json.Unmarshal(r.Raw, &raw) != nil || raw == nil {
 		return r, ErrInvalid
 	}
-	for key, loaded := range map[string]*LoadedLatency{"loadedDown": r.LoadedDown, "loadedUp": r.LoadedUp} {
-		if loaded != nil {
-			var fields map[string]json.RawMessage
-			_ = json.Unmarshal(data, &fields)
-			if Decode(fields[key], new(LoadedLatency), "low", "iqm", "high") != nil || !number(loaded.Low) || !number(loaded.IQM) || !number(loaded.High) {
-				return r, ErrInvalid
-			}
-		}
-	}
-	if r.Server != nil {
-		var fields map[string]json.RawMessage
-		_ = json.Unmarshal(data, &fields)
-		if Decode(fields["server"], new(Server)) != nil || !nonNull(fields["server"], "id", "name", "city", "sponsor", "host") || (r.Server.ID != nil && *r.Server.ID < 1) || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || utf8.RuneCountInString(r.Server.Host) > 255 {
-			return r, ErrInvalid
-		}
-	}
-	if r.EngineIP != nil && !address(*r.EngineIP) {
-		return r, ErrInvalid
-	}
-	if r.EngineResultURL != nil {
-		u, err := url.Parse(*r.EngineResultURL)
-		if err != nil || u.Scheme == "" {
-			return r, ErrInvalid
-		}
-	}
-	if len(r.Warnings) > 10 {
-		return r, ErrInvalid
-	}
-	for _, warning := range r.Warnings {
-		if utf8.RuneCountInString(warning) > 2000 {
-			return r, ErrInvalid
-		}
+	if err := r.validateDetails(data); err != nil {
+		return r, err
 	}
 	if r.Warnings == nil {
 		r.Warnings = []string{}
@@ -332,3 +302,40 @@ func sameAck(a, b Command) bool {
 	return a.Status == b.Status && a.Phase == b.Phase && a.Pct == b.Pct && equalString(a.ResultID, b.ResultID) && equalString(a.Error, b.Error)
 }
 func equalString(a, b *string) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
+
+func (r Result) validateDetails(data []byte) error {
+	for key, loaded := range map[string]*LoadedLatency{"loadedDown": r.LoadedDown, "loadedUp": r.LoadedUp} {
+		if loaded != nil {
+			var fields map[string]json.RawMessage
+			_ = json.Unmarshal(data, &fields)
+			if Decode(fields[key], new(LoadedLatency), "low", "iqm", "high") != nil || !number(loaded.Low) || !number(loaded.IQM) || !number(loaded.High) {
+				return ErrInvalid
+			}
+		}
+	}
+	if r.Server != nil {
+		var fields map[string]json.RawMessage
+		_ = json.Unmarshal(data, &fields)
+		if Decode(fields["server"], new(Server)) != nil || !nonNull(fields["server"], "id", "name", "city", "sponsor", "host") || (r.Server.ID != nil && *r.Server.ID < 1) || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || utf8.RuneCountInString(r.Server.Host) > 255 {
+			return ErrInvalid
+		}
+	}
+	if r.EngineIP != nil && !address(*r.EngineIP) {
+		return ErrInvalid
+	}
+	if r.EngineResultURL != nil {
+		u, err := url.Parse(*r.EngineResultURL)
+		if err != nil || u.Scheme == "" {
+			return ErrInvalid
+		}
+	}
+	if len(r.Warnings) > 10 {
+		return ErrInvalid
+	}
+	for _, warning := range r.Warnings {
+		if utf8.RuneCountInString(warning) > 2000 {
+			return ErrInvalid
+		}
+	}
+	return nil
+}
