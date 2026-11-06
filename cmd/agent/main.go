@@ -29,6 +29,7 @@ import (
 	"github.com/jooservices/speedtest/internal/agent/enroll"
 	"github.com/jooservices/speedtest/internal/agent/netpath"
 	"github.com/jooservices/speedtest/internal/agent/runloop"
+	"github.com/jooservices/speedtest/internal/shared/errtrack"
 )
 
 // version is the agent version, overridable at build time with
@@ -196,6 +197,9 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 		logger.Error("invalid environment file")
 		return 1
 	}
+	flush := startErrorTracking(logger)
+	defer flush()
+	defer errtrack.Recover(map[string]string{"component": "agent"})
 
 	in, ok := loadAgentInputs(logger)
 	if !ok {
@@ -222,6 +226,7 @@ func runAgent(ctx context.Context, args []string, stdout, stderr io.Writer) int 
 	closeErr := loop.Close()
 	if err != nil || closeErr != nil {
 		logger.Error("agent stopped after lifecycle failure; inspect spool and configuration")
+		errtrack.CaptureError(errors.Join(err, closeErr), map[string]string{"stage": "lifecycle"})
 		return 1
 	}
 

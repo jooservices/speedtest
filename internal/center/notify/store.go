@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jooservices/speedtest/internal/center/schedules"
 	"github.com/jooservices/speedtest/internal/center/settings"
+	"github.com/jooservices/speedtest/internal/shared/errtrack"
 )
 
 var (
@@ -296,8 +297,11 @@ func (s *Store) Loop(ctx context.Context) {
 			consumed, e1 := s.Consume(ctx)
 			dispatched, e2 := s.Dispatch(ctx)
 			if e1 != nil || e2 != nil {
-				if s.Logger != nil && ctx.Err() == nil {
-					s.Logger.Error("notification worker iteration failed")
+				if ctx.Err() == nil {
+					if s.Logger != nil {
+						s.Logger.Error("notification worker iteration failed")
+					}
+					errtrack.CaptureError(errors.Join(e1, e2), map[string]string{"loop": "notifications"})
 				}
 				break
 			}

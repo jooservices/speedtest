@@ -12,11 +12,13 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strconv"
 	"sync/atomic"
 	"time"
 
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/settings"
+	"github.com/jooservices/speedtest/internal/shared/errtrack"
 )
 
 const (
@@ -320,6 +322,7 @@ func recoverPanics(next http.Handler, logger *slog.Logger) http.Handler {
 			}
 
 			requestID := requestIDFromContext(r.Context())
+			errtrack.CapturePanic(recovered, map[string]string{"route": routeLabel(r.URL.Path), "method": r.Method})
 			logger.ErrorContext(r.Context(), "request panic recovered",
 				slog.String("request_id", requestID),
 				slog.String("method", r.Method),
@@ -363,6 +366,11 @@ func logRequests(next http.Handler, logger *slog.Logger) http.Handler {
 		status := response.status
 		if status == 0 {
 			status = http.StatusOK
+		}
+		if status >= http.StatusInternalServerError {
+			route := routeLabel(r.URL.Path)
+			errtrack.CaptureMessage(fmt.Sprintf("%s %s answered %d", r.Method, route, status), []string{r.Method, route, strconv.Itoa(status)},
+				map[string]string{"route": route, "method": r.Method, "status": strconv.Itoa(status)})
 		}
 		logger.InfoContext(r.Context(), "http request",
 			slog.String("request_id", requestIDFromContext(r.Context())),
