@@ -113,8 +113,9 @@ func decode(data []byte, kind string) (*geoip2.Reader, error) {
 	return db, nil
 }
 
-// editionMatches accepts MaxMind editions ("GeoLite2-City") and the DB-IP Lite editions in the same format ("DBIP-City-Lite").
+// editionMatches accepts MaxMind editions ("GeoLite2-City") and the DB-IP Lite editions in the same format ("DBIP-City-Lite", "DBIP-ASN-Lite (compat=GeoLite2-ASN)").
 func editionMatches(databaseType, kind string) bool {
+	databaseType = strings.TrimSuffix(databaseType, " (compat=GeoLite2-"+kind+")")
 	return strings.HasSuffix(databaseType, "-"+kind) || strings.HasSuffix(databaseType, "-"+kind+"-Lite")
 }
 
