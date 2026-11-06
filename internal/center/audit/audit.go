@@ -129,6 +129,8 @@ var rules = []rule{
 	{"POST", "/api/settings/enrolment-key", "settings.enrolment_key", "settings", "Generated a new enrolment key"},
 	{"POST", "/api/notifications/test/{id}", "notification.test", "notification", "Sent a test notification"},
 	{"POST", "/api/auth/password", "auth.password", "user", "Changed the password"},
+	{"POST", "/api/auth/2fa/enable", "auth.two_factor_enable", "user", "Turned two-factor sign-in on"},
+	{"POST", "/api/auth/2fa/disable", "auth.two_factor_disable", "user", "Turned two-factor sign-in off"},
 	{"POST", "/api/ip/refreshes", "ip.refresh", "ip", "Refreshed locations"},
 }
 

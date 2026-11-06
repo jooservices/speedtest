@@ -160,3 +160,53 @@ func randomUUID() (string, error) {
 	encoded := hex.EncodeToString(value[:])
 	return fmt.Sprintf("%s-%s-%s-%s-%s", encoded[:8], encoded[8:12], encoded[12:16], encoded[16:20], encoded[20:]), nil
 }
+
+// GetTwoFactor reads the second-factor state of an account.
+func (s *PostgresStore) GetTwoFactor(ctx context.Context, userID string) (TwoFactor, error) {
+	var record TwoFactor
+	err := s.pool.QueryRow(ctx, `SELECT secret_enc, enabled, last_step, recovery_hashes FROM user_two_factor WHERE user_id=$1`, userID).
+		Scan(&record.SecretEnc, &record.Enabled, &record.LastStep, &record.RecoveryHashes)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return TwoFactor{}, ErrNotFound
+	}
+	return record, err
+}
+
+// SaveTwoFactorSetup stores a pending secret; it never touches an enabled row (the service refuses that case).
+func (s *PostgresStore) SaveTwoFactorSetup(ctx context.Context, userID string, secretEnc []byte) error {
+	_, err := s.pool.Exec(ctx, `INSERT INTO user_two_factor(user_id, secret_enc) VALUES ($1,$2)
+		ON CONFLICT (user_id) DO UPDATE SET secret_enc=EXCLUDED.secret_enc, enabled=false, last_step=0, recovery_hashes='{}', enabled_at=NULL
+		WHERE user_two_factor.enabled=false`, userID, secretEnc)
+	return err
+}
+
+// EnableTwoFactor switches a pending setup on; it changes nothing when none is pending.
+func (s *PostgresStore) EnableTwoFactor(ctx context.Context, userID string, step int64, recoveryHashes []string) error {
+	tag, err := s.pool.Exec(ctx, `UPDATE user_two_factor SET enabled=true, last_step=$2, recovery_hashes=$3, enabled_at=now()
+		WHERE user_id=$1 AND enabled=false`, userID, step, recoveryHashes)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() != 1 {
+		return ErrTwoFactorNotPending
+	}
+	return nil
+}
+
+func (s *PostgresStore) DeleteTwoFactor(ctx context.Context, userID string) error {
+	_, err := s.pool.Exec(ctx, `DELETE FROM user_two_factor WHERE user_id=$1`, userID)
+	return err
+}
+
+// ConsumeTwoFactorStep advances last_step only forward, so two requests with the same code cannot both succeed.
+func (s *PostgresStore) ConsumeTwoFactorStep(ctx context.Context, userID string, step int64) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE user_two_factor SET last_step=$2 WHERE user_id=$1 AND enabled AND last_step<$2`, userID, step)
+	return err == nil && tag.RowsAffected() == 1, err
+}
+
+// ConsumeRecoveryCode removes one digest atomically.
+func (s *PostgresStore) ConsumeRecoveryCode(ctx context.Context, userID, hash string) (bool, error) {
+	tag, err := s.pool.Exec(ctx, `UPDATE user_two_factor SET recovery_hashes=array_remove(recovery_hashes,$2)
+		WHERE user_id=$1 AND enabled AND $2 = ANY(recovery_hashes)`, userID, hash)
+	return err == nil && tag.RowsAffected() == 1, err
+}

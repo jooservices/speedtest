@@ -41,6 +41,8 @@ type authUserResponse struct {
 type loginRequest struct {
 	Email    string `json:"email"`
 	Password string `json:"password"`
+	// Code is the authenticator code or a recovery code; only needed when two-factor sign-in is on.
+	Code string `json:"code,omitempty"`
 }
 
 type passwordRequest struct {
@@ -100,6 +102,8 @@ func (s *serverAuth) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.changePassword(w, r)
+	case "/api/auth/2fa", "/api/auth/2fa/setup", "/api/auth/2fa/enable", "/api/auth/2fa/disable":
+		s.twoFactor(w, r)
 	default:
 		writeNotFoundProblem(w, r)
 	}
@@ -115,9 +119,10 @@ type serverAuth struct {
 type AuthService interface {
 	Bootstrap(context.Context) (auth.SessionView, error)
 	Session(context.Context, string) (auth.SessionView, error)
-	Login(context.Context, string, string, string, string) (auth.SessionView, error)
+	LoginWithCode(context.Context, string, string, string, string, string) (auth.SessionView, error)
 	Logout(context.Context, string) error
 	ChangePassword(context.Context, string, string, string) (auth.SessionView, error)
+	TwoFactorService
 }
 
 func (s *serverAuth) me(w http.ResponseWriter, r *http.Request) {
@@ -167,12 +172,12 @@ func (s *serverAuth) login(w http.ResponseWriter, r *http.Request) {
 	if !decodeAuthJSON(w, r, &input) {
 		return
 	}
-	if !auth.ValidEmailForAPI(input.Email) || len(input.Password) == 0 || len(input.Password) > 1024 {
+	if !auth.ValidEmailForAPI(input.Email) || len(input.Password) == 0 || len(input.Password) > 1024 || len(input.Code) > 32 {
 		writeValidation(w, r, "Email or password is invalid.")
 		return
 	}
 	clientIP := remoteIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), s.trustedProxyCIDRs)
-	created, err := s.service.Login(r.Context(), token, input.Email, input.Password, clientIP)
+	created, err := s.service.LoginWithCode(r.Context(), token, input.Email, input.Password, input.Code, clientIP)
 	if errors.Is(err, auth.ErrInvalidSession) {
 		s.clearCookie(w, r)
 		writeUnauthorized(w, r)
@@ -186,17 +191,11 @@ func (s *serverAuth) login(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
+	if writeTwoFactorProblem(w, r, err) {
+		return
+	}
 	if errors.Is(err, auth.ErrRateLimited) {
-		var limited retryAfterError
-		retrySeconds := 1
-		if errors.As(err, &limited) {
-			retrySeconds = max(1, int((limited.RetryAfter()+time.Second-1)/time.Second))
-		}
-		w.Header().Set("Retry-After", strconv.Itoa(retrySeconds))
-		writeProblemResponse(w, http.StatusTooManyRequests, problemResponse{
-			Type: "/problems/ratelimited", Title: "Too many login attempts", Status: http.StatusTooManyRequests,
-			Detail: "Too many login attempts. Try again later.", TraceID: requestIDFromContext(r.Context()),
-		})
+		writeRateLimited(w, r, err)
 		return
 	}
 	if errors.Is(err, auth.ErrSessionConflict) {
@@ -278,6 +277,20 @@ func (s *serverAuth) changePassword(w http.ResponseWriter, r *http.Request) {
 	s.setCookie(w, r, rotated)
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// writeRateLimited answers 429 with Retry-After taken from the limiter.
+func writeRateLimited(w http.ResponseWriter, r *http.Request, err error) {
+	var limited retryAfterError
+	retrySeconds := 1
+	if errors.As(err, &limited) {
+		retrySeconds = max(1, int((limited.RetryAfter()+time.Second-1)/time.Second))
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(retrySeconds))
+	writeProblemResponse(w, http.StatusTooManyRequests, problemResponse{
+		Type: "/problems/ratelimited", Title: "Too many login attempts", Status: http.StatusTooManyRequests,
+		Detail: "Too many login attempts. Try again later.", TraceID: requestIDFromContext(r.Context()),
+	})
 }
 
 func decodeAuthJSON(w http.ResponseWriter, r *http.Request, target any) bool {
