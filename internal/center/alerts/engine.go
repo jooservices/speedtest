@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
+	"github.com/jooservices/speedtest/internal/shared/errtrack"
 )
 
 const signalBatchSize = 100
@@ -390,6 +391,7 @@ func (s *Store) Loop(ctx context.Context) {
 			if err != nil {
 				ok = false
 				s.logger().ErrorContext(ctx, "alert IP signal drain failed", "error", err)
+				errtrack.CaptureError(err, map[string]string{"loop": "alerts", "step": "ip-signals"})
 				break
 			}
 			if count < signalBatchSize {
@@ -399,6 +401,7 @@ func (s *Store) Loop(ctx context.Context) {
 		if err := s.EvaluateOffline(ctx); err != nil {
 			ok = false
 			s.logger().ErrorContext(ctx, "alert offline check failed", "error", err)
+			errtrack.CaptureError(err, map[string]string{"loop": "alerts", "step": "offline-check"})
 		}
 		if s.ObserveRun != nil {
 			s.ObserveRun(ok)

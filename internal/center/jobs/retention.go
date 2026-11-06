@@ -10,6 +10,8 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/jooservices/speedtest/internal/shared/errtrack"
 )
 
 const (
@@ -166,6 +168,11 @@ func (r *Retention) Loop(ctx context.Context) {
 			return
 		case <-time.After(wait):
 		}
-		_, _ = r.Run(ctx)
+		if _, err := r.Run(ctx); err != nil && ctx.Err() == nil {
+			if r.Logger != nil {
+				r.Logger.Error("retention run failed", "error", err)
+			}
+			errtrack.CaptureError(err, map[string]string{"loop": "retention"})
+		}
 	}
 }

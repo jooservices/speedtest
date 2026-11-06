@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/jooservices/speedtest/internal/center/nodes"
@@ -124,4 +125,41 @@ func writePage(w http.ResponseWriter, items any, page, size, total int) {
 	}
 	writeJSON(w, http.StatusOK, apiEnvelope{Success: true, Code: http.StatusOK, Message: "Success", Data: items,
 		Meta: map[string]any{"pagination": map[string]any{"current_page": page, "per_page": size, "total": total, "last_page": last}}})
+}
+
+var idSegment = regexp.MustCompile(`^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}|\d+)$`)
+
+// routeWords are the fixed words that appear in this API's paths; any other segment is shown as *.
+var routeWords = map[string]bool{
+	"api": true, "auth": true, "agent": true, "nodes": true, "schedules": true, "alerts": true, "settings": true, "notifications": true,
+	"ip": true, "stats": true, "results": true, "export": true, "dashboard": true, "series": true, "installations": true,
+	"installer": true, "jobs": true, "audit": true, "rules": true, "events": true, "stagger": true, "ack": true, "acknowledgements": true,
+	"run": true, "commands": true, "credential": true, "uninstallations": true, "tokens": true, "enroll": true, "heartbeat": true,
+	"config": true, "test": true, "deliveries": true, "summary": true, "trend": true, "hour-of-day": true, "heatmap": true,
+	"distribution": true, "password": true, "me": true, "login": true, "logout": true, "enrolment-key": true, "lookup": true,
+	"map": true, "history": true, "addresses": true, "probes": true, "csv": true, "json": true, "csv.": true, "results.csv": true,
+	"results.json": true, "export.csv": true, "export.json": true, "events.": true, "ack.": true, "install.sh": true, "download": true,
+	"healthz": true, "readyz": true, "metrics": true,
+}
+
+// routeLabel turns a request path into a low-cardinality route name for error reports: ids become {id}, words this
+// API does not use become *, and anything outside the API, health and install paths is "ui". Paths a scanner invents
+// therefore never create new groups.
+func routeLabel(path string) string {
+	if !strings.HasPrefix(path, "/api/") && path != "/healthz" && path != "/readyz" && path != "/metrics" && path != "/install.sh" && !strings.HasPrefix(path, "/download/") {
+		return "ui"
+	}
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) > 5 {
+		parts = parts[:5]
+	}
+	for i, p := range parts {
+		switch {
+		case idSegment.MatchString(p):
+			parts[i] = "{id}"
+		case !routeWords[p]:
+			parts[i] = "*"
+		}
+	}
+	return "/" + strings.Join(parts, "/")
 }
