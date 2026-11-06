@@ -24,7 +24,8 @@ var subcommands = map[string]func(ctx context.Context, args []string, stdout io.
 	"rotate-app-key": func(ctx context.Context, args []string, stdout io.Writer) error {
 		return runRotateAppKey(ctx, args, os.Stdin, stdout)
 	},
-	"seed-admin": runSeedAdmin,
+	"seed-admin":  runSeedAdmin,
+	"disable-2fa": runDisableTwoFactor,
 	"reset-owner-password": func(ctx context.Context, args []string, stdout io.Writer) error {
 		return runResetOwnerPassword(ctx, args, os.Stdin, stdout)
 	},

@@ -52,6 +52,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-SET-08', area: 'settings', title: 'the activity log lists owner changes without secrets', covers: 'audit log, filter, no secrets', run: S.settings.activityLog },
 
     { id: 'SC-AUTH-02', area: 'auth', title: 'the owner can change the password', covers: 'change password, old password refused, new one works', run: () => S.auth.changePassword('a brand new passphrase 2026') },
+    { id: 'SC-AUTH-04', area: 'auth', title: 'two-factor sign-in can be turned on, used and turned off', covers: 'authenticator setup, code at sign-in, recovery code once, turn off', run: () => S.auth.twoFactor(process.env.E2E_ONLY ? undefined : 'a brand new passphrase 2026') },
     { id: 'SC-AUTH-03', area: 'auth', title: 'signing out ends the session', covers: 'sign out, API refuses visitor', run: S.auth.signOutEndsSession },
   ];
 }
