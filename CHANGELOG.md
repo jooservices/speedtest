@@ -8,6 +8,14 @@ All notable changes to Speedtest are recorded here. The format follows
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-06
+
+First production release: command center, agents, web UI, alerts and notifications, audit log, Sentry error tracking,
+Prometheus metrics, OpenObserve dashboard and alerts, and the production deploy script (`deploy/prod/prod.sh`).
+
+### Added
+- Production deployment of the command center as a container (`deploy/prod`).
+
 ### Added
 - Advertise published agent releases by platform and show updates for older stable agents.
 - Release packaging (`make release`) and the one-line agent installer served by the
