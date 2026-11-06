@@ -180,3 +180,22 @@ database before the atomic swap, and keeps the old file and reader when anything
 `SPEEDTEST_GEO_DBIP_AUTO_UPDATE=false` turns it off; with a MaxMind key the GeoLite2 updater runs instead. Wherever the
 data is shown, the attribution **IP Geolocation by DB-IP** (https://db-ip.com) applies; this page and the application
 documentation carry it. Providers are configured through the environment; moving their keys into Settings is a follow-up.
+
+## Free provider facts (read from the providers' own pages on 2026-11-06)
+
+Limits change; check the page before relying on a number.
+
+| Provider | Free limit | Key | HTTPS | Commercial use | Gives | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| DB-IP Lite (offline MMDB) | none, monthly files | no | download | yes, CC BY 4.0 with attribution | country, city, coordinates, ASN | the base of the offline database |
+| IPinfo Lite | no request limit | token | yes | yes, CC BY-SA 4.0 with attribution | country and ASN only; free MMDB/CSV download too | best source for ASN and country gaps |
+| ip-api.com | 45 requests/minute; batch of 100 IPs per request, 15 batch requests/minute | no | **no (HTTP only)** | **no (non-commercial)** | city, region, coordinates, timezone, ISP, ASN | over the limit: HTTP 429, repeated: 1-hour ban; `X-Rl`/`X-Ttl` headers; IPs travel unencrypted |
+| ipgeolocation.io | 1,000 credits/day, no per-minute limit | free key | yes | yes (within the limit) | country, state, city, coordinates, ASN, timezone | resets 00:00 UTC; calls from a server only |
+| ipwho.is | 1,000 requests/day | no | yes | yes | country, region, city, coordinates, ASN, ISP, timezone | no bulk on the free plan |
+| freeipapi.com | 60 requests/minute | no | yes | yes | country, region, city, ASN, timezone | European servers; no bulk on free |
+| GeoJS | not published on the docs page | no | yes | see its terms | country, city, coordinates, ASN, organisation | accepts several IPs in one call |
+| ipapi.co | 1,000 requests/day on a trial | trial | yes | **trial is "not meant for production"** | city, coordinates, ASN | keep off in production |
+| RIPEstat network-info | no key; fair use | no | yes | public RIPE data | prefix and ASN only | possible ASN fallback |
+
+Because of these limits the providers are used sparingly: the offline database answers first, and a free provider is asked
+only when the offline answer is missing or weak, in the order and with the budgets of the quota-aware policy (JOOST-88).
