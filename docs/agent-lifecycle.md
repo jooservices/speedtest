@@ -80,7 +80,7 @@ soak; Claude performs review/QA, and deployment remains the owner's decision.
 The agent heartbeats its installed Ookla and LibreSpeed executables, resolving
 `SPEEDTEST_OOKLA_BINARY` and `SPEEDTEST_LIBRESPEED_BINARY` (defaults `speedtest` and
 `librespeed-cli`). The center offers one interval/offset/enabled schedule per
-engine; newly enabled LibreSpeed defaults to 30 minutes. Config sync replaces
+engine; newly enabled LibreSpeed defaults to 60 minutes. Config sync replaces
 these schedules without restarting. One scheduler worker runs all engines and
 manual primary-engine requests in sequence, including coincident slots; overdue
 slots expire rather than building an unbounded queue. Every durable result keeps

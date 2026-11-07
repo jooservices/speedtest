@@ -360,7 +360,7 @@ func trendSQL(column string) string {
 ), grouped AS (
  SELECT r.node_id, date_trunc($4, r.ts AT TIME ZONE $5) AS local_bucket,
         count(r.` + column + `)::int AS sample_count, avg(r.` + column + `)::float8 AS value
- FROM results r JOIN selected_nodes n ON n.id = r.node_id
+ FROM results r JOIN selected_nodes n ON r.node_id = n.id
  WHERE r.ts >= $2 AND r.ts < $3 AND r.status = 'ok' AND r.` + column + ` IS NOT NULL
  GROUP BY r.node_id, local_bucket
 )
@@ -412,7 +412,7 @@ func (s *Store) HourOfDay(ctx context.Context, q Query) ([]HourSeries, error) {
 ), grouped AS (
  SELECT r.node_id, extract(hour FROM r.ts AT TIME ZONE $4)::int AS hour,
         count(r.` + column + `)::int AS sample_count, avg(r.` + column + `)::float8 AS value
- FROM results r JOIN selected_nodes n ON n.id = r.node_id
+ FROM results r JOIN selected_nodes n ON r.node_id = n.id
  WHERE r.ts >= $2 AND r.ts < $3 AND r.status = 'ok' AND r.` + column + ` IS NOT NULL
  GROUP BY r.node_id, hour
 )
@@ -463,7 +463,7 @@ func (s *Store) Heatmap(ctx context.Context, q Query, nodeID string) (Heatmap, e
  SELECT r.node_id, (extract(isodow FROM r.ts AT TIME ZONE $4)::int - 1) AS weekday,
         extract(hour FROM r.ts AT TIME ZONE $4)::int AS hour,
         count(r.` + column + `)::int AS sample_count, avg(r.` + column + `)::float8 AS value
- FROM results r JOIN target_node n ON n.id = r.node_id
+ FROM results r JOIN target_node n ON r.node_id = n.id
  WHERE r.ts >= $2 AND r.ts < $3 AND r.status = 'ok' AND r.` + column + ` IS NOT NULL
  GROUP BY r.node_id, weekday, hour
 )
@@ -550,7 +550,7 @@ func (s *Store) Distribution(ctx context.Context, q Query) ([]Distribution, erro
 func distributionSQL(column string) string {
 	return `WITH selected_nodes AS (` + selectedNodes + `), metric_values AS MATERIALIZED (
  SELECT r.node_id, r.` + column + ` AS value
- FROM results r JOIN selected_nodes n ON n.id = r.node_id
+ FROM results r JOIN selected_nodes n ON r.node_id = n.id
  WHERE r.ts >= $2 AND r.ts < $3 AND r.status = 'ok' AND r.` + column + ` IS NOT NULL
 ), bounds AS (
  SELECT n.id, count(v.value)::int AS samples, min(v.value) AS low, max(v.value) AS high,

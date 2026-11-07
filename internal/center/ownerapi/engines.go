@@ -2,7 +2,10 @@ package ownerapi
 
 import (
 	"context"
+	"errors"
 	"slices"
+
+	"github.com/jackc/pgx/v5"
 
 	"github.com/jooservices/speedtest/internal/center/schedules"
 )
@@ -26,6 +29,9 @@ func (s *Store) replaceEngines(ctx context.Context, id string, engines []EngineS
 	defer func() { _ = tx.Rollback(ctx) }()
 	var installed []string
 	if err := tx.QueryRow(ctx, `SELECT installed_engines FROM nodes WHERE id=$1 FOR UPDATE`, id).Scan(&installed); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, "", ErrNotFound
+		}
 		return nil, "", err
 	}
 	rows, err := s.scheduleRows(ctx, tx, true, id)

@@ -55,8 +55,8 @@ func TestNullableResultIdentityIntegration(t *testing.T) {
 	if hook.calls != 2 {
 		t.Fatal("known IP hook not invoked")
 	}
-	// Roll back the two-factor, audit log, installer, delivery, alert engine and history migrations, then refuse to lose the nullable-IP contract.
-	for _, name := range []string{"two-factor", "audit log", "SSH installer", "notification deliveries", "alert engine", "history"} {
+	// Roll back engine schedules, two-factor, audit log, installer, delivery, alert engine and history, then refuse to lose the nullable-IP contract.
+	for _, name := range []string{"engine schedules", "two-factor", "audit log", "SSH installer", "notification deliveries", "alert engine", "history"} {
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(name+" migration rollback failed", err)
 		}
@@ -72,25 +72,26 @@ func TestNullableResultIdentityIntegration(t *testing.T) {
 	if _, err := pool.Exec(ctx, `DELETE FROM results WHERE node_id=$1`, node); err != nil {
 		t.Fatal(err)
 	}
-	// A compatible populated row survives both down and up; no data is discarded.
-	result, err := agentapi.ParseResult([]byte(ingestionResult))
-	if err != nil {
+	// A version-3 compatible row (no results.engine yet) survives both down and up; no data is discarded.
+	const compatibleID = "00000000-0000-4000-8000-000000000001"
+	if _, err := pool.Exec(ctx, `INSERT INTO ip_addresses(ip) VALUES ('203.0.113.1') ON CONFLICT DO NOTHING`); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = store.SaveResult(ctx, node, result); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,ip,threads,server)
+		VALUES ($1,$2,'2026-11-03T00:00:00Z','ok',123.4,56.7,3,1,'203.0.113.1',4,'{"id":1,"name":"edge","city":"city","sponsor":"isp","host":"test.example"}'::jsonb)`, compatibleID, node); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.Migrate(ctx, pool, "down"); err != nil {
+	if err := db.Migrate(ctx, pool, "down"); err != nil {
 		t.Fatal(err)
 	}
 	// Exercise upgrade of legacy successful rows without a typed server object.
-	if _, err = pool.Exec(ctx, `UPDATE results SET server=NULL WHERE id=$1`, result.ID); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE results SET server=NULL WHERE id=$1`, compatibleID); err != nil {
 		t.Fatal(err)
 	}
-	if err = db.Migrate(ctx, pool, "up"); err != nil {
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal(err)
 	}
-	if err = pool.QueryRow(ctx, `SELECT server_id=1 AND ip='203.0.113.1' AND server->>'name'='Server 1' FROM results WHERE id=$1`, result.ID).Scan(&null); err != nil || !null {
+	if err := pool.QueryRow(ctx, `SELECT server_id=1 AND ip='203.0.113.1' AND server->>'name'='Server 1' FROM results WHERE id=$1`, compatibleID).Scan(&null); err != nil || !null {
 		t.Fatal("compatible data changed or backfill missing", err)
 	}
 	t.Log("PASS: failed NULL IP accepted/stored/idempotent and invokes alert hook; ok NULL IP rejected; LibreSpeed server identity accepted/stored; null IP skips IP history work; populated down/up; lossy down refuses atomically")

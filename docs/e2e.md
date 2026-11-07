@@ -39,7 +39,7 @@ what the page shows; put the change back (or order the scenario last) when it al
 
 ## Scenarios
 
-34 scenarios across auth, dashboard, nodes, results, statistics, IP, schedules, alerts, settings and quality (layout, accessibility,
+42 scenarios across auth, dashboard, nodes, results, statistics, IP, schedules, alerts, settings and quality (layout, accessibility,
 theme): see [e2e-scenarios.md](e2e-scenarios.md).
 
 The SSH install wizard (host-key confirmation, live progress, failure) is covered against the contract fixture by
@@ -55,3 +55,13 @@ Failure screenshots land in `.tmp/e2e/shots`.
 `ui/assets/js` (the page is reloaded often, so coverage is taken before every navigation and united), and prints one line per file with
 `node scripts/ui-coverage.mjs`. The gate is **85% of lines per file**; `--detail <file>` lists the lines nothing ran. Go packages are
 measured with `go test -coverprofile` (see docs/development.md).
+
+## Independent engines (JOOST-71)
+
+`SC-ENG-01` enables LibreSpeed on an installed node, checks the new 60-minute
+schedule default, changes its interval independently, verifies persistence after
+reload, then disables it. `SC-ENG-02` selects LibreSpeed and returns to the primary
+engine on dashboard, results and statistics; responses are checked against OpenAPI.
+The native harness is approved for this ticket: `node tests/e2e/main.mjs`, without
+Docker or the shared browser launcher. Run database suites and browser harnesses
+serially because both reset the same verified worktree database.

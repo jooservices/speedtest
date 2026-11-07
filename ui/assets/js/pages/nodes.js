@@ -424,7 +424,7 @@
       ['ookla', 'librespeed'].forEach(function (name) {
         var current = engineRows.filter(function (e) { return e.engine === name; })[0];
         var installed = available.indexOf(name) !== -1;
-        var draft = Object.assign({ engine: name, interval: 30, offset: 0, enabled: false }, current || {});
+        var draft = Object.assign({ engine: name, interval: 60, offset: 0, enabled: false }, current || {});
         if (!current && installed) engineRows.push(draft); else if (current) draft = current;
         var label = name === 'ookla' ? 'Ookla' : 'LibreSpeed';
         engineForm.appendChild(h('div', { class: 'setting' },

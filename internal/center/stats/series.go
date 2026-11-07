@@ -112,7 +112,7 @@ func seriesQuery(expr string) string {
 	return `WITH selected_nodes AS (` + selectedNodes + `), grid AS (SELECT g AS k FROM generate_series(0, $4::int - 1) g),
 grouped AS (
  SELECT r.node_id, floor(extract(epoch FROM (r.ts - $2::timestamptz)) / $5::float8)::int AS k, count(*)::int AS c, avg(` + expr + `)::float8 AS v
- FROM results r JOIN selected_nodes n ON n.id = r.node_id
+ FROM results r JOIN selected_nodes n ON r.node_id = n.id
  WHERE r.ts >= $2 AND r.ts < $3 AND r.status <> 'failed' AND ` + expr + ` IS NOT NULL
  GROUP BY r.node_id, k
 )

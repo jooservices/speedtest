@@ -4,6 +4,7 @@ package ipwatch_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -458,7 +459,11 @@ func legacyResultFixture(t *testing.T, p *pgxpool.Pool, r agentapi.Result) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := p.Exec(t.Context(), `INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,ip,threads,error) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`, r.ID, nodeA, r.TS, r.Status, r.Down, r.Up, r.Ping, r.ServerID, r.IP, r.Threads, r.Error); err != nil {
+	server, err := json.Marshal(r.Server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.Exec(t.Context(), `INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,ip,threads,error,server) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::jsonb)`, r.ID, nodeA, r.TS, r.Status, r.Down, r.Up, r.Ping, r.ServerID, r.IP, r.Threads, r.Error, server); err != nil {
 		t.Fatal(err)
 	}
 }

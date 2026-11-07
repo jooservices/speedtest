@@ -559,7 +559,7 @@ preserve the legacy capability record. Node views expose `engines` and
 "interval": 60, "offset": 0, "enabled": true }, { "engine": "librespeed",
 "interval": 30, "offset": 5, "enabled": true } ] }` under the existing session,
 CSRF, origin and If-Match requirements. Keep the Ookla entry (it may be disabled)
-for rollout compatibility. Omitted intervals default to 30 minutes. GET includes
+for rollout compatibility. Omitted intervals for new engine schedules default to 60 minutes. GET includes
 an `engines` list of schedule views and the primary schedule compatibility fields.
 The collection contains one view per node/engine. The legacy single-schedule PUT
 continues to edit only Ookla. Agent config adds `schedules`; `schedule` and `engine`
