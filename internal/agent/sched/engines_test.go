@@ -69,7 +69,9 @@ func TestEngineSchedulesSerializeCoincidentSlotsAndManualRequests(t *testing.T) 
 	next("manual")
 	r.release <- struct{}{}
 	cancel()
-	<-done
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
 	if r.max != 1 {
 		t.Fatalf("maximum concurrency=%d", r.max)
 	}

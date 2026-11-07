@@ -113,7 +113,7 @@
     return ST.ui.field('Engine', ST.ui.select([{ value: '', label: 'Primary engine' }, { value: 'ookla', label: 'Ookla' }, { value: 'librespeed', label: 'LibreSpeed' }], ST.selectedEngine, function (value) {
       ST.selectedEngine = value;
       if (ST.demo) ST.refresh(); else ST.load();
-    }, { 'aria-label': 'Engine' }));
+    }));
   };
   ST.engineSchedules = function (node) { return node.engineSchedules || [{ engine: 'ookla', interval: node.interval, offset: node.offset || 0, enabled: node.enabled }]; };
   ST.saveEngineSchedules = function (id, engines) { var n = ST.node(id); n.engineSchedules = engines; persist(); ST.emit('data'); return Promise.resolve(); };
@@ -368,11 +368,11 @@
   };
 
   ST.csv = function (rows) {
-    var head = ['time', 'node', 'status', 'download_mbps', 'upload_mbps', 'ping_ms', 'jitter_ms', 'packet_loss_pct', 'loaded_latency_down_ms', 'loaded_latency_up_ms', 'server', 'public_ip', 'error'];
+    var head = ['time', 'node', 'status', 'download_mbps', 'upload_mbps', 'ping_ms', 'jitter_ms', 'packet_loss_pct', 'loaded_latency_down_ms', 'loaded_latency_up_ms', 'server', 'public_ip', 'error', 'engine'];
     var esc = function (v) { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     return [head.join(',')].concat(rows.map(function (r) {
       var n = ST.node(r.nodeId), s = ST.server(r.serverId);
-      return [new Date(r.ts).toISOString(), n ? n.name + ' ' + n.label : r.nodeId, r.status, r.down, r.up, r.ping, r.jitter, r.loss, r.dLat, r.uLat, s.name + ' - ' + s.city, r.ip, r.error].map(esc).join(',');
+      return [new Date(r.ts).toISOString(), n ? n.name + ' ' + n.label : r.nodeId, r.status, r.down, r.up, r.ping, r.jitter, r.loss, r.dLat, r.uLat, s.name + ' - ' + s.city, r.ip, r.error, r.engine || 'ookla'].map(esc).join(',');
     })).join('\n');
   };
 

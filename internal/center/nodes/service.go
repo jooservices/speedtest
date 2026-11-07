@@ -173,7 +173,7 @@ func (s *Service) createNodeTx(ctx context.Context, tx pgx.Tx, input Input) (any
 	if err != nil {
 		return nil, translateDBError(err)
 	}
-	if _, err := tx.Exec(ctx, `WITH legacy AS (INSERT INTO schedules (node_id) VALUES ($1) RETURNING node_id) INSERT INTO engine_schedules(node_id,engine) SELECT node_id,'ookla' FROM legacy`, nodeID); err != nil {
+	if _, err := tx.Exec(ctx, `WITH legacy AS (INSERT INTO schedules (node_id) VALUES ($1) RETURNING *) INSERT INTO engine_schedules(node_id,engine,interval_minutes,offset_minutes,enabled,revision) SELECT node_id,'ookla',interval_minutes,offset_minutes,enabled,revision FROM legacy`, nodeID); err != nil {
 		return nil, translateDBError(err)
 	}
 	credentialID, err := s.uuid()

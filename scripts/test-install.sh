@@ -73,6 +73,19 @@ grep -q "^name: " "$work/root/etc/speedtest-agent/config.yaml" || fail "node nam
 grep -q "Checksum verified" "$work/out1.log" || fail "no checksum confirmation printed"
 printf 'ok: install on amd64\n'
 
+# LibreSpeed integrity is checked before either binary is installed.
+rm -rf "$work/root"
+cp "$rel/librespeed-cli_1.0.14_linux_amd64.tar.gz" "$work/libre-original"
+printf 'tampered' >>"$rel/librespeed-cli_1.0.14_linux_amd64.tar.gz"
+if run_install SPEEDTEST_INSTALL_UNAME_M=x86_64 sh "$work/install.sh" --token t --name n >"$work/libre-tamper.log" 2>&1; then
+ fail "tampered LibreSpeed archive accepted"
+fi
+grep -q "checksum mismatch for LibreSpeed" "$work/libre-tamper.log" || fail "no LibreSpeed integrity error"
+[ ! -e "$work/root/usr/local/bin/speedtest-agent" ] || fail "agent installed after LibreSpeed checksum failure"
+[ ! -e "$work/root/usr/local/bin/librespeed-cli" ] || fail "LibreSpeed installed after checksum failure"
+cp "$work/libre-original" "$rel/librespeed-cli_1.0.14_linux_amd64.tar.gz"
+printf 'ok: tampered LibreSpeed archive refused before install\n'
+
 # 2. arm64 picks the arm64 binary.
 rm -rf "$work/root"
 run_install SPEEDTEST_INSTALL_UNAME_M=aarch64 sh "$work/install.sh" --token t --name n >/dev/null 2>&1 || fail "arm64 install failed"

@@ -148,3 +148,15 @@ func TestCachePrunesExpiredWindowsAndRefreshesSameKey(t *testing.T) {
 		t.Fatal("same-key expiration did not refresh")
 	}
 }
+
+func TestCacheKeysSeparateEngines(t *testing.T) {
+	c := &Cached{TTL: time.Minute}
+	q := stats.Query{}
+	primary := c.key(q)
+	q.Engine = "ookla"
+	ookla := c.key(q)
+	q.Engine = "librespeed"
+	if libre := c.key(q); libre == primary || libre == ookla || primary == ookla {
+		t.Fatal("engine filters share a cache key")
+	}
+}

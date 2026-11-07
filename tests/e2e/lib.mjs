@@ -85,7 +85,11 @@ export async function startAgent(stack, { name, token }) {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   const env = { ...process.env, SPEEDTEST_AGENT_CONFIG: join(dir, 'config.yaml'), SPEEDTEST_AGENT_CREDENTIAL: join(dir, 'credential'), SPEEDTEST_AGENT_CENTER: stack.origin,
-    SPEEDTEST_OOKLA_BINARY: join(out, 'bin', 'fake-speedtest'), SPEEDTEST_OOKLA_ARGS: '["--scenario","success"]', SPEEDTEST_SPOOL_DIR: join(dir, 'spool'),
+    SPEEDTEST_OOKLA_BINARY: join(out, 'bin', 'fake-speedtest'), SPEEDTEST_OOKLA_ARGS: '["--scenario","success"]',
+    // Capability discovery only needs LookPath; reuse the Ookla fake so LibreSpeed is reported as installed.
+    SPEEDTEST_LIBRESPEED_BINARY: join(out, 'bin', 'fake-speedtest'),
+    SPEEDTEST_LIBRESPEED_CONCURRENT: '4', SPEEDTEST_LIBRESPEED_TIMEOUT: '60s',
+    SPEEDTEST_SPOOL_DIR: join(dir, 'spool'),
     SPEEDTEST_AGENT_UPDATE_DIR: join(dir, 'update'), SPEEDTEST_AGENT_INBOX_DIR: join(dir, 'inbox') };
   run(join(out, 'bin', 'agent'), ['enroll', '--center', stack.origin, '--token', token, '--name', name], { env });
   const agent = spawn(join(out, 'bin', 'agent'), ['run'], { cwd: dir, env, stdio: 'ignore' });

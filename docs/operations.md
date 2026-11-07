@@ -294,17 +294,17 @@ and check `curl -vI https://<host>/readyz`. The probe's `cert_days` confirms the
 In Node → Settings → Test engines, set each installed engine's interval and enabled
 switch, then save. An uninstalled engine explains how to repair installation.
 Ookla remains the new-node default at 30 minutes. LibreSpeed starts disabled until
-selected, with a 30 minute default. When several nodes share a public IP, increase
+selected, with a 60 minute default. When several nodes share a public IP, increase
 their Ookla intervals: the Ookla CLI can rate limit by public IP. Choose one engine
 in dashboard, results or statistics before interpreting trends; different engines
 are never averaged together. Alert rules without an engine evaluate the primary
 engine only.
 
-Migration 00009 keeps the single-row legacy `schedules` table, backfills
+Migration 00010 keeps the single-row legacy `schedules` table, backfills
 `engine_schedules`, and adds `results.engine NOT NULL DEFAULT 'ookla'`. New code
 mirrors Ookla writes transactionally; the old binary can still read its schedule
 and insert results. Upgrade center writers before configuring additional engines.
-On a verified disposable worktree database, `make migrate-down` rolls back 00009;
+On a verified disposable worktree database, `make migrate-down` rolls back 00010;
 legacy schedules and result rows survive, while per-engine schedules, capabilities
 and result engine labels are removed. Stop new agents before rollback, and use the
 old binary afterwards. `make migrate` reapplies and backfills the legacy state.
