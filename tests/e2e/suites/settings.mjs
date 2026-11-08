@@ -97,25 +97,28 @@ export function settingsSuite(T, ctx) {
       await T.open('#/settings', 'Settings');
       await T.tab('Notifications');
       await T.see('Events and message templates');
-      const card = page.locator('div').filter({ hasText: 'Test success' }).filter({ has: page.getByLabel('Enable Test success') }).first();
+      const card = page.locator('[data-event-key="test.success"]');
       await card.waitFor();
-      const editor = card.locator('textarea').first();
+      const editor = card.locator('textarea');
       await editor.waitFor();
       const original = await editor.inputValue();
       assert.ok(original.includes('{node}'), 'the default template loads');
       await editor.fill('E2E preview for {node} download {download}');
       await T.press('Preview', card);
-      await T.eventually(async () => (await card.locator('pre').innerText()).includes('Viettel') || (await card.locator('pre').innerText()).includes('E2E preview'), 'live preview renders sample data');
+      await T.eventually(async () => {
+        const text = await card.locator('pre').innerText();
+        return text.includes('E2E preview') || text.includes('Viettel');
+      }, 'live preview renders sample data');
       await T.press('Save template', card);
       await T.toast('Template saved').waitFor();
       assert.ok(T.db("select body from notification_templates where event_key='test.success' and channel='telegram'").includes('E2E preview'), 'custom template is stored');
       await T.press('Reset to default', card);
       await T.toast('Template reset').waitFor();
       assert.equal(Number(T.db("select count(*) from notification_templates where event_key='test.success' and channel='telegram'")), 0, 'reset removes the override');
-      await page.getByLabel('Enable Test success').uncheck({ force: true });
+      await card.getByLabel('Enable Test success').uncheck({ force: true });
       await T.toast('Saved').waitFor();
       await T.eventually(() => T.db("select enabled::text from notification_event_settings where event_key='test.success'") === 'false', 'event toggle is stored');
-      await page.getByLabel('Enable Test success').check({ force: true });
+      await card.getByLabel('Enable Test success').check({ force: true });
       await T.settled();
     },
 
