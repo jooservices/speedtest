@@ -24,6 +24,7 @@ Opening `ui/index.html?demo=1` directly also works. Without `?demo=1`, the UI re
 | Results | Filter, search, sort, paginate, open full detail, export CSV |
 | Statistics | Per-node summary (average, median, slow/fast 5%, variation, stability), trend with optional combined total, time of day, weekday × hour heatmap, distribution |
 | IP & location | Map of current locations, address-change timeline, every address seen with geolocation, lookup tool |
+| ISPs | Providers inferred from ASN data: node count, average/p95 speed, % of expected, success rate, latency, trend and comparison |
 | Schedules | Interval and start minute per node, keep tests from overlapping, upcoming runs, data-usage estimate |
 | Alerts | Activity with acknowledge, rule editor (download, upload, latency, jitter, loss, failed tests, IP change) |
 | Settings | Theme, units, time zone, test engine, location service, notifications, retention, export, enrolment key |
