@@ -6,6 +6,7 @@ INSERT INTO nodes (id,name,label,provider,plan,expected_down_mbps,expected_up_mb
  ('10000000-0000-4000-8000-000000000004','VM4','VNPT Home 2','VNPT','Home 2',150,50,4,'vm4','speedtest-agent/1.0.0',now() - interval '1 hour'),
  ('10000000-0000-4000-8000-000000000005','VM5','All connections (load balanced)','Router','LB',1500,300,5,'vm5','speedtest-agent/1.0.0',now());
 INSERT INTO schedules (node_id, interval_minutes, offset_minutes) SELECT id, 30, (color_slot-1)*6 FROM nodes;
+INSERT INTO engine_schedules SELECT node_id,'ookla',interval_minutes,offset_minutes,enabled,revision FROM schedules;
 INSERT INTO ip_addresses (ip,geo,source,looked_up_at) VALUES
  ('203.0.113.11','{"city":"Hanoi","region":"Hanoi","country":"VN","latitude":21.0285,"longitude":105.8542,"time_zone":"Asia/Ho_Chi_Minh","accuracy_radius":20,"asn":7552,"organisation":"Viettel Group"}','GeoLite2',now()),
  ('203.0.113.12','{"city":"Ho Chi Minh City","region":"Ho Chi Minh","country":"VN","latitude":10.8231,"longitude":106.6297,"time_zone":"Asia/Ho_Chi_Minh","accuracy_radius":20,"asn":7552,"organisation":"Viettel Group"}','GeoLite2',now()),

@@ -99,6 +99,6 @@ func (c *Cached) Snapshot(ctx context.Context, q stats.Query) (Snapshot, error) 
 func (c *Cached) key(q stats.Query) string {
 	step := c.TTL
 	r := func(t time.Time) int64 { return t.Truncate(step).UnixNano() }
-	return fmt.Sprintf("%s|%v|%d|%d|%d|%d|%s|%s", strings.Join(q.NodeIDs, ","), q.NodesSet,
-		r(q.From), r(q.To), r(q.PreviousFrom), r(q.PreviousTo), q.Timezone, q.Bucket)
+	return fmt.Sprintf("%s|%v|%d|%d|%d|%d|%s|%s|%s", strings.Join(q.NodeIDs, ","), q.NodesSet,
+		r(q.From), r(q.To), r(q.PreviousFrom), r(q.PreviousTo), q.Timezone, q.Bucket, q.Engine)
 }

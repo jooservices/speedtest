@@ -164,7 +164,7 @@ func TestOwnerResultsExportCSV(t *testing.T) {
 	if strings.Join(records[0], ",") != strings.Join(csvHeader, ",") {
 		t.Fatalf("header = %v", records[0])
 	}
-	if got := strings.Join(records[1], "|"); got != "2026-11-03T01:00:00Z|VM1 Home|ok|250.5|90.25|12|1.5|0|20.5|25|Viettel - Hanoi|203.0.113.5|" {
+	if got := strings.Join(records[1], "|"); got != "2026-11-03T01:00:00Z|VM1 Home|ok|250.5|90.25|12|1.5|0|20.5|25|Viettel - Hanoi|203.0.113.5||" {
 		t.Fatalf("row 1 = %s", got)
 	}
 	second := records[2]

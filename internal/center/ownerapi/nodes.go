@@ -55,9 +55,11 @@ func (s *Store) now() time.Time {
 
 const nodeColumns = `n.id::text, n.name, n.label, n.provider, n.plan, n.expected_down_mbps, n.expected_up_mbps, n.threads,
 	n.server_id, n.color_slot, n.enabled, n.auto_update, n.binding_interface, host(n.binding_source_ip), n.note,
-	n.config_revision, s.interval_minutes, s.offset_minutes, s.enabled, n.host, n.agent, n.created_at, n.last_seen_at`
+	n.config_revision, s.interval_minutes, s.offset_minutes, s.enabled, n.host, n.agent, n.created_at, n.last_seen_at,n.installed_engines,n.primary_engine`
 
 type nodeRow struct {
+	Engines                                                   []string
+	PrimaryEngine                                             string
 	ID, Name, Label, Provider, Plan, Iface, Note, Host, Agent string
 	Down, Up                                                  float64
 	Threads, ColorSlot, Interval, Offset                      int32
@@ -73,7 +75,7 @@ func scanNode(row pgx.Row) (nodeRow, error) {
 	var n nodeRow
 	err := row.Scan(&n.ID, &n.Name, &n.Label, &n.Provider, &n.Plan, &n.Down, &n.Up, &n.Threads, &n.ServerID, &n.ColorSlot,
 		&n.Enabled, &n.AutoUpdate, &n.Iface, &n.SourceIP, &n.Note, &n.Revision, &n.Interval, &n.Offset, &n.ScheduleOn,
-		&n.Host, &n.Agent, &n.CreatedAt, &n.LastSeen)
+		&n.Host, &n.Agent, &n.CreatedAt, &n.LastSeen, &n.Engines, &n.PrimaryEngine)
 	return n, err
 }
 
@@ -122,7 +124,7 @@ func (n nodeRow) view(now time.Time, latest, latestGood map[string]any, currentI
 	obj := map[string]any{
 		"id": n.ID, "name": n.Name, "label": n.Label, "provider": n.Provider, "plan": n.Plan,
 		"expectedDown": n.Down, "expectedUp": n.Up, "threads": int64(n.Threads), "server": server, "note": n.Note,
-		"enabled": n.Enabled, "autoUpdate": n.AutoUpdate,
+		"engines": n.Engines, "primaryEngine": n.PrimaryEngine, "enabled": n.Enabled, "autoUpdate": n.AutoUpdate,
 		"binding":   map[string]any{"iface": n.Iface, "sourceIp": nullable(n.SourceIP)},
 		"colorSlot": int64(n.ColorSlot), "interval": int64(n.Interval), "offset": int64(n.Offset), "host": n.Host, "agent": displayAgent(n.Agent),
 		"createdAt": n.CreatedAt.UTC().Format(time.RFC3339Nano), "lastSeen": lastSeen,
@@ -158,7 +160,7 @@ func (s *Store) loadExtras(ctx context.Context, q interface {
 		dest  map[string]map[string]any
 		where string
 	}{{ex.latest, ""}, {ex.latestGood, " AND r.status <> 'failed'"}} {
-		rows, err := q.Query(ctx, `SELECT DISTINCT ON (r.node_id) `+ResultColumns+` FROM results r WHERE r.node_id = ANY($1::uuid[])`+spec.where+` ORDER BY r.node_id, r.ts DESC, r.id DESC`, ids)
+		rows, err := q.Query(ctx, `SELECT DISTINCT ON (r.node_id) `+ResultColumns+` FROM results r JOIN nodes n ON n.id=r.node_id WHERE r.engine=n.primary_engine AND r.node_id = ANY($1::uuid[])`+spec.where+` ORDER BY r.node_id, r.ts DESC, r.id DESC`, ids)
 		if err != nil {
 			return ex, err
 		}
@@ -207,7 +209,7 @@ func (s *Store) List(ctx context.Context, page, size int) ([]map[string]any, int
 	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM nodes`).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.DB.Query(ctx, `SELECT `+nodeColumns+` FROM nodes n JOIN schedules s ON s.node_id = n.id ORDER BY lower(n.name), n.id LIMIT $1 OFFSET $2`, size, (page-1)*size)
+	rows, err := s.DB.Query(ctx, `SELECT `+nodeColumns+` FROM nodes n JOIN engine_schedules s ON s.node_id = n.id AND s.engine=n.primary_engine ORDER BY lower(n.name), n.id LIMIT $1 OFFSET $2`, size, (page-1)*size)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -248,7 +250,7 @@ func (s *Store) one(ctx context.Context, q interface {
 	if lock {
 		suffix = " FOR UPDATE OF n"
 	}
-	n, err := scanNode(q.QueryRow(ctx, `SELECT `+nodeColumns+` FROM nodes n JOIN schedules s ON s.node_id = n.id WHERE n.id = $1`+suffix, id))
+	n, err := scanNode(q.QueryRow(ctx, `SELECT `+nodeColumns+` FROM nodes n JOIN engine_schedules s ON s.node_id = n.id AND s.engine=n.primary_engine WHERE n.id = $1`+suffix, id))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nodeRow{}, ErrNotFound
 	}

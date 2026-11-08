@@ -6,6 +6,7 @@ import { join } from 'node:path';
 import http from 'node:http';
 import { startStack, startAgent, stopAll, query, root } from './lib.mjs';
 import { coreSteps } from './steps/core.mjs';
+import { enginesSuite } from './suites/engines.mjs';
 import { authSuite } from './suites/auth.mjs';
 import { dashboardSuite } from './suites/dashboard.mjs';
 import { nodesSuite } from './suites/nodes.mjs';
@@ -43,7 +44,7 @@ await new Promise(resolve => receiverServer.listen(0, '127.0.0.1', resolve));
 receiver.url = `http://127.0.0.1:${receiverServer.address().port}/hook`;
 const ctx = { page, stack, startAgent, query, problems, receiver };
 const T = coreSteps(ctx);
-const S = { auth: authSuite(T, ctx), dashboard: dashboardSuite(T, ctx), nodes: nodesSuite(T, ctx), results: resultsSuite(T, ctx), statistics: statisticsSuite(T, ctx),
+const S = { engines: enginesSuite(T, ctx), auth: authSuite(T, ctx), dashboard: dashboardSuite(T, ctx), nodes: nodesSuite(T, ctx), results: resultsSuite(T, ctx), statistics: statisticsSuite(T, ctx),
   network: networkSuite(T, ctx), schedules: schedulesSuite(T, ctx), alerts: alertsSuite(T, ctx), settings: settingsSuite(T, ctx), quality: qualitySuite(T, ctx) };
 const scenarios = buildScenarios({ T, S });
 if (process.env.E2E_TRACE) page.on('response', r => {  if (r.url().includes('/api/') && r.request().method() !== 'GET') console.log('  ', r.request().method(), r.url().replace(stack.origin, ''), r.status(), process.env.E2E_BODY ? (r.request().postData() || '') : ''); });

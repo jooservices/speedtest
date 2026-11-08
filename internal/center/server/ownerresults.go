@@ -27,7 +27,7 @@ var resultRanges = map[string]time.Duration{"6h": 6 * time.Hour, "24h": 24 * tim
 
 // csvHeader lists the export columns; they match the dashboard's own export.
 var csvHeader = []string{"time", "node", "status", "download_mbps", "upload_mbps", "ping_ms", "jitter_ms", "packet_loss_pct",
-	"loaded_latency_down_ms", "loaded_latency_up_ms", "server", "public_ip", "error"}
+	"loaded_latency_down_ms", "loaded_latency_up_ms", "server", "public_ip", "error", "engine"}
 
 type ownerResults struct {
 	store   OwnerResultsStore
@@ -49,7 +49,7 @@ func ownerResultsRoute(path string) bool {
 func (h *ownerResults) serve(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case "/api/export/results.csv":
-		h.exportCSV(w, r, ownerapi.ResultFilter{Sort: "ts", Dir: "asc"})
+		h.exportCSV(w, r, ownerapi.ResultFilter{Sort: "ts", Dir: "asc", AllEngines: true})
 	case "/api/export/results.json":
 		h.exportJSON(w, r)
 	case "/api/results":
@@ -168,7 +168,7 @@ func (h *ownerResults) exportJSON(w http.ResponseWriter, r *http.Request) {
 		}
 		return nil
 	}
-	err := h.store.ExportResults(r.Context(), ownerapi.ResultFilter{Sort: "ts", Dir: "asc"}, enc)
+	err := h.store.ExportResults(r.Context(), ownerapi.ResultFilter{Sort: "ts", Dir: "asc", AllEngines: true}, enc)
 	if !started && err != nil {
 		writeOwnerError(w, r, err)
 		return
@@ -210,7 +210,7 @@ func csvRecord(row ownerapi.ResultRow) []string {
 		server = strings.Trim(strings.TrimSpace(name)+" - "+strings.TrimSpace(city), " -")
 	}
 	return []string{text(res["ts"]), neutralise(node), text(res["status"]), num(res["down"]), num(res["up"]), num(res["ping"]),
-		num(res["jitter"]), num(res["loss"]), num(res["dLat"]), num(res["uLat"]), neutralise(server), text(res["ip"]), text(res["error"])}
+		num(res["jitter"]), num(res["loss"]), num(res["dLat"]), num(res["uLat"]), neutralise(server), text(res["ip"]), text(res["error"]), text(res["engine"])}
 }
 
 func neutralise(s string) string {
@@ -229,6 +229,10 @@ func invalid(w http.ResponseWriter, r *http.Request, detail string) bool {
 func (h *ownerResults) filter(w http.ResponseWriter, r *http.Request) (ownerapi.ResultFilter, bool) {
 	q := r.URL.Query()
 	var f ownerapi.ResultFilter
+	var valid bool
+	if f.Engine, valid = parseEngine(w, r); !valid {
+		return f, false
+	}
 	if _, present := q["nodes"]; present {
 		f.NodesSet = true
 		seen := map[string]bool{}
