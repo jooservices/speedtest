@@ -45,5 +45,17 @@ export function resultsSuite(T) {
       await T.see('0 results');
       await T.fill('Maximum download', '');
     },
+
+    // Failed rows show a short failure-class reason chip next to Failed.
+    async failureClassChip() {
+      await T.open('#/history', 'Results');
+      await T.settled();
+      const status = T.selectWith('Any status');
+      await status.selectOption('failed');
+      await T.settled();
+      const reason = page.locator('.chip', { hasText: /Rate limited|No network|Timeout|Other|Server unreachable|Engine missing/ }).first();
+      await reason.waitFor({ timeout: 10000 });
+      assert.ok(await reason.isVisible(), 'failed rows show a failure-class chip');
+    },
   };
 }

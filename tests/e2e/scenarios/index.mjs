@@ -24,6 +24,7 @@ export function scenarios({ T, S }) {
 
     { id: 'SC-RES-01', area: 'results', title: 'results can be filtered, opened and exported', covers: 'results filter, detail, CSV export', run: S.results.filterOpenExport },
     { id: 'SC-RES-02', area: 'results', title: 'results sort, page and filter by node and speed', covers: 'results sorting, paging, chips', run: S.results.sortPageAndChips },
+    { id: 'SC-RES-03', area: 'results', title: 'failed results show a short failure-class chip', covers: 'JOOST-73 failureClass reason chip on Results', run: S.results.failureClassChip },
 
     { id: 'SC-STAT-01', area: 'statistics', title: 'statistics show the center figures', covers: '/api/stats summary on the page', run: S.statistics.summaryMatchesApi },
     { id: 'SC-STAT-02', area: 'statistics', title: 'every statistics control works', covers: 'metric tabs, chips, combined total, table, heat map, range', run: S.statistics.everyControl },
