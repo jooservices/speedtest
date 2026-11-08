@@ -25,9 +25,11 @@
       var pcts = sums.map(function (x) { return x.downPct; }).filter(function (v) { return v != null; });
       var upc = sums.map(function (x) { return x.upPct; }).filter(function (v) { return v != null; });
       var allOk = S.sum(sums.map(function (x) { return x.ok; })), allN = S.sum(sums.map(function (x) { return x.count; }));
+      var rateLimited = S.sum(sums.map(function (x) { return x.rateLimited || 0; }));
+      var eligible = allN - rateLimited;
       var pings = ST.results({ from: a, to: b, status: 'ok' }).map(function (r) { return r.ping; });
       var ips = S.sum(nodes.map(function (n) { return ST.ipHistory(n.id).changes.filter(function (c) { return c.ts >= a && c.ts <= b && !(n.ipModel && n.ipModel.kind === 'mix'); }).length; }));
-      return { down: S.mean(pcts), up: S.mean(upc), ping: S.summary(pings).median, success: allN ? allOk / allN * 100 : null, ips: ips, count: allN };
+      return { down: S.mean(pcts), up: S.mean(upc), ping: S.summary(pings).median, success: eligible ? allOk / eligible * 100 : null, rateLimited: rateLimited, ips: ips, count: allN };
     }
     var cur = fleet(from, now), prev = fleet(prevFrom, from);
     var tiles = h('div', { class: 'grid cols-5 mb' });
@@ -38,7 +40,7 @@
     tiles.appendChild(tile('Download vs. expected', 'down', cur.down == null ? '—' : F.num(cur.down, 0), '%', U.deltaTag(cur.down, prev.down, true), 'Average of each node’s download compared with the speed you expect from it'));
     tiles.appendChild(tile('Upload vs. expected', 'up', cur.up == null ? '—' : F.num(cur.up, 0), '%', U.deltaTag(cur.up, prev.up, true), 'Average of each node’s upload compared with the speed you expect from it'));
     tiles.appendChild(tile('Median latency', 'activity', cur.ping == null ? '—' : F.num(cur.ping, 1), 'ms', U.deltaTag(cur.ping, prev.ping, false)));
-    tiles.appendChild(tile('Tests succeeded', 'check', cur.success == null ? '—' : F.num(cur.success, 1), '%', U.deltaTag(cur.success, prev.success, true), F.num(cur.count) + ' tests in this range'));
+    tiles.appendChild(tile('Tests succeeded', 'check', cur.success == null ? '—' : F.num(cur.success, 1), '%', U.deltaTag(cur.success, prev.success, true), F.num(cur.count) + ' tests in this range' + (cur.rateLimited ? ' · ' + F.num(cur.rateLimited) + ' rate-limited excluded' : '')));
     tiles.appendChild(tile('IP changes', 'swap', String(cur.ips), cur.ips === 1 ? 'change' : 'changes', h('a', { href: '#/network', class: 'delta flat' }, 'See history')));
     root.appendChild(tiles);
 
