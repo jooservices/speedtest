@@ -21,6 +21,7 @@ import (
 	"github.com/jooservices/speedtest/internal/agent/sched"
 	"github.com/jooservices/speedtest/internal/agent/update"
 	"github.com/jooservices/speedtest/internal/shared/agentid"
+	"github.com/jooservices/speedtest/internal/shared/failureclass"
 )
 
 // restartDelay lets the acknowledgement of an update command reach the center before the process exits.
@@ -51,6 +52,7 @@ type Loop struct {
 	stop          atomic.Pointer[context.CancelFunc]
 	spool         *report.Spool
 	reporter      *report.Reporter
+	rateLimits    *report.RateLimitGate
 	logger        *slog.Logger
 	center        string
 	credential    string
@@ -89,6 +91,10 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 	if err != nil {
 		return nil, err
 	}
+	backoffCfg, err := report.RateLimitBackoffConfigFromEnv()
+	if err != nil {
+		return nil, err
+	}
 	threads := cfg.ParallelConnections
 	if threads == 0 {
 		threads = report.DefaultThreads
@@ -97,7 +103,7 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 			threads = ec.Concurrent
 		}
 	}
-	l := &Loop{spool: spool, logger: logger, center: center.String(), credential: credential,
+	l := &Loop{spool: spool, rateLimits: report.NewRateLimitGate(backoffCfg, nil), logger: logger, center: center.String(), credential: credential,
 		cfg: measurementConfig{runner, binding, cfg.ServerID, threads, cfg.Engine}, commands: make(map[string]commandState), notify: make(chan struct{}, 1), fatal: make(chan error, 1)}
 	if err := l.restoreCommands(); err != nil {
 		return nil, err
@@ -245,6 +251,16 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 			return errors.New("engine schedule was removed")
 		}
 	}
+	engineName := cfg.name
+	if engineName == "" {
+		engineName = name
+	}
+	// Scheduled slots stay quiet during a provider backoff window; manual run_now still attempts.
+	if id == "" && l.rateLimits != nil && l.rateLimits.Blocked(engineName) {
+		l.mu.Unlock()
+		l.logger.Info("skipping scheduled test during rate-limit backoff", "engine", engineName)
+		return nil
+	}
 	l.progress(id, "testing", 20)
 	l.mu.Unlock()
 	runner, err := netpath.NewRunner(cfg.engine, l.center, l.credential, cfg.binding)
@@ -265,8 +281,35 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 		l.fail(errors.New("measurement could not be represented by reporting contract"))
 		return err
 	}
-	res.Engine = cfg.name
+	res.Engine = engineName
 	res.Warnings = out.Warnings
+	if !l.acceptResult(engineName, id, res) {
+		return runErr
+	}
+	if err := l.spoolResult(id, res); err != nil {
+		return err
+	}
+	return runErr
+}
+
+func (l *Loop) acceptResult(engineName, id string, res report.Result) bool {
+	if res.Status != report.StatusFailed {
+		if l.rateLimits != nil {
+			l.rateLimits.ObserveSuccess(engineName)
+		}
+		return true
+	}
+	if l.rateLimits != nil && !l.rateLimits.ObserveFailure(engineName, res.FailureClass) {
+		l.logger.Info("rate-limited failure already recorded in backoff window", "engine", engineName, "class", failureclass.RateLimited)
+		if id != "" {
+			l.failCommand(id, res.Error)
+		}
+		return false
+	}
+	return true
+}
+
+func (l *Loop) spoolResult(id string, res report.Result) error {
 	// Enqueue is independent of cancellation: an interrupted test is still durable.
 	l.mu.Lock()
 	var state commandState
@@ -276,7 +319,7 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 		state.Ack = control.CommandAck{Status: "running", Phase: "reporting", Pct: 80}
 	}
 	data, _ := json.Marshal(state)
-	err = l.spool.AppendWithState(res, id, data)
+	err := l.spool.AppendWithState(res, id, data)
 	if err != nil {
 		l.mu.Unlock()
 		l.fail(errors.New("result spool write failed"))
@@ -286,9 +329,22 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 		l.commands[id] = state
 	}
 	l.mu.Unlock()
-	l.logger.Info("result spooled", "id", res.ID, "status", res.Status)
+	l.logger.Info("result spooled", "id", res.ID, "status", res.Status, "failureClass", res.FailureClass)
 	l.wake()
-	return runErr
+	return nil
+}
+
+func (l *Loop) failCommand(id string, detail *string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	state := l.commands[id]
+	state.Ack = control.CommandAck{Status: "failed", Error: detail, Phase: "rate limited", Pct: 100}
+	data, _ := json.Marshal(state)
+	if err := l.spool.SaveCommand(id, data); err != nil {
+		l.fail(errors.New("command journal write failed"))
+		return
+	}
+	l.commands[id] = state
 }
 
 // progress is called with mu held. Engine CLIs expose final output only, so
