@@ -87,7 +87,7 @@
       var channel = 'telegram';
       var editor = h('textarea', { class: 'input', rows: 6, style: 'width:100%;font-family:var(--mono,monospace)', 'aria-label': 'Template for ' + ev.title, value: '' });
       var preview = h('pre', { class: 'hint', style: 'white-space:pre-wrap;margin:0;min-height:4em' }, 'Preview appears here.');
-      var box = h('div', { class: 'stack', style: 'gap:8px;padding-top:8px;border-top:1px solid var(--border)' },
+      var box = h('div', { class: 'stack', style: 'gap:8px;padding-top:8px;border-top:1px solid var(--border)', 'data-event-key': ev.key },
         h('div', { class: 'row', style: 'justify-content:space-between;gap:12px;align-items:center' },
           h('div', null, h('div', { style: 'font-weight:600' }, ev.title), h('div', { class: 'hint' }, ev.key + ' · ' + ev.category)),
           U.toggle(ev.enabled, function (v) {
