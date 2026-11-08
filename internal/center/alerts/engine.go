@@ -6,8 +6,11 @@ import (
 	"log/slog"
 	"time"
 
+	"strconv"
+
 	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
+	"github.com/jooservices/speedtest/internal/center/catalog"
 	"github.com/jooservices/speedtest/internal/shared/errtrack"
 )
 
@@ -39,7 +42,14 @@ func (s *Store) AfterResultStored(ctx context.Context, tx pgx.Tx, node string, r
 			return err
 		}
 	}
+	var expectedDown, expectedUp float64
+	if err := tx.QueryRow(ctx, `SELECT expected_down_mbps,expected_up_mbps FROM nodes WHERE id=$1`, node).Scan(&expectedDown, &expectedUp); err != nil {
+		return err
+	}
 	if err := s.evaluateResult(ctx, tx, node, result, ts); err != nil {
+		return err
+	}
+	if err := s.emitTestOutcome(ctx, tx, node, result, ts, expectedDown, expectedUp); err != nil {
 		return err
 	}
 	if result.IP != nil {
@@ -148,7 +158,14 @@ func (s *Store) advanceRule(ctx context.Context, tx pgx.Tx, rule Rule, node stri
 		eventID = &createdID
 	}
 	if change.resolved && eventID != nil {
+		var openedAt time.Time
+		if err := tx.QueryRow(ctx, `SELECT ts FROM alert_events WHERE id=$1`, *eventID).Scan(&openedAt); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `UPDATE alert_events SET resolved_at=GREATEST(ts,$2) WHERE id=$1 AND resolved_at IS NULL`, *eventID, ts); err != nil {
+			return err
+		}
+		if err := s.emitRecovery(ctx, tx, rule, node, openedAt, ts, resultID); err != nil {
 			return err
 		}
 		eventID = nil
@@ -166,15 +183,24 @@ func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, rule Rule, node stri
 	if err != nil {
 		return "", err
 	}
+	eventKey := ""
+	if cat, ok := catalog.EventForAlertMetric(rule.Metric); ok {
+		eventKey = cat.Key
+	}
+	payload, err := s.rulePayload(ctx, tx, eventKey, rule, node, resultID, detail)
+	if err != nil {
+		return "", err
+	}
+	raw := PayloadJSON(payload)
 	var created string
 	if resultID == "" {
-		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail)
-			VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail).Scan(&created)
+		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail,event_key,payload)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail, eventKey, raw).Scan(&created)
 	} else {
-		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail,trigger_result_id)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail,trigger_result_id,event_key,payload)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
 			ON CONFLICT (rule_id,node_id,trigger_result_id) WHERE trigger_result_id IS NOT NULL DO NOTHING
-			RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail, resultID).Scan(&created)
+			RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail, resultID, eventKey, raw).Scan(&created)
 		if errors.Is(err, pgx.ErrNoRows) {
 			if err = tx.QueryRow(ctx, `SELECT id::text FROM alert_events WHERE rule_id=$1 AND node_id=$2 AND trigger_result_id=$3`, rule.ID, node, resultID).Scan(&created); err != nil {
 				return "", err
@@ -189,6 +215,34 @@ func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, rule Rule, node stri
 		return "", err
 	}
 	return created, nil
+}
+
+func (s *Store) rulePayload(ctx context.Context, tx pgx.Tx, eventKey string, rule Rule, node, resultID, detail string) (map[string]string, error) {
+	var nodeName string
+	var expectedDown, expectedUp float64
+	if err := tx.QueryRow(ctx, `SELECT name,expected_down_mbps,expected_up_mbps FROM nodes WHERE id=$1`, node).Scan(&nodeName, &expectedDown, &expectedUp); err != nil {
+		return nil, err
+	}
+	result := agentapi.Result{}
+	if resultID != "" {
+		var loadErr error
+		result, loadErr = loadResult(ctx, tx, resultID)
+		if loadErr != nil {
+			return nil, loadErr
+		}
+	}
+	limits, err := s.qualityLimits(ctx, tx, node)
+	if err != nil {
+		return nil, err
+	}
+	value, expected, pct := metricValue(rule, result, expectedDown, expectedUp)
+	extra := map[string]string{"value": value, "expected": expected, "pct": pct, "threshold": formatNum(rule.Value), "count": strconv.Itoa(rule.ForTests)}
+	_ = detail
+	url, err := s.centerURL(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
+	return BuildPayload(eventKey, nodeName, url, rule.Severity, result, expectedDown, expectedUp, limits, extra), nil
 }
 
 func (s *Store) enqueueNotification(ctx context.Context, tx pgx.Tx, eventID string, selected []string) error {
@@ -244,7 +298,12 @@ func (s *Store) processSignal(ctx context.Context, tx pgx.Tx, item signal) error
 		detail += " (" + item.City + ")"
 	}
 	for _, rule := range matched {
-		if _, err := s.insertEvent(ctx, tx, rule, item.NodeID, item.TS, item.ResultID, detail); err != nil {
+		id, err := s.insertEvent(ctx, tx, rule, item.NodeID, item.TS, item.ResultID, detail)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `UPDATE alert_events SET payload = payload || $2::jsonb WHERE id=$1`, id,
+			PayloadJSON(map[string]string{"ip": item.ToIP, "old_ip": item.FromIP, "city": item.City})); err != nil {
 			return err
 		}
 	}
@@ -366,7 +425,14 @@ func (s *Store) advanceOffline(ctx context.Context, tx pgx.Tx, rule Rule, node s
 		eventID = &created
 	}
 	if change.resolved && eventID != nil {
+		var openedAt time.Time
+		if err := tx.QueryRow(ctx, `SELECT ts FROM alert_events WHERE id=$1`, *eventID).Scan(&openedAt); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `UPDATE alert_events SET resolved_at=GREATEST(ts,$2) WHERE id=$1 AND resolved_at IS NULL`, *eventID, now); err != nil {
+			return err
+		}
+		if err := s.emitRecovery(ctx, tx, rule, node, openedAt, now, ""); err != nil {
 			return err
 		}
 		eventID = nil

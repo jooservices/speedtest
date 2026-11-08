@@ -317,16 +317,14 @@ func (s *Store) Loop(ctx context.Context) {
 
 func (s *Store) attempt(ctx context.Context, tx pgx.Tx, d Delivery) error {
 	attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	view, ch, secret, sendErr := s.configurationTx(attemptCtx, tx, d.Channel)
-	if sendErr == nil {
-		what, node, since := "Test notification", "Command center", d.CreatedAt
-		if d.EventID != nil {
-			sendErr = tx.QueryRow(attemptCtx, `SELECT e.title,n.name,e.ts FROM alert_events e JOIN nodes n ON n.id=e.node_id WHERE e.id=$1`, *d.EventID).Scan(&what, &node, &since)
-		}
-		if sendErr == nil {
-			sendErr = s.Sender.Send(attemptCtx, d.Channel, ch.To, secret, Message(what, node, since, view.CenterURL))
-		}
+	if sendErr != nil {
+		return sendErr
 	}
-	cancel()
-	return sendErr
+	text, err := s.renderDelivery(attemptCtx, tx, d, view.CenterURL)
+	if err != nil {
+		return err
+	}
+	return s.Sender.Send(attemptCtx, d.Channel, ch.To, secret, text)
 }
