@@ -120,6 +120,7 @@ func buildHandler(cfg config.CenterConfig, svc services, logger *slog.Logger, ui
 		OwnerResults:       svc.OwnerResults,
 		OwnerSchedules:     svc.OwnerSchedules,
 		OwnerStats:         svc.OwnerStats,
+		OwnerISP:           svc.OwnerISP,
 		Settings:           svc.Settings,
 		OwnerIP:            svc.OwnerIP,
 		OwnerNotifications: svc.OwnerNotifications,

@@ -22,6 +22,9 @@ type ResultFilter struct {
 	// Nodes limits results to these node IDs. NodesSet with no IDs matches nothing.
 	Nodes    []string
 	NodesSet bool
+	// ISPs limits results to these ISP IDs. ISPsSet with no IDs matches nothing.
+	ISPs    []string
+	ISPsSet bool
 	// From is inclusive and To is exclusive.
 	From, To time.Time
 	// Status is "", "ok", "degraded" or "failed".
@@ -71,6 +74,12 @@ func (f ResultFilter) where() (clause string, args []any, ok bool) {
 			return "", nil, false
 		}
 		add("r.node_id = ANY(?::uuid[])", f.Nodes)
+	}
+	if f.ISPsSet {
+		if len(f.ISPs) == 0 {
+			return "", nil, false
+		}
+		add("r.isp_id = ANY(?::uuid[])", f.ISPs)
 	}
 	if !f.From.IsZero() {
 		add("r.ts >= ?", f.From)

@@ -56,6 +56,8 @@ type Query struct {
 	Engine       string
 	NodeIDs      []string
 	NodesSet     bool
+	ISPIDs       []string
+	ISPsSet      bool
 	From         time.Time
 	To           time.Time
 	PreviousFrom time.Time
