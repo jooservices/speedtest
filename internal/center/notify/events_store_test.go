@@ -115,6 +115,8 @@ func (r memRow) Scan(dest ...any) error {
 			*d = r.vals[i].(time.Time)
 		case *[]string:
 			*d = r.vals[i].([]string)
+		case *[]byte:
+			*d = r.vals[i].([]byte)
 		}
 	}
 	return nil

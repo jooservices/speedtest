@@ -2345,6 +2345,262 @@ paths:
           description: Resource identifier.
           schema:
             $ref: "#/components/schemas/ID"
+  /api/notifications/events:
+    get:
+      operationId: listNotificationEvents
+      tags:
+        - Notifications
+      summary: List notification event catalog
+      description: Effective per-event on/off, severity, channels and catalog metadata.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listNotificationEventsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/notifications/events/{key}:
+    get:
+      operationId: getNotificationEvent
+      tags:
+        - Notifications
+      summary: Read one notification event
+      description: Read one notification event.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationEventResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+    patch:
+      operationId: updateNotificationEvent
+      tags:
+        - Notifications
+      summary: Update notification event settings
+      description: Owner overrides for enabled, severity and channels. Requires CSRF.
+      security:
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationEventPatch"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationEventResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/templates/{key}/{channel}:
+    get:
+      operationId: getNotificationTemplate
+      tags:
+        - Notifications
+      summary: Read a notification template
+      description: Effective body for one event and channel.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationTemplateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+    put:
+      operationId: putNotificationTemplate
+      tags:
+        - Notifications
+      summary: Replace a notification template
+      description: Unknown placeholders are rejected. Requires CSRF.
+      security:
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationTemplateInput"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationTemplateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/templates/{key}/{channel}/previews:
+    post:
+      operationId: previewNotificationTemplate
+      tags:
+        - Notifications
+      summary: Preview a notification template
+      description: Renders the body (or stored/default) with sample placeholder data.
+      security:
+        - SessionCookie: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationTemplateInput"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/previewNotificationTemplateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/templates/{key}/{channel}/resets:
+    post:
+      operationId: resetNotificationTemplate
+      tags:
+        - Notifications
+      summary: Reset a notification template
+      description: Deletes the owner override so the catalog default applies again.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationTemplateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - $ref: "#/components/parameters/CSRF"
   /api/settings:
     get:
       operationId: getSettings
@@ -5716,6 +5972,111 @@ components:
         - lastAttempt
         - error
       description: Safe delivery metadata only; no payload secrets or destination credentials.
+    NotificationEvent:
+      type: object
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+        category:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+        severity:
+          $ref: "#/components/schemas/Severity"
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Channel"
+          minItems: 1
+          maxItems: 4
+        nodeScoped:
+          type: boolean
+        engineScoped:
+          type: boolean
+        placeholders:
+          type: array
+          items:
+            type: string
+        customized:
+          type: boolean
+      required:
+        - key
+        - category
+        - title
+        - description
+        - enabled
+        - severity
+        - channels
+        - nodeScoped
+        - engineScoped
+        - placeholders
+        - customized
+    NotificationEventPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+        severity:
+          $ref: "#/components/schemas/Severity"
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Channel"
+          minItems: 1
+          maxItems: 4
+    NotificationTemplate:
+      type: object
+      additionalProperties: false
+      properties:
+        eventKey:
+          type: string
+        channel:
+          $ref: "#/components/schemas/Channel"
+        body:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        isDefault:
+          type: boolean
+        updatedAt:
+          type: string
+      required:
+        - eventKey
+        - channel
+        - body
+        - isDefault
+    NotificationTemplateInput:
+      type: object
+      additionalProperties: false
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 4000
+      required:
+        - body
+    NotificationTemplatePreview:
+      type: object
+      additionalProperties: false
+      properties:
+        channel:
+          $ref: "#/components/schemas/Channel"
+        body:
+          type: string
+        sample:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+        - channel
+        - body
+        - sample
     IPChange:
       type: object
       additionalProperties: false
@@ -6504,6 +6865,44 @@ components:
               const: 200
             data:
               $ref: "#/components/schemas/Delivery"
+    listNotificationEventsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/NotificationEvent"
+    getNotificationEventResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/NotificationEvent"
+    getNotificationTemplateResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/NotificationTemplate"
+    previewNotificationTemplateResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/NotificationTemplatePreview"
     getSettingsResponse:
       allOf:
         - $ref: "#/components/schemas/Success"

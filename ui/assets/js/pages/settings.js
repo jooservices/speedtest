@@ -71,6 +71,46 @@
         body.appendChild(row(c.name, null, h('div', { class: 'stack', style: 'gap:8px' }, controls)));
       });
       body.appendChild(h('p', { class: 'hint', style: 'margin-top:12px' }, 'Secrets are stored encrypted and are never shown again. Leave a secret empty to keep the saved one.'));
+      body.appendChild(h('h3', { style: 'margin:24px 0 8px;font-size:1rem' }, 'Events and message templates'));
+      body.appendChild(h('p', { class: 'hint', style: 'margin:0 0 12px' }, 'Turn events on or off, then edit the wording per channel. Placeholders use curly braces, for example {node} and {download}.'));
+      var catalog = h('div', { class: 'stack', style: 'gap:12px', 'aria-busy': 'true' }, h('p', { class: 'hint' }, 'Loading events…'));
+      body.appendChild(catalog);
+      ST.notificationEvents().then(function (events) {
+        U.clear(catalog); catalog.removeAttribute('aria-busy');
+        events.forEach(function (ev) { catalog.appendChild(eventCard(ev)); });
+      }, function (error) {
+        U.clear(catalog); catalog.removeAttribute('aria-busy');
+        catalog.appendChild(U.callout(error.message || 'Could not load notification events.', 'crit', 'alert'));
+      });
+    }
+    function eventCard(ev) {
+      var channel = 'telegram';
+      var editor = h('textarea', { class: 'input', rows: 6, style: 'width:100%;font-family:var(--mono,monospace)', 'aria-label': 'Template for ' + ev.title, value: '' });
+      var preview = h('pre', { class: 'hint', style: 'white-space:pre-wrap;margin:0;min-height:4em' }, 'Preview appears here.');
+      var box = h('div', { class: 'stack', style: 'gap:8px;padding-top:8px;border-top:1px solid var(--border)' },
+        h('div', { class: 'row', style: 'justify-content:space-between;gap:12px;align-items:center' },
+          h('div', null, h('div', { style: 'font-weight:600' }, ev.title), h('div', { class: 'hint' }, ev.key + ' · ' + ev.category)),
+          U.toggle(ev.enabled, function (v) {
+            ST.updateNotificationEvent(ev.key, { enabled: v }).then(function () { U.toast('Saved'); }, fail);
+          }, 'Enable ' + ev.title)),
+        h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' },
+          U.select([{ value: 'telegram', label: 'Telegram' }, { value: 'email', label: 'Email' }, { value: 'slack', label: 'Slack' }, { value: 'webhook', label: 'Webhook' }], channel, function (v) { channel = v; loadTemplate(); }),
+          U.btn('Load', { size: 'sm', onClick: loadTemplate }),
+          U.btn('Preview', { size: 'sm', onClick: function () {
+            ST.previewNotificationTemplate(ev.key, channel, editor.value).then(function (p) { preview.textContent = p.body; }, fail);
+          } }),
+          U.btn('Save template', { size: 'sm', variant: 'primary', onClick: function () {
+            ST.saveNotificationTemplate(ev.key, channel, editor.value).then(function () { U.toast('Template saved'); }, fail);
+          } }),
+          U.btn('Reset to default', { size: 'sm', onClick: function () {
+            ST.resetNotificationTemplate(ev.key, channel).then(function (t) { editor.value = t.body; preview.textContent = 'Preview appears here.'; U.toast('Template reset'); }, fail);
+          } })),
+        editor, preview);
+      function loadTemplate() {
+        ST.notificationTemplate(ev.key, channel).then(function (t) { editor.value = t.body; }, fail);
+      }
+      loadTemplate();
+      return box;
     }
     function withChannel(key, patch) {
       var notify = JSON.parse(JSON.stringify(pending.notify || s.notify));

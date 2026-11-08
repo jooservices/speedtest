@@ -20,6 +20,10 @@ func TestClassify(t *testing.T) {
 		{"POST", "/api/auth/password", "auth.password", "", true},
 		{"PUT", "/api/alerts/events/" + id + "/ack", "alert.ack", id, true},
 		{"POST", "/api/notifications/test/webhook", "notification.test", "webhook", true},
+		{"PATCH", "/api/notifications/events/test.success", "notification.event.update", "test.success", true},
+		{"PUT", "/api/notifications/templates/test.success/telegram", "notification.template.update", "telegram", true},
+		{"POST", "/api/notifications/templates/test.success/telegram/resets", "notification.template.reset", "telegram", true},
+		{"POST", "/api/notifications/templates/test.success/telegram/previews", "", "", false},
 		{"POST", "/api/nodes/", "node.create", "", true}, // trailing slash
 		{"GET", "/api/nodes", "", "", false},
 		{"POST", "/api/agent/results", "", "", false},
