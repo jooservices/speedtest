@@ -89,7 +89,8 @@ func (s *Store) evaluateResult(ctx context.Context, tx pgx.Tx, node string, resu
 
 func metricMatches(rule Rule, result agentapi.Result, expectedDown, expectedUp float64) bool {
 	if rule.Metric == "failed" {
-		return result.Status == "failed"
+		// Provider rate limits are expected backoff noise, not alertable failures.
+		return result.Status == "failed" && result.FailureClass != "rate_limited"
 	}
 	if result.Status == "failed" {
 		return false

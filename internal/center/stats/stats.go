@@ -83,6 +83,7 @@ type NodeSummary struct {
 	Count       int           `json:"count"`
 	OK          int           `json:"ok"`
 	Failed      int           `json:"failed"`
+	RateLimited int           `json:"rateLimited"`
 	SuccessRate *float64      `json:"successRate"`
 	Down        MetricSummary `json:"down"`
 	Up          MetricSummary `json:"up"`
@@ -190,7 +191,7 @@ func (s *Store) Summary(ctx context.Context, q Query) ([]SummaryComparison, erro
 	for rows.Next() {
 		var id, name, period string
 		var summary NodeSummary
-		dest := []any{&id, &name, &period, &summary.Count, &summary.OK, &summary.Failed, &summary.IPCount}
+		dest := []any{&id, &name, &period, &summary.Count, &summary.OK, &summary.Failed, &summary.RateLimited, &summary.IPCount}
 		for _, metric := range []*MetricSummary{&summary.Down, &summary.Up, &summary.Ping, &summary.Jitter, &summary.Loss} {
 			dest = append(dest, metricDest(metric)...)
 		}
@@ -202,8 +203,10 @@ func (s *Store) Summary(ctx context.Context, q Query) ([]SummaryComparison, erro
 		for _, metric := range []*MetricSummary{&summary.Down, &summary.Up, &summary.Ping, &summary.Jitter, &summary.Loss} {
 			metric.setPercentiles()
 		}
-		if summary.Count > 0 {
-			summary.SuccessRate = number(float64(summary.OK) / float64(summary.Count) * 100)
+		// Success rate excludes provider rate limits; those are shown separately as rateLimited.
+		eligible := summary.Count - summary.RateLimited
+		if eligible > 0 {
+			summary.SuccessRate = number(float64(summary.OK) / float64(eligible) * 100)
 		}
 		if summary.Down.Mean != nil {
 			summary.DownPct = number(*summary.Down.Mean / expectedDown * 100)
@@ -236,7 +239,9 @@ func (s *Store) Summary(ctx context.Context, q Query) ([]SummaryComparison, erro
 
 func summarySQL() string {
 	selects := []string{"n.id::text", "n.name", "p.period", "count(r.id)::int", "count(r.id) FILTER (WHERE r.status <> 'failed')::int",
-		"count(r.id) FILTER (WHERE r.status = 'failed')::int", "count(DISTINCT r.ip)::int"}
+		"count(r.id) FILTER (WHERE r.status = 'failed')::int",
+		"count(r.id) FILTER (WHERE r.status = 'failed' AND r.failure_class = 'rate_limited')::int",
+		"count(DISTINCT r.ip)::int"}
 	for _, col := range []string{"down_mbps", "up_mbps", "ping_ms", "jitter_ms", "loss_percent"} {
 		selects = append(selects, metricAggregate("r."+col)...)
 	}
