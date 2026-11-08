@@ -80,7 +80,7 @@ func addNode(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id, name str
 		VALUES ($1,$2,100,50,$3)`, id, name, created); err != nil {
 		t.Fatal("create integration node")
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO schedules(node_id,interval_minutes,offset_minutes,enabled) VALUES ($1,$2,0,true)`, id, interval); err != nil {
+	if _, err := pool.Exec(ctx, `WITH legacy AS (INSERT INTO schedules(node_id,interval_minutes,offset_minutes,enabled) VALUES ($1,$2,0,true) RETURNING *) INSERT INTO engine_schedules SELECT node_id,'ookla',interval_minutes,offset_minutes,enabled,revision FROM legacy`, id, interval); err != nil {
 		t.Fatal("create integration schedule")
 	}
 }

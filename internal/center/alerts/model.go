@@ -25,6 +25,7 @@ var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a
 // RuleInput is the complete owner-editable configuration for one rule.
 // AllNodes selects every node; otherwise NodeIDs is a non-empty explicit scope.
 type RuleInput struct {
+	Engine   string
 	Name     string
 	Metric   string
 	Op       string
@@ -39,6 +40,7 @@ type RuleInput struct {
 
 // Rule is the public rule representation. Nodes is either "all" or a UUID list.
 type Rule struct {
+	Engine   string   `json:"engine,omitempty"`
 	ID       string   `json:"id"`
 	Name     string   `json:"name"`
 	Metric   string   `json:"metric"`
@@ -79,6 +81,9 @@ var severities = map[string]bool{"info": true, "warn": true, "crit": true}
 // NormalizeRule validates the OpenAPI rule constraints and returns stable IDs
 // and whitespace without changing the requested rule semantics.
 func NormalizeRule(in RuleInput) (RuleInput, error) {
+	if in.Engine != "" && in.Engine != "ookla" && in.Engine != "librespeed" {
+		return RuleInput{}, ErrInvalid
+	}
 	in.Name = strings.TrimSpace(in.Name)
 	if utf8.RuneCountInString(in.Name) < 1 || utf8.RuneCountInString(in.Name) > 200 ||
 		!catalog.ValidThreshold(in.Metric, in.Op, in.Value, in.ForTests) || !catalog.ValidOperator(in.Op) || math.IsNaN(in.Value) || math.IsInf(in.Value, 0) || in.Value < 0 ||

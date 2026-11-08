@@ -60,8 +60,8 @@ func jsonValue(value any) any {
 }
 func (r Result) values(node string) ([]string, []any) {
 	ts, _ := time.Parse(time.RFC3339Nano, r.TS)
-	return []string{"id", "node_id", "ts", "status", "down_mbps", "up_mbps", "ping_ms", "jitter_ms", "down_latency_ms", "up_latency_ms", "loss_percent", "server_id", "ip", "threads", "bytes_down", "bytes_up", "duration_seconds", "error", "manual", "raw", "loaded_down", "loaded_up", "server", "engine_isp", "engine_result_id", "engine_result_url", "engine_ip", "warnings"},
-		[]any{r.ID, node, ts, r.Status, r.Down, r.Up, r.Ping, r.Jitter, r.DLat, r.ULat, r.Loss, r.ServerID, r.IP, r.Threads, r.BytesDown, r.BytesUp, r.Duration, r.Error, r.Manual, jsonValue(r.Raw), jsonValue(r.LoadedDown), jsonValue(r.LoadedUp), jsonValue(r.Server), r.EngineISP, r.EngineResultID, r.EngineResultURL, r.EngineIP, jsonValue(r.Warnings)}
+	return []string{"id", "node_id", "ts", "status", "down_mbps", "up_mbps", "ping_ms", "jitter_ms", "down_latency_ms", "up_latency_ms", "loss_percent", "server_id", "ip", "threads", "bytes_down", "bytes_up", "duration_seconds", "error", "manual", "raw", "loaded_down", "loaded_up", "server", "engine_isp", "engine_result_id", "engine_result_url", "engine_ip", "warnings", "engine"},
+		[]any{r.ID, node, ts, r.Status, r.Down, r.Up, r.Ping, r.Jitter, r.DLat, r.ULat, r.Loss, r.ServerID, r.IP, r.Threads, r.BytesDown, r.BytesUp, r.Duration, r.Error, r.Manual, jsonValue(r.Raw), jsonValue(r.LoadedDown), jsonValue(r.LoadedUp), jsonValue(r.Server), r.EngineISP, r.EngineResultID, r.EngineResultURL, r.EngineIP, jsonValue(r.Warnings), resultEngine(r.Engine)}
 }
 
 func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool, error) {
@@ -121,10 +121,12 @@ func (s *Postgres) Config(ctx context.Context, node string) (map[string]any, err
 	var source *string
 	var enabled, autoUpdate bool
 	var revision, scheduleRevision int64
-	var settings []byte
-	err := s.Pool.QueryRow(ctx, `SELECT n.id::text,n.name,n.expected_down_mbps,n.expected_up_mbps,n.threads,n.server_id,n.binding_interface,host(n.binding_source_ip),n.auto_update,n.config_revision,s.interval_minutes,s.offset_minutes,(s.enabled AND n.enabled),s.revision,
- COALESCE((SELECT jsonb_object_agg(key,value) FROM settings WHERE key IN ('engine','quietStart','quietEnd','timezone','agentRelease') AND value IS NOT NULL),'{}'::jsonb)
- FROM nodes n JOIN schedules s ON s.node_id=n.id WHERE n.id=$1`, node).Scan(&id, &name, &down, &up, &threads, &server, &iface, &source, &autoUpdate, &revision, &interval, &offset, &enabled, &scheduleRevision, &settings)
+	var settings, engineSchedules []byte
+	var primary string
+	err := s.Pool.QueryRow(ctx, `SELECT n.id::text,n.name,n.expected_down_mbps,n.expected_up_mbps,n.threads,n.server_id,n.binding_interface,host(n.binding_source_ip),n.auto_update,n.config_revision,s.interval_minutes,s.offset_minutes,(s.enabled AND n.enabled),(SELECT sum(e.revision) FROM engine_schedules e WHERE e.node_id=n.id),
+ COALESCE((SELECT jsonb_object_agg(key,value) FROM settings WHERE key IN ('engine','quietStart','quietEnd','timezone','agentRelease') AND value IS NOT NULL), '{}'::jsonb),n.primary_engine,
+ (SELECT jsonb_agg(jsonb_build_object('engine',e.engine,'interval',e.interval_minutes,'offset',e.offset_minutes,'enabled',e.enabled AND n.enabled) ORDER BY e.engine) FROM engine_schedules e WHERE e.node_id=n.id)
+ FROM nodes n JOIN engine_schedules s ON s.node_id=n.id AND s.engine=n.primary_engine WHERE n.id=$1`, node).Scan(&id, &name, &down, &up, &threads, &server, &iface, &source, &autoUpdate, &revision, &interval, &offset, &enabled, &scheduleRevision, &settings, &primary, &engineSchedules)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
 	}
@@ -148,15 +150,15 @@ func (s *Postgres) Config(ctx context.Context, node string) (map[string]any, err
 	if server != nil {
 		serverValue = *server
 	}
-	return map[string]any{"revision": fmt.Sprintf("%d.%d", revision, scheduleRevision), "name": name, "expectedDown": down, "expectedUp": up,
+	return map[string]any{"revision": fmt.Sprintf("%d.%d", revision, scheduleRevision), "schedules": json.RawMessage(engineSchedules), "name": name, "expectedDown": down, "expectedUp": up,
 		"schedule": map[string]any{"interval": interval, "offset": offset, "enabled": enabled},
 		"quiet":    map[string]any{"quietStart": defaults["quietStart"], "quietEnd": defaults["quietEnd"], "timezone": defaults["timezone"]},
-		"engine":   defaults["engine"], "threads": threads, "server": serverValue, "binding": map[string]any{"iface": iface, "sourceIp": source}, "autoUpdate": autoUpdate, "release": defaults["agentRelease"]}, nil
+		"engine":   primary, "threads": threads, "server": serverValue, "binding": map[string]any{"iface": iface, "sourceIp": source}, "autoUpdate": autoUpdate, "release": defaults["agentRelease"]}, nil
 }
 
 func (s *Postgres) Heartbeat(ctx context.Context, node string, h Heartbeat) (time.Time, error) {
 	var received time.Time
-	err := s.Pool.QueryRow(ctx, `UPDATE nodes SET last_seen_at=clock_timestamp(),agent=$2 WHERE id=$1 RETURNING last_seen_at`, node, h.Agent).Scan(&received)
+	err := s.Pool.QueryRow(ctx, `UPDATE nodes SET last_seen_at=clock_timestamp(),agent=$2,installed_engines=COALESCE($3::text[],installed_engines) WHERE id=$1 RETURNING last_seen_at`, node, h.Agent, h.Engines).Scan(&received)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return received, ErrNotFound
 	}
@@ -222,4 +224,11 @@ func (s *Postgres) Ack(ctx context.Context, node, id string, a Ack) (Command, er
 		return Command{}, err
 	}
 	return next, tx.Commit(ctx)
+}
+
+func resultEngine(name string) string {
+	if name == "" {
+		return "ookla"
+	}
+	return name
 }

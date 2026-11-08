@@ -294,7 +294,7 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	}
 	// Later migrations (for example the SSH installer) sit above this one; roll back until the delivery table is gone.
 	var exists bool
-	for step := 0; step < 4; step++ {
+	for step := 0; step < 5; step++ {
 		if err := db.Migrate(ctx, p, "down"); err != nil {
 			t.Fatal("rollback step", step, err)
 		}

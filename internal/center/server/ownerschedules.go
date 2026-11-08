@@ -108,11 +108,16 @@ func (h *ownerSchedules) replace(w http.ResponseWriter, r *http.Request, id stri
 		return
 	}
 	var in struct {
-		Interval *int  `json:"interval"`
-		Offset   *int  `json:"offset"`
-		Enabled  *bool `json:"enabled"`
+		Engines  []ownerapi.EngineSchedule `json:"engines"`
+		Interval *int                      `json:"interval"`
+		Offset   *int                      `json:"offset"`
+		Enabled  *bool                     `json:"enabled"`
 	}
 	if !decodeJSON(w, r, &in) {
+		return
+	}
+	if in.Engines != nil {
+		h.respond(w, r, http.StatusOK)(h.store.ReplaceSchedule(r.Context(), id, ownerapi.ScheduleInput{Engines: in.Engines}, ifMatch))
 		return
 	}
 	if in.Interval == nil || in.Offset == nil || in.Enabled == nil {

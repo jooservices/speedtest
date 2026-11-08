@@ -106,7 +106,7 @@ func mean(values []float64) *float64 {
 // fleet follows the preview: down/up are the unweighted mean of each node's percentage of its expected speed
 // (nodes without data are left out), success is non-failed over all tests, ips counts address changes and
 // ping is the median of every successful test's latency.
-func (s *Store) fleet(ctx context.Context, summaries []stats.SummaryComparison, current bool, from, to time.Time) (Fleet, error) {
+func (s *Store) fleet(ctx context.Context, summaries []stats.SummaryComparison, current bool, from, to time.Time, engine string) (Fleet, error) {
 	var downs, ups []float64
 	var ok, count int
 	for _, item := range summaries {
@@ -129,8 +129,8 @@ func (s *Store) fleet(ctx context.Context, summaries []stats.SummaryComparison, 
 		f.Success = &success
 	}
 	err := s.DB.QueryRow(ctx, `SELECT
-		(SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY ping_ms) FROM results WHERE ts >= $1 AND ts < $2 AND status = 'ok' AND ping_ms IS NOT NULL),
-		(SELECT count(*) FROM node_ip_history WHERE ts >= $1 AND ts < $2 AND from_ip IS NOT NULL)::int`, from, to).Scan(&f.Ping, &f.IPs)
+		(SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY ping_ms) FROM results r JOIN nodes n ON n.id=r.node_id WHERE r.engine=COALESCE(NULLIF($3,''),n.primary_engine) AND ts >= $1 AND ts < $2 AND status = 'ok' AND ping_ms IS NOT NULL),
+		(SELECT count(*) FROM node_ip_history WHERE ts >= $1 AND ts < $2 AND from_ip IS NOT NULL)::int`, from, to, engine).Scan(&f.Ping, &f.IPs)
 	return f, err
 }
 
@@ -155,19 +155,19 @@ func (s *Store) Snapshot(ctx context.Context, q stats.Query) (Snapshot, error) {
 	if err != nil {
 		return out, err
 	}
-	summaries, err := s.Stats.Summary(ctx, stats.Query{From: q.From, To: q.To, PreviousFrom: q.PreviousFrom, PreviousTo: q.PreviousTo})
+	summaries, err := s.Stats.Summary(ctx, stats.Query{Engine: q.Engine, From: q.From, To: q.To, PreviousFrom: q.PreviousFrom, PreviousTo: q.PreviousTo})
 	if err != nil {
 		return out, err
 	}
-	if out.Current, err = s.fleet(ctx, summaries, true, q.From, q.To); err != nil {
+	if out.Current, err = s.fleet(ctx, summaries, true, q.From, q.To, q.Engine); err != nil {
 		return out, err
 	}
-	if out.Previous, err = s.fleet(ctx, summaries, false, q.PreviousFrom, q.PreviousTo); err != nil {
+	if out.Previous, err = s.fleet(ctx, summaries, false, q.PreviousFrom, q.PreviousTo, q.Engine); err != nil {
 		return out, err
 	}
 
 	now := s.now()
-	spark, err := s.Stats.Series(ctx, stats.Query{From: now.Add(-SparkHours * time.Hour), To: now.Add(time.Second), Metric: stats.Download}, false, SparkPoints)
+	spark, err := s.Stats.Series(ctx, stats.Query{Engine: q.Engine, From: now.Add(-SparkHours * time.Hour), To: now.Add(time.Second), Metric: stats.Download}, false, SparkPoints)
 	if err != nil {
 		return out, err
 	}
@@ -190,7 +190,7 @@ func (s *Store) Snapshot(ctx context.Context, q stats.Query) (Snapshot, error) {
 		out.Nodes = append(out.Nodes, NodeCard{Node: node, Summary: summaryByNode[id], Sparkline: points})
 	}
 
-	if out.LatestResults, _, err = s.Results.ListResults(ctx, ownerapi.ResultFilter{Sort: "ts", Dir: "desc"}, 1, RecentResults); err != nil {
+	if out.LatestResults, _, err = s.Results.ListResults(ctx, ownerapi.ResultFilter{Engine: q.Engine, Sort: "ts", Dir: "desc"}, 1, RecentResults); err != nil {
 		return out, err
 	}
 	events, total, err := s.Alerts.ListEvents(ctx, alerts.EventFilter{State: "open"}, 1, OpenAlerts)

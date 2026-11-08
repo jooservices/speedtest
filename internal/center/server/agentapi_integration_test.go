@@ -189,17 +189,23 @@ func TestAgentIngestionProtocolIntegration(t *testing.T) {
 	if cached.Code != 304 || cached.Body.Len() != 0 {
 		t.Fatal(cached)
 	}
-	if _, err = pool.Exec(ctx, `UPDATE nodes SET name='renamed',binding_interface='eth0',server_id=7,auto_update=true,config_revision=config_revision+1 WHERE id=$1`, node); err != nil {
+	if _, err = pool.Exec(ctx, `UPDATE nodes SET name='renamed',binding_interface='eth0',server_id=7,auto_update=true,primary_engine='librespeed',installed_engines=ARRAY['ookla','librespeed'],config_revision=config_revision+1 WHERE id=$1`, node); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = pool.Exec(ctx, `UPDATE schedules SET interval_minutes=60,offset_minutes=10,revision=revision+1 WHERE node_id=$1`, node); err != nil {
 		t.Fatal(err)
 	}
-	if _, err = pool.Exec(ctx, `INSERT INTO settings(key,value) VALUES ('engine','"librespeed"'),('quietStart','"22:00"'),('quietEnd','"06:00"'),('timezone','"Asia/Ho_Chi_Minh"'),('agentRelease','{"version":"v2","url":"https://example.test/agent","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}')`); err != nil {
+	if _, err = pool.Exec(ctx, `UPDATE engine_schedules SET interval_minutes=60,offset_minutes=10,revision=revision+1 WHERE node_id=$1 AND engine='ookla'`, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO engine_schedules(node_id,engine,interval_minutes,offset_minutes,enabled,revision) VALUES ($1,'librespeed',60,0,true,1)`, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pool.Exec(ctx, `INSERT INTO settings(key,value) VALUES ('quietStart','"22:00"'),('quietEnd','"06:00"'),('timezone','"Asia/Ho_Chi_Minh"'),('agentRelease','{"version":"v2","url":"https://example.test/agent","sha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}')`); err != nil {
 		t.Fatal(err)
 	}
 	updated := ingestRequest(t, handler, token, "GET", "/api/agent/config", "")
-	if updated.Code != 200 || updated.Header().Get("ETag") == etag || !strings.Contains(updated.Body.String(), "librespeed") || !strings.Contains(updated.Body.String(), "renamed") || !strings.Contains(updated.Body.String(), "22:00") {
+	if updated.Code != 200 || updated.Header().Get("ETag") == etag || !strings.Contains(updated.Body.String(), `"engine":"librespeed"`) || !strings.Contains(updated.Body.String(), `"schedules"`) || !strings.Contains(updated.Body.String(), "renamed") || !strings.Contains(updated.Body.String(), "22:00") {
 		t.Fatal(updated.Body.String())
 	}
 	heartbeat := ingestRequest(t, handler, token, "POST", "/api/agent/heartbeat", `{"agent":"2.0","uptime":30,"lastTest":null}`)
