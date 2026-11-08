@@ -109,7 +109,7 @@ func (n nodeRow) status(now time.Time, latest map[string]any) string {
 	return "online"
 }
 
-func (n nodeRow) view(now time.Time, latest, latestGood map[string]any, currentIP string, geo map[string]any) map[string]any {
+func (n nodeRow) view(now time.Time, latest, latestGood map[string]any, currentIP string, geo, currentISP map[string]any) map[string]any {
 	var server any = "auto"
 	if n.ServerID != nil {
 		server = int64(*n.ServerID)
@@ -129,7 +129,7 @@ func (n nodeRow) view(now time.Time, latest, latestGood map[string]any, currentI
 		"colorSlot": int64(n.ColorSlot), "interval": int64(n.Interval), "offset": int64(n.Offset), "host": n.Host, "agent": displayAgent(n.Agent),
 		"createdAt": n.CreatedAt.UTC().Format(time.RFC3339Nano), "lastSeen": lastSeen,
 		"status": n.status(now, latest), "latest": nilMap(latest), "latestGood": nilMap(latestGood),
-		"currentIp": ip, "geo": nilMap(geo), "updateVersion": nil,
+		"currentIp": ip, "geo": nilMap(geo), "isp": nilMap(currentISP), "updateVersion": nil,
 	}
 	return obj
 }
@@ -147,12 +147,13 @@ type extras struct {
 	latest, latestGood map[string]map[string]any
 	ip                 map[string]string
 	geo                map[string]map[string]any
+	isp                map[string]map[string]any
 }
 
 func (s *Store) loadExtras(ctx context.Context, q interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }, ids []string) (extras, error) {
-	ex := extras{latest: map[string]map[string]any{}, latestGood: map[string]map[string]any{}, ip: map[string]string{}, geo: map[string]map[string]any{}}
+	ex := extras{latest: map[string]map[string]any{}, latestGood: map[string]map[string]any{}, ip: map[string]string{}, geo: map[string]map[string]any{}, isp: map[string]map[string]any{}}
 	if len(ids) == 0 {
 		return ex, nil
 	}
@@ -177,8 +178,11 @@ func (s *Store) loadExtras(ctx context.Context, q interface {
 			return ex, err
 		}
 	}
-	rows, err := q.Query(ctx, `SELECT DISTINCT ON (r.node_id) r.node_id::text, host(r.ip), a.source, a.geo
-		FROM results r LEFT JOIN ip_addresses a ON a.ip = r.ip
+	rows, err := q.Query(ctx, `SELECT DISTINCT ON (r.node_id) r.node_id::text, host(r.ip), a.source, a.geo,
+		i.id::text, i.asn, i.organisation, i.name
+		FROM results r
+		LEFT JOIN ip_addresses a ON a.ip = r.ip
+		LEFT JOIN isps i ON i.id = COALESCE(r.isp_id, a.isp_id)
 		WHERE r.node_id = ANY($1::uuid[]) AND r.ip IS NOT NULL ORDER BY r.node_id, r.ts DESC, r.id DESC`, ids)
 	if err != nil {
 		return ex, err
@@ -186,9 +190,10 @@ func (s *Store) loadExtras(ctx context.Context, q interface {
 	defer rows.Close()
 	for rows.Next() {
 		var node, ip string
-		var source *string
+		var source, ispID, org, name *string
+		var asn *uint
 		var geo []byte
-		if err := rows.Scan(&node, &ip, &source, &geo); err != nil {
+		if err := rows.Scan(&node, &ip, &source, &geo, &ispID, &asn, &org, &name); err != nil {
 			return ex, err
 		}
 		ex.ip[node] = ip
@@ -198,6 +203,9 @@ func (s *Store) loadExtras(ctx context.Context, q interface {
 		}
 		if g := GeoObject(ip, src, geo); g != nil {
 			ex.geo[node] = g
+		}
+		if ispID != nil && asn != nil && org != nil && name != nil {
+			ex.isp[node] = map[string]any{"id": *ispID, "asn": *asn, "organisation": *org, "name": *name}
 		}
 	}
 	return ex, rows.Err()
@@ -237,7 +245,7 @@ func (s *Store) List(ctx context.Context, page, size int) ([]map[string]any, int
 	now := s.now()
 	out := make([]map[string]any, 0, len(list))
 	for _, n := range list {
-		out = append(out, s.nodeView(ctx, s.DB, n, now, ex.latest[n.ID], ex.latestGood[n.ID], ex.ip[n.ID], ex.geo[n.ID]))
+		out = append(out, s.nodeView(ctx, s.DB, n, now, ex.latest[n.ID], ex.latestGood[n.ID], ex.ip[n.ID], ex.geo[n.ID], ex.isp[n.ID]))
 	}
 	return out, total, nil
 }
@@ -261,7 +269,7 @@ func (s *Store) one(ctx context.Context, q interface {
 	if err != nil {
 		return nil, nodeRow{}, err
 	}
-	return s.nodeView(ctx, q, n, s.now(), ex.latest[id], ex.latestGood[id], ex.ip[id], ex.geo[id]), n, nil
+	return s.nodeView(ctx, q, n, s.now(), ex.latest[id], ex.latestGood[id], ex.ip[id], ex.geo[id], ex.isp[id]), n, nil
 }
 
 // Get returns one node and its strong entity tag.
@@ -479,8 +487,8 @@ func displayAgent(agent string) string { display, _ := agentid.Parse(agent); ret
 
 func (s *Store) nodeView(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
-}, n nodeRow, now time.Time, latest, latestGood map[string]any, ip string, geo map[string]any) map[string]any {
-	view := n.view(now, latest, latestGood, ip, geo)
+}, n nodeRow, now time.Time, latest, latestGood map[string]any, ip string, geo, currentISP map[string]any) map[string]any {
+	view := n.view(now, latest, latestGood, ip, geo, currentISP)
 	if s.Releases != nil {
 		var raw []byte
 		err := q.QueryRow(ctx, `SELECT value FROM settings WHERE key='agentRelease'`).Scan(&raw)

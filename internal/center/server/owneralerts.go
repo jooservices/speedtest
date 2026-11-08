@@ -221,7 +221,7 @@ func (h *ownerAlerts) eventCollection(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	q := r.URL.Query()
-	filter := alerts.EventFilter{State: q.Get("state"), Severity: q.Get("severity"), NodeID: strings.ToLower(q.Get("node"))}
+	filter := alerts.EventFilter{State: q.Get("state"), Severity: q.Get("severity"), NodeID: strings.ToLower(q.Get("node")), ISPID: strings.ToLower(q.Get("isp"))}
 	if filter.State == "" {
 		filter.State = "open"
 	}
@@ -235,6 +235,10 @@ func (h *ownerAlerts) eventCollection(w http.ResponseWriter, r *http.Request) {
 	}
 	if filter.NodeID != "" && !uuidPattern.MatchString(filter.NodeID) {
 		invalid(w, r, "node must be a valid node ID.")
+		return
+	}
+	if filter.ISPID != "" && !uuidPattern.MatchString(filter.ISPID) {
+		invalid(w, r, "isp must be a valid ISP ID.")
 		return
 	}
 	items, total, err := h.store.ListEvents(r.Context(), filter, page, size)

@@ -63,12 +63,13 @@ func TestNodeViewShape(t *testing.T) {
 	ip := "192.0.2.9"
 	n := nodeRow{ID: "id", Name: "VM1", Down: 300, Up: 100, Threads: 4, ServerID: &sid, ColorSlot: 2, Enabled: true, ScheduleOn: true,
 		Interval: 30, Offset: 10, SourceIP: &ip, CreatedAt: now, LastSeen: &seen, Revision: 5}
-	v := n.view(now, map[string]any{"status": "ok"}, map[string]any{"id": "r"}, "203.0.113.1", map[string]any{"ip": "203.0.113.1"})
+	v := n.view(now, map[string]any{"status": "ok"}, map[string]any{"id": "r"}, "203.0.113.1", map[string]any{"ip": "203.0.113.1"}, map[string]any{"name": "Viettel"})
 	if v["server"] != int64(7) || v["status"] != "online" || v["currentIp"] != "203.0.113.1" || v["latestGood"] == nil || v["geo"] == nil ||
+		v["isp"].(map[string]any)["name"] != "Viettel" ||
 		v["binding"].(map[string]any)["sourceIp"] != "192.0.2.9" || v["interval"] != int64(30) || v["lastSeen"] == nil || v["updateVersion"] != nil {
 		t.Fatalf("view = %v", v)
 	}
-	bare := nodeRow{Enabled: true, ScheduleOn: true}.view(now, nil, nil, "", nil)
+	bare := nodeRow{Enabled: true, ScheduleOn: true}.view(now, nil, nil, "", nil, nil)
 	if bare["server"] != "auto" || bare["latest"] != nil || bare["currentIp"] != nil || bare["lastSeen"] != nil || bare["status"] != "offline" {
 		t.Fatalf("bare view = %v", bare)
 	}
