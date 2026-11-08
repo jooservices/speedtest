@@ -189,10 +189,20 @@ func TestIncrementalStreakRestartResolutionAndRuleLifecycleIntegration(t *testin
 		t.Fatal("save streak-breaking result:", err)
 	}
 	events, total, err := restarted.ListEvents(ctx, alerts.EventFilter{State: "all"}, 1, 25)
-	if err != nil || total != 1 || events[0].ResolvedAt == nil {
-		t.Fatalf("streak-breaking result did not resolve the event: total=%d events=%+v err=%v", total, events, err)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
 	}
-	event, etag, err := restarted.GetEvent(ctx, events[0].ID)
+	var ruleEvent *alerts.Event
+	for i := range events {
+		if events[i].RuleID != nil {
+			ruleEvent = &events[i]
+			break
+		}
+	}
+	if ruleEvent == nil || ruleEvent.ResolvedAt == nil || total < 1 {
+		t.Fatalf("streak-breaking result did not resolve the event: total=%d events=%+v", total, events)
+	}
+	event, etag, err := restarted.GetEvent(ctx, ruleEvent.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -507,6 +517,9 @@ func TestThirtyDayReplayMatchesApprovedUIPreviewIntegration(t *testing.T) {
 	}
 	actualSet := make([]eventSignature, 0, len(actual))
 	for _, event := range actual {
+		if event.RuleID == nil {
+			continue // catalog-only notifications (test.success/recovery) are outside the preview alert fixture
+		}
 		var ts time.Time
 		ts, err := time.Parse(time.RFC3339Nano, event.TS)
 		if err != nil {
