@@ -10,11 +10,18 @@ import (
 	"github.com/jooservices/speedtest/internal/center/settings"
 )
 
-// OwnerNotificationsStore exposes only safe delivery metadata.
+// OwnerNotificationsStore exposes delivery metadata and the notification catalog.
 type OwnerNotificationsStore interface {
 	Test(context.Context, string) (notify.Delivery, error)
 	Delivery(context.Context, string) (notify.Delivery, error)
 	Deliveries(context.Context, string, int, int) ([]notify.Delivery, int, error)
+	ListNotificationEvents(context.Context) ([]notify.EventView, error)
+	GetNotificationEvent(context.Context, string) (notify.EventView, error)
+	UpdateNotificationEvent(context.Context, string, notify.EventPatch) (notify.EventView, error)
+	GetNotificationTemplate(context.Context, string, string) (notify.TemplateView, error)
+	PutNotificationTemplate(context.Context, string, string, string) (notify.TemplateView, error)
+	ResetNotificationTemplate(context.Context, string, string) (notify.TemplateView, error)
+	PreviewNotificationTemplate(context.Context, string, string, string) (notify.TemplatePreview, error)
 }
 
 type ownerNotifications struct {
@@ -39,6 +46,9 @@ func newOwnerNotificationsHandler(store OwnerNotificationsStore, auth *serverAut
 }
 func ownerNotificationsRoute(path string) bool { return strings.HasPrefix(path, "/api/notifications/") }
 func notificationError(w http.ResponseWriter, r *http.Request, err error) {
+	if notificationCatalogError(w, r, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, notify.ErrUnconfigured):
 		invalid(w, r, "Enable and configure this notification channel in Settings.")
@@ -61,11 +71,19 @@ func (h *ownerNotifications) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasPrefix(rest, "test/"):
 		h.queueTest(w, r, strings.TrimPrefix(rest, "test/"))
-	case r.Method != http.MethodGet:
-		methodNotAllowed(w, r, http.MethodGet)
+	case rest == "events" || strings.HasPrefix(rest, "events/") || strings.HasPrefix(rest, "templates/"):
+		h.serveCatalog(w, r, rest)
 	case rest == "deliveries":
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, r, http.MethodGet)
+			return
+		}
 		h.listDeliveries(w, r)
 	case strings.HasPrefix(rest, "deliveries/"):
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, r, http.MethodGet)
+			return
+		}
 		h.getDelivery(w, r, strings.TrimPrefix(rest, "deliveries/"))
 	default:
 		writeNotFoundProblem(w, r)

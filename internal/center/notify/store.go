@@ -45,10 +45,12 @@ type Store struct {
 	// ObserveRun reports pass success without changing worker behavior.
 	ObserveRun func(bool)
 	DB         *pgxpool.Pool
-	Settings   Preferences
-	Sender     Sender
-	Now        func() time.Time
-	Logger     *slog.Logger
+	// EventsDB optionally replaces DB for catalog override helpers (unit tests).
+	EventsDB eventDB
+	Settings Preferences
+	Sender   Sender
+	Now      func() time.Time
+	Logger   *slog.Logger
 }
 
 func (s *Store) now() time.Time {

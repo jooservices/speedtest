@@ -578,6 +578,22 @@
         });
       });
     };
+    ST.notificationEvents = function () { return API.request('/api/notifications/events').then(function (r) { return r.data; }); };
+    ST.updateNotificationEvent = function (key, patch) {
+      return API.request('/api/notifications/events/' + encodeURIComponent(key), { method: 'PATCH', body: patch }).then(function (r) { return r.data; });
+    };
+    ST.notificationTemplate = function (key, channel) {
+      return API.request('/api/notifications/templates/' + encodeURIComponent(key) + '/' + encodeURIComponent(channel)).then(function (r) { return r.data; });
+    };
+    ST.saveNotificationTemplate = function (key, channel, body) {
+      return API.request('/api/notifications/templates/' + encodeURIComponent(key) + '/' + encodeURIComponent(channel), { method: 'PUT', body: { body: body } }).then(function (r) { return r.data; });
+    };
+    ST.previewNotificationTemplate = function (key, channel, body) {
+      return API.request('/api/notifications/templates/' + encodeURIComponent(key) + '/' + encodeURIComponent(channel) + '/previews', { method: 'POST', body: { body: body } }).then(function (r) { return r.data; });
+    };
+    ST.resetNotificationTemplate = function (key, channel) {
+      return API.request('/api/notifications/templates/' + encodeURIComponent(key) + '/' + encodeURIComponent(channel) + '/resets', { method: 'POST' }).then(function (r) { return r.data; });
+    };
     // Follows an installation or removal job. Progress arrives as server-sent events; if the stream drops after the job has
     // ended, its final state is read instead. onEvent receives {id, message, pct, status}; the last call has a terminal status.
     ST.followInstallation = function (id, onEvent) {

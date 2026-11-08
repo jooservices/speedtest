@@ -55,6 +55,12 @@ func (f *fakeTx) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error
 func (f *fakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
 	case strings.Contains(sql, "FROM settings"):
+		if f.fail == "settings-missing" {
+			return alertRow{err: pgx.ErrNoRows}
+		}
+		if f.fail == "settings" {
+			return alertRow{err: errors.New("settings")}
+		}
 		raw, _ := json.Marshal(map[string]string{"centerUrl": "https://center.example"})
 		return alertRow{vals: []any{raw}}
 	case strings.Contains(sql, "notification_event_settings") && strings.Contains(sql, "channels"):
@@ -67,6 +73,9 @@ func (f *fakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 		}
 		return alertRow{vals: []any{ch}}
 	case strings.Contains(sql, "notification_event_settings"):
+		if f.fail == "enabled" {
+			return alertRow{err: errors.New("enabled")}
+		}
 		v, ok := f.settings[args[0].(string)]
 		if !ok {
 			return alertRow{err: pgx.ErrNoRows}
@@ -95,6 +104,9 @@ func (f *fakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 		f.inserted++
 		return alertRow{vals: []any{"evt-1"}}
 	case strings.Contains(sql, "FROM results"):
+		if f.fail == "results" {
+			return alertRow{err: errors.New("results")}
+		}
 		down, up, ping := 200.0, 80.0, 10.0
 		return alertRow{vals: []any{"rid", "2026-11-08T01:00:00Z", "ok", &down, &up, &ping, (*float64)(nil), (*float64)(nil), (*string)(nil), false}}
 	}
@@ -288,6 +300,50 @@ func TestEmitHelpersAndOutcomes(t *testing.T) {
 	tx.fail = "node"
 	if err := store.emitTestOutcome(ctx, tx, "n1", agentapi.Result{ID: "rid", Status: "ok", Down: &down}, time.Now().UTC(), 300, 100); err == nil {
 		t.Fatal("expected node failure")
+	}
+	tx.settings["test.success"] = true
+	tx.settings["test.recovered"] = true
+	tx.settings["node.online"] = true
+	tx.fail = "settings-missing"
+	if got, err := store.centerURL(ctx, tx); err != nil || got != "" {
+		t.Fatalf("missing display settings: %q %v", got, err)
+	}
+	tx.fail = "settings"
+	if _, err := store.centerURL(ctx, tx); err == nil {
+		t.Fatal("expected settings failure")
+	}
+	tx.fail = "enabled"
+	if err := store.emitTestOutcome(ctx, tx, "n1", agentapi.Result{ID: "rid", Status: "ok", Down: &down}, time.Now().UTC(), 300, 100); err == nil {
+		t.Fatal("expected enabled failure")
+	}
+	tx.fail = "limits"
+	if err := store.emitTestOutcome(ctx, tx, "n1", agentapi.Result{ID: "rid", Status: "ok", Down: &down}, time.Now().UTC(), 300, 100); err == nil {
+		t.Fatal("expected limits failure on success")
+	}
+	if err := store.emitRecovery(ctx, tx, Rule{Metric: "failed", Channels: []string{"telegram"}}, "n1", time.Now(), time.Now(), ""); err == nil {
+		t.Fatal("expected limits failure on recovery")
+	}
+	tx.fail = "results"
+	if err := store.emitRecovery(ctx, tx, Rule{Metric: "failed", Channels: []string{"telegram"}}, "n1", time.Now(), time.Now(), "rid"); err == nil {
+		t.Fatal("expected results failure on recovery")
+	}
+	tx.fail = "settings"
+	if err := store.emitTestOutcome(ctx, tx, "n1", agentapi.Result{ID: "rid", Status: "ok", Down: &down}, time.Now().UTC(), 300, 100); err == nil {
+		t.Fatal("expected center URL failure on success")
+	}
+	if err := store.emitRecovery(ctx, tx, Rule{Metric: "failed", Channels: []string{"telegram"}}, "n1", time.Now(), time.Now(), ""); err == nil {
+		t.Fatal("expected center URL failure on recovery")
+	}
+	tx.fail = "channels"
+	if err := store.emitTestOutcome(ctx, tx, "n1", agentapi.Result{ID: "rid", Status: "ok", Down: &down}, time.Now().UTC(), 300, 100); err == nil {
+		t.Fatal("expected channels failure on success")
+	}
+	if err := store.emitRecovery(ctx, tx, Rule{Metric: "failed", Channels: []string{"telegram"}}, "n1", time.Now(), time.Now(), ""); err == nil {
+		t.Fatal("expected channels failure on recovery")
+	}
+	tx.fail = "node"
+	if err := store.emitRecovery(ctx, tx, Rule{Metric: "failed", Channels: []string{"telegram"}}, "n1", time.Now(), time.Now(), ""); err == nil {
+		t.Fatal("expected node failure on recovery")
 	}
 	tx.fail = ""
 }
