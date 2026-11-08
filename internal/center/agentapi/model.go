@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/jooservices/speedtest/internal/shared/failureclass"
 )
 
 var (
@@ -41,6 +43,7 @@ type Result struct {
 	BytesUp         int64           `json:"bytesUp"`
 	Duration        float64         `json:"duration"`
 	Error           *string         `json:"error"`
+	FailureClass    string          `json:"failureClass,omitempty"`
 	Manual          bool            `json:"manual"`
 	Raw             json.RawMessage `json:"raw"`
 	LoadedDown      *LoadedLatency  `json:"loadedDown"`
@@ -197,8 +200,20 @@ func ParseResult(data []byte) (Result, error) {
 		if r.Down == nil || r.Up == nil || r.Ping == nil || r.Server == nil || r.IP == nil || r.Error != nil {
 			return r, ErrInvalid
 		}
+		if r.FailureClass == "" {
+			r.FailureClass = failureclass.Other
+		}
+		if r.FailureClass != failureclass.Other {
+			return r, ErrInvalid
+		}
 	case "failed":
 		if r.Error == nil || strings.TrimSpace(*r.Error) == "" {
+			return r, ErrInvalid
+		}
+		if r.FailureClass == "" {
+			r.FailureClass = failureclass.FromText(*r.Error)
+		}
+		if !failureclass.Valid(r.FailureClass) {
 			return r, ErrInvalid
 		}
 	default:
