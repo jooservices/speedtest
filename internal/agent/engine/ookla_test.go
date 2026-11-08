@@ -128,6 +128,7 @@ func TestRunnerErrorsAndDeadlines(t *testing.T) {
 		{"missing", Config{Binary: filepath.Join(t.TempDir(), "absent")}, Options{}, BinaryMissing},
 		{"missing PATH", Config{Binary: "speedtest-nonexistent-joost15"}, Options{}, BinaryMissing},
 		{"crash", Config{Binary: fake, Args: []string{"--scenario", "crash"}}, Options{}, Execution},
+		{"rate limited", Config{Binary: fake, Args: []string{"--scenario", "rate_limited"}}, Options{}, RateLimited},
 		{"timeout", Config{Binary: fake, Args: []string{"--scenario", "timeout"}, Timeout: 20 * time.Millisecond}, Options{}, Timeout},
 		{"override timeout", Config{Binary: fake, Args: []string{"--scenario", "timeout"}}, Options{Timeout: 20 * time.Millisecond}, Timeout},
 		{"negative pin", Config{}, Options{ServerID: -1}, InvalidOptions},

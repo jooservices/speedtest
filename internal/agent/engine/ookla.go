@@ -162,6 +162,8 @@ func validNetworkOptions(opts Options) bool {
 func classify(s string) ErrorClass {
 	s = strings.ToLower(s)
 	switch {
+	case strings.Contains(s, "too many requests"), strings.Contains(s, "rate limit"), strings.Contains(s, "429"):
+		return RateLimited
 	case strings.Contains(s, "license"), strings.Contains(s, "licence"), strings.Contains(s, "gdpr"):
 		return License
 	case strings.Contains(s, "timed out"), strings.Contains(s, "timeout"):
