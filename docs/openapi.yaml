@@ -1124,6 +1124,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
@@ -1287,6 +1288,287 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/ServerError"
+  /api/isps:
+    get:
+      operationId: listISPs
+      tags:
+        - ISPs
+      summary: List ISPs with aggregate speed metrics
+      description: ISPs are derived from ASN/organisation geolocation data. Aggregates honour engine isolation.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listISPsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/isps/compare:
+    get:
+      operationId: compareISPs
+      tags:
+        - ISPs
+      summary: Compare selected ISPs in the same period
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - name: isps
+          in: query
+          required: true
+          description: Comma-separated ISP IDs to compare (1–20).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listISPsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/isps/{id}:
+    get:
+      operationId: getISP
+      tags:
+        - ISPs
+      summary: Read one ISP with aggregate metrics
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getISPResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/isps/{id}/trend:
+    get:
+      operationId: getISPTrend
+      tags:
+        - ISPs
+      summary: Daily download trend for one ISP
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getISPTrendResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/isps/{id}/plans:
+    get:
+      operationId: listISPPlans
+      tags:
+        - ISPs
+      summary: List optional advertised plans for an ISP
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listISPPlansResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    post:
+      operationId: createISPPlan
+      tags:
+        - ISPs
+      summary: Create an advertised ISP plan
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ISPPlanInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getISPPlanResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/isps/{id}/plans/{planId}:
+    put:
+      operationId: updateISPPlan
+      tags:
+        - ISPs
+      summary: Replace an ISP plan
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - name: planId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ISPPlanInput"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getISPPlanResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    delete:
+      operationId: deleteISPPlan
+      tags:
+        - ISPs
+      summary: Delete an ISP plan
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - name: planId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "500":
+          $ref: "#/components/responses/ServerError"
   /api/stats/summary:
     get:
       operationId: getSummary
@@ -1319,6 +1601,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
@@ -1356,6 +1639,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
@@ -1410,6 +1694,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
@@ -1486,6 +1771,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
@@ -2946,6 +3232,26 @@ components:
         uniqueItems: true
       style: form
       explode: false
+    ISPs:
+      name: isps
+      in: query
+      required: false
+      description: Comma-separated ISP IDs; omitted means all, empty means none.
+      schema:
+        type: array
+        items:
+          $ref: "#/components/schemas/ID"
+        maxItems: 100
+        uniqueItems: true
+      style: form
+      explode: false
+    ISP:
+      name: isp
+      in: query
+      required: false
+      description: Optional single ISP filter for alert events.
+      schema:
+        $ref: "#/components/schemas/ID"
     Node:
       name: node
       in: query
@@ -4314,6 +4620,11 @@ components:
           anyOf:
             - $ref: "#/components/schemas/Geo"
             - type: "null"
+        isp:
+          anyOf:
+            - $ref: "#/components/schemas/ISPRef"
+            - type: "null"
+          description: Current ISP derived from the node's current public IP ASN.
         updateVersion:
           type:
             - string
@@ -4346,6 +4657,7 @@ components:
         - latestGood
         - currentIp
         - geo
+        - isp
         - updateVersion
       description: paused if disabled; otherwise offline if never seen or heartbeat age >90 seconds (three
         30-second heartbeat intervals); otherwise failed/degraded from latest result, else online.
@@ -5738,6 +6050,14 @@ components:
           anyOf:
             - $ref: "#/components/schemas/Geo"
             - type: "null"
+        fromIsp:
+          anyOf:
+            - $ref: "#/components/schemas/ISPRef"
+            - type: "null"
+        toIsp:
+          anyOf:
+            - $ref: "#/components/schemas/ISPRef"
+            - type: "null"
       required:
         - id
         - nodeId
@@ -5746,6 +6066,8 @@ components:
         - to
         - fromGeo
         - toGeo
+        - fromIsp
+        - toIsp
     IPAddress:
       type: object
       additionalProperties: false
@@ -6197,6 +6519,183 @@ components:
                   $ref: "#/components/schemas/Pagination"
               required:
                 - pagination
+    ISPRef:
+      type: object
+      additionalProperties: false
+      description: Compact ISP identity used on nodes and IP history.
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        asn:
+          type: integer
+          minimum: 1
+        organisation:
+          type: string
+        name:
+          type: string
+      required:
+        - id
+        - asn
+        - organisation
+        - name
+    ISP:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        asn:
+          type: integer
+          minimum: 1
+        organisation:
+          type: string
+        name:
+          type: string
+        nodeCount:
+          type: integer
+          minimum: 0
+        avgDown:
+          anyOf:
+            - $ref: "#/components/schemas/Mbps"
+            - type: "null"
+        p95Down:
+          anyOf:
+            - $ref: "#/components/schemas/Mbps"
+            - type: "null"
+        pctExpected:
+          anyOf:
+            - type: number
+            - type: "null"
+        successRate:
+          anyOf:
+            - type: number
+              minimum: 0
+              maximum: 1
+            - type: "null"
+        avgPing:
+          anyOf:
+            - $ref: "#/components/schemas/Milliseconds"
+            - type: "null"
+      required:
+        - id
+        - asn
+        - organisation
+        - name
+        - nodeCount
+    ISPPlan:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        name:
+          type: string
+        advertisedDown:
+          $ref: "#/components/schemas/Mbps"
+        advertisedUp:
+          $ref: "#/components/schemas/Mbps"
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        updatedAt:
+          $ref: "#/components/schemas/Timestamp"
+      required:
+        - id
+        - name
+        - advertisedDown
+        - advertisedUp
+        - createdAt
+        - updatedAt
+    ISPPlanInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        advertisedDown:
+          $ref: "#/components/schemas/Mbps"
+        advertisedUp:
+          $ref: "#/components/schemas/Mbps"
+      required:
+        - name
+        - advertisedDown
+        - advertisedUp
+    listISPsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/ISP"
+    getISPResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/ISP"
+    getISPTrendResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  ts:
+                    $ref: "#/components/schemas/Timestamp"
+                  down:
+                    anyOf:
+                      - $ref: "#/components/schemas/Mbps"
+                      - type: "null"
+                  up:
+                    anyOf:
+                      - $ref: "#/components/schemas/Mbps"
+                      - type: "null"
+                  ping:
+                    anyOf:
+                      - $ref: "#/components/schemas/Milliseconds"
+                      - type: "null"
+                  n:
+                    type: integer
+                    minimum: 0
+                required:
+                  - ts
+                  - n
+    listISPPlansResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/ISPPlan"
+    getISPPlanResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              enum:
+                - 200
+                - 201
+            data:
+              $ref: "#/components/schemas/ISPPlan"
     getResultResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
