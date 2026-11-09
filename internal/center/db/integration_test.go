@@ -62,6 +62,15 @@ func exec(t *testing.T, ctx context.Context, p *pgxpool.Pool, sql string) {
 	}
 }
 
+func currentMigrationVersion(t *testing.T, ctx context.Context, p *pgxpool.Pool) int64 {
+	t.Helper()
+	var version int64
+	if err := p.QueryRow(ctx, `SELECT COALESCE(MAX(version_id) FILTER (WHERE is_applied),0) FROM goose_db_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	return version
+}
+
 func TestMigrations(t *testing.T) {
 	pool, ctx := testPool(t)
 	dbtest.Reset(t, pool)
@@ -76,10 +85,10 @@ func TestMigrations(t *testing.T) {
 	}()
 	t.Run("AllRequiredTables", func(t *testing.T) {
 		var got int
-		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor"}).Scan(&got); e != nil || got != 27 {
-			t.Fatalf("required tables: got %d want 27: %v", got, e)
+		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor", "notification_event_settings", "notification_event_node_settings", "notification_templates"}).Scan(&got); e != nil || got != 30 {
+			t.Fatalf("required tables: got %d want 30: %v", got, e)
 		}
-		t.Log("PASS: 27 required tables created by embedded migrations")
+		t.Log("PASS: 30 required tables created by embedded migrations")
 	})
 	t.Run("IndexesUUIDUnitsAndTimeTypes", func(t *testing.T) {
 		var got int
@@ -165,7 +174,7 @@ INSERT INTO settings(key,value) VALUES ('display','{"theme":"dark"}');
 INSERT INTO settings(key,secret_ciphertext) VALUES ('integration',decode('aabb','hex'));
 INSERT INTO api_idempotency(principal,operation,key_hash,request_hash,response_ciphertext,expires_at) VALUES ('owner','create-node',repeat('a',64),repeat('b',64),decode(repeat('00',28),'hex'),now()+interval '1 hour');
 INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000-8000-000000000015',id,'run_now','00000000-0000-4000-8000-000000000002' FROM nodes;`)
-		for range 10 {
+		for currentMigrationVersion(t, ctx, pool) > 0 {
 			if e := db.Migrate(ctx, pool, "down"); e != nil {
 				t.Fatal(e)
 			}
@@ -202,7 +211,7 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		}
 	})
 	t.Run("TransactionalRollbackFailure", func(t *testing.T) {
-		for range 9 {
+		for currentMigrationVersion(t, ctx, pool) > 1 {
 			if e := db.Migrate(ctx, pool, "down"); e != nil {
 				t.Fatal(e)
 			}
