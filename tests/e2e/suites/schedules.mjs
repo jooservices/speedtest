@@ -3,6 +3,31 @@ export function schedulesSuite(T) {
   return {
     async intervalStaggerQuietHours() {
       await T.open('#/schedules', 'Schedules');
+      assert.equal(T.db("select interval_minutes from schedules s join nodes n on n.id=s.node_id where n.name='VM1'"), '30', 'seeded 30-minute schedules stay configured at 30');
+      const estimates = interval => {
+        const average = Number(T.db(`SELECT avg(COALESCE(bytes_down,0)+COALESCE(bytes_up,0)) FROM (
+        SELECT r.bytes_down,r.bytes_up FROM results r JOIN nodes n ON n.id=r.node_id
+        WHERE n.name='VM1' AND r.engine='ookla' AND r.status<>'failed'
+        ORDER BY r.ts DESC,r.id DESC LIMIT 200) recent`));
+        return page.evaluate(([bytes, minutes]) => [0, 1].map(extra => {
+          const perDay = bytes * (1440 / minutes + extra);
+          return [ST.fmt.bytes(perDay), ST.fmt.bytes(perDay * 30)];
+        }), [average, interval]);
+      };
+      const matchesEstimate = (text, expected) => expected.some(([daily, monthly]) => text.includes(daily) && text.includes(monthly));
+      const usageRow = () => page.locator('.content table.data').nth(1).locator('tbody tr').filter({ hasText: 'VM1' });
+      let rowText = await usageRow().innerText();
+      assert.ok(matchesEstimate(rowText, await estimates(30)), `30-minute estimate matches its fixture: ${rowText}`);
+      await T.choose(T.row('VM1').locator('select'), '5');
+      await T.toast('5 minutes').waitFor();
+      await page.reload();
+      await T.heading('Schedules').waitFor();
+      assert.equal(await T.row('VM1').locator('select').inputValue(), '5', 'the 5-minute minimum persists after reload');
+      rowText = await usageRow().innerText();
+      assert.ok(matchesEstimate(rowText, await estimates(5)), `5-minute estimate matches its fixture: ${rowText}`);
+      await T.choose(T.row('VM1').locator('select'), '30');
+      await page.reload();
+      await T.heading('Schedules').waitFor();
       await T.choose(T.row('VM1').locator('select'), '60');
       await T.toast('hour').waitFor();
       await page.reload();

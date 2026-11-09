@@ -31,3 +31,8 @@ Deployment artifacts for the node agent and the command center live here.
   its mode-0600 `.env`.
 - The agent and the center are deployed independently, matching the rule that
   nodes know only their own configuration.
+- The Docker staging center and extra-node bootstrap default to a 60-minute
+  schedule. `STAGING_INTERVAL_MINUTES` and `NODE_INTERVAL` remain explicit
+  overrides. They apply only at first enrollment; the center schedule and the
+  Ookla engine schedule are synchronized together, and the enrolled marker keeps
+  restarts from overwriting an operator's saved interval.
