@@ -3,6 +3,7 @@
 package server
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -60,6 +61,17 @@ func TestOwnerSchedulesHTTPFlowIntegration(t *testing.T) {
 		if rec.Code != http.StatusCreated {
 			t.Fatalf("create %d = %d %s", i, rec.Code, rec.Body.String())
 		}
+		var created struct {
+			Data struct {
+				Node struct {
+					Interval int `json:"interval"`
+					Offset   int `json:"offset"`
+				} `json:"node"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil || created.Data.Node.Interval != 60 || created.Data.Node.Offset != 0 {
+			t.Fatalf("created node schedule = %d:%d, want 60:0: %v", created.Data.Node.Interval, created.Data.Node.Offset, err)
+		}
 		ids = append(ids, responseString(t, rec.Body.Bytes(), "data", "node", "id"))
 	}
 
@@ -69,7 +81,9 @@ func TestOwnerSchedulesHTTPFlowIntegration(t *testing.T) {
 	}
 	one := call(http.MethodGet, "/api/schedules/"+ids[0], "", nil)
 	tag := one.Header().Get("ETag")
-	if one.Code != http.StatusOK || tag == "" || responseString(t, one.Body.Bytes(), "data", "nodeId") != ids[0] {
+	if one.Code != http.StatusOK || tag == "" || responseString(t, one.Body.Bytes(), "data", "nodeId") != ids[0] ||
+		!strings.Contains(one.Body.String(), `"interval":60`) || !strings.Contains(one.Body.String(), `"offset":0`) ||
+		!strings.Contains(one.Body.String(), `"bytesPerDay":0`) || !strings.Contains(one.Body.String(), `"bytesPerMonth":0`) {
 		t.Fatalf("one = %d %s", one.Code, one.Body.String())
 	}
 	put := call(http.MethodPut, "/api/schedules/"+ids[0], `{"interval":60,"offset":75,"enabled":true}`, map[string]string{"If-Match": tag})
@@ -79,7 +93,15 @@ func TestOwnerSchedulesHTTPFlowIntegration(t *testing.T) {
 	if rec := call(http.MethodPut, "/api/schedules/"+ids[0], `{"interval":60,"offset":0,"enabled":true}`, map[string]string{"If-Match": tag}); rec.Code != http.StatusPreconditionFailed {
 		t.Fatalf("stale put = %d", rec.Code)
 	}
-	if rec := call(http.MethodPut, "/api/schedules/"+ids[0], `{"interval":3,"offset":0,"enabled":true}`, map[string]string{"If-Match": put.Header().Get("ETag")}); rec.Code != http.StatusUnprocessableEntity {
+	five := call(http.MethodPut, "/api/schedules/"+ids[0], `{"interval":5,"offset":4,"enabled":true}`, map[string]string{"If-Match": put.Header().Get("ETag")})
+	if five.Code != http.StatusOK || !strings.Contains(five.Body.String(), `"interval":5`) || !strings.Contains(five.Body.String(), `"offset":4`) {
+		t.Fatalf("minimum interval update = %d %s", five.Code, five.Body.String())
+	}
+	restored := call(http.MethodPut, "/api/schedules/"+ids[0], `{"interval":60,"offset":0,"enabled":true}`, map[string]string{"If-Match": five.Header().Get("ETag")})
+	if restored.Code != http.StatusOK {
+		t.Fatalf("restore schedule = %d %s", restored.Code, restored.Body.String())
+	}
+	if rec := call(http.MethodPut, "/api/schedules/"+ids[0], `{"interval":4,"offset":0,"enabled":true}`, map[string]string{"If-Match": restored.Header().Get("ETag")}); rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("interval below the minimum = %d", rec.Code)
 	}
 

@@ -77,6 +77,14 @@ func TestEnrollmentCredentialLifecycleIntegration(t *testing.T) {
 	if !validUUID(issued.Node.ID) || !strings.HasPrefix(issued.Token, "enr_") {
 		t.Fatalf("invalid issuance response: %s", created)
 	}
+	var interval, offset int
+	var engineInterval, engineOffset int
+	if err := pool.QueryRow(ctx, `SELECT s.interval_minutes,s.offset_minutes,e.interval_minutes,e.offset_minutes
+FROM schedules s JOIN engine_schedules e ON e.node_id=s.node_id AND e.engine='ookla'
+WHERE s.node_id=$1`, issued.Node.ID).Scan(&interval, &offset, &engineInterval, &engineOffset); err != nil ||
+		interval != 60 || offset != 0 || engineInterval != 60 || engineOffset != 0 {
+		t.Fatalf("new node schedules = Ookla %d:%d and engine %d:%d, want both 60:0: %v", interval, offset, engineInterval, engineOffset, err)
+	}
 	if issued.ExpiresAt.Before(time.Now().Add(23*time.Hour)) || issued.ExpiresAt.After(time.Now().Add(25*time.Hour)) {
 		t.Fatalf("enrollment expiry = %s, want 24 hours", issued.ExpiresAt)
 	}
