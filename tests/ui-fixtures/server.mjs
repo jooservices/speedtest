@@ -122,10 +122,11 @@ export async function startServer() {
         send(status, envelope(output, {}, status)); return;
       }
       if (url.pathname.startsWith('/api/stats/')) {
-        const id = data.node.id, summary = { n: 1, mean: 90, median: 90, min: 90, max: 90, p5: 90, p95: 90, std: 0 };
+        const id = data.node.id, summary = { n: 1, mean: 90, median: 90, min: 90, max: 90, p5: 90, p50: 90, p95: 90, p99: 90, std: 0 };
         const node = { count: 1, ok: 1, failed: 0, successRate: 100, down: summary, up: summary, ping: summary, jitter: summary, loss: summary, ipCount: 1, downPct: 90, upPct: 80, stability: 100 };
         const day = new Date().toISOString().slice(0, 10) + 'T00:00:00Z', kind = url.pathname.split('/').pop();
-        const body = kind === 'summary' ? [{ nodeId: id, current: node, previous: node }]
+        const body = kind === 'events' ? { items: [], truncated: false }
+          : kind === 'summary' ? [{ nodeId: id, current: node, previous: node }]
           : kind === 'trend' ? [{ nodeId: id, name: data.node.name, metric: 'down', unit: 'Mbps', points: [{ ts: day, value: 90, count: 1 }], summary }]
           : kind === 'hour-of-day' ? [{ nodeId: id, hours: Array.from({ length: 24 }, (_, hour) => ({ hour, value: hour === 3 ? 90 : null, count: hour === 3 ? 1 : 0 })) }]
           : kind === 'heatmap' ? { nodeId: id, metric: 'down', timezone: 'UTC', cells: Array.from({ length: 168 }, (_, i) => ({ weekday: Math.floor(i / 24), hour: i % 24, value: i === 3 ? 90 : null, count: i === 3 ? 1 : 0 })) }

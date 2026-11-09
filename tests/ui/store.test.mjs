@@ -50,6 +50,27 @@ test('demo mode seeds and persists locally without making API calls', () => {
   ST.updateNode('n1', { name: 'Local demo' });
   assert.equal(ST.node('n1').name, 'Local demo'); assert.ok(storage.has('st.demo.v1'));
 });
+test('percentiles and week changes use interpolated values and preserve undefined cases', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  const summary = ST.stats.summary([10, 20, 30, 40, 50]);
+  assert.equal(summary.p50, 30); assert.equal(summary.median, summary.p50);
+  assert.equal(summary.p95, 48); assert.equal(summary.p99, 49.6);
+  assert.equal(ST.stats.summary([]).p50, null); assert.equal(ST.stats.summary([]).p99, null);
+  assert.equal(ST.stats.summary([7]).p50, 7); assert.equal(ST.stats.summary([7]).p99, 7);
+  assert.equal(ST.stats.weekChange(120, 100), 20);
+  assert.equal(ST.stats.weekChange(100, 0), null); assert.equal(ST.stats.weekChange(null, 100), null);
+});
+test('effective ISP prefers the trimmed engine value and falls back to cached IP organisation', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  assert.equal(ST.stats.effectiveISP({ engineISP: '  Engine ISP  ', ip: '203.0.113.9' }), 'Engine ISP');
+  assert.equal(ST.stats.effectiveISP({ engineISP: ' ', ip: '203.0.113.9' }), 'Viettel Group');
+  assert.equal(ST.stats.effectiveISP({ ip: '192.0.2.99' }), 'VNPT Corp');
+  assert.equal(ST.stats.effectiveISP({ ip: '203.0.114.9' }), null);
+  const filtered = ST.results({ nodeIds: ['n1'], isp: 'viettel group' });
+  assert.ok(filtered.length > 0);
+  assert.ok(filtered.every(result => ST.stats.effectiveISP(result).toLowerCase() === 'viettel group'));
+  assert.equal(ST.results({ nodeIds: ['n1'], isp: 'unknown isp' }).length, 0);
+});
 test('settings writes use CSRF and ETag and never echo configured flags or blank secrets', async t => {
   const { ST, control } = await setup(t);
   await ST.load();
