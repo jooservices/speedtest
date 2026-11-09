@@ -293,12 +293,20 @@ and check `curl -vI https://<host>/readyz`. The probe's `cert_days` confirms the
 
 In Node → Settings → Test engines, set each installed engine's interval and enabled
 switch, then save. An uninstalled engine explains how to repair installation.
-Ookla remains the new-node default at 30 minutes. LibreSpeed starts disabled until
+Ookla remains the new-node default at 60 minutes. LibreSpeed starts disabled until
 selected, with a 60 minute default. When several nodes share a public IP, increase
 their Ookla intervals: the Ookla CLI can rate limit by public IP. Choose one engine
 in dashboard, results or statistics before interpreting trends; different engines
 are never averaged together. Alert rules without an engine evaluate the primary
 engine only.
+
+Docker staging creates new Ookla schedules at 60 minutes by default.
+`STAGING_INTERVAL_MINUTES` overrides the center's initial schedule for nodes in
+the staging container; `NODE_INTERVAL` overrides schedules for extra node
+containers. Bootstrap applies an override only during first enrollment and
+updates `schedules` plus the Ookla `engine_schedules` row in one transaction.
+The enrolled marker prevents a restart from rewriting the chosen interval. A
+later change requires an explicit schedule update in the center.
 
 Migration 00010 keeps the single-row legacy `schedules` table, backfills
 `engine_schedules`, and adds `results.engine NOT NULL DEFAULT 'ookla'`. New code
