@@ -13,15 +13,17 @@
 #
 # Needs Docker access (sg docker -c "deploy/docker/nodes.sh ...") and deploy/docker/stg.env (0600) for the
 # owner credentials; they are read by parsing, never sourced or printed.
-# Environment: CENTER_URL (default http://<host LAN IP>:18090), NODE_INTERVAL (30), EXPECTED_DOWN/UP (500).
+# Environment: CENTER_URL (default http://<host LAN IP>:18090), NODE_INTERVAL (60), EXPECTED_DOWN/UP (500).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
+source deploy/docker/schedule-defaults.sh
 IMAGE="${STG_IMAGE:-speedtest-staging:latest}"
 ENV_FILE="${STG_ENV_FILE:-deploy/docker/stg.env}"
 PORT="${STAGING_PORT:-18090}"
 NODE_NETWORK="${NODE_NETWORK:-host}"
 if [ "$NODE_NETWORK" = host ]; then CENTER_URL="${CENTER_URL:-http://127.0.0.1:${PORT}}"; else CENTER_URL="${CENTER_URL:-http://$(hostname -I | awk '{print $1}'):${PORT}}"; fi
 LOCAL="http://127.0.0.1:${PORT}"
+NODE_INTERVAL="$(node_interval)"
 cmd="${1:-list}"; shift || true
 
 envval() { grep -m1 "^$1=" "$ENV_FILE" | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//'; }
@@ -32,6 +34,13 @@ login() { [ "$(stat -c %a "$ENV_FILE")" = 600 ] || { echo "$ENV_FILE must be mod
   csrf="$(api GET /api/auth/me | jq -r '.data.csrfToken')"
   csrf="$(api POST /api/auth/login "$(jq -nc --arg e "$(envval STAGING_OWNER_EMAIL)" --arg p "$(envval STAGING_OWNER_PASSWORD)" '{email:$e,password:$p}')" | jq -r '.data.csrfToken // empty')"
   [ -n "$csrf" ] || { echo "owner sign-in failed"; exit 1; }; }
+set_node_interval() { local id="$1" tag body code
+  tag="$(curl -sS -D - -o /dev/null -b "$jar" "${LOCAL}/api/schedules/${id}" | tr -d '\r' | awk -F': ' 'tolower($1)=="etag"{print $2}')"
+  [ -n "$tag" ] || { echo "could not read schedule ETag for node $id"; exit 1; }
+  body="$(jq -nc --argjson interval "$NODE_INTERVAL" '{interval:$interval,offset:0,enabled:true}')"
+  code="$(curl -sS -o /dev/null -w '%{http_code}' -b "$jar" -X PUT "${LOCAL}/api/schedules/${id}" -H "Origin: ${LOCAL}" -H "X-CSRF-Token: ${csrf}" -H 'Content-Type: application/json' -H "If-Match: ${tag}" -d "$body")"
+  [ "$code" = 200 ] || { echo "could not set node $id interval (HTTP $code)"; exit 1; }
+}
 
 case "$cmd" in
 up)
@@ -41,12 +50,15 @@ up)
     if docker ps -a --format '{{.Names}}' | grep -qx "speedtest-node-$name"; then echo "node $name already has a container"; continue; fi
     created="$(api POST /api/nodes "$(jq -nc --arg n "$name" --arg l "Docker node $name" --argjson d "${EXPECTED_DOWN:-500}" --argjson u "${EXPECTED_UP:-500}" '{name:$n,label:$l,expectedDown:$d,expectedUp:$u}')")"
     token="$(printf '%s' "$created" | jq -r '.data.token // empty')"
+    node_id="$(printf '%s' "$created" | jq -r '.data.node.id // empty')"
     [ -n "$token" ] || { echo "node $name was not created: $(printf '%s' "$created" | head -c 300)"; exit 1; }
+    [ -n "$node_id" ] || { echo "node $name response had no id"; exit 1; }
+    set_node_interval "$node_id"
     net=host
     if [ "$NODE_NETWORK" != host ]; then net="speedtest-net-$name"; docker network inspect "$net" >/dev/null 2>&1 || docker network create "$net" >/dev/null; fi
     docker volume create "speedtest-node-$name" >/dev/null
     docker run -d --name "speedtest-node-$name" --restart unless-stopped --network "$net" \
-      -e NODE_NAME="$name" -e CENTER_URL="$CENTER_URL" -e ENROLL_TOKEN="$token" -e NODE_INTERVAL="${NODE_INTERVAL:-30}" \
+      -e NODE_NAME="$name" -e CENTER_URL="$CENTER_URL" -e ENROLL_TOKEN="$token" -e NODE_INTERVAL="$NODE_INTERVAL" \
       -e EXPECTED_DOWN="${EXPECTED_DOWN:-500}" -e EXPECTED_UP="${EXPECTED_UP:-500}" -v "speedtest-node-$name":/var/lib/speedtest \
       --entrypoint /usr/bin/tini "$IMAGE" -- /usr/local/bin/node-entrypoint.sh >/dev/null
     echo "started node $name (network $net)"
@@ -61,7 +73,9 @@ list)
   ;;
 down|purge)
   for name in "$@"; do docker rm -f "speedtest-node-$name" >/dev/null 2>&1 || true; docker network rm "speedtest-net-$name" >/dev/null 2>&1 || true
-    [ "$cmd" = purge ] && docker volume rm "speedtest-node-$name" >/dev/null 2>&1 || true; echo "removed $name"; done
+    if [ "$cmd" = purge ]; then docker volume rm "speedtest-node-$name" >/dev/null 2>&1 || true; fi
+    echo "removed $name"
+  done
   ;;
 forget)
   login
