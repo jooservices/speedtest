@@ -1310,6 +1310,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1318,6 +1320,7 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
@@ -1347,6 +1350,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1355,6 +1360,7 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
@@ -1401,6 +1407,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1409,6 +1417,7 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
@@ -1438,6 +1447,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1446,6 +1457,7 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - name: node
           in: query
           required: true
@@ -1477,6 +1489,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1485,6 +1499,7 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
@@ -1500,6 +1515,45 @@ paths:
             minimum: 1
             maximum: 100
             default: 15
+  /api/stats/events:
+    get:
+      operationId: getStatisticsEvents
+      tags:
+        - Statistics
+      summary: Read bounded IP, ISP and alert marks for statistics
+      description: Returns the newest 500 marks in stable order (ts descending, then type and id ascending).
+        IP marks exclude initial addresses. ISP marks compare consecutive known effective ISPs per node and
+        engine, including the predecessor before the requested range. An unlinked alert is included only
+        without an ISP filter and is labelled engine unknown. truncated is true when more marks match.
+        Event labels are plain text.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getEventsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
+        - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
   /api/dashboard:
     get:
       operationId: getDashboard
@@ -2914,6 +2968,15 @@ components:
       description: Omission uses each node's primary engine; engines are never blended.
       schema:
         $ref: "#/components/schemas/Engine"
+    ISP:
+      name: isp
+      in: query
+      required: false
+      description: Optional trimmed, case-insensitive exact ISP match (1–200 characters). Effective ISP uses the result engine ISP, then cached IP organisation; records with unknown ISP are excluded when filtering.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
     Page:
       name: page
       in: query
@@ -4754,7 +4817,19 @@ components:
             - "null"
           description: Same unit as the selected metric; null for no samples.
           minimum: 0
+        p50:
+          type:
+            - number
+            - "null"
+          description: Median percentile, equal to median; null for no samples.
+          minimum: 0
         p95:
+          type:
+            - number
+            - "null"
+          description: Same unit as the selected metric; null for no samples.
+          minimum: 0
+        p99:
           type:
             - number
             - "null"
@@ -4773,7 +4848,9 @@ components:
         - min
         - max
         - p5
+        - p50
         - p95
+        - p99
         - std
       description: Population std deviation. Percentiles interpolate at (n-1)*p. A single sample has
         std=0; empty aggregates have n=0 and null values.
@@ -5019,6 +5096,46 @@ components:
         - count
       description: Empty data returns bins=[] and count=0; constant data uses a nonzero width centered on
         the constant.
+    StatisticsEvent:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        ts:
+          $ref: "#/components/schemas/Timestamp"
+        type:
+          type: string
+          enum:
+            - ip_change
+            - isp_change
+            - alert
+        label:
+          type: string
+          description: Plain text change or alert title/details.
+      required:
+        - id
+        - nodeId
+        - ts
+        - type
+        - label
+    StatisticsEvents:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatisticsEvent"
+          maxItems: 500
+        truncated:
+          type: boolean
+          description: True when more than 500 matching marks exist.
+      required:
+        - items
+        - truncated
     Fleet:
       type: object
       additionalProperties: false
@@ -6259,6 +6376,15 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/Distribution"
+    getEventsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/StatisticsEvents"
     getDashboardResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
