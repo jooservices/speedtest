@@ -28,27 +28,35 @@ cmd="${1:-list}"; shift || true
 
 envval() { grep -m1 "^$1=" "$ENV_FILE" | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//'; }
 jar="$(mktemp)"; trap 'rm -f "$jar"' EXIT
-api() { local m="$1" p="$2" b="${3:-}"; local a=(-sS -b "$jar" -c "$jar" -X "$m" "${LOCAL}${p}" -H "Origin: ${LOCAL}" -H "X-CSRF-Token: ${csrf:-}")
-  [ -n "$b" ] && a+=(-H 'Content-Type: application/json' -d "$b"); [ "$m" = POST ] && a+=(-H "Idempotency-Key: node-$(date +%s%N)"); curl "${a[@]}"; }
+api() { local m="$1" p="$2" b="${3:-}" idem="${4:-}"; local a=(-sS -b "$jar" -c "$jar" -X "$m" "${LOCAL}${p}" -H "Origin: ${LOCAL}" -H "X-CSRF-Token: ${csrf:-}")
+  [ -n "$b" ] && a+=(-H 'Content-Type: application/json' -d "$b"); [ "$m" = POST ] && a+=(-H "Idempotency-Key: ${idem:-node-$(date +%s%N)}"); curl "${a[@]}"; }
 login() { [ "$(stat -c %a "$ENV_FILE")" = 600 ] || { echo "$ENV_FILE must be mode 0600"; exit 1; }
   csrf="$(api GET /api/auth/me | jq -r '.data.csrfToken')"
   csrf="$(api POST /api/auth/login "$(jq -nc --arg e "$(envval STAGING_OWNER_EMAIL)" --arg p "$(envval STAGING_OWNER_PASSWORD)" '{email:$e,password:$p}')" | jq -r '.data.csrfToken // empty')"
   [ -n "$csrf" ] || { echo "owner sign-in failed"; exit 1; }; }
-set_node_interval() { local id="$1" tag body code
-  tag="$(curl -sS -D - -o /dev/null -b "$jar" "${LOCAL}/api/schedules/${id}" | tr -d '\r' | awk -F': ' 'tolower($1)=="etag"{print $2}')"
-  [ -n "$tag" ] || { echo "could not read schedule ETag for node $id"; exit 1; }
+set_node_interval() { local id="$1" tag body code attempts=0
   body="$(jq -nc --argjson interval "$NODE_INTERVAL" '{interval:$interval,offset:0,enabled:true}')"
-  code="$(curl -sS -o /dev/null -w '%{http_code}' -b "$jar" -X PUT "${LOCAL}/api/schedules/${id}" -H "Origin: ${LOCAL}" -H "X-CSRF-Token: ${csrf}" -H 'Content-Type: application/json' -H "If-Match: ${tag}" -d "$body")"
-  [ "$code" = 200 ] || { echo "could not set node $id interval (HTTP $code)"; exit 1; }
+  while (( attempts < 3 )); do
+    attempts=$((attempts + 1))
+    tag="$(curl -sS -D - -o /dev/null -b "$jar" "${LOCAL}/api/schedules/${id}" | tr -d '\r' | awk -F': ' 'tolower($1)=="etag"{print $2}')" || { echo "could not read schedule for node $id" >&2; return 1; }
+    [ -n "$tag" ] || { echo "could not read schedule ETag for node $id" >&2; return 1; }
+    code="$(curl -sS -o /dev/null -w '%{http_code}' -b "$jar" -X PUT "${LOCAL}/api/schedules/${id}" -H "Origin: ${LOCAL}" -H "X-CSRF-Token: ${csrf}" -H 'Content-Type: application/json' -H "If-Match: ${tag}" -d "$body")" || { echo "schedule update request failed for node $id" >&2; return 1; }
+    [ "$code" = 200 ] && return 0
+    [ "$code" = 412 ] || { echo "could not set node $id interval (HTTP $code)" >&2; return 1; }
+  done
+  echo "schedule for node $id changed during all update attempts" >&2
+  return 1
 }
 
 case "$cmd" in
 up)
   [ $# -ge 1 ] || { echo "usage: nodes.sh up NAME..."; exit 1; }
+  require_schedule_interval NODE_INTERVAL "$NODE_INTERVAL"
   login
   for name in "$@"; do
     if docker ps -a --format '{{.Names}}' | grep -qx "speedtest-node-$name"; then echo "node $name already has a container"; continue; fi
-    created="$(api POST /api/nodes "$(jq -nc --arg n "$name" --arg l "Docker node $name" --argjson d "${EXPECTED_DOWN:-500}" --argjson u "${EXPECTED_UP:-500}" '{name:$n,label:$l,expectedDown:$d,expectedUp:$u}')")"
+    creation_key="docker-node-$(printf '%s' "$name" | sha256sum | cut -c1-64)"
+    created="$(api POST /api/nodes "$(jq -nc --arg n "$name" --arg l "Docker node $name" --argjson d "${EXPECTED_DOWN:-500}" --argjson u "${EXPECTED_UP:-500}" '{name:$n,label:$l,expectedDown:$d,expectedUp:$u}')" "$creation_key")"
     token="$(printf '%s' "$created" | jq -r '.data.token // empty')"
     node_id="$(printf '%s' "$created" | jq -r '.data.node.id // empty')"
     [ -n "$token" ] || { echo "node $name was not created: $(printf '%s' "$created" | head -c 300)"; exit 1; }
