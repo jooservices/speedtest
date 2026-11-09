@@ -124,6 +124,11 @@ func (r Result) Validate() error {
 	if err := r.validateDetails(); err != nil {
 		return err
 	}
+	return r.validateStatus()
+}
+
+// validateStatus checks the rules that depend on the result status (failed needs an error and a class, ok needs the metrics).
+func (r Result) validateStatus() error {
 	switch r.Status {
 	case StatusFailed:
 		if r.Error == nil || *r.Error == "" {
