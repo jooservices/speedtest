@@ -2,10 +2,11 @@
 # Entrypoint of an extra node container ("VM"): enrols once with the token it was given, then runs one agent.
 # It knows only its own name, the center address and its expected speeds; nothing about other nodes.
 set -euo pipefail
-STATE=/var/lib/speedtest
+STATE="${SPEEDTEST_STATE_DIR:-/var/lib/speedtest}"
 # shellcheck source=deploy/docker/schedule-defaults.sh
 source "$(dirname "$0")/schedule-defaults.sh"
 NODE_INTERVAL="$(node_interval)"
+require_schedule_interval NODE_INTERVAL "$NODE_INTERVAL"
 : "${NODE_NAME:?}" "${CENTER_URL:?}"
 export SPEEDTEST_AGENT_CONFIG="$STATE/config.yaml" SPEEDTEST_AGENT_CREDENTIAL="$STATE/credential" SPEEDTEST_AGENT_CENTER="$CENTER_URL" SPEEDTEST_SPOOL_DIR="$STATE/spool"
 log() { printf '%s node %s: %s\n' "$(date -u +%FT%TZ)" "$NODE_NAME" "$*"; }
