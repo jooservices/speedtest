@@ -75,6 +75,10 @@
 
   /* ---------- Settings / nodes API ---------- */
   ST.settings = function () { return state.settings; };
+  ST.timezone = function () {
+    var zone = state.settings.timezone;
+    return zone && zone !== 'browser' ? zone : (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+  };
   ST.setSettings = function (patch, silent) { Object.assign(state.settings, patch); persist(); if (!silent) ST.emit('settings'); };
   ST.nodes = function () { return state.nodes; };
   ST.node = function (id) { return state.nodes.filter(function (n) { return n.id === id; })[0]; };
@@ -121,6 +125,12 @@
   /* ---------- Queries ---------- */
   ST.now = function () { return Date.now(); };
   ST.nodeResults = function (id) { return ST.results({nodeIds:[id]}); };
+  function effectiveISP(result) {
+    var value = String(result.engineISP || '').trim();
+    var geo = result.geo || (ST.geo && ST.geo(result.ip)) || {};
+    if (!value) value = String(geo.organisation || geo.asnOrg || geo.isp || '').trim();
+    return value || null;
+  }
   ST.results = function (o) {
     o = o || {};
     var ids = o.nodeIds || state.nodes.map(function (n) { return n.id; });
@@ -131,6 +141,7 @@
         var r = arr[i];
         if (r.ts < from || r.ts > to) continue;
         if ((r.engine || 'ookla') !== (o.engine || ST.selectedEngine || (ST.node(id) || {}).primaryEngine || 'ookla')) continue;
+        if (o.isp && (!effectiveISP(r) || effectiveISP(r).toLowerCase() !== o.isp.toLowerCase())) continue;
         if (o.status && o.status !== 'all' && r.status !== o.status) continue;
         out.push(r);
       }
@@ -152,11 +163,16 @@
     var i = (sorted.length - 1) * p, lo = Math.floor(i), hi = Math.ceil(i);
     return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
   };
+  S.effectiveISP = effectiveISP;
+  S.weekChange = function (current, previous) {
+    return current == null || previous == null || previous === 0 ? null : (current - previous) / previous * 100;
+  };
   S.std = function (a) { if (a.length < 2) return 0; var m = S.mean(a); return Math.sqrt(S.mean(a.map(function (x) { return (x - m) * (x - m); }))); };
   S.summary = function (values) {
     var v = values.filter(function (x) { return x != null; }).sort(function (a, b) { return a - b; });
-    if (!v.length) return { n: 0, mean: null, median: null, min: null, max: null, p5: null, p95: null, std: null };
-    return { n: v.length, mean: S.mean(v), median: S.pct(v, .5), min: v[0], max: v[v.length - 1], p5: S.pct(v, .05), p95: S.pct(v, .95), std: S.std(v) };
+    if (!v.length) return { n: 0, mean: null, median: null, min: null, max: null, p5: null, p50: null, p95: null, p99: null, std: null };
+    var p50 = S.pct(v, .5);
+    return { n: v.length, mean: S.mean(v), median: p50, min: v[0], max: v[v.length - 1], p5: S.pct(v, .05), p50: p50, p95: S.pct(v, .95), p99: S.pct(v, .99), std: S.std(v) };
   };
   S.metricValue = function (r, m) {
     if (r.status === 'failed') return null;
@@ -175,8 +191,8 @@
     jitter: { label: 'Jitter', short: 'Jitter', unit: 'ms', good: 'low' },
     loss: { label: 'Packet loss', short: 'Loss', unit: '%', good: 'low' }
   };
-  S.nodeSummary = function (id, from, to) {
-    var rs = ST.results({ nodeIds: [id], from: from, to: to }), ok = rs.filter(function (r) { return r.status !== 'failed'; }), n = ST.node(id);
+  S.nodeSummary = function (id, from, to, isp) {
+    var rs = ST.results({ nodeIds: [id], from: from, to: to, isp: isp }), ok = rs.filter(function (r) { return r.status !== 'failed'; }), n = ST.node(id);
     var ips = {}; rs.forEach(function (r) { ips[r.ip] = 1; });
     var sum = {
       count: rs.length, ok: ok.length, failed: rs.length - ok.length, successRate: rs.length ? ok.length / rs.length * 100 : null,
@@ -241,7 +257,9 @@
               open = {
                 id: rule.id + ':' + node.id + ':' + r.ts, ruleId: rule.id, nodeId: node.id, severity: rule.severity, ts: r.ts, resolvedAt: null,
                 title: rule.name,
-                detail: rule.metric === 'ip_changed' ? 'Now ' + r.ip + (ST.geo(r.ip) ? ' (' + ST.geo(r.ip).city + ')' : '') : ST.ruleText(rule)
+                detail: rule.metric === 'ip_changed' ? 'Now ' + r.ip + (ST.geo(r.ip) ? ' (' + ST.geo(r.ip).city + ')' : '') : ST.ruleText(rule),
+                triggerResultId: r.id,
+                engine: r.engine || node.primaryEngine || 'ookla'
               };
               events.push(open);
             }
@@ -526,12 +544,6 @@
       return schedules.nodes.filter(function (x) { return x.nodeId === node.id; }).map(function (x) { return Object.assign({ engine: x.engine || 'ookla' }, x.config); });
     };
     ST.saveEngineSchedules = function (id, engines) { return ST.saveSchedule(id, { engines: engines }); };
-    function quietZone() {
-      var zone = state.settings.timezone;
-      if (zone && zone !== 'browser') return zone;
-      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
-    }
-    ST.timezone = quietZone;
     // Two-factor sign-in (authenticator app): status, start setup, confirm, turn off.
     ST.twoFactorStatus = function () { return API.request('/api/auth/2fa').then(function (r) { return r.data; }); };
     ST.twoFactorSetup = function (currentPassword) { return API.request('/api/auth/2fa/setup', { method: 'POST', body: { currentPassword: currentPassword } }).then(function (r) { return r.data; }); };
@@ -552,7 +564,7 @@
         var rules = Object.assign({ stagger: current.stagger, maxConcurrent: current.maxConcurrent,
           quietStart: current.quiet.quietStart, quietEnd: current.quiet.quietEnd }, patch);
         return mutation('/api/schedules/rules', 'PUT', { stagger: !!rules.stagger, maxConcurrent: +rules.maxConcurrent,
-          quiet: { quietStart: rules.quietStart || '', quietEnd: rules.quietEnd || '', timezone: quietZone() } }, { ifMatch: response.etag });
+          quiet: { quietStart: rules.quietStart || '', quietEnd: rules.quietEnd || '', timezone: ST.timezone() } }, { ifMatch: response.etag });
       });
     };
     ST.staggerSchedules = function () {
