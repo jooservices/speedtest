@@ -257,13 +257,17 @@ func TestMigrationBackfillAndRollbackIntegration(t *testing.T) {
 	for i := range 8 {
 		save(t, s, nodeA, result(i+1, i, fmt.Sprintf("203.0.113.%d", i%2+1)))
 	}
-	for range 6 {
+	for {
+		var version int64
+		if err := p.QueryRow(t.Context(), `SELECT COALESCE(MAX(version_id) FILTER (WHERE is_applied),0) FROM goose_db_version`).Scan(&version); err != nil {
+			t.Fatal(err)
+		}
+		if version <= 3 {
+			break
+		}
 		if err := db.Migrate(t.Context(), p, "down"); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := db.Migrate(t.Context(), p, "down"); err != nil {
-		t.Fatal(err)
 	}
 	// Populate version-3 data, including an obsolete history row, as a pre-upgrade fixture.
 	s.Hook = nil

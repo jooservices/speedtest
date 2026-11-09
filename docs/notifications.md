@@ -20,9 +20,9 @@ accept a per-node enable override.
 | Network | `network.ip_changed`, `network.isp_changed`, `network.server_differs` |
 | Bandwidth / security / platform / digests | catalogued for Settings; digest scheduling is JOOST-79 |
 
-`quality.drop_vs_median` and `network.server_differs` are marked `engineScoped`
-for a future emitter once JOOST-71 lands. Do not edit `internal/center/stats` or
-schedules tables from this feature.
+`quality.drop_vs_median` and `network.server_differs` are marked `engineScoped`.
+The current engine dimension comes from JOOST-71; alert rule evaluation remains
+per engine. This feature does not edit `internal/center/stats` or schedule tables.
 
 Production defaults already match the owner rules: download below 65% of
 expected, upload below 40%, ping above 30 ms, jitter above 10 ms, loss above 2%,
@@ -67,11 +67,13 @@ Quiet hours, retries and test messages behave as before (see delivery worker in
 
 ## Migrations
 
-- `00010_notification_events.sql` — override tables (settings, templates, node settings)
-- `00011_alert_event_payload.sql` — additive `event_key` / `payload` on `alert_events`
+- `00010_engine_schedules.sql` (JOOST-71) — per-engine node schedules and result identity.
+- `00011_alert_event_payload.sql` — additive `event_key` / `payload` columns on `alert_events`.
+- `00012_notification_events.sql` — event, per-node enable and template overrides.
 
-Both are backward compatible with a running 1.0.0 binary (defaults / unused
-columns).
+The notification migrations add columns and tables. The running 1.0.0 binary can
+continue writing alerts and results because the new fields have defaults and
+the new tables are unused by that binary.
 
 ## Verification
 

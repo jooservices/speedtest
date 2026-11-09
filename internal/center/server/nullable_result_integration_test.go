@@ -55,10 +55,17 @@ func TestNullableResultIdentityIntegration(t *testing.T) {
 	if hook.calls != 2 {
 		t.Fatal("known IP hook not invoked")
 	}
-	// Roll back engine schedules, two-factor, audit log, installer, delivery, alert engine and history, then refuse to lose the nullable-IP contract.
-	for _, name := range []string{"engine schedules", "two-factor", "audit log", "SSH installer", "notification deliveries", "alert engine", "history"} {
+	// Roll back to version 3, then refuse to lose the nullable-IP contract.
+	for {
+		var version int64
+		if err := pool.QueryRow(ctx, `SELECT COALESCE(MAX(version_id) FILTER (WHERE is_applied),0) FROM goose_db_version`).Scan(&version); err != nil {
+			t.Fatal(err)
+		}
+		if version <= 3 {
+			break
+		}
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
-			t.Fatal(name+" migration rollback failed", err)
+			t.Fatal("migration rollback failed", err)
 		}
 	}
 	// New-format rows cannot be represented under version 2. Refuse rollback atomically.

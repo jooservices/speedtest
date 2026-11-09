@@ -14,6 +14,12 @@ Its down migration preserves results, cached locations and derived history; see
 `00007_ssh_installations.sql` adds short-lived host-key probes, installation job
 state and replayable progress events, with hashed idempotency keys and an active
 installation limit per node. It stores no SSH credentials or enrollment tokens.
+`00010_engine_schedules.sql` adds per-engine schedules and result identity;
+existing nodes and results backfill to Ookla. `00011_alert_event_payload.sql`
+adds defaulted event keys and placeholder payloads to alert history, and
+`00012_notification_events.sql` adds owner overrides for event settings,
+per-node event enablement and templates. The notification versions are
+additive; the 1.0.0 binary continues to use its existing tables and columns.
 
 `00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
 SQL files are embedded by
@@ -97,6 +103,9 @@ that a subsequent up can reapply version 1.
 | `installer_jobs` | Owner-scoped installation state; at most one active job per node |
 | `installer_events` | Safe, replayable plain-language progress events |
 | `installer_idempotency` | HMAC-protected install request digest and job link, expiring after 24 hours |
+| `notification_event_settings` | Owner overrides for event enabled state, severity and channels |
+| `notification_event_node_settings` | Per-node enable overrides for node-scoped events |
+| `notification_templates` | Per-event, per-channel owner template overrides |
 
 All IDs are UUIDs. A result ID has **no server default**, so retries cannot
 accidentally obtain another identity. The primary key rejects duplicate UUIDs;
