@@ -101,7 +101,7 @@ func tfSetup(t *testing.T, attempts int) (*Service, *memoryStore, *time.Time, Se
 	cfg.AppKey = []byte(strings.Repeat("k", 32))
 	cfg.LoginMaxAttempts = attempts
 	service := testService(t, store, cfg)
-	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	now := time.Now().UTC().Truncate(time.Second)
 	service.now = func() time.Time { return now }
 	anonymous, err := service.Bootstrap(context.Background())
 	if err != nil {
