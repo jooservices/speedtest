@@ -32,7 +32,10 @@ Deployment artifacts for the node agent and the command center live here.
 - The agent and the center are deployed independently, matching the rule that
   nodes know only their own configuration.
 - The Docker staging center and extra-node bootstrap default to a 60-minute
-  schedule. `STAGING_INTERVAL_MINUTES` and `NODE_INTERVAL` remain explicit
-  overrides. They apply only at first enrollment; the center schedule and the
-  Ookla engine schedule are synchronized together, and the enrolled marker keeps
-  restarts from overwriting an operator's saved interval.
+  schedule. `STAGING_INTERVAL_MINUTES` and `NODE_INTERVAL` accept explicit
+  whole-minute overrides from 5 through 1440. They apply only at first
+  enrollment; the center schedule and the Ookla engine schedule are synchronized
+  together, and the enrolled marker keeps restarts from overwriting an operator's
+  saved interval. Invalid values stop before node creation or token consumption.
+- Staging entrypoints keep persistent state in `/var/lib/speedtest`;
+  `SPEEDTEST_STATE_DIR` may point to an isolated directory for behavioral tests.

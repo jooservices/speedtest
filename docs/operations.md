@@ -306,7 +306,16 @@ the staging container; `NODE_INTERVAL` overrides schedules for extra node
 containers. Bootstrap applies an override only during first enrollment and
 updates `schedules` plus the Ookla `engine_schedules` row in one transaction.
 The enrolled marker prevents a restart from rewriting the chosen interval. A
-later change requires an explicit schedule update in the center.
+later change requires an explicit schedule update in the center. Both overrides
+must be whole minutes from 5 through 1440; invalid values stop before node
+creation or token consumption.
+
+For a center binary rollback, stop all center writers before rolling back
+migration 00015 and restoring the previous binary. Start the previous binary
+only after the database default is back to 30 minutes; its node-create response
+assumes that former default. The current binary reports the value actually
+inserted, so node creation remains consistent if 00015 is rolled back while the
+current binary is running.
 
 Migration 00010 keeps the single-row legacy `schedules` table, backfills
 `engine_schedules`, and adds `results.engine NOT NULL DEFAULT 'ookla'`. New code
