@@ -96,7 +96,7 @@ var apiRoutes = map[string]bool{
 	"/api/isps/{id}":                     true,
 	"/api/isps/{id}/trend":               true,
 	"/api/isps/{id}/plans":               true,
-	"/api/isps/{id}/plans/{planId}":      true,
+	"/api/isps/{id}/plans/{id}":         true,
 	"/api/jobs/{id}":                     true,
 	"/api/installer/probes":              true,
 	"/api/nodes/{id}/installations":      true,
