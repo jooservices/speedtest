@@ -125,7 +125,9 @@ func (s *Postgres) Config(ctx context.Context, node string) (map[string]any, err
 	var primary string
 	err := s.Pool.QueryRow(ctx, `SELECT n.id::text,n.name,n.expected_down_mbps,n.expected_up_mbps,n.threads,n.server_id,n.binding_interface,host(n.binding_source_ip),n.auto_update,n.config_revision,s.interval_minutes,s.offset_minutes,(s.enabled AND n.enabled),(SELECT sum(e.revision) FROM engine_schedules e WHERE e.node_id=n.id),
  COALESCE((SELECT jsonb_object_agg(key,value) FROM settings WHERE key IN ('engine','quietStart','quietEnd','timezone','agentRelease') AND value IS NOT NULL), '{}'::jsonb),n.primary_engine,
- (SELECT jsonb_agg(jsonb_build_object('engine',e.engine,'interval',e.interval_minutes,'offset',e.offset_minutes,'enabled',e.enabled AND n.enabled) ORDER BY e.engine) FROM engine_schedules e WHERE e.node_id=n.id)
+ (SELECT jsonb_agg(jsonb_build_object('engine',e.engine,'interval',e.interval_minutes,'offset',e.offset_minutes,'enabled',e.enabled AND n.enabled,
+   'serverId',COALESCE(to_jsonb(ns.pinned_server_id),'"auto"'::jsonb)) ORDER BY e.engine)
+   FROM engine_schedules e LEFT JOIN node_engine_servers ns ON ns.node_id=e.node_id AND ns.engine=e.engine WHERE e.node_id=n.id)
  FROM nodes n JOIN engine_schedules s ON s.node_id=n.id AND s.engine=n.primary_engine WHERE n.id=$1`, node).Scan(&id, &name, &down, &up, &threads, &server, &iface, &source, &autoUpdate, &revision, &interval, &offset, &enabled, &scheduleRevision, &settings, &primary, &engineSchedules)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -165,13 +167,17 @@ func (s *Postgres) Heartbeat(ctx context.Context, node string, h Heartbeat) (tim
 	return received, err
 }
 
-const commandColumns = `id::text,node_id::text,type,version,status,created_at,acked_at,phase,pct,result_id::text,error`
+const commandColumns = `id::text,node_id::text,type,engine,version,status,created_at,acked_at,phase,pct,result_id::text,error`
 
 type scanner interface{ Scan(...any) error }
 
 func scanCommand(row scanner) (Command, error) {
 	var c Command
-	err := row.Scan(&c.ID, &c.NodeID, &c.Type, &c.Version, &c.Status, &c.CreatedAt, &c.AckedAt, &c.Phase, &c.Pct, &c.ResultID, &c.Error)
+	var engine *string
+	err := row.Scan(&c.ID, &c.NodeID, &c.Type, &engine, &c.Version, &c.Status, &c.CreatedAt, &c.AckedAt, &c.Phase, &c.Pct, &c.ResultID, &c.Error)
+	if engine != nil {
+		c.Engine = *engine
+	}
 	c.CreatedAt = c.CreatedAt.UTC()
 	if c.AckedAt != nil {
 		utc := c.AckedAt.UTC()
@@ -208,6 +214,13 @@ func (s *Postgres) Ack(ctx context.Context, node, id string, a Ack) (Command, er
 	if err != nil {
 		return Command{}, err
 	}
+	if current.Type == "list_servers" {
+		if a.Status == "succeeded" && a.Servers == nil || a.Status != "succeeded" && a.Servers != nil {
+			return Command{}, ErrInvalid
+		}
+	} else if a.Servers != nil {
+		return Command{}, ErrInvalid
+	}
 	next, err := ApplyAck(current, a)
 	if err != nil {
 		return Command{}, err
@@ -222,6 +235,13 @@ func (s *Postgres) Ack(ctx context.Context, node, id string, a Ack) (Command, er
 			return Command{}, ErrInvalid
 		}
 		return Command{}, err
+	}
+	if current.Type == "list_servers" && next.Status == "succeeded" {
+		if _, err = tx.Exec(ctx, `INSERT INTO node_engine_servers(node_id,engine,servers,refreshed_at)
+VALUES($1,$2,$3::jsonb,clock_timestamp()) ON CONFLICT(node_id,engine) DO UPDATE
+SET servers=EXCLUDED.servers,refreshed_at=EXCLUDED.refreshed_at`, node, current.Engine, jsonValue(*a.Servers)); err != nil {
+			return Command{}, err
+		}
 	}
 	return next, tx.Commit(ctx)
 }

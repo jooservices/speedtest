@@ -4,7 +4,7 @@ Monitor the real speed of every internet connection you own, around the clock.
 
 Small agents on your machines run a speed test on a schedule and report to one dashboard. The dashboard stores every result, remembers which public IP each machine used and where it is, and shows averages, trends and the best and worst hours.
 
-**Status: interface preview and backend foundation.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. In demo mode, everything you change is kept in the browser's local storage. The UI now includes a contract-backed API client and remote data store; product endpoints that do not exist yet are verified with a local fake API until backend integration in JOOST-48. The command center serves the UI, checks database readiness, provides owner authentication and session endpoints, and supports node enrollment, credential lifecycle and authenticated agent ingestion endpoints (results, configuration, heartbeat, commands and observed IP). The agent can enroll, run scheduled speed tests, heartbeat every 30 s, sync its schedule with ETags, and handle `run_now`, `pause`, `resume` and `update_config`; results are committed to a private SQLite spool before background delivery. Other product API areas are still being implemented. PostgreSQL migrations, a connection pool, and geolocation modules are available.
+**Status: interface preview and backend foundation.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. In demo mode, everything you change is kept in the browser's local storage. The UI includes a contract-backed API client and remote data store. The command center serves the UI, checks database readiness, provides owner authentication and session endpoints, and supports node enrollment, credential lifecycle, authenticated agent ingestion, and owner server-catalog and selection endpoints. It stores a separate discovered server catalog and pin for each installed engine. The agent can enroll, run scheduled speed tests, heartbeat every 30 s, sync its schedule with ETags, and handle `run_now`, `pause`, `resume`, `update_config` and `list_servers`; results are committed to a private SQLite spool before background delivery. PostgreSQL migrations, a connection pool, and geolocation modules are available.
 
 ## View the preview
 
@@ -20,7 +20,7 @@ Opening `ui/index.html?demo=1` directly also works. Without `?demo=1`, the UI re
 | Page | What you can do |
 |---|---|
 | Dashboard | Fleet tiles (speed versus expected, latency, success rate, IP changes), one card per node, comparison chart (speed or % of expected, chart or table), latest results, open alerts |
-| Nodes | List, guided "Add a node" wizard (install over SSH or copy one command), node detail with settings, agent controls and removal |
+| Nodes | List, guided "Add a node" wizard (install over SSH or copy one command), node detail with per-engine server search and pinning, agent controls and removal |
 | Results | Filter, search, sort, paginate, open full detail, export CSV |
 | Statistics | Per-node summary (average, median, slow/fast 5%, variation, stability), trend with optional combined total, time of day, weekday × hour heatmap, distribution |
 | IP & location | Map of current locations, address-change timeline, every address seen with geolocation, lookup tool |
@@ -166,7 +166,7 @@ unknown keys, and invalid values fail fast with a configuration error.
   without restart. The schedule (interval, offset, enabled) and quiet hours come
   from the center; the local `config.yaml` only seeds the bootstrap interval.
 - **Commands** are polled and acknowledged (`run_now`, `pause`, `resume`,
-  `update_config`); a command is executed once and redeliveries are only
+  `update_config`, `update_agent`, `list_servers`); a command is executed once and redeliveries are only
   re-acknowledged.
 - **Offline behavior**: if the center is unreachable the agent keeps the last
   known schedule and only logs.

@@ -1,6 +1,97 @@
 export function nodesSuite(T, ctx) {
   const { page, assert } = T;
   const { stack, startAgent } = ctx;
+  async function pinOoklaAndCheckFallback() {
+    await T.press('Refresh server list');
+    await T.row('Gateway Central').waitFor({ timeout: 90000 });
+    await page.getByRole('columnheader', { name: 'Distance' }).waitFor();
+    await assertPickerTableFits(page.locator('.setting').filter({ hasText: 'Search Ookla servers' }).first(), 'Ookla');
+    const search = 'Search Ookla servers';
+    await T.fill(search, 'Gateway');
+    const server = T.row('Gateway Central');
+    await server.waitFor();
+    await T.fill(search, 'Hanoi');
+    await server.waitFor();
+    await T.fill(search, 'Ookla ISP');
+    await server.waitFor();
+    await server.getByRole('button', { name: 'Pin' }).click();
+    await T.toast('Ookla server selection saved').waitFor();
+    await T.press('Use automatic selection');
+    await T.toast('Ookla server selection saved').waitFor();
+    await server.getByRole('button', { name: 'Pin' }).click();
+    await T.toast('Ookla server selection saved').waitFor();
+    assert.equal(T.db("select pinned_server_id from node_engine_servers c join nodes n on n.id=c.node_id where n.name='E2E-1' and c.engine='ookla'"), '54321');
+    await T.press('Run test');
+    const run = T.dialog('Running speed test');
+    await run.getByText(/Mbps ↓|Gbps ↓|kbps ↓/).waitFor({ timeout: 90000 });
+    await T.press('Close', run.locator('.modal-foot'));
+    const saved = T.db("select r.server_id::text||':'||r.warnings::text from results r join nodes n on n.id=r.node_id where n.name='E2E-1' order by r.ts desc limit 1");
+    assert.match(saved, /^12345:.*Pinned server was unreachable/);
+    await T.open('#/history', 'Results');
+    await T.fill('Search results', 'E2E-1');
+    const resultRow = page.getByRole('row').filter({ hasText: 'Different from pinned' }).first();
+    await resultRow.waitFor();
+    await resultRow.click();
+    await page.getByText(/instead of pinned server #54321/).waitFor();
+    await page.getByText(/Pinned server was unreachable/).waitFor();
+    await page.locator('dd').filter({ hasText: /Singapore Gateway, Singapore \(#12345\)/ }).waitFor();
+  }
+
+  async function pinLibreSpeedAndCheckPicker() {
+    await T.open('#/nodes', 'Nodes');
+    await T.row('E2E-1').click();
+    await T.tab('Settings');
+    const libre = page.locator('.setting').filter({ hasText: 'LibreSpeed' }).first();
+    await libre.getByRole('button', { name: 'Refresh server list' }).click();
+    const libreRows = libre.locator('tbody tr');
+    await libreRows.nth(1).waitFor({ timeout: 90000 });
+    await assertPickerTableFits(libre, 'LibreSpeed');
+    assert.match(await libreRows.nth(0).innerText(), /Hanoi/);
+    assert.match(await libreRows.nth(1).innerText(), /Singapore/);
+    assert.equal(await libre.getByRole('columnheader', { name: 'Distance' }).count(), 0, 'LibreSpeed has no invented distance column');
+    await libre.getByRole('row').filter({ hasText: 'Singapore' }).getByRole('button', { name: 'Pin' }).click();
+    await T.toast('LibreSpeed server selection saved').waitFor();
+    await T.toast('LibreSpeed server selection saved').waitFor({ state: 'hidden' });
+    assert.equal(T.db("select pinned_server_id from node_engine_servers c join nodes n on n.id=c.node_id where n.name='E2E-1' and c.engine='librespeed'"), '12345');
+    return libre;
+  }
+
+  async function checkServerPickerResponsive(libre) {
+    const original = page.viewportSize();
+    for (const theme of ['dark', 'light']) {
+      await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
+      for (const width of [390, 768, 1440]) {
+        await page.setViewportSize({ width, height: 900 });
+        await libre.scrollIntoViewIfNeeded();
+        await page.evaluate(() => window.scrollTo(0, 0));
+        await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+        const overflow = await page.evaluate(() => {
+          const wide = [];
+          for (const el of document.querySelectorAll('.content *')) {
+            const box = el.getBoundingClientRect();
+            if (box.width && box.right > document.documentElement.clientWidth + 1 && !el.closest('.table-wrap, .tabs, .seg, pre, .legend')) wide.push(`${el.tagName}.${el.className} ${Math.round(box.left)}-${Math.round(box.right)} width=${Math.round(box.width)} min=${getComputedStyle(el).minWidth}`);
+          }
+          return { page: document.documentElement.scrollWidth - document.documentElement.clientWidth, x: scrollX, wide: wide.slice(0, 5) };
+        });
+        assert.ok(overflow.page <= 1, `node server settings overflow at ${width}px (${theme}): ${JSON.stringify(overflow)}`);
+        assert.deepEqual(overflow.wide, [], `node server settings elements overflow at ${width}px (${theme})`);
+        if (width >= 768) await assertPickerTableFits(libre, 'LibreSpeed');
+        if (width <= 900) {
+          const menu = await page.locator('.menu-btn').boundingBox();
+          assert.ok(menu && menu.x >= 0 && menu.x + menu.width <= width, `mobile menu is outside the viewport at ${width}px (${theme}): ${JSON.stringify(menu)}`);
+        }
+        if (process.env.E2E_SHOTS) await page.screenshot({ path: `${process.env.E2E_SHOTS}/server-selection-${theme}-${width}.png`, fullPage: true });
+      }
+    }
+    await page.setViewportSize(original);
+    await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
+  }
+
+  async function assertPickerTableFits(section, label) {
+    const table = section.locator('.table-wrap').first();
+    const size = await table.evaluate(el => ({ client: el.clientWidth, scroll: el.scrollWidth }));
+    assert.ok(size.client > 0 && size.scroll <= size.client + 1, `${label} server table clips at desktop width: ${JSON.stringify(size)}`);
+  }
   return {
     async publishedUpdate() {
       T.db("update nodes set agent='speedtest-agent/1.0.0 (linux/amd64)' where name='VM3'");
@@ -60,8 +151,18 @@ export function nodesSuite(T, ctx) {
       await T.fill('Search results', 'E2E-1');
       await page.getByRole('row').nth(1).waitFor();
       // The same line cannot be enrolled twice with the same one-time key.
-      const again = await page.request.post(stack.origin + '/api/agent/enroll', { data: { token, name: 'E2E-copy', agent: 'x' } });
+      const again = await page.request.post(stack.browserOrigin + '/api/agent/enroll', { data: { token, name: 'E2E-copy', agent: 'x' } });
       assert.ok(again.status() >= 400, 'an enrolment key works once, got ' + again.status());
+    },
+
+    async discoverPinAndFallback() {
+      await T.open('#/nodes', 'Nodes');
+      await T.row('E2E-1').click();
+      await T.tab('Settings');
+      await pinOoklaAndCheckFallback();
+      await T.dismiss();
+      const libre = await pinLibreSpeedAndCheckPicker();
+      await checkServerPickerResponsive(libre);
     },
 
     // Wizard validation: nothing is created from an incomplete or duplicate form.
@@ -139,12 +240,12 @@ export function nodesSuite(T, ctx) {
       await T.press('Pause');
       await T.toast('paused').waitFor();
       await T.settled();
-      assert.equal(T.db("select enabled from nodes where name='VM4'"), 'f');
+      await T.eventually(async () => (await T.api('/api/nodes?size=100')).body.data.find(node => node.name === 'VM4').enabled === false, 'the node is paused on the center');
       await T.eventually(async () => await page.getByRole('button', { name: 'Run test' }).isDisabled(), 'a paused node cannot be tested');
       await T.press('Resume');
       await T.toast('resumed').waitFor();
       await T.settled();
-      assert.equal(T.db("select enabled from nodes where name='VM4'"), 't');
+      await T.eventually(async () => (await T.api('/api/nodes?size=100')).body.data.find(node => node.name === 'VM4').enabled === true, 'the node is resumed on the center');
     },
 
     // Removing a node from the dashboard only (no SSH): the node and its results disappear.

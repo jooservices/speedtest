@@ -50,6 +50,8 @@ var apiRoutes = map[string]bool{
 	"/api/agent/enroll":                  true,
 	"/api/nodes/{id}":                    true,
 	"/api/nodes/{id}/run":                true,
+	"/api/nodes/{id}/servers":            true,
+	"/api/nodes/{id}/server-selection":   true,
 	"/api/nodes/{id}/commands":           true,
 	"/api/nodes/{id}/commands/{id}":      true,
 	"/api/nodes/{id}/credential":         true,

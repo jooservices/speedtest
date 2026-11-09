@@ -1,17 +1,157 @@
 package runloop
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jooservices/speedtest/internal/agent/control"
+	"github.com/jooservices/speedtest/internal/agent/engine"
+	"github.com/jooservices/speedtest/internal/agent/netpath"
 	"github.com/jooservices/speedtest/internal/agent/sched"
 	"github.com/jooservices/speedtest/internal/agent/testutil"
 )
+
+type pinnedFailureEngine struct{ calls []engine.Options }
+
+func (e *pinnedFailureEngine) Run(_ context.Context, options engine.Options) (engine.Result, error) {
+	e.calls = append(e.calls, options)
+	if options.ServerID > 0 {
+		return engine.Result{}, &engine.RunError{Class: engine.ServerUnavailable}
+	}
+	return engine.Result{ExternalIP: "198.51.100.7"}, nil
+}
+
+type serverListingEngine struct {
+	options engine.Options
+	servers []engine.ServerOption
+	err     error
+}
+
+func (*serverListingEngine) Run(context.Context, engine.Options) (engine.Result, error) {
+	return engine.Result{}, nil
+}
+
+func (e *serverListingEngine) ListServers(_ context.Context, options engine.Options) ([]engine.ServerOption, error) {
+	e.options = options
+	return e.servers, e.err
+}
+
+func TestPinnedServerFailureRetriesAutomaticallyWithWarning(t *testing.T) {
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"code":200,"data":{"ip":"198.51.100.7"}}`))
+	}))
+	defer center.Close()
+	measurement := &pinnedFailureEngine{}
+	runner, err := netpath.NewRunner(measurement, center.URL, "test-token", netpath.Binding{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runWithServerFallback(t.Context(), runner, 54321)
+	if err != nil || len(measurement.calls) != 2 || measurement.calls[0].ServerID != 54321 || measurement.calls[1].ServerID != 0 {
+		t.Fatalf("fallback calls=%+v err=%v", measurement.calls, err)
+	}
+	if result.Measurement.ExternalIP != "198.51.100.7" || result.PublicIP != "198.51.100.7" || len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "automatically") {
+		t.Fatalf("fallback result=%+v", result)
+	}
+}
+
+func TestPinnedServerFallbackIsLimitedToUnavailableServer(t *testing.T) {
+	for _, tc := range []struct {
+		class engine.ErrorClass
+		id    int64
+		want  bool
+	}{{engine.ServerUnavailable, 12, true}, {engine.NoRoute, 12, true}, {engine.Timeout, 12, false}, {engine.ServerUnavailable, 0, false}} {
+		if got := retryAutomaticServer(&engine.RunError{Class: tc.class}, tc.id); got != tc.want {
+			t.Errorf("retryAutomaticServer(%s,%d)=%v", tc.class, tc.id, got)
+		}
+	}
+	if retryAutomaticServer(nil, 12) || retryAutomaticServer(errors.New("network failure"), 12) {
+		t.Fatal("retried without a server availability error")
+	}
+}
+
+func TestListServersUsesConfiguredEngineAndNodeBinding(t *testing.T) {
+	wantServers := []engine.ServerOption{{ID: 12, Name: "Test", City: "Hanoi"}}
+	for _, tc := range []struct {
+		name    string
+		binding netpath.Binding
+		wantIP  string
+	}{
+		{name: "default route"},
+		{name: "source IP", binding: netpath.Binding{SourceIP: "127.0.0.1"}, wantIP: "127.0.0.1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			lister := &serverListingEngine{servers: wantServers}
+			loop := &Loop{engineConfigs: map[string]measurementConfig{"ookla": {engine: lister, binding: tc.binding}}}
+			got, err := loop.listServers(t.Context(), "ookla")
+			if err != nil || !reflect.DeepEqual(got, wantServers) || lister.options.SourceIP != tc.wantIP {
+				t.Fatalf("servers=%+v options=%+v err=%v", got, lister.options, err)
+			}
+		})
+	}
+}
+
+func TestListServersRejectsUnsupportedEngineListerAndBinding(t *testing.T) {
+	loop := &Loop{}
+	if _, err := loop.listServers(t.Context(), "unknown"); err == nil {
+		t.Fatal("accepted unsupported engine")
+	}
+	loop.engineConfigs = map[string]measurementConfig{"ookla": {engine: &pinnedFailureEngine{}}}
+	if _, err := loop.listServers(t.Context(), "ookla"); err == nil {
+		t.Fatal("accepted engine without server discovery")
+	}
+	loop.engineConfigs["ookla"] = measurementConfig{engine: &serverListingEngine{}, binding: netpath.Binding{Interface: "interface-does-not-exist"}}
+	if _, err := loop.listServers(t.Context(), "ookla"); err == nil {
+		t.Fatal("accepted unavailable network interface")
+	}
+}
+
+func TestListServersBuildsConfiguredEngineFromEnvironment(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "speedtest")
+	script := "#!/bin/sh\ncat <<'SERVERS'\n{\"servers\":[{\"id\":12,\"name\":\"Test server\",\"location\":\"Hanoi\",\"sponsor\":\"Test ISP\",\"host\":\"test.example\",\"distance\":5.5}]}\nSERVERS\n"
+	if err := os.WriteFile(binary, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SPEEDTEST_OOKLA_BINARY", binary)
+	t.Setenv("SPEEDTEST_OOKLA_ARGS", "[]")
+	t.Setenv("SPEEDTEST_OOKLA_TIMEOUT", "1s")
+	loop := &Loop{}
+	servers, err := loop.listServers(t.Context(), "ookla")
+	if err != nil || len(servers) != 1 || servers[0].ID != 12 || servers[0].DistanceKM == nil || *servers[0].DistanceKM != 5.5 {
+		t.Fatalf("servers=%+v err=%v", servers, err)
+	}
+}
+
+func TestConfiguredServerAcceptsOnlyAutomaticOrPositiveIDs(t *testing.T) {
+	for _, tc := range []struct {
+		raw  string
+		want int64
+		bad  bool
+	}{
+		{raw: `"auto"`},
+		{raw: `12`, want: 12},
+		{raw: `0`, bad: true},
+		{raw: `-1`, bad: true},
+		{raw: `"12"`, bad: true},
+		{raw: `true`, bad: true},
+		{raw: `{`, bad: true},
+	} {
+		got, err := configuredServer(json.RawMessage(tc.raw))
+		if (err != nil) != tc.bad || got != tc.want {
+			t.Errorf("configuredServer(%s) = %d, %v", tc.raw, got, err)
+		}
+	}
+}
 
 func TestInstalledEnginesUsesExecutableCapabilities(t *testing.T) {
 	dir := t.TempDir()
@@ -39,9 +179,9 @@ func TestInstalledEnginesUsesExecutableCapabilities(t *testing.T) {
 func TestConfiguredEnginesKeepIndependentSchedules(t *testing.T) {
 	cfg := measurementConfig{name: "ookla", threads: 4}
 	base := sched.Schedule{Interval: 30 * time.Minute, Enabled: true}
-	inputs := []control.ScheduleInput{{Engine: "ookla", Interval: 30, Enabled: true}, {Engine: "librespeed", Interval: 60, Offset: 5, Enabled: true}}
+	inputs := []control.ScheduleInput{{Engine: "ookla", Interval: 30, Enabled: true, ServerID: json.RawMessage(`54321`)}, {Engine: "librespeed", Interval: 60, Offset: 5, Enabled: true, ServerID: json.RawMessage(`"auto"`)}}
 	configs, schedules, err := configuredEngines(inputs, cfg, base)
-	if err != nil || len(configs) != 2 || len(schedules) != 2 || schedules[1].Interval != time.Hour || schedules[1].Offset != 5*time.Minute || configs["librespeed"].name != "librespeed" {
+	if err != nil || len(configs) != 2 || len(schedules) != 2 || schedules[1].Interval != time.Hour || schedules[1].Offset != 5*time.Minute || configs["librespeed"].name != "librespeed" || configs["ookla"].server != 54321 || configs["librespeed"].server != 0 {
 		t.Fatal(configs, schedules, err)
 	}
 	for _, input := range [][]control.ScheduleInput{{{Engine: "bad"}}, {{Engine: "ookla", Interval: 30}, {Engine: "ookla", Interval: 30}}, {{Engine: "ookla", Interval: 0}}} {

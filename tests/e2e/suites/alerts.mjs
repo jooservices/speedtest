@@ -47,15 +47,15 @@ export function alertsSuite(T) {
       await T.open('#/alerts', 'Alerts');
       await T.tab(/Activity/);
       const before = Number(T.db('select count(*) from alert_events where not acked'));
+      const openCount = async () => (await T.api('/api/alerts/events?state=all&size=100')).body.data.filter(event => !event.acked).length;
       assert.ok(before >= 2);
       await page.getByRole('button', { name: 'Acknowledge', exact: true }).first().click();
       await T.toast('Alert acknowledged').waitFor();
-      assert.equal(Number(T.db('select count(*) from alert_events where not acked')), before - 1);
+      await T.eventually(async () => await openCount() === before - 1, 'the alert acknowledgement is stored');
       await page.getByRole('tab', { name: 'All', exact: true }).click();
       await T.settled();
       await T.press('Reopen');
-      await T.settled();
-      assert.equal(Number(T.db('select count(*) from alert_events where not acked')), before, 'Reopen puts it back');
+      await T.eventually(async () => await openCount() === before, 'Reopen puts it back');
       await T.choose(T.selectWith('Any importance'), 'crit');
       await T.expectNoLoadError();
       await T.choose(T.selectWith('Any importance'), 'all');

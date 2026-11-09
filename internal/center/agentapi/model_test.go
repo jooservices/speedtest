@@ -141,6 +141,27 @@ func TestAckValidationAndTransitions(t *testing.T) {
 	}
 }
 
+func TestServerListAcknowledgementValidation(t *testing.T) {
+	valid := `{"status":"succeeded","pct":100,"servers":[{"id":12,"name":"Singapore","city":"Singapore","isp":"Fiber","host":"sg.example","distanceKm":4.5}]}`
+	ack, err := ParseAck([]byte(valid))
+	if err != nil || ack.Servers == nil || len(*ack.Servers) != 1 || (*ack.Servers)[0].ID != 12 {
+		t.Fatalf("server list ack=%+v err=%v", ack, err)
+	}
+	for _, data := range []string{
+		`{"status":"succeeded","servers":null}`,
+		`{"status":"succeeded","servers":[{"id":0,"name":"Bad"}]}`,
+		`{"status":"succeeded","servers":[{"id":12,"name":""}]}`,
+		`{"status":"succeeded","servers":[{"id":12,"name":"A"},{"id":12,"name":"B"}]}`,
+		`{"status":"succeeded","servers":[{"id":12,"name":"A","distanceKm":-1}]}`,
+		`{"status":"succeeded","servers":[{"id":2147483648,"name":"A"}]}`,
+		`{"status":"running","servers":[]}`,
+	} {
+		if _, err := ParseAck([]byte(data)); err == nil {
+			t.Errorf("accepted %s", data)
+		}
+	}
+}
+
 func TestDecodeBoundaryFailures(t *testing.T) {
 	var value any
 	if Decode([]byte(`{} garbage`), &value) == nil {

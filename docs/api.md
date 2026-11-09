@@ -174,6 +174,27 @@ same selected interface/source IP. The center-observed `data.ip` is the result's
 public IP; preserve the engine-reported address as `engineIp` and add a `warnings`
 entry when the two addresses differ.
 
+## Server discovery and selection (JOOST-76)
+
+Each installed engine has its own server catalog and pin. `GET /api/nodes/{id}/servers?engine=ookla`
+reads the stored Ookla catalog; use `engine=librespeed` for LibreSpeed. `POST` to the same URL queues
+a `list_servers` command for that engine and returns `202` with a `Location` to poll. A successful
+agent acknowledgement replaces only that engine's catalog. A failed refresh leaves its prior catalog
+and pin intact. The catalog response ETag is the node configuration revision.
+
+Use `PUT /api/nodes/{id}/server-selection` with that ETag in `If-Match` and a CSRF token to set
+`{"engine":"ookla","serverId":54321}` or clear the pin with `"serverId":"auto"`. A numeric ID must
+be present in the selected engine's discovered catalog. The center stores pins independently for
+Ookla and LibreSpeed, advances the configuration revision, and queues an agent configuration refresh.
+Each agent schedule includes its own `serverId`, so one engine's pin cannot affect the other engine.
+
+The picker searches server name, city and ISP. Ookla distance is displayed when the server list
+provides it; LibreSpeed has no coordinates, so it is sorted by server name and shows no distance.
+When a pinned server cannot be reached, the agent retries with automatic selection and attaches a
+warning to the result. Result reads include the server actually used in `serverId` and the current
+pin for that node and engine in `pinnedServerId`; the UI identifies a mismatch and shows any fallback
+warning.
+
 Agent config advertises the latest release URL/version/sha256 and defaults
 autoUpdate to false. The owner enables it per node; verify checksums, replace
 atomically and roll back if the first heartbeat fails within two minutes.

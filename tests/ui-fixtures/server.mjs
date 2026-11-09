@@ -10,7 +10,7 @@ export function fixture() {
     colorSlot: 1, interval: 30, offset: 0, host: '', agent: 'test', createdAt: ts, lastSeen: ts, status: 'online',
     latest: null, latestGood: null, currentIp: '203.0.113.9', geo: null, updateVersion: null };
   const result = { id: 'a4bbcf7b-8938-4e90-8128-59047d35b087', nodeId: node.id, ts,
-    serverId: 1, threads: 4, ip: '203.0.113.9', status: 'ok', error: null, down: 90, up: 40, ping: 0,
+    serverId: 1, pinnedServerId: null, threads: 4, ip: '203.0.113.9', status: 'ok', error: null, down: 90, up: 40, ping: 0,
     jitter: null, loss: null, dLat: null, uLat: null, bytesDown: 1000, bytesUp: 500, duration: 1,
     manual: false, raw: {}, server: { id: 1, name: 'Fixture server', city: '', sponsor: '' }, geo: null };
   node.latest = result; node.latestGood = result;

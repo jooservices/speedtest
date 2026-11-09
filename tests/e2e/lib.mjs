@@ -24,10 +24,10 @@ function run(command, args, options = {}) {
   return result.stdout;
 }
 
-function freePort() {
+function freePort(requested) {
   return new Promise((resolvePort, reject) => {
     const server = createServer();
-    server.listen(0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolvePort(port)); });
+    server.listen(requested || 0, '127.0.0.1', () => { const { port } = server.address(); server.close(() => resolvePort(port)); });
     server.on('error', reject);
   });
 }
@@ -54,7 +54,7 @@ export async function startStack({ seed = true } = {}) {
   run('go', ['build', '-o', join(out, 'bin', 'agent'), './cmd/agent']);
   run('go', ['build', '-o', join(out, 'bin', 'fake-speedtest'), './internal/agent/testdata/fake-speedtest']);
   sql(db, 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
-  const port = await freePort();
+  const port = await freePort(process.env.E2E_PORT ? Number(process.env.E2E_PORT) : undefined);
   const releaseDir = join(out, 'release');
   mkdirSync(releaseDir, { recursive: true });
   const artifact = 'speedtest-agent-linux-amd64';
@@ -71,12 +71,13 @@ export async function startStack({ seed = true } = {}) {
   const center = spawn(join(out, 'bin', 'center'), ['-ui-dir', join(root, 'ui')], { cwd: root, env: centerEnv, stdio: ['ignore', 'ignore', 'ignore'], detached: false });
   processes.push(center);
   const origin = `http://127.0.0.1:${port}`;
+  const browserOrigin = process.env.E2E_BROWSER_ORIGIN || origin;
   for (let i = 0; i < 100; i++) {
     try { if ((await fetch(origin + '/readyz')).ok) break; } catch { /* not up yet */ }
     await new Promise(r => setTimeout(r, 100));
     if (i === 99) throw new Error('the center did not become ready');
   }
-  return { origin, db, env: centerEnv, pid: center.pid };
+  return { origin, browserOrigin, db, env: centerEnv, pid: center.pid };
 }
 
 // Starts a real agent for an enrolment token and waits until the center has seen it.

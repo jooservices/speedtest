@@ -1,7 +1,8 @@
 // Steps: the smallest user actions and checks. Everything above (suites, scenarios) is built from these, so a UI
 // change is fixed in one place.
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
 export const OWNER = { email: 'jooservices@gmail.com', password: 'password' };
 
@@ -10,7 +11,7 @@ export function coreSteps(ctx) {
   const T = {
     page,
     assert,
-    url: hash => `${stack.origin}/${hash}`,
+    url: hash => `${stack.browserOrigin}/${hash}`,
     heading: name => page.getByRole('heading', { name, level: 1 }),
     toast: text => page.locator('#toasts').getByText(text).first(),
 
@@ -47,7 +48,12 @@ export function coreSteps(ctx) {
     async see(text, scope = page, timeout) { await scope.getByText(text).first().waitFor(timeout ? { timeout } : undefined); },
     async download(trigger) {
       const [file] = await Promise.all([page.waitForEvent('download'), trigger()]);
-      return readFileSync(await file.path(), 'utf8');
+      const directory = mkdtempSync(resolve('.tmp/e2e-download-'));
+      try {
+        const path = join(directory, file.suggestedFilename());
+        await file.saveAs(path);
+        return readFileSync(path, 'utf8');
+      } finally { rmSync(directory, { recursive: true, force: true }); }
     },
 
     // Polls a condition (a stored value, a file) for a few seconds: for results that are saved a moment after the click.
@@ -66,7 +72,7 @@ export function coreSteps(ctx) {
 
     // ---- the center, for checking what was really stored ----
     db: sql => query(stack.db, sql),
-    async api(path) { const res = await page.request.get(stack.origin + path); return { status: res.status(), body: res.status() < 300 ? await res.json() : null, text: await res.text() }; },
+    async api(path) { const res = await page.request.get(stack.browserOrigin + path); return { status: res.status(), body: res.status() < 300 ? await res.json() : null, text: await res.text() }; },
 
     // The browser logs a refused request itself; where refusing is the expected outcome, drop that log line.
     expectRefusal(status) { for (let i = problems.length - 1; i >= 0; i--) if (new RegExp(`status of ${status}`).test(problems[i])) problems.splice(i, 1); },
