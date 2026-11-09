@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 	"github.com/jooservices/speedtest/internal/center/audit"
 )
 
@@ -49,6 +50,12 @@ func withAudit(next http.Handler, store AuditStore, auth *serverAuth, logger *sl
 
 // actor returns the signed-in owner's e-mail for the request's session, or "" without a valid session.
 func (s *serverAuth) actor(r *http.Request) string {
+	if principal, ok := apitoken.PrincipalFromContext(r.Context()); ok {
+		if principal.Email != "" {
+			return principal.Email
+		}
+		return principal.UserID
+	}
 	if s == nil || s.service == nil {
 		return ""
 	}

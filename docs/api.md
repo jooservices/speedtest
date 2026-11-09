@@ -31,6 +31,31 @@ Login failures use the same 401 problem for an unknown email
 and an incorrect password. New passwords must contain at least 12 Unicode
 characters and at most 1024 UTF-8 bytes.
 
+Owner API access tokens are separate named credentials created and revoked at
+`/api/access-tokens` from an authenticated session. A token is returned only in
+its creation response; PostgreSQL stores its SHA-256 digest, and token metadata
+never includes the bearer value or digest. Tokens can expire and successful
+uses update `lastUsedAt`. Revocation takes effect immediately. Keep the bearer
+value in a secret store and send it as `Authorization: Bearer <token>` over
+HTTPS. Bearer requests do not need the session cookie, Origin or CSRF header.
+The per-token request bucket defaults to 120 requests per minute with a burst
+of 20, configured by `SPEEDTEST_API_TOKEN_REQUESTS_PER_MINUTE`.
+
+The scopes are `read` (safe owner operations), `read-write` (read plus
+non-destructive changes), and `full` (all operations, including destructive
+changes). Every operation declares its required scope in
+`docs/openapi.yaml` using `x-access-token-scope`; a token must meet that
+operation's scope before its handler runs. Agent credentials and auth/session
+endpoints are not API-token operations. Creating and revoking a token creates a
+safe audit entry; owner writes made with bearer credentials are audited against
+the token owner's account. Access logs omit request headers and query data.
+
+The Streamable HTTP MCP endpoint is `/mcp`. Its tools are generated from the
+OpenAPI operations marked with `x-mcp-tool`, including their input schemas and
+scope requirements; it does not return integration secrets. The separate
+`speedtest-mcp` executable exposes the same remote tools over stdio for MCP
+clients. See [MCP setup and tool reference](mcp.md).
+
 Run `go run ./cmd/center seed-admin` to ensure the documented default owner is
 present in local or test environments. `APP_ENV` must be `local` or `test`; the
 command refuses staging, production and unknown values. It inserts only when the
