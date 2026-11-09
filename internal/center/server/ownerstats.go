@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jooservices/speedtest/internal/center/stats"
 )
@@ -17,6 +18,7 @@ type OwnerStatsStore interface {
 	HourOfDay(context.Context, stats.Query) ([]stats.HourSeries, error)
 	Heatmap(context.Context, stats.Query, string) (stats.Heatmap, error)
 	Distribution(context.Context, stats.Query) ([]stats.Distribution, error)
+	Events(context.Context, stats.Query) (stats.EventsResponse, error)
 }
 
 const maxStatsSpan = 366 * 24 * time.Hour
@@ -38,7 +40,7 @@ func newOwnerStatsHandler(store OwnerStatsStore, auth *serverAuth) http.Handler 
 
 func ownerStatsRoute(path string) bool {
 	switch path {
-	case "/api/stats/summary", "/api/stats/trend", "/api/stats/hour-of-day", "/api/stats/heatmap", "/api/stats/distribution":
+	case "/api/stats/summary", "/api/stats/trend", "/api/stats/hour-of-day", "/api/stats/heatmap", "/api/stats/distribution", "/api/stats/events":
 		return true
 	default:
 		return false
@@ -57,6 +59,8 @@ func (h *ownerStats) serve(w http.ResponseWriter, r *http.Request) {
 		h.heatmap(w, r)
 	case "/api/stats/distribution":
 		h.distribution(w, r)
+	case "/api/stats/events":
+		h.events(w, r)
 	default:
 		writeNotFoundProblem(w, r)
 	}
@@ -156,6 +160,9 @@ func (h *ownerStats) heatmap(w http.ResponseWriter, r *http.Request) {
 	if q.Engine, engineOK = parseEngine(w, r); !engineOK {
 		return
 	}
+	if q.ISP, engineOK = parseStatsISP(w, r); !engineOK {
+		return
+	}
 	var ok bool
 	if q.Metric, ok = parseStatsMetric(w, r); !ok {
 		return
@@ -179,6 +186,22 @@ func (h *ownerStats) heatmap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeEnvelope(w, http.StatusOK, "Success", item)
+}
+
+func (h *ownerStats) events(w http.ResponseWriter, r *http.Request) {
+	q, ok := h.window(w, r)
+	if !ok {
+		return
+	}
+	if q.NodeIDs, q.NodesSet, ok = parseStatsNodes(w, r); !ok {
+		return
+	}
+	items, err := h.store.Events(r.Context(), q)
+	if err != nil {
+		writeStatsError(w, r, err)
+		return
+	}
+	writeEnvelope(w, http.StatusOK, "Success", items)
 }
 
 func (h *ownerStats) distribution(w http.ResponseWriter, r *http.Request) {
@@ -218,6 +241,9 @@ func (h *ownerStats) window(w http.ResponseWriter, r *http.Request) (stats.Query
 	q := stats.Query{}
 	var engineOK bool
 	if q.Engine, engineOK = parseEngine(w, r); !engineOK {
+		return q, false
+	}
+	if q.ISP, engineOK = parseStatsISP(w, r); !engineOK {
 		return q, false
 	}
 	fromRaw, fromSet, valid := singleStatsParam(w, r, "from")
@@ -274,6 +300,19 @@ func (h *ownerStats) window(w http.ResponseWriter, r *http.Request) (stats.Query
 	q.From, q.To = from.UTC(), to.UTC()
 	q.PreviousFrom, q.PreviousTo = q.From.Add(-duration), q.From
 	return q, true
+}
+
+func parseStatsISP(w http.ResponseWriter, r *http.Request) (string, bool) {
+	raw, present, valid := singleStatsParam(w, r, "isp")
+	if !valid || !present {
+		return "", valid
+	}
+	raw = strings.TrimSpace(raw)
+	if utf8.RuneCountInString(raw) < 1 || utf8.RuneCountInString(raw) > 200 {
+		statsInvalid(w, r, "isp must contain 1 to 200 non-whitespace characters.")
+		return "", false
+	}
+	return raw, true
 }
 
 func parseStatsNodes(w http.ResponseWriter, r *http.Request) ([]string, bool, bool) {

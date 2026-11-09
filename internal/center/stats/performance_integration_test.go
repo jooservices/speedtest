@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -78,7 +79,7 @@ func TestStatisticsQueriesMeetLatencyTargetOnOneYearDataset(t *testing.T) {
  FROM generate_series(1, $1::int) AS node(node_no)
  CROSS JOIN generate_series(1, $2::int) AS sample(sample_no)
 )
-INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,loss_percent,server_id,server,ip,threads,error)
+INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,loss_percent,server_id,server,ip,threads,error,engine,engine_isp)
 SELECT g.result_id, n.id, $3::timestamptz + (g.sample_no - 1) * interval '30 minutes', g.status,
        CASE WHEN g.status='failed' THEN NULL ELSE 100 + g.node_no * 10 + (g.sample_no % 100) END,
        CASE WHEN g.status='failed' THEN NULL ELSE 20 + g.node_no + (g.sample_no % 30) END,
@@ -87,7 +88,9 @@ SELECT g.result_id, n.id, $3::timestamptz + (g.sample_no - 1) * interval '30 min
        CASE WHEN g.status='failed' THEN NULL ELSE (g.sample_no % 10)::float8 END,
        CASE WHEN g.status='failed' THEN NULL ELSE 1 END,
        CASE WHEN g.status='failed' THEN NULL ELSE '{"id":1,"name":"Fixture","city":"C","sponsor":"P"}'::jsonb END, $4::inet, 4,
-       CASE WHEN g.status='failed' THEN 'performance fixture failure' ELSE NULL END
+       CASE WHEN g.status='failed' THEN 'performance fixture failure' ELSE NULL END,
+       CASE WHEN g.sample_no % 2=0 THEN 'librespeed' ELSE 'ookla' END,
+       CASE WHEN g.sample_no % 4 < 2 THEN 'Carrier A' ELSE 'Carrier B' END
 FROM generated g JOIN nodes n ON n.name = 'Perf-' || g.node_no`, nodeCount, samplesPerNode, start, ip)
 	if err != nil {
 		t.Fatal("could not generate one-year benchmark data")
@@ -96,11 +99,17 @@ FROM generated g JOIN nodes n ON n.name = 'Perf-' || g.node_no`, nodeCount, samp
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM results`).Scan(&inserted); err != nil || inserted != totalSamples {
 		t.Fatalf("generated result count = %d err=%v, want %d", inserted, err, totalSamples)
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO alert_events(id,node_id,severity,ts,title,detail,trigger_result_id)
+SELECT gen_random_uuid(),node_id,'info',ts + interval '1 second','Performance fixture alert','Bounded event query',id
+FROM results WHERE engine='ookla' AND engine_isp='Carrier A' ORDER BY ts,id LIMIT 600`); err != nil {
+		t.Fatal("could not generate 600 linked benchmark events")
+	}
 
 	query := Query{NodeIDs: nodeIDs, NodesSet: true, From: start, To: end, PreviousFrom: start.Add(-365 * 24 * time.Hour), PreviousTo: start,
-		Metric: Download, Timezone: "UTC", Bucket: "day", Bins: 15}
+		Engine: "ookla", ISP: "Carrier A", Metric: Download, Timezone: "UTC", Bucket: "day", Bins: 15}
+	planSQL, planArgs := scopedQuery(query, summarySQL(), nodeIDs, query.From, query.To, query.PreviousFrom, query.PreviousTo)
 	var explainJSON []byte
-	if err := pool.QueryRow(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+summarySQL(), nodeIDs, query.From, query.To, query.PreviousFrom, query.PreviousTo).Scan(&explainJSON); err != nil {
+	if err := pool.QueryRow(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+planSQL, planArgs...).Scan(&explainJSON); err != nil {
 		t.Fatal("could not explain the summary query")
 	}
 	var explained []struct {
@@ -135,6 +144,21 @@ FROM generated g JOIN nodes n ON n.name = 'Perf-' || g.node_no`, nodeCount, samp
 		t.Fatalf("EXPLAIN did not scan results: %v", nodesSeen)
 	}
 	t.Logf("EXPLAIN summary on %d results: %.2f ms; %v", totalSamples, explained[0].ExecutionTime, nodesSeen)
+	var eventExplain []byte
+	if err := pool.QueryRow(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+eventsSQL, nodeIDs, query.From, query.To, query.Engine, query.ISP).Scan(&eventExplain); err != nil {
+		t.Fatalf("could not explain the bounded events query: %v", err)
+	}
+	var eventPlan []struct {
+		ExecutionTime float64    `json:"Execution Time"`
+		Plan          planDetail `json:"Plan"`
+	}
+	if err := json.Unmarshal(eventExplain, &eventPlan); err != nil || len(eventPlan) != 1 {
+		t.Fatalf("invalid events EXPLAIN JSON: %v", err)
+	}
+	var eventScans []string
+	appendPlanScans(eventPlan[0].Plan, &eventScans)
+	t.Logf("EXPLAIN events (ANALYZE, BUFFERS) on %d results and 600 alerts: %.2f ms; shared hits=%d reads=%d; scans=%v",
+		totalSamples, eventPlan[0].ExecutionTime, eventPlan[0].Plan.SharedHitBlocks, eventPlan[0].Plan.SharedReadBlocks, eventScans)
 
 	measure := func(name string, run func() error) {
 		t.Helper()
@@ -176,6 +200,11 @@ FROM generated g JOIN nodes n ON n.name = 'Perf-' || g.node_no`, nodeCount, samp
 	if len(distributions) != nodeCount || len(distributions[0].Bins) != query.Bins {
 		t.Fatalf("distribution returned %d nodes / %d bins", len(distributions), len(distributions[0].Bins))
 	}
+	var events EventsResponse
+	measure("events (600 linked alerts)", func() error { var err error; events, err = store.Events(ctx, query); return err })
+	if len(events.Items) != MaxEvents || !events.Truncated {
+		t.Fatalf("events returned %d items, truncated=%t; want %d and true", len(events.Items), events.Truncated, MaxEvents)
+	}
 }
 
 func TestStatisticsStoreReportsDatabaseFailures(t *testing.T) {
@@ -194,6 +223,7 @@ func TestStatisticsStoreReportsDatabaseFailures(t *testing.T) {
 		"hour-of-day":  func() error { _, err := store.HourOfDay(ctx, query); return err },
 		"heatmap":      func() error { _, err := store.Heatmap(ctx, query, nodeID); return err },
 		"distribution": func() error { _, err := store.Distribution(ctx, query); return err },
+		"events":       func() error { _, err := store.Events(ctx, query); return err },
 	}
 	tests := []struct {
 		name      string
@@ -220,6 +250,7 @@ func TestStatisticsStoreReportsDatabaseFailures(t *testing.T) {
 		{name: "distribution query", method: "distribution", queryFail: 1},
 		{name: "distribution scan", method: "distribution", scanFail: 1},
 		{name: "distribution rows", method: "distribution", rowsErr: 1},
+		{name: "events query", method: "events", queryFail: 1},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -272,16 +303,31 @@ func (rows failingStatsRows) Err() error {
 }
 
 type planDetail struct {
-	NodeType     string       `json:"Node Type"`
-	RelationName string       `json:"Relation Name"`
-	IndexName    string       `json:"Index Name"`
-	Plans        []planDetail `json:"Plans"`
+	NodeType         string       `json:"Node Type"`
+	RelationName     string       `json:"Relation Name"`
+	IndexName        string       `json:"Index Name"`
+	ActualTime       float64      `json:"Actual Total Time"`
+	SharedHitBlocks  int          `json:"Shared Hit Blocks"`
+	SharedReadBlocks int          `json:"Shared Read Blocks"`
+	Plans            []planDetail `json:"Plans"`
+}
+
+func appendPlanScans(plan planDetail, scans *[]string) {
+	if plan.IndexName != "" {
+		*scans = append(*scans, fmt.Sprintf("%s on %s via %s (%.2f ms, hits=%d, reads=%d)",
+			plan.NodeType, plan.RelationName, plan.IndexName, plan.ActualTime, plan.SharedHitBlocks, plan.SharedReadBlocks))
+	}
+	for _, child := range plan.Plans {
+		appendPlanScans(child, scans)
+	}
 }
 
 func containsRelation(nodes []string, relation string) bool {
 	for _, node := range nodes {
-		if node == "Seq Scan on "+relation || node == "Index Scan on "+relation || node == "Bitmap Heap Scan on "+relation {
-			return true
+		for _, scan := range []string{"Seq Scan on ", "Index Scan on ", "Bitmap Heap Scan on "} {
+			if strings.HasPrefix(node, scan+relation) {
+				return true
+			}
 		}
 	}
 	return false
