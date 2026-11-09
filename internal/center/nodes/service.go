@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jooservices/speedtest/internal/center/schedules"
 )
 
 const enrollmentLifetime = 24 * time.Hour
@@ -188,7 +189,7 @@ func (s *Service) createNodeTx(ctx context.Context, tx pgx.Tx, input Input) (any
 		return nil, translateDBError(err)
 	}
 	return map[string]any{
-		"node":      nodeResponse(nodeID, input, colorSlot, createdAt, 30, 0, "", ""),
+		"node":      nodeResponse(nodeID, input, colorSlot, createdAt, schedules.DefaultInterval, 0, "", ""),
 		"token":     token,
 		"expiresAt": expiresAt.UTC().Format(time.RFC3339Nano),
 	}, nil
