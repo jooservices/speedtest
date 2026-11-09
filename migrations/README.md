@@ -16,6 +16,9 @@ state and replayable progress events, with hashed idempotency keys and an active
 installation limit per node. It stores no SSH credentials or enrollment tokens.
 
 `00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
+`00019_api_access_tokens.sql` adds owner-scoped API tokens with named permissions,
+optional expiry, last-use and revocation timestamps, and only a 32-byte token
+digest. Its down migration removes that table and its index.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file
@@ -97,6 +100,7 @@ that a subsequent up can reapply version 1.
 | `installer_jobs` | Owner-scoped installation state; at most one active job per node |
 | `installer_events` | Safe, replayable plain-language progress events |
 | `installer_idempotency` | HMAC-protected install request digest and job link, expiring after 24 hours |
+| `api_access_tokens` | Owner-scoped bearer token metadata, expiry and last-use timestamps, and unique SHA-256 digest |
 
 All IDs are UUIDs. A result ID has **no server default**, so retries cannot
 accidentally obtain another identity. The primary key rejects duplicate UUIDs;

@@ -109,6 +109,8 @@ type rule struct {
 // rules map an owner write to a readable action. Patterns use {id} for one path segment.
 var rules = []rule{
 	{"POST", "/api/nodes", "node.create", "node", "Added a node"},
+	{"POST", "/api/access-tokens", "access_token.create", "access_token", "Created an API access token"},
+	{"DELETE", "/api/access-tokens/{id}", "access_token.revoke", "access_token", "Revoked an API access token"},
 	{"PATCH", "/api/nodes/{id}", "node.update", "node", "Changed node settings"},
 	{"DELETE", "/api/nodes/{id}", "node.delete", "node", "Removed a node"},
 	{"POST", "/api/nodes/{id}/run", "node.run", "node", "Started a speed test"},

@@ -202,6 +202,66 @@
               }, fail);
             });
           } })))));
+      accessTokens();
+    }
+    function accessTokens() {
+      var name = U.input('', null, { maxlength: 80, autocomplete: 'off', 'aria-label': 'Token name', placeholder: 'e.g. monitoring' });
+      var scope = U.select([{ value: 'read', label: 'Read only' }, { value: 'read-write', label: 'Read and write' }, { value: 'full', label: 'Full access' }], 'read', null, { 'aria-label': 'Token scope' });
+      var expiry = U.input('', null, { type: 'datetime-local', 'aria-label': 'Optional expiry' });
+      var list = h('div', { 'aria-live': 'polite' }), disclosure = h('div');
+      function displayToken(raw) {
+        U.clear(disclosure);
+        disclosure.appendChild(U.callout('Copy this token now. It will not be shown again after you leave this page.', 'warn'));
+        disclosure.appendChild(h('pre', { class: 'recovery-codes', style: 'overflow-wrap:anywhere;white-space:pre-wrap;user-select:all' }, raw));
+        disclosure.appendChild(U.btn('Copy token', { size: 'sm', icon: 'copy', onClick: function () {
+          if (!navigator.clipboard) return U.toast('Clipboard access is unavailable. Select and copy the token.', 'error');
+          navigator.clipboard.writeText(raw).then(function () { U.toast('Token copied'); }, function () { U.toast('Could not copy the token. Select it and copy manually.', 'error'); });
+        } }));
+      }
+      function loadTokens() {
+        U.clear(list); list.appendChild(h('p', { class: 'hint' }, 'Loading access tokens…'));
+        ST.api.list('/api/access-tokens').then(drawTokens, function (error) {
+          U.clear(list); list.appendChild(U.callout('Could not load access tokens: ' + error.message, 'crit', 'alert'));
+          list.appendChild(U.btn('Try again', { size: 'sm', onClick: loadTokens }));
+        });
+      }
+      function drawTokens(tokens) {
+        U.clear(list);
+        if (!tokens.length) { list.appendChild(U.empty('No API tokens', 'Create a named token for a script or MCP client.')); return; }
+        list.appendChild(U.table({ columns: [
+          { key: 'name', label: 'Name' }, { key: 'scope', label: 'Access' },
+          { key: 'createdAt', label: 'Created', render: function (token) { return F.date(Date.parse(token.createdAt), 'full'); } },
+          { key: 'expiresAt', label: 'Expires', render: function (token) { return token.expiresAt ? F.date(Date.parse(token.expiresAt), 'full') : 'Never'; } },
+          { key: 'lastUsedAt', label: 'Last used', render: function (token) { return token.lastUsedAt ? F.date(Date.parse(token.lastUsedAt), 'full') : 'Never'; } },
+          { key: 'state', label: 'State', render: function (token) { return token.revokedAt ? 'Revoked' : 'Active'; } },
+          { key: 'actions', label: '', render: function (token) { return token.revokedAt ? '—' : U.btn('Revoke', { size: 'sm', variant: 'danger', onClick: function () { revokeToken(token); } }); } }
+        ], rows: tokens }));
+      }
+      function createToken() {
+        var tokenName = name.value.trim(), scopeValue = scope.value, expiration = null;
+        if (!tokenName) return U.toast('Enter a name for this token.', 'error');
+        if (expiry.value) {
+          var instant = Date.parse(expiry.value);
+          if (!Number.isFinite(instant) || instant <= Date.now()) return U.toast('Choose an expiry date and time in the future.', 'error');
+          expiration = new Date(instant).toISOString();
+        }
+        ST.api.request('/api/access-tokens', { method: 'POST', body: { name: tokenName, scope: scopeValue, expiresAt: expiration } }).then(function (reply) {
+          displayToken(reply.data.token); name.value = ''; expiry.value = ''; U.toast('API token created'); loadTokens();
+        }, fail);
+      }
+      function revokeToken(token) {
+        U.confirm({ title: 'Revoke “' + token.name + '”?', text: 'Any request using this token will stop working immediately.', confirm: 'Revoke', danger: true }).then(function (ok) {
+          if (!ok) return;
+          ST.api.request('/api/access-tokens/' + encodeURIComponent(token.id), { method: 'DELETE' }).then(function () { U.toast('API token revoked'); loadTokens(); }, fail);
+        });
+      }
+      body.appendChild(h('section', { class: 'setting', style: 'align-items:flex-start' },
+        h('div', null, h('div', { style: 'font-weight:600' }, 'API access tokens'),
+          h('div', { class: 'hint' }, 'Bearer tokens are shown once. Read only permits queries; read and write excludes destructive actions; full access includes all documented owner operations. Use HTTPS when connecting remotely.')),
+        h('div', { class: 's-ctl', style: 'width:min(100%,680px)' },
+          h('div', { class: 'stack', style: 'gap:8px' }, U.field('Name', name), U.field('Scope', scope), U.field('Expiry (optional)', expiry),
+            U.btn('Create API token', { variant: 'primary', onClick: createToken }), disclosure, list))));
+      loadTokens();
     }
 
     if (tab === 'general') {
