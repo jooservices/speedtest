@@ -51,14 +51,14 @@ func (s *Store) random() io.Reader {
 }
 
 const ruleColumns = `id::text,name,metric,op,value,for_tests,node_ids IS NULL,
-	COALESCE(node_ids::text[],ARRAY[]::text[]),severity,channels,enabled,revision`
+	COALESCE(node_ids::text[],ARRAY[]::text[]),severity,channels,enabled,revision,COALESCE(engine,'')`
 
 type rowScanner interface{ Scan(...any) error }
 
 func scanRule(row rowScanner) (Rule, error) {
 	var r Rule
 	var all bool
-	err := row.Scan(&r.ID, &r.Name, &r.Metric, &r.Op, &r.Value, &r.ForTests, &all, &r.NodeIDs, &r.Severity, &r.Channels, &r.Enabled, &r.Revision)
+	err := row.Scan(&r.ID, &r.Name, &r.Metric, &r.Op, &r.Value, &r.ForTests, &all, &r.NodeIDs, &r.Severity, &r.Channels, &r.Enabled, &r.Revision, &r.Engine)
 	if err != nil {
 		return Rule{}, err
 	}
@@ -167,8 +167,8 @@ func (s *Store) ReplaceRule(ctx context.Context, id string, in RuleInput, ifMatc
 		return Rule{}, "", err
 	}
 	if _, err = tx.Exec(ctx, `UPDATE alert_rules SET name=$2,metric=$3,op=$4,value=$5,for_tests=$6,node_ids=$7,
-		severity=$8,channels=$9,enabled=$10,revision=revision+1,updated_at=now() WHERE id=$1`,
-		id, clean.Name, clean.Metric, clean.Op, clean.Value, clean.ForTests, ruleNodeIDs(clean), clean.Severity, clean.Channels, clean.Enabled); err != nil {
+		severity=$8,channels=$9,enabled=$10,engine=NULLIF($11,''),revision=revision+1,updated_at=now() WHERE id=$1`,
+		id, clean.Name, clean.Metric, clean.Op, clean.Value, clean.ForTests, ruleNodeIDs(clean), clean.Severity, clean.Channels, clean.Enabled, clean.Engine); err != nil {
 		return Rule{}, "", err
 	}
 	r, err := scanRule(tx.QueryRow(ctx, `SELECT `+ruleColumns+` FROM alert_rules WHERE id=$1`, id))

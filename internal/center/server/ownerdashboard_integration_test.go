@@ -75,6 +75,7 @@ func TestDashboardGoldenFixture(t *testing.T) {
 	exec(`INSERT INTO nodes (id,name,label,expected_down_mbps,expected_up_mbps,color_slot,host,agent) VALUES
 		('` + dashAlpha + `','Alpha','Home',1000,100,1,'h','a/1'),('` + dashBravo + `','Bravo','Office',200,50,2,'h','a/1'),('` + dashEmpty + `','Empty','',100,25,3,'h','a/1')`)
 	exec(`INSERT INTO schedules (node_id) SELECT id FROM nodes`)
+	exec(`INSERT INTO engine_schedules (node_id, engine) SELECT id, 'ookla' FROM nodes`)
 	exec(`INSERT INTO ip_addresses(ip) VALUES ('203.0.113.5'),('203.0.113.6'),('203.0.113.7')`)
 	n := 0
 	seed := func(node string, at time.Time, status string, down, up, ping any) {

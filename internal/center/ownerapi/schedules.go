@@ -15,6 +15,7 @@ import (
 
 // ScheduleInput is the owner-editable part of one node's schedule.
 type ScheduleInput struct {
+	Engines  []EngineSchedule
 	Interval int
 	Offset   int
 	Enabled  bool
@@ -31,6 +32,7 @@ type ScheduleRules struct {
 const usageSamples = 200
 
 type scheduleRow struct {
+	Engine       string
 	NodeID       string
 	NodeEnabled  bool
 	Interval     int
@@ -49,17 +51,17 @@ type queryer interface {
 func scheduleETag(revision int64) string { return fmt.Sprintf(`"schedule-%d"`, revision) }
 
 func (s *Store) scheduleRows(ctx context.Context, q queryer, lock bool, ids ...string) ([]scheduleRow, error) {
-	query := `SELECT n.id::text, n.enabled, s.interval_minutes, s.offset_minutes, s.enabled, s.revision,
+	query := `SELECT n.id::text, n.enabled, s.engine, s.interval_minutes, s.offset_minutes, s.enabled, s.revision,
 		COALESCE((SELECT avg(COALESCE(t.bytes_down,0) + COALESCE(t.bytes_up,0)) FROM (
-			SELECT r.bytes_down, r.bytes_up FROM results r WHERE r.node_id = n.id AND r.status <> 'failed'
+			SELECT r.bytes_down, r.bytes_up FROM results r WHERE r.node_id = n.id AND r.engine=s.engine AND r.status <> 'failed'
 			ORDER BY r.ts DESC, r.id DESC LIMIT ` + fmt.Sprint(usageSamples) + `) t), 0)
-		FROM nodes n JOIN schedules s ON s.node_id = n.id`
+		FROM nodes n JOIN engine_schedules s ON s.node_id = n.id`
 	var args []any
 	if len(ids) > 0 {
 		query += ` WHERE n.id = ANY($1::uuid[])`
 		args = append(args, ids)
 	}
-	query += ` ORDER BY n.id`
+	query += ` ORDER BY n.id,s.engine`
 	if lock {
 		query += ` FOR UPDATE OF s`
 	}
@@ -71,7 +73,7 @@ func (s *Store) scheduleRows(ctx context.Context, q queryer, lock bool, ids ...s
 	var out []scheduleRow
 	for rows.Next() {
 		var r scheduleRow
-		if err := rows.Scan(&r.NodeID, &r.NodeEnabled, &r.Interval, &r.Offset, &r.Enabled, &r.Revision, &r.AverageBytes); err != nil {
+		if err := rows.Scan(&r.NodeID, &r.NodeEnabled, &r.Engine, &r.Interval, &r.Offset, &r.Enabled, &r.Revision, &r.AverageBytes); err != nil {
 			return nil, err
 		}
 		out = append(out, r)
@@ -127,7 +129,7 @@ func rulesView(r ScheduleRules) map[string]any {
 
 func (s *Store) scheduleView(r scheduleRow, q schedules.Quiet, now time.Time) map[string]any {
 	slot := schedules.Slot{Interval: r.Interval, Offset: r.Offset}
-	view := map[string]any{"nodeId": r.NodeID, "config": map[string]any{"interval": r.Interval, "offset": r.Offset, "enabled": r.Enabled},
+	view := map[string]any{"nodeId": r.NodeID, "engine": r.Engine, "config": map[string]any{"interval": r.Interval, "offset": r.Offset, "enabled": r.Enabled},
 		"nextRun": nil, "upcoming": []string{}, "bytesPerDay": 0.0, "bytesPerMonth": 0.0}
 	if !r.Enabled || !r.NodeEnabled {
 		return view
@@ -150,7 +152,7 @@ func (s *Store) scheduleView(r scheduleRow, q schedules.Quiet, now time.Time) ma
 func collectionETag(rows []scheduleRow, ruleRevisions []int64) string {
 	h := sha256.New()
 	for _, r := range rows {
-		_, _ = fmt.Fprintf(h, "%s:%d;", r.NodeID, r.Revision)
+		_, _ = fmt.Fprintf(h, "%s:%s:%d;", r.NodeID, r.Engine, r.Revision)
 	}
 	_, _ = fmt.Fprint(h, "|")
 	for _, rev := range ruleRevisions {
@@ -177,6 +179,9 @@ func (s *Store) collection(ctx context.Context, q queryer, lock bool) (map[strin
 	}
 	clashes := []map[string]any{}
 	for _, c := range schedules.Clashes(slots, rules.MaxConcurrent) {
+		if c.A == c.B {
+			continue
+		}
 		clashes = append(clashes, map[string]any{"nodes": []string{c.A, c.B}, "detail": c.Detail})
 	}
 	data := map[string]any{"rules": rulesView(rules), "nodes": nodes, "clashes": clashes}
@@ -205,13 +210,26 @@ func (s *Store) Schedule(ctx context.Context, id string) (map[string]any, string
 	if err != nil {
 		return nil, "", err
 	}
-	return s.scheduleView(rows[0], rules.Quiet, s.now()), scheduleETag(rows[0].Revision), nil
+	views := make([]map[string]any, 0, len(rows))
+	primary := 0
+	for i, r := range rows {
+		views = append(views, s.scheduleView(r, rules.Quiet, s.now()))
+		if r.Engine == "ookla" {
+			primary = i
+		}
+	}
+	view := s.scheduleView(rows[primary], rules.Quiet, s.now())
+	view["engines"] = views
+	return view, nodeScheduleETag(rows), nil
 }
 
 // ReplaceSchedule sets one node's schedule under an If-Match precondition. The offset is clamped below the interval.
 func (s *Store) ReplaceSchedule(ctx context.Context, id string, in ScheduleInput, ifMatch string) (map[string]any, string, error) {
 	if !validUUID(id) {
 		return nil, "", ErrNotFound
+	}
+	if in.Engines != nil {
+		return s.replaceEngines(ctx, id, in.Engines, ifMatch)
 	}
 	if in.Interval < schedules.MinInterval || in.Interval > schedules.MaxInterval || in.Offset < 0 {
 		return nil, "", ErrInvalid
@@ -229,11 +247,14 @@ func (s *Store) ReplaceSchedule(ctx context.Context, id string, in ScheduleInput
 	if len(rows) == 0 {
 		return nil, "", ErrNotFound
 	}
-	if ifMatch != scheduleETag(rows[0].Revision) {
+	if ifMatch != nodeScheduleETag(rows) {
 		return nil, "", ErrStale
 	}
 	if _, err := tx.Exec(ctx, `UPDATE schedules SET interval_minutes=$2, offset_minutes=$3, enabled=$4, revision=revision+1, updated_at=now() WHERE node_id=$1`,
 		id, slot.Interval, slot.Offset, in.Enabled); err != nil {
+		return nil, "", err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE engine_schedules SET interval_minutes=$2,offset_minutes=$3,enabled=$4,revision=revision+1 WHERE node_id=$1 AND engine='ookla'`, id, slot.Interval, slot.Offset, in.Enabled); err != nil {
 		return nil, "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -254,6 +275,18 @@ func upsertSetting(ctx context.Context, tx pgx.Tx, key string, value any) error 
 
 // applyStagger rewrites the offsets of every node and reports how many changed.
 func applyStagger(ctx context.Context, tx pgx.Tx, rows []scheduleRow) error {
+	groups := map[string][]scheduleRow{}
+	for _, r := range rows {
+		groups[r.Engine] = append(groups[r.Engine], r)
+	}
+	for name, group := range groups {
+		if err := staggerEngine(ctx, tx, group, name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+func staggerEngine(ctx context.Context, tx pgx.Tx, rows []scheduleRow, engine string) error {
 	nodes := make([]schedules.Node, len(rows))
 	for i, r := range rows {
 		nodes[i] = schedules.Node{ID: r.NodeID, Interval: r.Interval, Offset: r.Offset, Enabled: r.Enabled}
@@ -265,6 +298,12 @@ func applyStagger(ctx context.Context, tx pgx.Tx, rows []scheduleRow) error {
 	}
 	sort.Strings(ids)
 	for _, id := range ids {
+		if _, err := tx.Exec(ctx, `UPDATE engine_schedules SET offset_minutes=$2, revision=revision+1 WHERE node_id=$1 AND engine=$3 AND offset_minutes <> $2`, id, offsets[id], engine); err != nil {
+			return err
+		}
+		if engine != "ookla" {
+			continue
+		}
 		if _, err := tx.Exec(ctx, `UPDATE schedules SET offset_minutes=$2, revision=revision+1, updated_at=now() WHERE node_id=$1 AND offset_minutes <> $2`, id, offsets[id]); err != nil {
 			return err
 		}
@@ -304,6 +343,9 @@ func (s *Store) ReplaceRules(ctx context.Context, in ScheduleRules, ifMatch stri
 			return nil, "", err
 		}
 	}
+	if _, err := tx.Exec(ctx, `UPDATE engine_schedules SET revision=revision+1`); err != nil {
+		return nil, "", err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE schedules SET revision=revision+1, updated_at=now()`); err != nil {
 		return nil, "", err
 	}
@@ -342,4 +384,11 @@ func (s *Store) Stagger(ctx context.Context, ifMatch string) (map[string]any, st
 		return nil, "", err
 	}
 	return data, newTag, nil
+}
+
+func nodeScheduleETag(rows []scheduleRow) string {
+	if len(rows) == 1 {
+		return scheduleETag(rows[0].Revision)
+	}
+	return collectionETag(rows, nil)
 }

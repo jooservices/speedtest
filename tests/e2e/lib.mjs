@@ -62,7 +62,7 @@ export async function startStack({ seed = true } = {}) {
   writeFileSync(join(releaseDir, artifact), binary);
   writeFileSync(join(releaseDir, 'release.json'), JSON.stringify({ version: '2.0.0', commit: 'e2e', builtAt: new Date().toISOString(), files: { [artifact]: createHash('sha256').update(binary).digest('hex') } }));
   const centerEnv = { ...process.env, ...env, APP_ENV: 'local', APP_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=', SPEEDTEST_HTTP_ADDR: `127.0.0.1:${port}`, // gitleaks:allow (fixed test-only key)
-    SPEEDTEST_PUBLIC_URL: `http://127.0.0.1:${port}`, SPEEDTEST_RELEASE_DIR: releaseDir, SPEEDTEST_ADMIN_EMAIL: '', SPEEDTEST_LOGIN_MAX_ATTEMPTS: '100' };
+    SPEEDTEST_PUBLIC_URL: `http://127.0.0.1:${port}`, SPEEDTEST_RELEASE_DIR: releaseDir, SPEEDTEST_ADMIN_EMAIL: '', SPEEDTEST_LOGIN_MAX_ATTEMPTS: '100', SPEEDTEST_GEO_DBIP_AUTO_UPDATE: 'false' };
   run('go', ['run', './internal/center/db/cmd/migrate', 'up'], { env: centerEnv });
   run(join(out, 'bin', 'center'), ['seed-admin'], { env: centerEnv });
   if (seed) sqlFile(db, join(root, 'tests', 'e2e', 'seed.sql'));
@@ -85,7 +85,11 @@ export async function startAgent(stack, { name, token }) {
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   const env = { ...process.env, SPEEDTEST_AGENT_CONFIG: join(dir, 'config.yaml'), SPEEDTEST_AGENT_CREDENTIAL: join(dir, 'credential'), SPEEDTEST_AGENT_CENTER: stack.origin,
-    SPEEDTEST_OOKLA_BINARY: join(out, 'bin', 'fake-speedtest'), SPEEDTEST_OOKLA_ARGS: '["--scenario","success"]', SPEEDTEST_SPOOL_DIR: join(dir, 'spool'),
+    SPEEDTEST_OOKLA_BINARY: join(out, 'bin', 'fake-speedtest'), SPEEDTEST_OOKLA_ARGS: '["--scenario","success"]',
+    // Capability discovery only needs LookPath; reuse the Ookla fake so LibreSpeed is reported as installed.
+    SPEEDTEST_LIBRESPEED_BINARY: join(out, 'bin', 'fake-speedtest'),
+    SPEEDTEST_LIBRESPEED_CONCURRENT: '4', SPEEDTEST_LIBRESPEED_TIMEOUT: '60s',
+    SPEEDTEST_SPOOL_DIR: join(dir, 'spool'),
     SPEEDTEST_AGENT_UPDATE_DIR: join(dir, 'update'), SPEEDTEST_AGENT_INBOX_DIR: join(dir, 'inbox') };
   run(join(out, 'bin', 'agent'), ['enroll', '--center', stack.origin, '--token', token, '--name', name], { env });
   const agent = spawn(join(out, 'bin', 'agent'), ['run'], { cwd: dir, env, stdio: 'ignore' });

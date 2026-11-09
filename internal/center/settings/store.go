@@ -353,6 +353,9 @@ func writeShared(ctx context.Context, tx pgx.Tx, view Settings) error {
 		}
 	}
 	if zoneChanged || before.QuietStart != view.QuietStart || before.QuietEnd != view.QuietEnd || before.Stagger != view.Stagger || before.MaxConcurrent != view.MaxConcurrent || before.Engine != view.Engine {
+		if _, err := tx.Exec(ctx, `UPDATE engine_schedules SET revision=revision+1`); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(ctx, `UPDATE schedules SET revision = revision + 1, updated_at = now()`); err != nil {
 			return err
 		}

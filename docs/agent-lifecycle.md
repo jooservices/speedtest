@@ -74,3 +74,16 @@ run `go test -race -p 1 -tags integration ./... -count=1`. See the migration
 runbook for the authorized manual guard on the Dev Workspaces VM. No UI or browser
 flow changes in this ticket. Offline doubles do not certify staging or real-agent
 soak; Claude performs review/QA, and deployment remains the owner's decision.
+
+## Multiple measurement engines
+
+The agent heartbeats its installed Ookla and LibreSpeed executables, resolving
+`SPEEDTEST_OOKLA_BINARY` and `SPEEDTEST_LIBRESPEED_BINARY` (defaults `speedtest` and
+`librespeed-cli`). The center offers one interval/offset/enabled schedule per
+engine; newly enabled LibreSpeed defaults to 60 minutes. Config sync replaces
+these schedules without restarting. One scheduler worker runs all engines and
+manual primary-engine requests in sequence, including coincident slots; overdue
+slots expire rather than building an unbounded queue. Every durable result keeps
+the engine used even if configuration changes while the subprocess is running.
+Missing/uninstalled binaries produce failed measurements; repair installation and
+wait for the next capability heartbeat before enabling the engine.

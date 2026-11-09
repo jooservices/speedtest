@@ -1122,6 +1122,7 @@ paths:
         "500":
           $ref: "#/components/responses/ServerError"
       parameters:
+        - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
@@ -1206,6 +1207,7 @@ paths:
         "500":
           $ref: "#/components/responses/ServerError"
       parameters:
+        - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
@@ -1315,6 +1317,7 @@ paths:
         "500":
           $ref: "#/components/responses/ServerError"
       parameters:
+        - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
@@ -1351,6 +1354,7 @@ paths:
         "500":
           $ref: "#/components/responses/ServerError"
       parameters:
+        - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
@@ -1404,6 +1408,7 @@ paths:
         "500":
           $ref: "#/components/responses/ServerError"
       parameters:
+        - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
@@ -1440,6 +1445,7 @@ paths:
         "500":
           $ref: "#/components/responses/ServerError"
       parameters:
+        - $ref: "#/components/parameters/Engine"
         - name: node
           in: query
           required: true
@@ -1478,6 +1484,7 @@ paths:
         "500":
           $ref: "#/components/responses/ServerError"
       parameters:
+        - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
@@ -1524,6 +1531,7 @@ paths:
         "500":
           $ref: "#/components/responses/ServerError"
       parameters:
+        - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Range"
   /api/series:
     get:
@@ -1556,6 +1564,7 @@ paths:
         "500":
           $ref: "#/components/responses/ServerError"
       parameters:
+        - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
@@ -1704,7 +1713,9 @@ paths:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/ScheduleInput"
+              oneOf:
+                  - $ref: "#/components/schemas/ScheduleInput"
+                  - $ref: "#/components/schemas/NodeEngineSchedulesInput"
   /api/schedules/rules:
     put:
       operationId: replaceScheduleRules
@@ -2897,6 +2908,12 @@ components:
       scheme: bearer
       description: Shared Settings key, accepted only to create enrollment tokens.
   parameters:
+    Engine:
+      name: engine
+      in: query
+      description: Omission uses each node's primary engine; engines are never blended.
+      schema:
+        $ref: "#/components/schemas/Engine"
     Page:
       name: page
       in: query
@@ -3247,6 +3264,41 @@ components:
             status: 500
             detail: Internal failure; safe detail only.
   schemas:
+    Engine:
+      type: string
+      enum: [ookla, librespeed]
+      default: ookla
+    EngineScheduleInput:
+      type: object
+      additionalProperties: false
+      properties:
+        engine:
+          $ref: "#/components/schemas/Engine"
+        interval:
+          type: integer
+          minimum: 5
+          maximum: 1440
+          default: 60
+        offset:
+          type: integer
+          minimum: 0
+          maximum: 1439
+          default: 0
+        enabled:
+          type: boolean
+          default: false
+      required: [engine, enabled]
+    NodeEngineSchedulesInput:
+      type: object
+      additionalProperties: false
+      properties:
+        engines:
+          type: array
+          minItems: 1
+          maxItems: 2
+          items:
+            $ref: "#/components/schemas/EngineScheduleInput"
+      required: [engines]
     ID:
       type: string
       description: Opaque resource identifier; clients must not interpret its structure.
@@ -3674,6 +3726,13 @@ components:
       type: object
       additionalProperties: false
       properties:
+        engines:
+          type: array
+          maxItems: 2
+          items:
+            $ref: "#/components/schemas/Schedule"
+        engine:
+          $ref: "#/components/schemas/Engine"
         nodeId:
           $ref: "#/components/schemas/ID"
         config:
@@ -3739,6 +3798,12 @@ components:
       type: object
       additionalProperties: false
       properties:
+        schedules:
+          type: array
+          minItems: 1
+          maxItems: 2
+          items:
+            $ref: "#/components/schemas/EngineScheduleInput"
         revision:
           type: string
         name:
@@ -3829,6 +3894,8 @@ components:
       type: object
       additionalProperties: false
       properties:
+        engine:
+          $ref: "#/components/schemas/Engine"
         id:
           $ref: "#/components/schemas/UUID"
         ts:
@@ -3982,6 +4049,8 @@ components:
       type: object
       additionalProperties: false
       properties:
+        engine:
+          $ref: "#/components/schemas/Engine"
         id:
           $ref: "#/components/schemas/UUID"
         nodeId:
@@ -4144,6 +4213,14 @@ components:
       type: object
       additionalProperties: false
       properties:
+        primaryEngine:
+          $ref: "#/components/schemas/Engine"
+        engines:
+          type: array
+          uniqueItems: true
+          maxItems: 2
+          items:
+            $ref: "#/components/schemas/Engine"
         name:
           type: string
           minLength: 1
@@ -4338,6 +4415,12 @@ components:
       type: object
       additionalProperties: false
       properties:
+        engines:
+          type: array
+          uniqueItems: true
+          maxItems: 2
+          items:
+            $ref: "#/components/schemas/Engine"
         agent:
           type: string
           description: Agent version identifier; enrollment and heartbeat may append (goos/goarch). Owner views omit that suffix.
@@ -5019,6 +5102,8 @@ components:
       type: object
       additionalProperties: false
       properties:
+        engine:
+          $ref: "#/components/schemas/Engine"
         name:
           type: string
           minLength: 1
@@ -5087,6 +5172,8 @@ components:
       type: object
       additionalProperties: false
       properties:
+        engine:
+          $ref: "#/components/schemas/Engine"
         id:
           $ref: "#/components/schemas/ID"
         name:

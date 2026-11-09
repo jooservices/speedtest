@@ -47,6 +47,7 @@ type Controller struct {
 	UpdateResult func() *UpdateResult
 	// HeartbeatOK is called after each successful heartbeat; a freshly updated agent uses it to confirm itself.
 	HeartbeatOK func()
+	Engines     func() []string
 	// OfferUpdate is called with the latest configuration so the agent can start a self-update.
 	OfferUpdate func(AgentConfig)
 	// UpdateAgent handles an owner's update_agent command against the freshly fetched configuration.
@@ -158,6 +159,10 @@ func (c *Controller) heartbeat(ctx context.Context) {
 		lastTest = &s
 	}
 	hb := Heartbeat{Agent: c.Client.Agent, Uptime: uptime, LastTest: lastTest}
+	if c.Engines != nil {
+		engines := c.Engines()
+		hb.Engines = &engines
+	}
 	if c.UpdateResult != nil {
 		hb.UpdateResult = c.UpdateResult()
 	}

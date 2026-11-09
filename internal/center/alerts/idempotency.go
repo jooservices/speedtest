@@ -86,9 +86,9 @@ func (s *Store) createRuleTx(ctx context.Context, tx pgx.Tx, in RuleInput) (Rule
 	if err != nil {
 		return Rule{}, err
 	}
-	if _, err = tx.Exec(ctx, `INSERT INTO alert_rules(id,name,metric,op,value,for_tests,node_ids,severity,channels,enabled)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`, id, in.Name, in.Metric, in.Op, in.Value, in.ForTests,
-		ruleNodeIDs(in), in.Severity, in.Channels, in.Enabled); err != nil {
+	if _, err = tx.Exec(ctx, `INSERT INTO alert_rules(id,name,metric,op,value,for_tests,node_ids,severity,channels,enabled,engine)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11,''))`, id, in.Name, in.Metric, in.Op, in.Value, in.ForTests,
+		ruleNodeIDs(in), in.Severity, in.Channels, in.Enabled, in.Engine); err != nil {
 		return Rule{}, err
 	}
 	r, err := scanRule(tx.QueryRow(ctx, `SELECT `+ruleColumns+` FROM alert_rules WHERE id=$1`, id))

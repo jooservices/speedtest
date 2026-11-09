@@ -55,8 +55,8 @@ func (s *Store) evaluateResult(ctx context.Context, tx pgx.Tx, node string, resu
 		COALESCE(r.node_ids::text[],ARRAY[]::text[]),r.severity,r.channels,r.enabled,r.revision,
 		n.expected_down_mbps,n.expected_up_mbps
 		FROM alert_rules r JOIN nodes n ON n.id=$1
-		WHERE r.enabled AND r.metric NOT IN ('ip_changed','offline')
-		AND (r.node_ids IS NULL OR $1=ANY(r.node_ids)) ORDER BY r.id`, node)
+		WHERE r.enabled AND COALESCE(r.engine,n.primary_engine)=$2 AND r.metric NOT IN ('ip_changed','offline')
+		AND (r.node_ids IS NULL OR $1=ANY(r.node_ids)) ORDER BY r.id`, node, measurementEngine(result.Engine))
 	if err != nil {
 		return err
 	}
@@ -218,8 +218,8 @@ func (s *Store) consumeResultSignal(ctx context.Context, tx pgx.Tx, resultID str
 func (s *Store) processSignal(ctx context.Context, tx pgx.Tx, item signal) error {
 	rows, err := tx.Query(ctx, `SELECT id::text,name,metric,op,value,for_tests,node_ids IS NULL,
 		COALESCE(node_ids::text[],ARRAY[]::text[]),severity,channels,enabled,revision
-		FROM alert_rules WHERE enabled AND metric='ip_changed'
-		AND (node_ids IS NULL OR $1=ANY(node_ids)) ORDER BY id`, item.NodeID)
+		FROM alert_rules WHERE enabled AND metric='ip_changed' AND COALESCE(engine,(SELECT primary_engine FROM nodes WHERE id=$1))=(SELECT engine FROM results WHERE id=$2)
+		AND (node_ids IS NULL OR $1=ANY(node_ids)) ORDER BY id`, item.NodeID, item.ResultID)
 	if err != nil {
 		return err
 	}
@@ -305,7 +305,7 @@ func (s *Store) EvaluateOffline(ctx context.Context) error {
 		COALESCE(r.node_ids::text[],ARRAY[]::text[]),r.severity,r.channels,r.enabled,r.revision,
 		n.id::text,n.enabled,s.enabled,s.interval_minutes,COALESCE(n.last_seen_at,n.created_at)
 		FROM alert_rules r JOIN nodes n ON r.node_ids IS NULL OR n.id=ANY(r.node_ids)
-		JOIN schedules s ON s.node_id=n.id WHERE r.enabled AND r.metric='offline'
+		JOIN engine_schedules s ON s.node_id=n.id AND s.engine=COALESCE(r.engine,n.primary_engine) WHERE r.enabled AND r.metric='offline'
 		ORDER BY r.id,n.id`)
 	if err != nil {
 		return err
@@ -419,4 +419,11 @@ func (s *Store) logger() *slog.Logger {
 		return s.Logger
 	}
 	return slog.Default()
+}
+
+func measurementEngine(name string) string {
+	if name == "" {
+		return "ookla"
+	}
+	return name
 }

@@ -17,6 +17,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/oschwald/geoip2-golang"
 )
 
 const (
@@ -158,12 +160,16 @@ func (r *Reader) updateEdition(ctx context.Context, client *http.Client, key, ki
 	if err != nil {
 		return err
 	}
+	return r.install(ctx, kind, target, data, db, "GeoLite2")
+}
+
+// install replaces the database file and swaps the reader under the lookup lock.
+// A reader never sees a partially written file; the temporary file is on the destination filesystem.
+func (r *Reader) install(ctx context.Context, kind, target string, data []byte, db *geoip2.Reader, label string) error {
 	if err := ctx.Err(); err != nil {
 		_ = db.Close()
 		return err
 	}
-	// Rename and reader replacement share the lookup lock. A reader never sees a
-	// partially written file. The temporary file is on the destination filesystem.
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if err := replace(target, data); err != nil {
@@ -180,7 +186,7 @@ func (r *Reader) updateEdition(ctx context.Context, client *http.Client, key, ki
 	if old != nil {
 		_ = old.Close()
 	}
-	r.log.Info("GeoLite2 database updated", "edition", kind)
+	r.log.Info(label+" database updated", "edition", kind)
 	return nil
 }
 

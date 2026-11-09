@@ -21,6 +21,7 @@ const DefaultTimeout = 10 * time.Second
 
 // Heartbeat is the POST /api/agent/heartbeat body.
 type Heartbeat struct {
+	Engines      *[]string     `json:"engines,omitempty"`
 	Agent        string        `json:"agent"`
 	Uptime       int64         `json:"uptime"`
 	LastTest     *string       `json:"lastTest"`
@@ -33,9 +34,10 @@ type UpdateResult = update.Result
 // ScheduleInput is the schedule part of the effective agent configuration.
 // Interval and offset are whole minutes.
 type ScheduleInput struct {
-	Interval int  `json:"interval"`
-	Offset   int  `json:"offset"`
-	Enabled  bool `json:"enabled"`
+	Engine   string `json:"engine,omitempty"`
+	Interval int    `json:"interval"`
+	Offset   int    `json:"offset"`
+	Enabled  bool   `json:"enabled"`
 }
 
 // QuietHours is the daily quiet window in the configuration.
@@ -49,10 +51,11 @@ type QuietHours struct {
 // GET /api/agent/config. Only the fields the scheduler needs are decoded; the
 // rest are ignored.
 type AgentConfig struct {
-	Engine  string          `json:"engine"`
-	Threads int             `json:"threads"`
-	Server  json.RawMessage `json:"server"`
-	Binding *struct {
+	Schedules []ScheduleInput `json:"schedules,omitempty"`
+	Engine    string          `json:"engine"`
+	Threads   int             `json:"threads"`
+	Server    json.RawMessage `json:"server"`
+	Binding   *struct {
 		Interface string  `json:"iface"`
 		SourceIP  *string `json:"sourceIp"`
 	} `json:"binding"`
