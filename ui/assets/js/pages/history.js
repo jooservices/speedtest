@@ -71,6 +71,7 @@
       listHost.appendChild(pager);
     }
 
+    root.appendChild(ST.engineSelector());
     root.appendChild(U.pageHead('Results', 'Every speed test, newest first. Click a row for all the details.', [
       U.btn('Export CSV', { icon: 'download', onClick: function () { var rows = filtered(); U.download('speedtest-results-' + new Date().toISOString().slice(0, 10) + '.csv', ST.csv(rows), 'text/csv'); U.toast('Exported ' + rows.length + ' results'); } }),
       U.btn('Run tests', { icon: 'play', variant: 'primary', onClick: function () { U.runTestDialog(nodes.filter(function (n) { return n.enabled; }).map(function (n) { return n.id; })); } })]));

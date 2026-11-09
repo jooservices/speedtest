@@ -79,6 +79,7 @@ func (q QuietHours) inQuiet(t time.Time) bool {
 // durations of whole minutes; slots fall on the Unix-epoch grid:
 // epoch + offset + k*interval.
 type Schedule struct {
+	Engine   string
 	Interval time.Duration
 	Offset   time.Duration
 	Enabled  bool
@@ -147,12 +148,15 @@ type Scheduler struct {
 	clock  Clock
 	jitter func(time.Duration) time.Duration
 
-	manualID string
-	mu       sync.Mutex
-	schedule Schedule
-	lastRun  time.Time
-	manual   chan string
-	wake     chan struct{}
+	manualID    string
+	mu          sync.Mutex
+	schedule    Schedule
+	engines     []Schedule
+	paused      bool
+	engineEpoch time.Time
+	lastRun     time.Time
+	manual      chan string
+	wake        chan struct{}
 }
 
 // Option customizes a Scheduler created by New.
@@ -213,6 +217,7 @@ func (s *Scheduler) Schedule() Schedule {
 func (s *Scheduler) Pause() {
 	s.mu.Lock()
 	s.schedule.Enabled = false
+	s.paused = true
 	s.mu.Unlock()
 	s.signalWake()
 }
@@ -221,6 +226,7 @@ func (s *Scheduler) Pause() {
 func (s *Scheduler) Resume() {
 	s.mu.Lock()
 	s.schedule.Enabled = true
+	s.paused = false
 	s.mu.Unlock()
 	s.signalWake()
 }
@@ -264,14 +270,14 @@ const (
 // shutdown. Tests run one at a time; a test that overruns its slot causes the
 // next slot to be skipped and logged rather than stacked.
 func (s *Scheduler) Run(ctx context.Context) error {
-	var consumed time.Time
+	consumed := map[string]time.Time{}
 	for {
 		if ctx.Err() != nil {
 			return nil
 		}
 
 		// Drain a prior wake before taking the current snapshot.
-		sch := s.currentAfterWake()
+		sch := s.nextSchedule(consumed)
 
 		if !sch.Enabled {
 			if s.waitUnscheduled(ctx) {
@@ -281,7 +287,7 @@ func (s *Scheduler) Run(ctx context.Context) error {
 		}
 
 		now := s.clock.Now()
-		slot := nextUnconsumed(sch, now, consumed)
+		slot := s.engineSlot(sch, now, consumed[sch.Engine])
 		if slot.IsZero() {
 			if s.waitUnscheduled(ctx) {
 				return nil
@@ -306,14 +312,14 @@ func (s *Scheduler) Run(ctx context.Context) error {
 
 		// A timer and a config wake can become ready together. Recheck before
 		// running so a paused or replaced schedule cannot fire a stale slot.
-		if s.Schedule() != sch {
+		if !s.hasSchedule(sch) {
 			continue
 		}
-		consumed = slot
+		consumed[sch.Engine] = slot
 		actual := s.clock.Now()
 		if !actual.Before(slot.Add(sch.Interval)) {
 			s.logger.Warn("speed test slot expired; skipped", "slot", slot.UTC().Format(time.RFC3339))
-			consumed = actual
+			consumed[sch.Engine] = actual
 			continue
 		}
 		if sch.Quiet.inQuiet(actual) {
@@ -354,7 +360,7 @@ func (s *Scheduler) wait(ctx context.Context, d time.Duration) wake {
 // runScheduled runs one test and logs any slot skipped because the test
 // overran its own slot.
 func (s *Scheduler) runScheduled(ctx context.Context, slot time.Time, sch Schedule) {
-	s.runOne(ctx, "")
+	s.runOneEngine(ctx, "", sch.Engine)
 	finish := s.clock.Now()
 	next := nextSlot(finish, sch.Offset, sch.Interval)
 	skipped := int64(next.Sub(slot)/sch.Interval) - 1
@@ -368,7 +374,9 @@ func (s *Scheduler) runScheduled(ctx context.Context, slot time.Time, sch Schedu
 
 // runOne runs a single test, recording its start time. The run loop calls it
 // synchronously, so tests never overlap.
-func (s *Scheduler) runOne(ctx context.Context, id string) {
+func (s *Scheduler) runOne(ctx context.Context, id string) { s.runOneEngine(ctx, id, "") }
+
+func (s *Scheduler) runOneEngine(ctx context.Context, id, name string) {
 	start := s.clock.Now()
 	s.mu.Lock()
 	s.lastRun = start
@@ -380,6 +388,10 @@ func (s *Scheduler) runOne(ctx context.Context, id string) {
 		RunCommand(context.Context, string) error
 	}); ok && id != "" {
 		err = manual.RunCommand(ctx, id)
+	} else if runner, ok := s.runner.(interface {
+		RunEngine(context.Context, string) error
+	}); ok && name != "" {
+		err = runner.RunEngine(ctx, name)
 	} else {
 		err = s.runner.Run(ctx)
 	}

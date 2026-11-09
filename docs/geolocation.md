@@ -157,3 +157,45 @@ References: [MaxMind updates](https://dev.maxmind.com/geoip/updating-databases/)
 [download API](https://github.com/maxmind/openapi/blob/main/bundled/downloads.yaml),
 [reader](https://github.com/oschwald/geoip2-golang),
 [test fixtures and licences](https://github.com/maxmind/MaxMind-DB/tree/d1551916cff0712d12ff602c309234471b0402a2/test-data).
+
+## More providers, consensus and DB-IP Lite (JOOST-75)
+
+Resolver order stays: durable cache, offline MMDB, then the enabled online providers. Enabled providers are tried in
+this order: ip-api, IPinfo Lite, **ipwho.is**, **ipapi.co**, **ipgeolocation.io**. The three new ones are off by default
+(`SPEEDTEST_GEO_IPWHO_ENABLED`, `SPEEDTEST_GEO_IPAPICO_ENABLED`, `SPEEDTEST_GEO_IPGEOLOCATION_ENABLED`) and share the
+existing timeout, rate limiter and circuit breaker. ipgeolocation.io needs `SPEEDTEST_GEO_IPGEOLOCATION_KEY` and HTTPS;
+the key travels only in the request to that service and appears in no error or log line. Every provider also checks that
+the answer is for the requested IP.
+
+**Consensus** (`SPEEDTEST_GEO_CONSENSUS=true`, needs at least two providers): all enabled providers are asked, the country
+most of them report wins (a tie goes to the earlier provider), empty fields of the winning answer are filled from the
+providers that agree, and the stored source is `consensus:ipwho+ipapi-co` (a single answer keeps its provider name). When
+providers disagree, a warning lists the competing countries (never the IP). The source of every location is shown in
+IP and location as "Looked up with".
+
+**DB-IP Lite**: when no MaxMind licence key is set the center keeps `GeoLite2-City.mmdb` and `GeoLite2-ASN.mmdb` current
+from the free DB-IP Lite files (same format, CC BY 4.0). It checks every 24 hours and replaces a file only when it is
+missing or older than 25 days, tries the previous month when the current month is not published yet, verifies the
+database before the atomic swap, and keeps the old file and reader when anything fails.
+It is on by default in production (`APP_ENV=production`) and off elsewhere; `SPEEDTEST_GEO_DBIP_AUTO_UPDATE=true|false` overrides; with a MaxMind key the GeoLite2 updater runs instead. Wherever the
+data is shown, the attribution **IP Geolocation by DB-IP** (https://db-ip.com) applies; this page and the application
+documentation carry it. Providers are configured through the environment; moving their keys into Settings is a follow-up.
+
+## Free provider facts (read from the providers' own pages on 2026-11-06)
+
+Limits change; check the page before relying on a number.
+
+| Provider | Free limit | Key | HTTPS | Commercial use | Gives | Notes |
+| --- | --- | --- | --- | --- | --- | --- |
+| DB-IP Lite (offline MMDB) | none, monthly files | no | download | yes, CC BY 4.0 with attribution | country, city, coordinates, ASN | the base of the offline database |
+| IPinfo Lite | no request limit | token | yes | yes, CC BY-SA 4.0 with attribution | country and ASN only; free MMDB/CSV download too | best source for ASN and country gaps |
+| ip-api.com | 45 requests/minute; batch of 100 IPs per request, 15 batch requests/minute | no | **no (HTTP only)** | **no (non-commercial)** | city, region, coordinates, timezone, ISP, ASN | over the limit: HTTP 429, repeated: 1-hour ban; `X-Rl`/`X-Ttl` headers; IPs travel unencrypted |
+| ipgeolocation.io | 1,000 credits/day, no per-minute limit | free key | yes | yes (within the limit) | country, state, city, coordinates, ASN, timezone | resets 00:00 UTC; calls from a server only |
+| ipwho.is | 1,000 requests/day | no | yes | yes | country, region, city, coordinates, ASN, ISP, timezone | no bulk on the free plan |
+| freeipapi.com | 60 requests/minute | no | yes | yes | country, region, city, ASN, timezone | European servers; no bulk on free |
+| GeoJS | not published on the docs page | no | yes | see its terms | country, city, coordinates, ASN, organisation | accepts several IPs in one call |
+| ipapi.co | 1,000 requests/day on a trial | trial | yes | **trial is "not meant for production"** | city, coordinates, ASN | keep off in production |
+| RIPEstat network-info | no key; fair use | no | yes | public RIPE data | prefix and ASN only | possible ASN fallback |
+
+Because of these limits the providers are used sparingly: the offline database answers first, and a free provider is asked
+only when the offline answer is missing or weak, in the order and with the budgets of the quota-aware policy (JOOST-88).

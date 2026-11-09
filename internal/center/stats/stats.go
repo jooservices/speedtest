@@ -53,6 +53,7 @@ func (m Metric) unit() string {
 }
 
 type Query struct {
+	Engine       string
 	NodeIDs      []string
 	NodesSet     bool
 	From         time.Time
@@ -162,7 +163,7 @@ type DB interface {
 type Store struct{ DB DB }
 
 const selectedNodes = `
-SELECT id, name, expected_down_mbps, expected_up_mbps
+SELECT id, name, expected_down_mbps, expected_up_mbps, primary_engine
 FROM nodes
 WHERE ($1::uuid[] IS NULL OR id = ANY($1::uuid[]))`
 
@@ -178,7 +179,7 @@ func (s *Store) Summary(ctx context.Context, q Query) ([]SummaryComparison, erro
 		return []SummaryComparison{}, nil
 	}
 	query := summarySQL()
-	rows, err := s.DB.Query(ctx, query, q.nodeIDs(), q.From, q.To, q.PreviousFrom, q.PreviousTo)
+	rows, err := s.query(ctx, q, query, q.nodeIDs(), q.From, q.To, q.PreviousFrom, q.PreviousTo)
 	if err != nil {
 		return nil, fmt.Errorf("query statistics summary: %w", err)
 	}
@@ -304,7 +305,7 @@ func (s *Store) Trend(ctx context.Context, q Query) ([]Series, error) {
 	}
 
 	query := trendSQL(column)
-	rows, err := s.DB.Query(ctx, query, q.nodeIDs(), q.From, q.To, q.Bucket, q.Timezone)
+	rows, err := s.query(ctx, q, query, q.nodeIDs(), q.From, q.To, q.Bucket, q.Timezone)
 	if err != nil {
 		return nil, fmt.Errorf("query statistics trend: %w", err)
 	}
@@ -359,7 +360,7 @@ func trendSQL(column string) string {
 ), grouped AS (
  SELECT r.node_id, date_trunc($4, r.ts AT TIME ZONE $5) AS local_bucket,
         count(r.` + column + `)::int AS sample_count, avg(r.` + column + `)::float8 AS value
- FROM results r JOIN selected_nodes n ON n.id = r.node_id
+ FROM results r JOIN selected_nodes n ON r.node_id = n.id
  WHERE r.ts >= $2 AND r.ts < $3 AND r.status = 'ok' AND r.` + column + ` IS NOT NULL
  GROUP BY r.node_id, local_bucket
 )
@@ -377,7 +378,7 @@ func (s *Store) metricSummaries(ctx context.Context, q Query, column, statusCond
 SELECT n.id::text, ` + joinSQL(metricAggregate(column)) + `
 FROM selected_nodes n LEFT JOIN results r ON r.node_id = n.id AND r.ts >= $2 AND r.ts < $3 AND ` + statusCondition + `
 GROUP BY n.id ORDER BY n.id`
-	rows, err := s.DB.Query(ctx, query, q.nodeIDs(), q.From, q.To)
+	rows, err := s.query(ctx, q, query, q.nodeIDs(), q.From, q.To)
 	if err != nil {
 		return nil, fmt.Errorf("query statistics metric summary: %w", err)
 	}
@@ -411,7 +412,7 @@ func (s *Store) HourOfDay(ctx context.Context, q Query) ([]HourSeries, error) {
 ), grouped AS (
  SELECT r.node_id, extract(hour FROM r.ts AT TIME ZONE $4)::int AS hour,
         count(r.` + column + `)::int AS sample_count, avg(r.` + column + `)::float8 AS value
- FROM results r JOIN selected_nodes n ON n.id = r.node_id
+ FROM results r JOIN selected_nodes n ON r.node_id = n.id
  WHERE r.ts >= $2 AND r.ts < $3 AND r.status = 'ok' AND r.` + column + ` IS NOT NULL
  GROUP BY r.node_id, hour
 )
@@ -419,7 +420,7 @@ SELECT n.id::text, h.hour, coalesce(g.sample_count, 0), g.value
 FROM selected_nodes n CROSS JOIN hours h
 LEFT JOIN grouped g ON g.node_id = n.id AND g.hour = h.hour
 ORDER BY n.id, h.hour`
-	rows, err := s.DB.Query(ctx, query, q.nodeIDs(), q.From, q.To, q.Timezone)
+	rows, err := s.query(ctx, q, query, q.nodeIDs(), q.From, q.To, q.Timezone)
 	if err != nil {
 		return nil, fmt.Errorf("query statistics hour-of-day: %w", err)
 	}
@@ -453,7 +454,7 @@ func (s *Store) Heatmap(ctx context.Context, q Query, nodeID string) (Heatmap, e
 		return Heatmap{}, err
 	}
 	query := `WITH target_node AS (
- SELECT id FROM nodes WHERE id = $1::uuid
+ SELECT id,primary_engine FROM nodes WHERE id = $1::uuid
 ), cells AS (
  SELECT weekdays.weekday, hours.hour
  FROM generate_series(0, 6) AS weekdays(weekday)
@@ -462,7 +463,7 @@ func (s *Store) Heatmap(ctx context.Context, q Query, nodeID string) (Heatmap, e
  SELECT r.node_id, (extract(isodow FROM r.ts AT TIME ZONE $4)::int - 1) AS weekday,
         extract(hour FROM r.ts AT TIME ZONE $4)::int AS hour,
         count(r.` + column + `)::int AS sample_count, avg(r.` + column + `)::float8 AS value
- FROM results r JOIN target_node n ON n.id = r.node_id
+ FROM results r JOIN target_node n ON r.node_id = n.id
  WHERE r.ts >= $2 AND r.ts < $3 AND r.status = 'ok' AND r.` + column + ` IS NOT NULL
  GROUP BY r.node_id, weekday, hour
 )
@@ -470,7 +471,7 @@ SELECT n.id::text, c.weekday, c.hour, coalesce(g.sample_count, 0), g.value
 FROM target_node n CROSS JOIN cells c
 LEFT JOIN grouped g ON g.node_id = n.id AND g.weekday = c.weekday AND g.hour = c.hour
 ORDER BY c.weekday, c.hour`
-	rows, err := s.DB.Query(ctx, query, nodeID, q.From, q.To, q.Timezone)
+	rows, err := s.query(ctx, q, query, nodeID, q.From, q.To, q.Timezone)
 	if err != nil {
 		return Heatmap{}, fmt.Errorf("query statistics heatmap: %w", err)
 	}
@@ -502,7 +503,7 @@ func (s *Store) Distribution(ctx context.Context, q Query) ([]Distribution, erro
 		return []Distribution{}, nil
 	}
 	query := distributionSQL(column)
-	rows, err := s.DB.Query(ctx, query, q.nodeIDs(), q.From, q.To, q.Bins)
+	rows, err := s.query(ctx, q, query, q.nodeIDs(), q.From, q.To, q.Bins)
 	if err != nil {
 		return nil, fmt.Errorf("query statistics distribution: %w", err)
 	}
@@ -549,7 +550,7 @@ func (s *Store) Distribution(ctx context.Context, q Query) ([]Distribution, erro
 func distributionSQL(column string) string {
 	return `WITH selected_nodes AS (` + selectedNodes + `), metric_values AS MATERIALIZED (
  SELECT r.node_id, r.` + column + ` AS value
- FROM results r JOIN selected_nodes n ON n.id = r.node_id
+ FROM results r JOIN selected_nodes n ON r.node_id = n.id
  WHERE r.ts >= $2 AND r.ts < $3 AND r.status = 'ok' AND r.` + column + ` IS NOT NULL
 ), bounds AS (
  SELECT n.id, count(v.value)::int AS samples, min(v.value) AS low, max(v.value) AS high,

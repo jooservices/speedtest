@@ -23,6 +23,7 @@ var (
 
 // Result preserves nullable measurements and original engine details.
 type Result struct {
+	Engine          string          `json:"engine,omitempty"`
 	ID              string          `json:"id"`
 	TS              string          `json:"ts"`
 	Status          string          `json:"status"`
@@ -174,6 +175,12 @@ func ParseResult(data []byte) (Result, error) {
 		!nonNull(data, "id", "ts", "status", "threads", "bytesDown", "bytesUp", "duration", "manual", "raw", "warnings") {
 		return r, ErrInvalid
 	}
+	if r.Engine == "" {
+		r.Engine = "ookla"
+	}
+	if r.Engine != "ookla" && r.Engine != "librespeed" {
+		return r, ErrInvalid
+	}
 	if !UUID(r.ID) || !timestamp(r.TS) || (r.IP != nil && !address(*r.IP)) || r.Threads < 1 || r.Threads > 64 || r.BytesDown < 0 || r.BytesUp < 0 || !number(&r.Duration) || !text(r.Error, 2000) {
 		return r, ErrInvalid
 	}
@@ -222,6 +229,7 @@ type UpdateResult struct {
 }
 
 type Heartbeat struct {
+	Engines      []string      `json:"engines,omitempty"`
 	Agent        string        `json:"agent"`
 	Uptime       int64         `json:"uptime"`
 	LastTest     *string       `json:"lastTest"`
@@ -232,6 +240,13 @@ func ParseHeartbeat(data []byte) (Heartbeat, error) {
 	var h Heartbeat
 	if Decode(data, &h, "agent", "uptime", "lastTest") != nil || !nonNull(data, "agent", "uptime") || utf8.RuneCountInString(h.Agent) > 64 || h.Uptime < 0 || h.LastTest != nil && !timestamp(*h.LastTest) {
 		return h, ErrInvalid
+	}
+	seenEngines := map[string]bool{}
+	for _, name := range h.Engines {
+		if (name != "ookla" && name != "librespeed") || seenEngines[name] {
+			return h, ErrInvalid
+		}
+		seenEngines[name] = true
 	}
 	if h.UpdateResult != nil {
 		var fields map[string]json.RawMessage

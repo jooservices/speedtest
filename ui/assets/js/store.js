@@ -107,9 +107,20 @@
   };
   ST.deleteRule = function (id) { state.rules = state.rules.filter(function (r) { return r.id !== id; }); persist(); ST.recomputeEvents(); ST.emit('data'); };
 
+  ST.selectedEngine = '';
+  ST.engineQuery = function () { return ST.selectedEngine ? '&engine=' + encodeURIComponent(ST.selectedEngine) : ''; };
+  ST.engineSelector = function () {
+    return ST.ui.field('Engine', ST.ui.select([{ value: '', label: 'Primary engine' }, { value: 'ookla', label: 'Ookla' }, { value: 'librespeed', label: 'LibreSpeed' }], ST.selectedEngine, function (value) {
+      ST.selectedEngine = value;
+      if (ST.demo) ST.refresh(); else ST.load();
+    }));
+  };
+  ST.engineSchedules = function (node) { return node.engineSchedules || [{ engine: 'ookla', interval: node.interval, offset: node.offset || 0, enabled: node.enabled }]; };
+  ST.saveEngineSchedules = function (id, engines) { var n = ST.node(id); n.engineSchedules = engines; persist(); ST.emit('data'); return Promise.resolve(); };
+
   /* ---------- Queries ---------- */
   ST.now = function () { return Date.now(); };
-  ST.nodeResults = function (id) { return byNode[id] || []; };
+  ST.nodeResults = function (id) { return ST.results({nodeIds:[id]}); };
   ST.results = function (o) {
     o = o || {};
     var ids = o.nodeIds || state.nodes.map(function (n) { return n.id; });
@@ -119,6 +130,7 @@
       for (var i = 0; i < arr.length; i++) {
         var r = arr[i];
         if (r.ts < from || r.ts > to) continue;
+        if ((r.engine || 'ookla') !== (o.engine || ST.selectedEngine || (ST.node(id) || {}).primaryEngine || 'ookla')) continue;
         if (o.status && o.status !== 'all' && r.status !== o.status) continue;
         out.push(r);
       }
@@ -127,8 +139,8 @@
     return out;
   };
   ST.rangeFrom = function (key) { return Date.now() - ST.ranges[key || state.settings.range]; };
-  ST.latest = function (id) { var a = byNode[id] || []; for (var i = a.length - 1; i >= 0; i--) return a[i]; return null; };
-  ST.latestOk = function (id) { var a = byNode[id] || []; for (var i = a.length - 1; i >= 0; i--) if (a[i].status !== 'failed') return a[i]; return null; };
+  ST.latest = function (id) { var a = ST.nodeResults(id); for (var i = a.length - 1; i >= 0; i--) return a[i]; return null; };
+  ST.latestOk = function (id) { var a = ST.nodeResults(id); for (var i = a.length - 1; i >= 0; i--) if (a[i].status !== 'failed') return a[i]; return null; };
   ST.server = function (id) { return ST.servers.filter(function (s) { return s.id === id; })[0] || { id: id, name: 'Unknown server', city: '', sponsor: '' }; };
 
   /* ---------- Statistics ---------- */
@@ -356,11 +368,11 @@
   };
 
   ST.csv = function (rows) {
-    var head = ['time', 'node', 'status', 'download_mbps', 'upload_mbps', 'ping_ms', 'jitter_ms', 'packet_loss_pct', 'loaded_latency_down_ms', 'loaded_latency_up_ms', 'server', 'public_ip', 'error'];
+    var head = ['time', 'node', 'status', 'download_mbps', 'upload_mbps', 'ping_ms', 'jitter_ms', 'packet_loss_pct', 'loaded_latency_down_ms', 'loaded_latency_up_ms', 'server', 'public_ip', 'error', 'engine'];
     var esc = function (v) { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     return [head.join(',')].concat(rows.map(function (r) {
       var n = ST.node(r.nodeId), s = ST.server(r.serverId);
-      return [new Date(r.ts).toISOString(), n ? n.name + ' ' + n.label : r.nodeId, r.status, r.down, r.up, r.ping, r.jitter, r.loss, r.dLat, r.uLat, s.name + ' - ' + s.city, r.ip, r.error].map(esc).join(',');
+      return [new Date(r.ts).toISOString(), n ? n.name + ' ' + n.label : r.nodeId, r.status, r.down, r.up, r.ping, r.jitter, r.loss, r.dLat, r.uLat, s.name + ' - ' + s.city, r.ip, r.error, r.engine || 'ookla'].map(esc).join(',');
     })).join('\n');
   };
 
@@ -407,7 +419,7 @@
         var range = settings.data.range;
         var snapshot = await Promise.all([
           API.list('/api/nodes', options),
-          API.list('/api/results?range=' + encodeURIComponent(range), options),
+          API.list('/api/results?range=' + encodeURIComponent(range) + ST.engineQuery(), options),
           API.list('/api/alerts/rules', options),
           // state=all: acknowledged alerts stay visible under "All" and can be reopened (the center's default is open only).
           API.list('/api/alerts/events?state=all&range=' + encodeURIComponent(range), options),
@@ -510,6 +522,10 @@
     };
     // Schedules are computed by the center: next runs, data usage and clashes come from /api/schedules.
     ST.scheduleInfo = function () { return schedules; };
+    ST.engineSchedules = function (node) {
+      return schedules.nodes.filter(function (x) { return x.nodeId === node.id; }).map(function (x) { return Object.assign({ engine: x.engine || 'ookla' }, x.config); });
+    };
+    ST.saveEngineSchedules = function (id, engines) { return ST.saveSchedule(id, { engines: engines }); };
     function quietZone() {
       var zone = state.settings.timezone;
       if (zone && zone !== 'browser') return zone;

@@ -172,7 +172,7 @@ func TestResultHookChainOrderAndFailure(t *testing.T) {
 	}
 }
 func TestPostgresConfigAndHeartbeat(t *testing.T) {
-	base := []any{"node", "edge", float64(300), float64(100), 4, (*int)(nil), "", (*string)(nil), false, int64(1), 30, 0, true, int64(1), []byte(`{}`)}
+	base := []any{"node", "edge", float64(300), float64(100), 4, (*int)(nil), "", (*string)(nil), false, int64(1), 30, 0, true, int64(1), []byte(`{}`), "ookla", []byte(`[{"engine":"ookla","interval":30,"offset":0,"enabled":true}]`)}
 	s := &Postgres{Pool: testDB{row: testRow{values: base}}}
 	cfg, err := s.Config(t.Context(), "node")
 	if err != nil || cfg["server"] != "auto" || cfg["engine"] != "ookla" {
@@ -181,6 +181,7 @@ func TestPostgresConfigAndHeartbeat(t *testing.T) {
 	pinned := 42
 	base[5] = &pinned
 	base[14] = []byte(`{"engine":"librespeed"}`)
+	base[15] = "librespeed"
 	cfg, err = s.Config(t.Context(), "node")
 	if err != nil || cfg["server"] != 42 || cfg["engine"] != "librespeed" {
 		t.Fatal(cfg, err)

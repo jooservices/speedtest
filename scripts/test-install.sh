@@ -5,7 +5,8 @@ set -eu
 
 here="$(cd "$(dirname "$0")/.." && pwd)"
 script="$here/internal/center/install/install.sh"
-work="$(mktemp -d)"
+mkdir -p "$here/.tmp"
+work="$(mktemp -d "$here/.tmp/install-test.XXXXXX")"
 server_pid=""
 cleanup() {
 	if [ -n "$server_pid" ]; then kill "$server_pid" 2>/dev/null || true; fi
@@ -30,6 +31,12 @@ cp "$rel/speedtest-agent-linux-amd64" "$rel/speedtest-agent-linux-arm64"
 printf '[Unit]\nDescription=fake\n' >"$rel/speedtest-agent.service"
 (cd "$rel" && sha256sum speedtest-agent-linux-amd64 speedtest-agent-linux-arm64 speedtest-agent.service >SHA256SUMS)
 
+printf '#!/bin/sh\nexit 0\n' >"$rel/librespeed-cli"
+for libre_arch in amd64 arm64; do
+ (cd "$rel" && tar -czf "librespeed-cli_1.0.14_linux_${libre_arch}.tar.gz" librespeed-cli)
+done
+(cd "$rel" && sha256sum librespeed-cli_*.tar.gz >checksums.txt)
+
 # Serve it on a free loopback port.
 port="$(python3 -c 'import socket; s=socket.socket(); s.bind(("127.0.0.1",0)); print(s.getsockname()[1]); s.close()')"
 mkdir -p "$work/www"
@@ -46,7 +53,7 @@ url="http://127.0.0.1:$port"
 sed "s|__CENTER_URL__|$url|" "$script" >"$work/install.sh"
 
 run_install() { # extra env first via env(1); args follow
-	env SPEEDTEST_INSTALL_ROOT="$work/root" "$@"
+	env SPEEDTEST_LIBRESPEED_INSTALL_URL="$url/download" SPEEDTEST_INSTALL_ROOT="$work/root" "$@"
 }
 
 # 1. Success on amd64.
@@ -55,6 +62,7 @@ run_install SPEEDTEST_INSTALL_UNAME_M=x86_64 sh "$work/install.sh" --token tok12
 	cat "$work/out1.log" >&2
 	fail "install failed"
 }
+[ -x "$work/root/usr/local/bin/librespeed-cli" ] || fail "LibreSpeed not installed"
 [ -x "$work/root/usr/local/bin/speedtest-agent" ] || fail "binary not installed or not executable"
 [ -f "$work/root/etc/systemd/system/speedtest-agent.service" ] || fail "service unit not installed"
 args="$(cat "$work/root/etc/speedtest-agent/enroll-args")"
@@ -64,6 +72,19 @@ grep -q "^SPEEDTEST_AGENT_CENTER=" "$work/root/etc/speedtest-agent/.env" || fail
 grep -q "^name: " "$work/root/etc/speedtest-agent/config.yaml" || fail "node name not written"
 grep -q "Checksum verified" "$work/out1.log" || fail "no checksum confirmation printed"
 printf 'ok: install on amd64\n'
+
+# LibreSpeed integrity is checked before either binary is installed.
+rm -rf "$work/root"
+cp "$rel/librespeed-cli_1.0.14_linux_amd64.tar.gz" "$work/libre-original"
+printf 'tampered' >>"$rel/librespeed-cli_1.0.14_linux_amd64.tar.gz"
+if run_install SPEEDTEST_INSTALL_UNAME_M=x86_64 sh "$work/install.sh" --token t --name n >"$work/libre-tamper.log" 2>&1; then
+ fail "tampered LibreSpeed archive accepted"
+fi
+grep -q "checksum mismatch for LibreSpeed" "$work/libre-tamper.log" || fail "no LibreSpeed integrity error"
+[ ! -e "$work/root/usr/local/bin/speedtest-agent" ] || fail "agent installed after LibreSpeed checksum failure"
+[ ! -e "$work/root/usr/local/bin/librespeed-cli" ] || fail "LibreSpeed installed after checksum failure"
+cp "$work/libre-original" "$rel/librespeed-cli_1.0.14_linux_amd64.tar.gz"
+printf 'ok: tampered LibreSpeed archive refused before install\n'
 
 # 2. arm64 picks the arm64 binary.
 rm -rf "$work/root"

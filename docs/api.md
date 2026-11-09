@@ -547,3 +547,29 @@ current/newer, development/prerelease or unsupported agents. With no explicit
 `settings.agentRelease`, agent config `release` uses the node-platform entry in
 the cached release manifest for older stable agents only, preventing automatic
 downgrades. See [the manifest contract](release.md#release-advertisement-manifest).
+
+## Independent engines (JOOST-71)
+
+Nodes default to primary engine `ookla`. Heartbeats may report `engines` (a unique
+array of `ookla` and `librespeed`, including an empty array); omitted capabilities
+preserve the legacy capability record. Node views expose `engines` and
+`primaryEngine`. A schedule for an unreported engine is rejected with 422.
+
+`PUT /api/schedules/{node}` accepts `{ "engines": [ { "engine": "ookla",
+"interval": 60, "offset": 0, "enabled": true }, { "engine": "librespeed",
+"interval": 30, "offset": 5, "enabled": true } ] }` under the existing session,
+CSRF, origin and If-Match requirements. Keep the Ookla entry (it may be disabled)
+for rollout compatibility. Omitted intervals for new engine schedules default to 60 minutes. GET includes
+an `engines` list of schedule views and the primary schedule compatibility fields.
+The collection contains one view per node/engine. The legacy single-schedule PUT
+continues to edit only Ookla. Agent config adds `schedules`; `schedule` and `engine`
+remain the primary schedule and identity for older agents.
+
+Results contain `engine`; old agents omitting it are recorded as Ookla. UUID
+replay comparison includes engine identity. Results, filtered CSV, dashboard,
+series and all statistics endpoints accept `?engine=ookla|librespeed`. Omission
+selects each node's primary engine before aggregation; there is no all-engine
+average. Full exports retain all measurements and their engine identity. CSV adds
+`engine` as its final column. Alert rules optionally specify `engine`; omission
+selects the node's primary engine, so another engine cannot advance or reset its
+measurement streak.

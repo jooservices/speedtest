@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"sync"
 	"time"
@@ -34,6 +35,8 @@ type Resolver struct {
 	fallbacks []Fallback
 	mu        sync.Mutex
 	active    map[string]*lookupCall
+	consensus bool
+	log       *slog.Logger
 }
 
 type lookupCall struct {
@@ -106,6 +109,9 @@ func (r *Resolver) lookup(ctx context.Context, ip string) (Location, error) {
 		}
 	}
 
+	if r.consensus && len(r.fallbacks) > 1 {
+		return r.lookupConsensus(ctx, ip)
+	}
 	var failures []error
 	for _, provider := range r.fallbacks {
 		if err := ctx.Err(); err != nil {
