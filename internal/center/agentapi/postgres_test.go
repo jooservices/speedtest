@@ -89,7 +89,21 @@ func (h *testHook) AfterResultStored(context.Context, pgx.Tx, string, Result) er
 	return h.err
 }
 func commandRow(status string) testRow {
-	return testRow{values: []any{"00000000-0000-4000-8000-000000000001", "node", "run_now", (*string)(nil), status, time.Now(), (*time.Time)(nil), "", float64(0), (*string)(nil), (*string)(nil)}}
+	return testRow{values: []any{"00000000-0000-4000-8000-000000000001", "node", "run_now", (*string)(nil), (*string)(nil), status, time.Now(), (*time.Time)(nil), "", float64(0), (*string)(nil), (*string)(nil)}}
+}
+
+func TestScanCommandOptionalEngine(t *testing.T) {
+	row := commandRow("pending")
+	command, err := scanCommand(row)
+	if err != nil || command.Engine != "" {
+		t.Fatalf("legacy command engine=%q err=%v", command.Engine, err)
+	}
+	engine := "librespeed"
+	row.values[3] = &engine
+	command, err = scanCommand(row)
+	if err != nil || command.Engine != "librespeed" {
+		t.Fatalf("engine command engine=%q err=%v", command.Engine, err)
+	}
 }
 func TestPostgresSaveFailuresAndHook(t *testing.T) {
 	ctx := t.Context()
@@ -260,7 +274,7 @@ func TestPostgresCommandsAndAckFailures(t *testing.T) {
 	}
 	now := time.Now()
 	row := commandRow("succeeded")
-	row.values[6] = &now
+	row.values[7] = &now
 	if c, err := scanCommand(row); err != nil || c.AckedAt.Location() != time.UTC {
 		t.Fatal(c, err)
 	}

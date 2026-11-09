@@ -38,6 +38,22 @@ type Server struct {
 	Host     string `json:"host"`
 }
 
+// ServerOption is one engine server offered for selection. Distance is only
+// populated by engines that report it; the agent never estimates coordinates.
+type ServerOption struct {
+	ID         int64    `json:"id"`
+	Name       string   `json:"name"`
+	City       string   `json:"city"`
+	ISP        string   `json:"isp"`
+	Host       string   `json:"host"`
+	DistanceKM *float64 `json:"distanceKm,omitempty"`
+}
+
+// ServerLister is implemented by engines that can discover their server list.
+type ServerLister interface {
+	ListServers(context.Context, Options) ([]ServerOption, error)
+}
+
 // Result contains measurements only, not the reporting UUID or node identity.
 // Speeds are Mbps, latencies ms, packet loss percent and duration seconds.
 // Raw preserves all engine fields (including fields not normalized here).

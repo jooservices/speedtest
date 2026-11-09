@@ -687,6 +687,149 @@ paths:
             $ref: "#/components/schemas/ID"
         - $ref: "#/components/parameters/CSRF"
         - $ref: "#/components/parameters/Idempotency"
+  /api/nodes/{id}/servers:
+    get:
+      operationId: getNodeServerCatalog
+      tags:
+        - Nodes
+      summary: Read a node's server catalog for one engine
+      description: Returns only servers previously discovered by this node and engine. The ETag is the
+        node configuration revision used for the subsequent selection update.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Node identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - name: engine
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Engine"
+      responses:
+        "200":
+          description: Server catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getServerCatalogResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    post:
+      operationId: refreshNodeServerCatalog
+      tags:
+        - Nodes
+      summary: Queue server discovery on a node
+      description: Queues list_servers for one installed engine. Poll the returned Location until the
+        command is terminal; a successful acknowledgement replaces only that engine's catalog.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Node identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - name: engine
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Engine"
+        - $ref: "#/components/parameters/CSRF"
+      responses:
+        "202":
+          description: Discovery queued; poll Location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/createCommandResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/nodes/{id}/server-selection:
+    put:
+      operationId: setNodeServerSelection
+      tags:
+        - Nodes
+      summary: Pin a discovered server or select automatically
+      description: A numeric serverId must occur in the selected engine's stored catalog. Use auto to
+        remove the pin. The update advances node configuration and queues an agent config refresh.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Node identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServerSelectionInput"
+      responses:
+        "200":
+          description: Selection saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getServerCatalogResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
   /api/nodes/{id}/commands:
     post:
       operationId: createCommand
@@ -3287,7 +3430,20 @@ components:
         enabled:
           type: boolean
           default: false
+        serverId:
+          description: Pinned server ID for this engine, or auto to let the engine choose.
+          oneOf:
+            - const: auto
+              type: string
+            - type: integer
+              minimum: 1
+              maximum: 2147483647
       required: [engine, enabled]
+    AgentEngineSchedule:
+      allOf:
+        - $ref: "#/components/schemas/EngineScheduleInput"
+        - type: object
+          required: [serverId]
     NodeEngineSchedulesInput:
       type: object
       additionalProperties: false
@@ -3803,7 +3959,7 @@ components:
           minItems: 1
           maxItems: 2
           items:
-            $ref: "#/components/schemas/EngineScheduleInput"
+            $ref: "#/components/schemas/AgentEngineSchedule"
         revision:
           type: string
         name:
@@ -3890,6 +4046,70 @@ components:
               type: string
               pattern: "\\S"
       description: Engine server identity. Numeric ID is optional for automatic LibreSpeed selection.
+    ServerOption:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        city:
+          type: string
+          maxLength: 120
+        isp:
+          type: string
+          maxLength: 200
+        host:
+          type: string
+          maxLength: 255
+        distanceKm:
+          type: number
+          minimum: 0
+          description: Present only when supplied by the engine, currently Ookla.
+      required: [id, name, city, isp, host]
+    ServerCatalog:
+      type: object
+      additionalProperties: false
+      properties:
+        engine:
+          $ref: "#/components/schemas/Engine"
+        servers:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/ServerOption"
+        serverId:
+          oneOf:
+            - const: auto
+              type: string
+            - type: integer
+              minimum: 1
+              maximum: 2147483647
+        refreshedAt:
+          anyOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+      required: [engine, servers, serverId, refreshedAt]
+    ServerSelectionInput:
+      type: object
+      additionalProperties: false
+      properties:
+        engine:
+          $ref: "#/components/schemas/Engine"
+        serverId:
+          description: Use auto to clear the pin; numeric IDs must be in this engine's catalog.
+          oneOf:
+            - const: auto
+              type: string
+            - type: integer
+              minimum: 1
+              maximum: 2147483647
+      required: [engine, serverId]
     ResultInput:
       type: object
       additionalProperties: false
@@ -4083,6 +4303,13 @@ components:
             - type: integer
               minimum: 1
             - type: "null"
+        pinnedServerId:
+          anyOf:
+            - type: integer
+              minimum: 1
+              maximum: 2147483647
+            - type: "null"
+          description: Current pin for this result's node and engine; compare with serverId.
         ip:
           anyOf:
             - $ref: "#/components/schemas/IP"
@@ -4167,6 +4394,7 @@ components:
         - uLat
         - loss
         - serverId
+        - pinnedServerId
         - ip
         - threads
         - bytesDown
@@ -4534,6 +4762,12 @@ components:
             - resume
             - update_config
             - update_agent
+            - list_servers
+        engine:
+          description: Set for list_servers; null on other commands.
+          anyOf:
+            - $ref: "#/components/schemas/Engine"
+            - type: "null"
         version:
           type:
             - string
@@ -4600,11 +4834,16 @@ components:
             - string
             - "null"
           maxLength: 2000
+        servers:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/ServerOption"
       required:
         - status
       description: Monotonic status/progress. Repeating an identical acknowledgement is idempotent; a
         conflicting terminal acknowledgement returns 409. Failed acknowledgements require safe error
-        detail.
+        detail. A successful list_servers acknowledgement includes servers.
     User:
       type: object
       additionalProperties: false
@@ -6093,6 +6332,15 @@ components:
               const: 200
             data:
               $ref: "#/components/schemas/Command"
+    getServerCatalogResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/ServerCatalog"
     rotateCredentialResponse:
       allOf:
         - $ref: "#/components/schemas/Success"

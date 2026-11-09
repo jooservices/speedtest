@@ -172,3 +172,23 @@ func (e *LibreSpeed) Run(ctx context.Context, opts Options) (Result, error) {
 	}
 	return r, nil
 }
+
+// ListServers asks the configured LibreSpeed CLI to enumerate its configured
+// server list on the node's network path.
+func (e *LibreSpeed) ListServers(ctx context.Context, opts Options) ([]ServerOption, error) {
+	if !validServerListOptions(opts) || opts.InterfaceName != "" {
+		return nil, &RunError{Class: InvalidOptions}
+	}
+	args := []string{"--list"}
+	if e.config.ServerJSON != "" {
+		args = append(args, "--server-json", e.config.ServerJSON)
+	}
+	if opts.SourceIP != "" {
+		args = append(args, "--source", opts.SourceIP)
+	}
+	data, err := runServerListCommand(ctx, e.config.Binary, args, e.config.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	return ParseLibreSpeedList(data)
+}

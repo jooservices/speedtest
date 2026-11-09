@@ -67,6 +67,16 @@ type Server struct {
 	Host    string `json:"host,omitempty"`
 }
 
+// ServerOption is one discovered target that an owner can pin for an engine.
+type ServerOption struct {
+	ID         int64    `json:"id"`
+	Name       string   `json:"name"`
+	City       string   `json:"city"`
+	ISP        string   `json:"isp"`
+	Host       string   `json:"host"`
+	DistanceKM *float64 `json:"distanceKm,omitempty"`
+}
+
 // Decode rejects unknown fields, trailing JSON, missing required keys and null
 // for nonnullable properties. Nullable values remain distinguishable from zero.
 func Decode(data []byte, target any, required ...string) error {
@@ -260,28 +270,52 @@ func ParseHeartbeat(data []byte) (Heartbeat, error) {
 }
 
 type Ack struct {
-	Status   string   `json:"status"`
-	Phase    *string  `json:"phase,omitempty"`
-	Pct      *float64 `json:"pct,omitempty"`
-	ResultID *string  `json:"resultId,omitempty"`
-	Error    *string  `json:"error,omitempty"`
+	Status   string          `json:"status"`
+	Phase    *string         `json:"phase,omitempty"`
+	Pct      *float64        `json:"pct,omitempty"`
+	ResultID *string         `json:"resultId,omitempty"`
+	Error    *string         `json:"error,omitempty"`
+	Servers  *[]ServerOption `json:"servers,omitempty"`
 }
 
 func ParseAck(data []byte) (Ack, error) {
 	var a Ack
-	if Decode(data, &a, "status") != nil || !nonNull(data, "status", "phase", "pct") || !text(a.Phase, 200) || !text(a.Error, 2000) || !number(a.Pct) || a.Pct != nil && *a.Pct > 100 || a.ResultID != nil && !UUID(*a.ResultID) {
+	if Decode(data, &a, "status") != nil || !nonNull(data, "status", "phase", "pct", "servers") || !text(a.Phase, 200) || !text(a.Error, 2000) || !number(a.Pct) || a.Pct != nil && *a.Pct > 100 || a.ResultID != nil && !UUID(*a.ResultID) || !validServerOptions(a.Servers) {
 		return a, ErrInvalid
 	}
 	if a.Status != "running" && a.Status != "succeeded" && a.Status != "failed" || a.Status == "failed" && (a.Error == nil || strings.TrimSpace(*a.Error) == "") {
 		return a, ErrInvalid
 	}
+	if a.Servers != nil && a.Status != "succeeded" {
+		return a, ErrInvalid
+	}
 	return a, nil
 }
+
+func validServerOptions(servers *[]ServerOption) bool {
+	if servers == nil {
+		return true
+	}
+	if len(*servers) > 1000 {
+		return false
+	}
+	seen := make(map[int64]bool, len(*servers))
+	for _, server := range *servers {
+		if server.ID < 1 || server.ID > math.MaxInt32 || seen[server.ID] || strings.TrimSpace(server.Name) == "" || !textValue(server.Name, 200) || !textValue(server.City, 120) || !textValue(server.ISP, 200) || !textValue(server.Host, 255) || server.DistanceKM != nil && !number(server.DistanceKM) {
+			return false
+		}
+		seen[server.ID] = true
+	}
+	return true
+}
+
+func textValue(value string, max int) bool { return utf8.RuneCountInString(value) <= max }
 
 type Command struct {
 	ID        string     `json:"id"`
 	NodeID    string     `json:"nodeId"`
 	Type      string     `json:"type"`
+	Engine    string     `json:"engine,omitempty"`
 	Version   *string    `json:"version"`
 	Status    string     `json:"status"`
 	CreatedAt time.Time  `json:"createdAt"`

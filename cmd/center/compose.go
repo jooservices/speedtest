@@ -43,6 +43,7 @@ type services struct {
 	Metrics            server.MetricsSource
 	Agent              agentapi.Store
 	OwnerNodes         server.OwnerNodesStore
+	OwnerServers       server.OwnerServersStore
 	OwnerResults       server.OwnerResultsStore
 	OwnerSchedules     server.OwnerSchedulesStore
 	OwnerStats         server.OwnerStatsStore
@@ -122,6 +123,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		Metrics:            metrics.Collector{DB: pool},
 		Agent:              &agentapi.Postgres{Pool: pool, Releases: releases, Hook: agentapi.ResultHookChain{watcher, alertStore}},
 		OwnerNodes:         owner,
+		OwnerServers:       owner,
 		OwnerResults:       owner,
 		OwnerSchedules:     owner,
 		OwnerStats:         statsStore,

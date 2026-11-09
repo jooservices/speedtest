@@ -315,6 +315,57 @@ func TestAgentIngestionProtocolIntegration(t *testing.T) {
 	t.Log("PASS: batch partial failure; all fields/raw persisted; identical, changed and cross-node replays; concurrent UUID; transactional hook rollback; config ETag; heartbeat; command ack ownership/progress/idempotency; IP proxy trust; immediate revocation on all six operations")
 }
 
+func TestServerDiscoveryCommandStoresCatalogWithoutDroppingPinIntegration(t *testing.T) {
+	pool, ctx, appKey := openServerIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	service := nodes.NewService(pool, appKey)
+	node, token := enrollIngestionNode(t, ctx, service, "server-discovery")
+	if _, err := pool.Exec(ctx, `UPDATE nodes SET installed_engines=ARRAY['ookla','librespeed']::text[] WHERE id=$1`, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO engine_schedules(node_id,engine,interval_minutes,enabled) VALUES($1,'librespeed',60,true)`, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO node_engine_servers(node_id,engine,servers,pinned_server_id) VALUES($1,'ookla','[]',54321)`, node); err != nil {
+		t.Fatal(err)
+	}
+	store := &agentapi.Postgres{Pool: pool}
+	handler := NewHandler(Options{NodeCredentials: service, AgentAPI: store, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil))})
+	commandID := "00000000-0000-4000-8000-000000000176"
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_commands(id,node_id,type,engine) VALUES($1,$2,'list_servers','ookla')`, commandID, node); err != nil {
+		t.Fatal(err)
+	}
+	polled := ingestRequest(t, handler, token, http.MethodGet, "/api/agent/commands", "")
+	if polled.Code != http.StatusOK || !strings.Contains(polled.Body.String(), `"engine":"ookla"`) {
+		t.Fatalf("agent command poll=%d %s", polled.Code, polled.Body.String())
+	}
+	ack := `{"status":"succeeded","phase":"done","pct":100,"servers":[{"id":54321,"name":"Hanoi","city":"Hanoi","isp":"Fiber","host":"hn.example","distanceKm":22.8}]}`
+	acknowledged := ingestRequest(t, handler, token, http.MethodPost, "/api/agent/commands/"+commandID+"/ack", ack)
+	if acknowledged.Code != http.StatusOK {
+		t.Fatalf("server discovery acknowledgement=%d %s", acknowledged.Code, acknowledged.Body.String())
+	}
+	var servers []byte
+	var pin int64
+	var refreshed time.Time
+	if err := pool.QueryRow(ctx, `SELECT servers,pinned_server_id,refreshed_at FROM node_engine_servers WHERE node_id=$1 AND engine='ookla'`, node).Scan(&servers, &pin, &refreshed); err != nil {
+		t.Fatalf("stored catalog=%s pin=%d refreshed=%s err=%v", servers, pin, refreshed, err)
+	}
+	var listed []agentapi.ServerOption
+	if err := json.Unmarshal(servers, &listed); err != nil || len(listed) != 1 || listed[0].City != "Hanoi" || pin != 54321 || refreshed.IsZero() {
+		t.Fatalf("stored catalog=%s pin=%d refreshed=%s err=%v", servers, pin, refreshed, err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_commands(id,node_id,type,engine) VALUES('00000000-0000-4000-8000-000000000177',$1,'list_servers','librespeed')`, node); err != nil {
+		t.Fatal(err)
+	}
+	missingList := ingestRequest(t, handler, token, http.MethodPost, "/api/agent/commands/00000000-0000-4000-8000-000000000177/ack", `{"status":"succeeded","pct":100}`)
+	if missingList.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("success without list=%d %s", missingList.Code, missingList.Body.String())
+	}
+	t.Log("PASS: discovery command carries engine; success ACK validates and transactionally replaces that engine catalog; existing pin survives; missing catalog payload refused")
+}
+
 // The paced test measures the production executable, not the race/coverage
 // instrumented test harness or the load generator. The service shares this
 // suite's verified worktree database and is stopped before fixture cleanup.

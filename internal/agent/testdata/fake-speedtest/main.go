@@ -110,9 +110,20 @@ func main() {
 // code: 0 for a successful measurement, 1 when the timeout scenario is
 // cancelled, 2 for usage or engine errors.
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if hasArg(args, "--servers") {
+		return writeServerList(stdout)
+	}
+	if hasArg(args, "--list") {
+		_, _ = fmt.Fprintln(stdout, "ID  Name\n12345  Singapore, SG\n54321  Hanoi, VN")
+		return 0
+	}
 	cfg, err := parseFlags(args, stderr)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "speedtest: %v\n", err)
+		return 2
+	}
+	if cfg.serverID == 54321 {
+		_, _ = fmt.Fprintln(stderr, "speedtest: specified server unavailable")
 		return 2
 	}
 
@@ -181,6 +192,26 @@ func parseFlags(args []string, errw io.Writer) (config, error) {
 	return cfg, nil
 }
 
+func hasArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
+func writeServerList(stdout io.Writer) int {
+	servers := map[string]any{"servers": []map[string]any{
+		{"id": 12345, "name": "Singapore Gateway", "host": "sg.example", "location": "Singapore", "sponsor": "Ookla Singapore", "distance": 4.2},
+		{"id": 54321, "name": "Gateway Central", "host": "hn.example", "location": "Hanoi", "sponsor": "Ookla ISP", "distance": 22.8},
+	}}
+	if err := json.NewEncoder(stdout).Encode(servers); err != nil {
+		return 2
+	}
+	return 0
+}
+
 // scenarioDefaults returns the preset measurement for a scenario.
 func scenarioDefaults(name string) (config, bool) {
 	switch name {
@@ -231,10 +262,10 @@ func buildResult(cfg config) speedtestResult {
 		},
 		Server: server{
 			ID:       cfg.serverID,
-			Host:     "speedtest.hanoi.example",
+			Host:     "speedtest.singapore.example",
 			Port:     8080,
-			Name:     "Hanoi",
-			Location: "Hanoi",
+			Name:     "Singapore Gateway",
+			Location: "Singapore",
 			Country:  "Vietnam",
 			IP:       "203.0.113.20",
 		},

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -280,7 +281,7 @@ type planDetail struct {
 
 func containsRelation(nodes []string, relation string) bool {
 	for _, node := range nodes {
-		if node == "Seq Scan on "+relation || node == "Index Scan on "+relation || node == "Bitmap Heap Scan on "+relation {
+		if node == "Seq Scan on "+relation || strings.HasPrefix(node, "Index Scan on "+relation) || strings.HasPrefix(node, "Bitmap Heap Scan on "+relation) {
 			return true
 		}
 	}

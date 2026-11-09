@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/agent/engine"
 	"github.com/jooservices/speedtest/internal/agent/update"
 )
 
@@ -34,10 +35,11 @@ type UpdateResult = update.Result
 // ScheduleInput is the schedule part of the effective agent configuration.
 // Interval and offset are whole minutes.
 type ScheduleInput struct {
-	Engine   string `json:"engine,omitempty"`
-	Interval int    `json:"interval"`
-	Offset   int    `json:"offset"`
-	Enabled  bool   `json:"enabled"`
+	Engine   string          `json:"engine,omitempty"`
+	Interval int             `json:"interval"`
+	Offset   int             `json:"offset"`
+	Enabled  bool            `json:"enabled"`
+	ServerID json.RawMessage `json:"serverId,omitempty"`
 }
 
 // QuietHours is the daily quiet window in the configuration.
@@ -75,6 +77,7 @@ type Command struct {
 	ID        string  `json:"id"`
 	NodeID    string  `json:"nodeId"`
 	Type      string  `json:"type"`
+	Engine    string  `json:"engine,omitempty"`
 	Version   *string `json:"version"`
 	Status    string  `json:"status"`
 	CreatedAt string  `json:"createdAt"`
@@ -87,11 +90,12 @@ type Command struct {
 
 // CommandAck is the POST /api/agent/commands/{id}/ack body.
 type CommandAck struct {
-	Status   string  `json:"status"`
-	Phase    string  `json:"phase,omitempty"`
-	Pct      float64 `json:"pct"`
-	ResultID *string `json:"resultId,omitempty"`
-	Error    *string `json:"error,omitempty"`
+	Status   string                 `json:"status"`
+	Phase    string                 `json:"phase,omitempty"`
+	Pct      float64                `json:"pct"`
+	ResultID *string                `json:"resultId,omitempty"`
+	Error    *string                `json:"error,omitempty"`
+	Servers  *[]engine.ServerOption `json:"servers,omitempty"`
 }
 
 // successEnvelope is the shared Success wrapper around the data field.

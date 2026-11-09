@@ -380,22 +380,23 @@ func (s *Store) Delete(ctx context.Context, id, ifMatch string) error {
 
 var commandTypes = map[string]bool{"run_now": true, "pause": true, "resume": true, "update_config": true, "update_agent": true}
 
-const commandColumns = `id::text, node_id::text, type, version, status, created_at, acked_at, phase, pct, result_id::text, error`
+const commandColumns = `id::text, node_id::text, type, engine, version, status, created_at, acked_at, phase, pct, result_id::text, error`
 
 func scanCommand(row pgx.Row) (map[string]any, error) {
 	var id, nodeID, typ, status, phase string
+	var engine *string
 	var version, resultID, errText *string
 	var created time.Time
 	var acked *time.Time
 	var pct float64
-	if err := row.Scan(&id, &nodeID, &typ, &version, &status, &created, &acked, &phase, &pct, &resultID, &errText); err != nil {
+	if err := row.Scan(&id, &nodeID, &typ, &engine, &version, &status, &created, &acked, &phase, &pct, &resultID, &errText); err != nil {
 		return nil, err
 	}
 	var ackedAt any
 	if acked != nil {
 		ackedAt = acked.UTC().Format(time.RFC3339Nano)
 	}
-	return map[string]any{"id": id, "nodeId": nodeID, "type": typ, "version": nullable(version), "status": status,
+	return map[string]any{"id": id, "nodeId": nodeID, "type": typ, "engine": nullable(engine), "version": nullable(version), "status": status,
 		"createdAt": created.UTC().Format(time.RFC3339Nano), "ackedAt": ackedAt, "phase": phase, "pct": pct,
 		"resultId": nullable(resultID), "error": nullable(errText)}, nil
 }

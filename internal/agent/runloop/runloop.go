@@ -109,6 +109,7 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 	l.Controller.Engines = installedEngines
 	l.Controller.ApplyConfig = l.applyConfig
 	l.Controller.RunCommand = l.command
+	l.Controller.ListServers = l.listServers
 	l.Updater = &update.Agent{Paths: update.DefaultPaths(), Version: version, Logger: logger, Restart: l.restartSoon}
 	l.Controller.UpdateResult = l.Updater.Result
 	l.Controller.HeartbeatOK = l.Updater.Confirm
@@ -172,6 +173,60 @@ func (l *Loop) updateAgent(cmd control.Command, cfg control.AgentConfig) control
 		return control.CommandAck{Status: "failed", Error: &msg}
 	}
 	return control.CommandAck{Status: "succeeded", Phase: "restarting to install", Pct: 100}
+}
+
+func (l *Loop) listServers(ctx context.Context, name string) ([]engine.ServerOption, error) {
+	if name != "ookla" && name != "librespeed" {
+		return nil, errors.New("unsupported engine")
+	}
+	l.mu.Lock()
+	cfg, configured := l.engineConfigs[name]
+	if !configured {
+		cfg = l.cfg
+	}
+	l.mu.Unlock()
+	if !configured {
+		cfg.name = name
+		var err error
+		cfg.engine, err = engine.NewConfigured(name, cfg.threads)
+		if err != nil {
+			return nil, err
+		}
+	}
+	lister, ok := cfg.engine.(engine.ServerLister)
+	if !ok {
+		return nil, errors.New("engine does not support server discovery")
+	}
+	path, err := netpath.Resolve(cfg.binding)
+	if err != nil {
+		return nil, err
+	}
+	options := engine.Options{InterfaceName: path.Interface}
+	if path.SourceIP != nil {
+		options.SourceIP = path.SourceIP.String()
+	}
+	return lister.ListServers(ctx, options)
+}
+
+func runWithServerFallback(ctx context.Context, runner *netpath.Runner, serverID int64) (netpath.RunResult, error) {
+	out, err := runner.Run(ctx, engine.Options{ServerID: serverID})
+	if !retryAutomaticServer(err, serverID) {
+		return out, err
+	}
+	out, err = runner.Run(ctx, engine.Options{})
+	out.Warnings = append(out.Warnings, "Pinned server was unreachable; the engine selected a server automatically.")
+	return out, err
+}
+
+func retryAutomaticServer(err error, serverID int64) bool {
+	if serverID < 1 {
+		return false
+	}
+	var runErr *engine.RunError
+	if !errors.As(err, &runErr) {
+		return false
+	}
+	return runErr.Class == engine.ServerUnavailable || runErr.Class == engine.NoRoute
 }
 
 // watchUpdate makes a freshly installed version that cannot confirm itself exit with an error, which lets the
@@ -252,7 +307,7 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 		l.fail(errors.New("invalid measurement coordinator"))
 		return err
 	}
-	out, runErr := runner.Run(ctx, engine.Options{ServerID: cfg.server})
+	out, runErr := runWithServerFallback(ctx, runner, cfg.server)
 	if runErr != nil && out.Measurement.Error == "" {
 		out.Measurement.Error = "speedtest: network path unavailable"
 	}
@@ -466,6 +521,15 @@ func configuredEngines(inputs []control.ScheduleInput, cfg measurementConfig, sc
 		seen[input.Engine] = true
 		next := cfg
 		next.name = input.Engine
+		if len(input.ServerID) > 0 {
+			var err error
+			next.server, err = configuredServer(input.ServerID)
+			if err != nil {
+				return nil, nil, err
+			}
+		} else if input.Engine != cfg.name {
+			next.server = 0
+		}
 		var err error
 		next.engine, err = engine.NewConfigured(next.name, next.threads)
 		if err != nil {
@@ -480,4 +544,19 @@ func configuredEngines(inputs []control.ScheduleInput, cfg measurementConfig, sc
 		engineSchedules = append(engineSchedules, sch)
 	}
 	return configs, engineSchedules, nil
+}
+
+func configuredServer(raw json.RawMessage) (int64, error) {
+	var name string
+	if json.Unmarshal(raw, &name) == nil {
+		if name == "auto" {
+			return 0, nil
+		}
+		return 0, errors.New("invalid engine server selection")
+	}
+	var id int64
+	if json.Unmarshal(raw, &id) != nil || id < 1 {
+		return 0, errors.New("invalid engine server selection")
+	}
+	return id, nil
 }

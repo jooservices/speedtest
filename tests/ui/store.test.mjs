@@ -202,6 +202,52 @@ test('remote schedules, rules, stagger, key rotation, agent update, manual tests
   assert.equal((await ST.testNotification('webhook')).status, 'failed');
 });
 
+test('remote server catalogs poll discovery, preserve errors, and pin with the catalog ETag', async t => {
+  const { ST, context, data, control } = await setup(t);
+  await ST.load();
+  assert.deepEqual(JSON.parse(JSON.stringify(ST.engineSchedules(data.node))),
+    [{ engine: 'ookla', interval: 30, offset: 0, enabled: true }]);
+  await ST.saveEngineSchedules(data.node.id, [{ engine: 'librespeed', interval: 60, offset: 2, enabled: true }]);
+  let commandStatus = 'running';
+  let commandError = '';
+  let holdCommand = false;
+  let commandPolls = 0;
+  const request = ST.api.request;
+  const calls = [];
+  ST.api.request = async (path, options = {}) => {
+    calls.push({ path, options });
+    if (path.includes('/servers?engine=') && options.method === 'POST') return { data: { id: 'command/id' } };
+    if (path.includes('/servers?engine=')) return { data: { servers: [], pinnedServerId: 'auto' }, etag: '"catalog-v1"' };
+    if (path.endsWith('/commands/command%2Fid')) {
+      if (commandStatus === 'running' && !holdCommand && ++commandPolls > 1) commandStatus = 'succeeded';
+      return { data: { status: commandStatus, error: commandError } };
+    }
+    if (path.endsWith('/server-selection')) return { data: { engine: 'librespeed', serverId: calls.filter(call => call.path.endsWith('/server-selection')).length === 1 ? 17 : 'auto' }, etag: calls.filter(call => call.path.endsWith('/server-selection')).length === 1 ? '"catalog-v2"' : '"catalog-v3"' };
+    return request(path, options);
+  };
+  context.setTimeout = fn => { fn(); return 0; };
+  const catalog = await ST.serverCatalog('node/contract', 'libre speed');
+  assert.equal(catalog.etag, '"catalog-v1"');
+  await ST.refreshServerCatalog('node/contract', 'libre speed');
+  assert.ok(calls.some(call => call.path === '/api/nodes/node%2Fcontract/commands/command%2Fid'));
+  const selected = await ST.selectServer(data.node.id, 'librespeed', 17, '"catalog-v1"');
+  assert.equal(selected.serverId, 17);
+  assert.equal(selected.etag, '"catalog-v2"');
+  const automatic = await ST.selectServer(data.node.id, 'librespeed', 'auto', selected.etag);
+  assert.equal(automatic.serverId, 'auto');
+  assert.equal(automatic.etag, '"catalog-v3"');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call => call.path.endsWith('/server-selection')).options.body)),
+    { engine: 'librespeed', serverId: 17 });
+  commandStatus = 'failed';
+  await assert.rejects(ST.refreshServerCatalog(data.node.id, 'librespeed'), /could not retrieve its server list/);
+  commandError = 'server list unavailable';
+  await assert.rejects(ST.refreshServerCatalog(data.node.id, 'librespeed'), /server list unavailable/);
+  commandStatus = 'running'; commandError = ''; holdCommand = true; commandPolls = 0;
+  const vm = await import('node:vm');
+  vm.runInContext('var serverClock = 0; Date.now = function () { serverClock += 200000; return serverClock; };', context);
+  await assert.rejects(ST.refreshServerCatalog(data.node.id, 'librespeed'), /discovery is still running/);
+});
+
 test('a manual test follows the command to its result and reports a failed command plainly', async t => {
   const { ST, control, data } = await setup(t);
   await ST.load();

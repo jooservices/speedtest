@@ -51,6 +51,8 @@ type Options struct {
 	AgentRateLimit    int
 	// OwnerNodes optionally serves the dashboard node API (list, detail, update, delete, commands).
 	OwnerNodes OwnerNodesStore
+	// OwnerServers optionally serves per-engine server catalogs and pin selection.
+	OwnerServers OwnerServersStore
 	// OwnerSchedules optionally serves the dashboard schedule API.
 	OwnerSchedules OwnerSchedulesStore
 	// Audit optionally records owner changes and serves GET /api/audit.

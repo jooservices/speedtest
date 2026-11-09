@@ -16,6 +16,9 @@ state and replayable progress events, with hashed idempotency keys and an active
 installation limit per node. It stores no SSH credentials or enrollment tokens.
 
 `00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
+`00017_node_engine_servers.sql` adds per-node/per-engine server catalogs, engine-scoped discovery
+commands and pins. Existing primary-engine pins are backfilled from `nodes.server_id`; the legacy
+column remains synchronized for compatibility with the current center binary.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file
@@ -92,6 +95,7 @@ that a subsequent up can reapply version 1.
 | `settings` | Public JSON or encrypted secret bytes, revision |
 | `api_idempotency` | Hashed request identity and encrypted one-time issuance responses, expiring after 24 hours |
 | `agent_commands` | Per-node command lifecycle and progress |
+| `node_engine_servers` | Per-node/per-engine discovered server JSON, pin and refresh timestamp |
 | `installer_probes` | Expiring unauthenticated SSH host-key observations; one use per install |
 | `installer_probe_idempotency` | Probe replay identity and request digest, expiring after 24 hours |
 | `installer_jobs` | Owner-scoped installation state; at most one active job per node |
@@ -128,7 +132,8 @@ node UUID arrays in alert rules are deliberately a configuration value; the
 future API validates existence/uniqueness, as well as channel uniqueness and
 other cross-field rules. No WAN, peer-node or load-balancer relationship exists.
 
-`server_id IS NULL` means automatic server selection in node configuration;
+`node_engine_servers.pinned_server_id IS NULL` means automatic server selection for that engine;
+the legacy `nodes.server_id` mirrors the primary engine's pin for compatibility;
 `interval`/`offset` wire fields map to `schedules.interval_minutes` and
 `offset_minutes`. Node APIs join schedules; they must not duplicate schedule
 state in nodes. Global settings and quiet hours are keyed JSON values rather
@@ -197,3 +202,11 @@ with `make migrate` does not resend previously consumed events. Preserve deliver
 history through the operator backup process when needed. On a disposable test
 DB, `TestNotificationMigrationRollback` rehearses populated down/up and verifies
 that events and consumed markers survive without replaying old deliveries.
+
+## Version 17 rollback
+
+Migration 17 is additive. Its down migration removes `list_servers` commands,
+the new per-engine catalog table and the command `engine` column; it preserves legacy
+node settings and results. Reapplying the migration backfills a primary-engine pin
+from `nodes.server_id`. `TestServerCatalogMigrationUpDownIntegration` verifies the
+backfill, down schema and preservation of the legacy pin on the disposable worktree DB.
