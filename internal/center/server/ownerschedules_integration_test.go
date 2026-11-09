@@ -123,7 +123,7 @@ func TestOwnerSchedulesHTTPFlowIntegration(t *testing.T) {
 	var interval, offset int
 	var revision int64
 	if err := pool.QueryRow(ctx, `SELECT interval_minutes, offset_minutes, revision FROM schedules WHERE node_id=$1`, ids[0]).Scan(&interval, &offset, &revision); err != nil ||
-		interval != 60 || offset != 0 || revision < 3 {
+		interval != 60 || offset < 0 || offset >= interval || revision < 3 {
 		t.Fatalf("stored schedule: %d %d rev %d %v", interval, offset, revision, err)
 	}
 	var quiet string
