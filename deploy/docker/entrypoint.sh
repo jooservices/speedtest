@@ -6,7 +6,9 @@ set -euo pipefail
 
 STATE=/var/lib/speedtest
 PORT="${STAGING_PORT:-18090}"
-INTERVAL="${STAGING_INTERVAL_MINUTES:-30}"
+# shellcheck source=deploy/docker/schedule-defaults.sh
+source "$(dirname "$0")/schedule-defaults.sh"
+INTERVAL="$(staging_interval)"
 NODES="${STAGING_NODES:-VM1:0 VM2:10 VM3:20}"          # name:startMinuteOffset ...
 EXPECTED_DOWN="${STAGING_EXPECTED_DOWN_MBPS:-500}"
 EXPECTED_UP="${STAGING_EXPECTED_UP_MBPS:-500}"
@@ -79,8 +81,11 @@ for spec in $NODES; do
     if [ -z "$token" ] || [ -z "$node_id" ]; then die "node ${name} was not created: $(printf '%s' "$created" | head -c 300)"; fi
     SPEEDTEST_AGENT_CONFIG="$dir/config.yaml" SPEEDTEST_AGENT_CREDENTIAL="$dir/credential" \
       speedtest-agent enroll --center "$CENTER" --token "$token" --name "$name" --host "docker-staging"
-    psql_run -c "UPDATE schedules SET interval_minutes=${INTERVAL}, offset_minutes=${offset}, revision=revision+1 WHERE node_id='${node_id}'" \
-             -c "UPDATE nodes SET config_revision=config_revision+1 WHERE id='${node_id}'"
+    psql_run -c "BEGIN;
+UPDATE schedules SET interval_minutes=${INTERVAL}, offset_minutes=${offset}, revision=revision+1 WHERE node_id='${node_id}';
+UPDATE engine_schedules SET interval_minutes=${INTERVAL}, offset_minutes=${offset}, revision=revision+1 WHERE node_id='${node_id}' AND engine='ookla';
+UPDATE nodes SET config_revision=config_revision+1 WHERE id='${node_id}';
+COMMIT;"
     printf 'name: %s\nengine: %s\ninterval: %sm\nexpected_download_mbps: %s\nexpected_upload_mbps: %s\n' "$name" "${STAGING_ENGINE:-ookla}" "$INTERVAL" "$EXPECTED_DOWN" "$EXPECTED_UP" > "$dir/config.yaml"
     touch "$dir/enrolled"
   fi
