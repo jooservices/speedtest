@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+import { request as apiRequest } from 'playwright';
+
 export function settingsSuite(T, ctx) {
   const { page, assert } = T;
   const { receiver } = ctx;
@@ -41,6 +44,7 @@ export function settingsSuite(T, ctx) {
       await T.choose(setting('Parallel connections').locator('select'), '8');
       await T.toast('Saved').waitFor();
       await T.settled();
+      await T.eventually(() => T.db("select value->>'defaultThreads' from settings where key='display'") === '8', 'the default parallel connections are stored');
       await T.choose(setting('Server choice').locator('select'), 'pinned');
       await T.settled();
       await T.tab('Location');
@@ -120,7 +124,7 @@ export function settingsSuite(T, ctx) {
       await T.tab('Data');
       await T.choose(setting('Keep results for').locator('select'), '90');
       await T.settled();
-      assert.equal(T.db("select value #>> '{}' from settings where key='retentionDays'"), '90');
+      await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '90', 'the retention period is stored');
       const csv = await T.download(() => T.press('CSV', setting('Export all results')));
       assert.ok(csv.startsWith('time,node,status,download_mbps'), 'the CSV export has its header');
       const json = await T.download(() => T.press('JSON', setting('Export all results')));
@@ -164,6 +168,45 @@ export function settingsSuite(T, ctx) {
       // Cancelling the confirmation changes nothing.
       await T.press('Generate a new key');
       await T.press('Cancel', page.getByRole('dialog'));
+    },
+
+    async apiTokenCanBeCreatedUsedAndRevoked() {
+      await T.open('#/settings', 'Settings');
+      await T.tab('Access');
+      await page.getByLabel('Token name').fill('e2e-read-token');
+      await page.getByLabel('Scope').selectOption('read');
+      await T.press('Create API token');
+      await T.see('API token created');
+      const raw = (await page.locator('.recovery-codes').last().innerText()).trim();
+      assert.ok(raw.startsWith('st_at_'), 'the bearer credential is shown after creation');
+      const storedHash = T.db("select encode(token_hash,'hex') from api_access_tokens where name='e2e-read-token'");
+      assert.ok(storedHash === createHash('sha256').update(raw).digest('hex'), 'only its SHA-256 digest is stored');
+      const client = await apiRequest.newContext();
+      try {
+        const read = await client.get(ctx.stack.origin + '/api/nodes', { headers: { Authorization: `Bearer ${raw}` } });
+        assert.equal(read.status(), 200, 'bearer GET works without a session cookie');
+        const result = await read.json();
+        assert.equal(result.success, true);
+        const write = await client.post(ctx.stack.origin + '/api/nodes/123e4567-e89b-12d3-a456-426614174000/run', { headers: { Authorization: `Bearer ${raw}` } });
+        assert.equal(write.status(), 403, 'read scope refuses a write operation');
+        await T.eventually(() => T.db("select last_used_at is not null from api_access_tokens where name='e2e-read-token'") === 't', 'successful bearer use updates last-used time');
+      } finally {
+        await client.dispose();
+      }
+      const item = T.row('e2e-read-token');
+      await T.press('Revoke', item);
+      await T.press('Revoke', page.getByRole('dialog'));
+      await T.see('API token revoked');
+      const clientAfterRevoke = await apiRequest.newContext();
+      try {
+        const response = await clientAfterRevoke.get(ctx.stack.origin + '/api/nodes', { headers: { Authorization: `Bearer ${raw}` } });
+        assert.equal(response.status(), 401, 'revocation stops bearer access immediately');
+      } finally {
+        await clientAfterRevoke.dispose();
+      }
+      await page.reload();
+      await T.tab('Access');
+      assert.ok(!(await page.content()).includes(raw), 'the token is not shown again after a reload');
     },
   };
 }

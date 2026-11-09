@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/shared/testenv"
+
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
@@ -26,9 +28,7 @@ func TestRunMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal("worktree .env required")
 	}
-	for k, v := range values {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid test configuration")
@@ -50,7 +50,7 @@ func TestRunMigration(t *testing.T) {
 	}
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
-	for _, direction := range []string{"up", "up", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down"} {
+	for _, direction := range []string{"up", "up", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down"} {
 		var out bytes.Buffer
 		if code := run([]string{direction}, &out); code != 0 || !strings.Contains(out.String(), "complete") {
 			t.Fatalf("%s: code %d: %s", direction, code, out.String())

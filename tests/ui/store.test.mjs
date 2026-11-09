@@ -50,6 +50,35 @@ test('demo mode seeds and persists locally without making API calls', () => {
   ST.updateNode('n1', { name: 'Local demo' });
   assert.equal(ST.node('n1').name, 'Local demo'); assert.ok(storage.has('st.demo.v1'));
 });
+test('engine selector updates the selected engine and refreshes demo data', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  let refreshes = 0;
+  ST.ui = { field: (label, control) => ({ label, control }), select: (options, value, onChange) => ({ options, value, onChange }) };
+  ST.refresh = () => { refreshes++; };
+  const field = ST.engineSelector();
+  field.control.onChange('librespeed');
+  assert.equal(field.label, 'Engine');
+  assert.equal(ST.selectedEngine, 'librespeed');
+  assert.equal(ST.engineQuery(), '&engine=librespeed');
+  assert.equal(refreshes, 1);
+});
+test('engine schedules use the primary engine for legacy nodes', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  const [schedule] = ST.engineSchedules({ interval: 60, enabled: true });
+  assert.equal(schedule.engine, 'ookla'); assert.equal(schedule.interval, 60);
+  assert.equal(schedule.offset, 0); assert.equal(schedule.enabled, true);
+});
+test('remote engine schedules are filtered by node and include the default engine', async t => {
+  const { ST, data } = await setup(t);
+  await ST.load();
+  const [schedule] = ST.engineSchedules({ id: data.node.id });
+  assert.equal(schedule.engine, 'ookla'); assert.equal(schedule.interval, 30);
+  assert.equal(ST.engineSchedules({ id: 'missing' }).length, 0);
+});
+test('duration formatting includes days', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  assert.equal(ST.fmt.dur(90_000_000), '1d 1h');
+});
 test('settings writes use CSRF and ETag and never echo configured flags or blank secrets', async t => {
   const { ST, control } = await setup(t);
   await ST.load();
