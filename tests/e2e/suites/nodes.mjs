@@ -26,6 +26,15 @@ export function nodesSuite(T, ctx) {
       await T.row('VM2').click();
       await page.getByRole('heading', { name: /VM2/, level: 1 }).waitFor();
     },
+    async listShowsUpload() {
+      await T.open('#/nodes', 'Nodes');
+      await T.row('VM1').waitFor();
+      await T.expectCount(page.getByRole('columnheader', { name: /^Upload / }), 1, 'the list has one upload column');
+      const text = await T.row('VM1').innerText();
+      const matches = text.match(new RegExp('\\d+(\\.\\d+)? [KMG]?bps \\(\\d+%\\)', 'g')) || [];
+      assert.ok(matches.length >= 2, 'the VM1 row shows download and upload against the expected speed: ' + text);
+      await T.expectNoLoadError();
+    },
 
     // The wizard with the one-line command, a real agent that enrols with the shown key, the first result, a manual run.
     async addWithCommandAndRunTest() {

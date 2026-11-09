@@ -16,6 +16,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-QA-05', area: 'quality', title: 'on a phone the top bar fits one row and download buttons show a download icon', covers: 'top bar layout at 390 px, download icon', run: S.quality.phoneTopBar },
 
     { id: 'SC-NODE-01', area: 'nodes', title: 'the node list sorts and opens a node', covers: 'nodes list, detail', run: S.nodes.listSortsAndOpens },
+    { id: 'SC-NODE-09', area: 'nodes', title: 'the node list shows download and upload against the expected speed', covers: 'nodes list upload column', run: S.nodes.listShowsUpload },
     { id: 'SC-NODE-07', area: 'nodes', title: 'the node list is a list of cards on a phone', covers: 'mobile layout without sideways scrolling', run: S.nodes.cardsOnPhone },
     { id: 'SC-NODE-02', area: 'nodes', title: 'the add-node wizard refuses incomplete and duplicate input', covers: 'wizard validation', run: S.nodes.wizardValidation },
     { id: 'SC-NODE-03', area: 'nodes', title: 'node settings validate, save and refuse a duplicate name', covers: 'node edit', run: S.nodes.detailAndSettings },

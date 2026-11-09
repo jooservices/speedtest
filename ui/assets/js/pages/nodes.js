@@ -20,6 +20,7 @@
         { key: 'status', label: 'Status', render: function (r) { return !r.n.enabled ? U.chip('Paused', '', 'pause') : r.last && r.last.status === 'failed' ? U.chip('Last test failed', 'crit', 'x') : U.chip('Online', 'good', 'check'); } },
         { key: 'exp', label: 'Expected', num: true, render: function (r) { return F.speed(r.n.expectedDown) + ' / ' + F.speed(r.n.expectedUp); } },
         { key: 'avg', label: 'Average ' + ST.settings().range, num: true, render: function (r) { return r.sum.down.mean == null ? '—' : F.speed(r.sum.down.mean) + ' (' + F.num(r.sum.downPct, 0) + '%)'; } },
+        { key: 'avgup', label: 'Upload ' + ST.settings().range, num: true, render: function (r) { return r.sum.up.mean == null ? '—' : F.speed(r.sum.up.mean) + ' (' + F.num(r.sum.upPct, 0) + '%)'; } },
         { key: 'ping', label: 'Latency', num: true, render: function (r) { return F.ms(r.sum.ping.median); } },
         { key: 'ip', label: 'Public IP', render: function (r) { return h('span', { class: 'mono' }, r.last ? r.last.ip : '—'); } },
         { key: 'seen', label: 'Last test', render: function (r) { return r.last ? F.rel(r.last.ts) : 'Never'; } },
