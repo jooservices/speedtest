@@ -66,7 +66,7 @@ export function coreSteps(ctx) {
 
     // ---- the center, for checking what was really stored ----
     db: sql => query(stack.db, sql),
-    async api(path) { const res = await page.request.get(stack.origin + path); return { status: res.status(), body: res.status() < 300 ? await res.json() : null, text: await res.text() }; },
+    async api(path) { const res = await page.request.get(stack.origin + path); return { status: res.status(), body: res.status() < 300 && /json/.test(res.headers()['content-type'] || '') ? await res.json() : null, text: await res.text() }; },
 
     // The browser logs a refused request itself; where refusing is the expected outcome, drop that log line.
     expectRefusal(status) { for (let i = problems.length - 1; i >= 0; i--) if (new RegExp(`status of ${status}`).test(problems[i])) problems.splice(i, 1); },
