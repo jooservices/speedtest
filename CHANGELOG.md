@@ -9,6 +9,7 @@ All notable changes to Speedtest are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Monthly ISP and plan report (JOOST-79): per ISP and node, delivered against advertised speed, p95, worst hours, failures, downtime and IP changes; preview and CSV/PDF download on the ISPs page and `GET /api/reports/monthly`; optional e-mail of the previous month on the first of each month (`SPEEDTEST_MONTHLY_REPORT_EMAIL=true`).
 - Optional two-factor sign-in with an authenticator app (TOTP) and ten one-time recovery codes, in Settings > Access; the operator command `disable-2fa` is the recovery path.
 - Geolocation: ipwho.is, ipapi.co and ipgeolocation.io providers (off by default), consensus mode, and a built-in monthly DB-IP Lite database updater.
 
