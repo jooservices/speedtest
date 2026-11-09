@@ -105,8 +105,13 @@ func (w *Watcher) resolveAndLink(ctx context.Context, tx pgx.Tx, node string, r 
 		w.logger().InfoContext(ctx, "public IP location unavailable", "node_id", node, "result_id", r.ID)
 		return isp.LinkResult(ctx, tx, r.ID, node, ip)
 	}
-	if _, err = isp.LinkAddress(ctx, tx, ip, loc.ASN, loc.Organisation); err != nil {
+	entity, err := isp.LinkAddress(ctx, tx, ip, loc.ASN, loc.Organisation)
+	if err != nil {
 		return err
+	}
+	if entity == nil {
+		// Without an ASN identity there is nothing to link on either row.
+		return nil
 	}
 	return isp.LinkResult(ctx, tx, r.ID, node, ip)
 }
