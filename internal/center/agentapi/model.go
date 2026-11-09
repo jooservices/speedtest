@@ -195,29 +195,8 @@ func ParseResult(data []byte) (Result, error) {
 	if r.Loss != nil && *r.Loss > 100 || r.ServerID != nil && *r.ServerID < 1 {
 		return r, ErrInvalid
 	}
-	switch r.Status {
-	case "ok", "degraded":
-		if r.Down == nil || r.Up == nil || r.Ping == nil || r.Server == nil || r.IP == nil || r.Error != nil {
-			return r, ErrInvalid
-		}
-		if r.FailureClass == "" {
-			r.FailureClass = failureclass.Other
-		}
-		if r.FailureClass != failureclass.Other {
-			return r, ErrInvalid
-		}
-	case "failed":
-		if r.Error == nil || strings.TrimSpace(*r.Error) == "" {
-			return r, ErrInvalid
-		}
-		if r.FailureClass == "" {
-			r.FailureClass = failureclass.FromText(*r.Error)
-		}
-		if !failureclass.Valid(r.FailureClass) {
-			return r, ErrInvalid
-		}
-	default:
-		return r, ErrInvalid
+	if err := r.validateStatus(); err != nil {
+		return r, err
 	}
 	if r.Raw == nil {
 		r.Raw = json.RawMessage(`{}`)
@@ -234,6 +213,35 @@ func ParseResult(data []byte) (Result, error) {
 	}
 	r.ID = strings.ToLower(r.ID)
 	return r, nil
+}
+
+// validateStatus applies the rules that depend on the result status and fills the default failure class.
+func (r *Result) validateStatus() error {
+	switch r.Status {
+	case "ok", "degraded":
+		if r.Down == nil || r.Up == nil || r.Ping == nil || r.Server == nil || r.IP == nil || r.Error != nil {
+			return ErrInvalid
+		}
+		if r.FailureClass == "" {
+			r.FailureClass = failureclass.Other
+		}
+		if r.FailureClass != failureclass.Other {
+			return ErrInvalid
+		}
+	case "failed":
+		if r.Error == nil || strings.TrimSpace(*r.Error) == "" {
+			return ErrInvalid
+		}
+		if r.FailureClass == "" {
+			r.FailureClass = failureclass.FromText(*r.Error)
+		}
+		if !failureclass.Valid(r.FailureClass) {
+			return ErrInvalid
+		}
+	default:
+		return ErrInvalid
+	}
+	return nil
 }
 
 type UpdateResult struct {

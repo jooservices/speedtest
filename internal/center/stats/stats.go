@@ -200,24 +200,7 @@ func (s *Store) Summary(ctx context.Context, q Query) ([]SummaryComparison, erro
 		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("scan statistics summary: %w", err)
 		}
-		for _, metric := range []*MetricSummary{&summary.Down, &summary.Up, &summary.Ping, &summary.Jitter, &summary.Loss} {
-			metric.setPercentiles()
-		}
-		// Success rate excludes provider rate limits; those are shown separately as rateLimited.
-		eligible := summary.Count - summary.RateLimited
-		if eligible > 0 {
-			summary.SuccessRate = number(float64(summary.OK) / float64(eligible) * 100)
-		}
-		if summary.Down.Mean != nil {
-			summary.DownPct = number(*summary.Down.Mean / expectedDown * 100)
-		}
-		if summary.Up.Mean != nil {
-			summary.UpPct = number(*summary.Up.Mean / expectedUp * 100)
-		}
-		if summary.Down.Mean != nil && *summary.Down.Mean != 0 && summary.Down.Std != nil {
-			stability := math.Max(0, math.Min(100, 100-(*summary.Down.Std / *summary.Down.Mean)*220))
-			summary.Stability = number(stability)
-		}
+		summary.derive(expectedDown, expectedUp)
 
 		idx, found := byID[id]
 		if !found {
@@ -235,6 +218,28 @@ func (s *Store) Summary(ctx context.Context, q Query) ([]SummaryComparison, erro
 		return nil, fmt.Errorf("read statistics summary: %w", err)
 	}
 	return items, nil
+}
+
+// derive fills the percentiles, success rate, percentages of the expected speed and the stability from the raw aggregates.
+func (summary *NodeSummary) derive(expectedDown, expectedUp float64) {
+	for _, metric := range []*MetricSummary{&summary.Down, &summary.Up, &summary.Ping, &summary.Jitter, &summary.Loss} {
+		metric.setPercentiles()
+	}
+	// Success rate excludes provider rate limits; those are shown separately as rateLimited.
+	eligible := summary.Count - summary.RateLimited
+	if eligible > 0 {
+		summary.SuccessRate = number(float64(summary.OK) / float64(eligible) * 100)
+	}
+	if summary.Down.Mean != nil {
+		summary.DownPct = number(*summary.Down.Mean / expectedDown * 100)
+	}
+	if summary.Up.Mean != nil {
+		summary.UpPct = number(*summary.Up.Mean / expectedUp * 100)
+	}
+	if summary.Down.Mean != nil && *summary.Down.Mean != 0 && summary.Down.Std != nil {
+		stability := math.Max(0, math.Min(100, 100-(*summary.Down.Std / *summary.Down.Mean)*220))
+		summary.Stability = number(stability)
+	}
 }
 
 func summarySQL() string {
