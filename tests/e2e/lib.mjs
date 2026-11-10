@@ -80,21 +80,36 @@ export async function startStack({ seed = true } = {}) {
 }
 
 // Starts a real agent for an enrolment token and waits until the center has seen it.
-export async function startAgent(stack, { name, token }) {
+export async function startAgent(stack, { name, token, scenario = 'success', backoffInitial, backoffMax }) {
   const dir = join(out, 'agents', name.replaceAll(/[^A-Za-z0-9]/g, '_'));
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   const env = { ...process.env, SPEEDTEST_AGENT_CONFIG: join(dir, 'config.yaml'), SPEEDTEST_AGENT_CREDENTIAL: join(dir, 'credential'), SPEEDTEST_AGENT_CENTER: stack.origin,
-    SPEEDTEST_OOKLA_BINARY: join(out, 'bin', 'fake-speedtest'), SPEEDTEST_OOKLA_ARGS: '["--scenario","success"]',
+    SPEEDTEST_OOKLA_BINARY: join(out, 'bin', 'fake-speedtest'), SPEEDTEST_OOKLA_ARGS: JSON.stringify(['--scenario', scenario]),
     // Capability discovery only needs LookPath; reuse the Ookla fake so LibreSpeed is reported as installed.
     SPEEDTEST_LIBRESPEED_BINARY: join(out, 'bin', 'fake-speedtest'),
     SPEEDTEST_LIBRESPEED_CONCURRENT: '4', SPEEDTEST_LIBRESPEED_TIMEOUT: '60s',
     SPEEDTEST_SPOOL_DIR: join(dir, 'spool'),
     SPEEDTEST_AGENT_UPDATE_DIR: join(dir, 'update'), SPEEDTEST_AGENT_INBOX_DIR: join(dir, 'inbox') };
+  if (backoffInitial) env.SPEEDTEST_RATE_LIMIT_BACKOFF_INITIAL = backoffInitial;
+  if (backoffMax) env.SPEEDTEST_RATE_LIMIT_BACKOFF_MAX = backoffMax;
   run(join(out, 'bin', 'agent'), ['enroll', '--center', stack.origin, '--token', token, '--name', name], { env });
-  const agent = spawn(join(out, 'bin', 'agent'), ['run'], { cwd: dir, env, stdio: 'ignore' });
-  processes.push(agent);
-  return agent;
+  const spawnAgent = nextEnv => {
+    const child = spawn(join(out, 'bin', 'agent'), ['run'], { cwd: dir, env: nextEnv, stdio: 'ignore' });
+    processes.push(child);
+    return child;
+  };
+  let childProcess = spawnAgent(env);
+  return {
+    async restart(options = {}) {
+      if (childProcess.exitCode == null && childProcess.signalCode == null) {
+        await new Promise(resolveExit => { childProcess.once('exit', resolveExit); childProcess.kill('SIGTERM'); });
+      }
+      const nextEnv = { ...env };
+      if (options.scenario) nextEnv.SPEEDTEST_OOKLA_ARGS = JSON.stringify(['--scenario', options.scenario]);
+      childProcess = spawnAgent(nextEnv);
+    }
+  };
 }
 
 export function stopAll() {
