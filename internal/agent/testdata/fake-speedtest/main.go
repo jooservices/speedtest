@@ -16,6 +16,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -25,6 +26,9 @@ import (
 	"syscall"
 	"time"
 )
+
+//go:embed librespeed-servers-v1.0.14.txt
+var libreSpeedServerList string
 
 // speedtestResult mirrors the JSON produced by the Ookla CLI for
 // `--format=json`. Bandwidth is bytes per second; latency and jitter are
@@ -114,8 +118,11 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		return writeServerList(stdout)
 	}
 	if hasArg(args, "--list") {
-		_, _ = fmt.Fprintln(stdout, "ID  Name\n12345  Singapore, SG\n54321  Hanoi, VN")
+		_, _ = io.WriteString(stdout, libreSpeedServerList)
 		return 0
+	}
+	if hasArg(args, "--json") {
+		return runLibreSpeed(args, stdout, stderr)
 	}
 	cfg, err := parseFlags(args, stderr)
 	if err != nil {
@@ -141,6 +148,24 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
+}
+
+func runLibreSpeed(args []string, stdout, stderr io.Writer) int {
+	if argumentValue(args, "--server") == "52" {
+		_, _ = fmt.Fprintln(stderr, "server unavailable")
+		return 2
+	}
+	_, _ = io.WriteString(stdout, `{"timestamp":"2026-11-03T02:30:15.123456Z","server":{"name":"Hanoi, Vietnam (Hanoi Speedtest)","url":"https://hn.example.test/backend"},"client":{"ip":"203.0.113.10","isp":"Example ISP"},"bytes_sent":1000,"bytes_received":5000,"ping":3.5,"jitter":0.5,"upload":20,"download":100,"share":""}`+"\n")
+	return 0
+}
+
+func argumentValue(args []string, name string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == name {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
 // parseFlags parses the command line into a resolved config. Explicit flags

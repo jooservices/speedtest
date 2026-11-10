@@ -30,11 +30,12 @@ var restartDelay = 3 * time.Second
 var watchdogInterval = 5 * time.Second
 
 type measurementConfig struct {
-	engine  engine.Engine
-	binding netpath.Binding
-	server  int64
-	threads int
-	name    string
+	engine          engine.Engine
+	binding         netpath.Binding
+	server          int64
+	threads         int
+	name            string
+	serverSnapshots bool
 }
 
 type commandState struct {
@@ -98,7 +99,8 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 		}
 	}
 	l := &Loop{spool: spool, logger: logger, center: center.String(), credential: credential,
-		cfg: measurementConfig{runner, binding, cfg.ServerID, threads, cfg.Engine}, commands: make(map[string]commandState), notify: make(chan struct{}, 1), fatal: make(chan error, 1)}
+		cfg:      measurementConfig{engine: runner, binding: binding, server: cfg.ServerID, threads: threads, name: cfg.Engine},
+		commands: make(map[string]commandState), notify: make(chan struct{}, 1), fatal: make(chan error, 1)}
 	if err := l.restoreCommands(); err != nil {
 		return nil, err
 	}
@@ -209,24 +211,30 @@ func (l *Loop) listServers(ctx context.Context, name string) ([]engine.ServerOpt
 }
 
 func runWithServerFallback(ctx context.Context, runner *netpath.Runner, serverID int64) (netpath.RunResult, error) {
+	return runWithServerFallbackTimeout(ctx, runner, serverID, engine.DefaultTimeout)
+}
+
+func runWithServerFallbackTimeout(ctx context.Context, runner *netpath.Runner, serverID int64, timeout time.Duration) (netpath.RunResult, error) {
 	out, err := runner.Run(ctx, engine.Options{ServerID: serverID})
-	if !retryAutomaticServer(err, serverID) {
+	if !retryAutomaticServer(ctx, err, serverID) {
 		return out, err
 	}
-	out, err = runner.Run(ctx, engine.Options{})
+	fallbackCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	out, err = runner.Run(fallbackCtx, engine.Options{})
 	out.Warnings = append(out.Warnings, "Pinned server was unreachable; the engine selected a server automatically.")
 	return out, err
 }
 
-func retryAutomaticServer(err error, serverID int64) bool {
-	if serverID < 1 {
+func retryAutomaticServer(ctx context.Context, err error, serverID int64) bool {
+	if serverID < 1 || ctx.Err() != nil {
 		return false
 	}
 	var runErr *engine.RunError
 	if !errors.As(err, &runErr) {
 		return false
 	}
-	return runErr.Class == engine.ServerUnavailable || runErr.Class == engine.NoRoute
+	return runErr.Class == engine.ServerUnavailable || runErr.Class == engine.NoRoute || runErr.Class == engine.Timeout
 }
 
 // watchUpdate makes a freshly installed version that cannot confirm itself exit with an error, which lets the
@@ -320,8 +328,7 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 		l.fail(errors.New("measurement could not be represented by reporting contract"))
 		return err
 	}
-	res.Engine = cfg.name
-	res.Warnings = out.Warnings
+	applyMeasurementMetadata(&res, out, cfg)
 	// Enqueue is independent of cancellation: an interrupted test is still durable.
 	l.mu.Lock()
 	var state commandState
@@ -344,6 +351,19 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 	l.logger.Info("result spooled", "id", res.ID, "status", res.Status)
 	l.wake()
 	return runErr
+}
+
+func applyMeasurementMetadata(result *report.Result, out netpath.RunResult, cfg measurementConfig) {
+	result.Engine = cfg.name
+	result.Warnings = out.Warnings
+	if !cfg.serverSnapshots {
+		return
+	}
+	result.ServerSelectionKnown = true
+	if cfg.server > 0 {
+		pinnedServerID := cfg.server
+		result.PinnedServerID = &pinnedServerID
+	}
 }
 
 // progress is called with mu held. Engine CLIs expose final output only, so
@@ -449,6 +469,7 @@ func (l *Loop) applyConfig(remote control.AgentConfig, schedule sched.Schedule) 
 			cfg.binding.SourceIP = *remote.Binding.SourceIP
 		}
 	}
+	cfg.serverSnapshots = remote.ServerSelectionSnapshots
 	if _, err := netpath.Resolve(cfg.binding); err != nil {
 		return fmt.Errorf("invalid binding: %w", err)
 	}

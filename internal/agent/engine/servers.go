@@ -216,7 +216,39 @@ func parseLibreSpeedRow(line string) (ServerOption, bool) {
 	if len(fields) < 2 {
 		return ServerOption{}, false
 	}
+	if strings.HasSuffix(fields[0], ":") {
+		return parseLibreSpeedCLIEntry(line, fields[0])
+	}
 	return serverRow(fields[0], strings.TrimSpace(strings.TrimPrefix(line, fields[0])))
+}
+
+func parseLibreSpeedCLIEntry(line, rawID string) (ServerOption, bool) {
+	id, err := strconv.ParseInt(strings.TrimSuffix(rawID, ":"), 10, 64)
+	if err != nil || id < 1 || id > math.MaxInt32 {
+		return ServerOption{}, false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(line, rawID))
+	sponsor := ""
+	if start := strings.LastIndex(rest, " [Sponsor: "); start >= 0 && strings.HasSuffix(rest, "]") {
+		sponsor = strings.TrimSpace(rest[start+len(" [Sponsor: ") : len(rest)-1])
+		rest = strings.TrimSpace(rest[:start])
+	}
+	for start := strings.LastIndex(rest, " ("); start >= 0; start = strings.LastIndex(rest[:start], " (") {
+		serverText := rest[start+2:]
+		if !strings.HasSuffix(serverText, ")") {
+			continue
+		}
+		serverURL, err := url.Parse(serverText[:len(serverText)-1])
+		if err != nil || serverURL.Host == "" || serverURL.User != nil {
+			continue
+		}
+		option := ServerOption{ID: id, Name: strings.TrimSpace(rest[:start]), ISP: sponsor, Host: serverURL.Host}
+		if option.Name == "" || !validServerOptionText(option) {
+			return ServerOption{}, false
+		}
+		return option, true
+	}
+	return ServerOption{}, false
 }
 
 func serverRow(rawID, name string) (ServerOption, bool) {

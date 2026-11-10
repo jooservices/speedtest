@@ -65,20 +65,133 @@ func TestPinnedServerFailureRetriesAutomaticallyWithWarning(t *testing.T) {
 	}
 }
 
-func TestPinnedServerFallbackIsLimitedToUnavailableServer(t *testing.T) {
+func TestPinnedServerFallbackIsLimitedToUnavailableFailures(t *testing.T) {
+	ctx := context.Background()
 	for _, tc := range []struct {
 		class engine.ErrorClass
 		id    int64
 		want  bool
-	}{{engine.ServerUnavailable, 12, true}, {engine.NoRoute, 12, true}, {engine.Timeout, 12, false}, {engine.ServerUnavailable, 0, false}} {
-		if got := retryAutomaticServer(&engine.RunError{Class: tc.class}, tc.id); got != tc.want {
+	}{{engine.ServerUnavailable, 12, true}, {engine.NoRoute, 12, true}, {engine.Timeout, 12, true}, {engine.ServerUnavailable, 0, false}} {
+		if got := retryAutomaticServer(ctx, &engine.RunError{Class: tc.class}, tc.id); got != tc.want {
 			t.Errorf("retryAutomaticServer(%s,%d)=%v", tc.class, tc.id, got)
 		}
 	}
-	if retryAutomaticServer(nil, 12) || retryAutomaticServer(errors.New("network failure"), 12) {
+	if retryAutomaticServer(ctx, nil, 12) || retryAutomaticServer(ctx, errors.New("network failure"), 12) {
 		t.Fatal("retried without a server availability error")
 	}
+	canceled, cancel := context.WithCancel(ctx)
+	cancel()
+	if retryAutomaticServer(canceled, &engine.RunError{Class: engine.Timeout}, 12) {
+		t.Fatal("retried after caller cancellation")
+	}
 }
+
+func TestPinnedServerCLIReportedTimeoutRetriesAutomatically(t *testing.T) {
+	fixture, err := filepath.Abs("../engine/testdata/legacy.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	argsLog := filepath.Join(t.TempDir(), "args.log")
+	script := "#!/bin/sh\necho \"$*\" >> " + shellQuote(argsLog) + "\ncase \"$*\" in\n*'--server-id 54321'*) echo 'Operation timed out' >&2; exit 1;;\n*) cat " + shellQuote(fixture) + ";;\nesac\n"
+	runner, closeCenter := newOoklaFallbackRunner(t, writeFallbackEngine(t, script), time.Second)
+	defer closeCenter()
+	out, err := runWithServerFallbackTimeout(t.Context(), runner, 54321, 250*time.Millisecond)
+	if err != nil || out.Measurement.Server == nil || out.Measurement.Server.ID != 37471 || !strings.Contains(strings.Join(out.Warnings, " "), "automatically") {
+		t.Fatalf("CLI timeout did not fall back: result=%+v err=%v", out, err)
+	}
+	if got := strings.Count(readFallbackArgs(t, argsLog), "\n"); got != 2 {
+		t.Fatalf("engine invocations=%d, want pinned attempt and one automatic retry", got)
+	}
+}
+
+func TestPinnedServerEngineTimeoutRetriesWithBoundedAutomaticRun(t *testing.T) {
+	fixture, err := filepath.Abs("../engine/testdata/legacy.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	argsLog := filepath.Join(t.TempDir(), "args.log")
+	script := "#!/bin/sh\necho \"$*\" >> " + shellQuote(argsLog) + "\ncase \"$*\" in\n*'--server-id 54321'*) exec sleep 1;;\n*) cat " + shellQuote(fixture) + ";;\nesac\n"
+	runner, closeCenter := newOoklaFallbackRunner(t, writeFallbackEngine(t, script), 25*time.Millisecond)
+	defer closeCenter()
+	out, err := runWithServerFallbackTimeout(t.Context(), runner, 54321, 250*time.Millisecond)
+	if err != nil || out.Measurement.Server == nil || out.Measurement.Server.ID != 37471 || !strings.Contains(strings.Join(out.Warnings, " "), "automatically") {
+		t.Fatalf("timed-out pinned run did not fall back: result=%+v err=%v", out, err)
+	}
+	if got := strings.Count(readFallbackArgs(t, argsLog), "\n"); got != 2 {
+		t.Fatalf("engine invocations=%d, want pinned attempt and one automatic retry", got)
+	}
+}
+
+func TestPinnedServerTimeoutDoesNotRetryCallerDeadline(t *testing.T) {
+	argsLog := filepath.Join(t.TempDir(), "args.log")
+	script := "#!/bin/sh\necho \"$*\" >> " + shellQuote(argsLog) + "\nexec sleep 1\n"
+	runner, closeCenter := newOoklaFallbackRunner(t, writeFallbackEngine(t, script), time.Second)
+	defer closeCenter()
+	ctx, cancel := context.WithTimeout(t.Context(), 25*time.Millisecond)
+	defer cancel()
+	_, err := runWithServerFallbackTimeout(ctx, runner, 54321, 250*time.Millisecond)
+	var runErr *engine.RunError
+	if !errors.As(err, &runErr) || runErr.Class != engine.Timeout {
+		t.Fatalf("caller deadline error=%v, want engine timeout", err)
+	}
+	if got := strings.Count(readFallbackArgs(t, argsLog), "\n"); got != 1 {
+		t.Fatalf("engine invocations after caller deadline=%d, want 1", got)
+	}
+}
+
+func TestAutomaticRetryHasItsOwnDeadline(t *testing.T) {
+	argsLog := filepath.Join(t.TempDir(), "args.log")
+	script := "#!/bin/sh\necho \"$*\" >> " + shellQuote(argsLog) + "\ncase \"$*\" in\n*'--server-id 54321'*) echo 'server unavailable' >&2; exit 1;;\n*) exec sleep 1;;\nesac\n"
+	runner, closeCenter := newOoklaFallbackRunner(t, writeFallbackEngine(t, script), time.Second)
+	defer closeCenter()
+	started := time.Now()
+	_, err := runWithServerFallbackTimeout(t.Context(), runner, 54321, 100*time.Millisecond)
+	var runErr *engine.RunError
+	if !errors.As(err, &runErr) || runErr.Class != engine.Timeout || time.Since(started) > time.Second {
+		t.Fatalf("automatic run exceeded its own deadline: err=%v elapsed=%s", err, time.Since(started))
+	}
+	if got := strings.Count(readFallbackArgs(t, argsLog), "\n"); got != 2 {
+		t.Fatalf("engine invocations=%d, want one pinned attempt and one bounded retry", got)
+	}
+}
+
+func writeFallbackEngine(t *testing.T, script string) string {
+	t.Helper()
+	binary := filepath.Join(t.TempDir(), "speedtest")
+	if err := os.WriteFile(binary, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return binary
+}
+
+func newOoklaFallbackRunner(t *testing.T, binary string, timeout time.Duration) (*netpath.Runner, func()) {
+	t.Helper()
+	measurement, err := engine.NewOokla(engine.Config{Binary: binary, Timeout: timeout})
+	if err != nil {
+		t.Fatal(err)
+	}
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"code":200,"data":{"ip":"198.51.100.7"}}`))
+	}))
+	runner, err := netpath.NewRunner(measurement, center.URL, "test-token", netpath.Binding{})
+	if err != nil {
+		center.Close()
+		t.Fatal(err)
+	}
+	return runner, center.Close
+}
+
+func readFallbackArgs(t *testing.T, path string) string {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
+}
+
+func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
 
 func TestListServersUsesConfiguredEngineAndNodeBinding(t *testing.T) {
 	wantServers := []engine.ServerOption{{ID: 12, Name: "Test", City: "Hanoi"}}
@@ -219,7 +332,7 @@ func TestScheduledEngineProcessesTagDurableResults(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = loop.Close() }()
-	remote := control.AgentConfig{Engine: "ookla", Schedules: []control.ScheduleInput{{Engine: "ookla", Interval: 30, Enabled: true}, {Engine: "librespeed", Interval: 60, Enabled: true}}}
+	remote := control.AgentConfig{Engine: "ookla", ServerSelectionSnapshots: true, Schedules: []control.ScheduleInput{{Engine: "ookla", Interval: 30, Enabled: true}, {Engine: "librespeed", Interval: 60, Enabled: true}}}
 	if err = loop.applyConfig(remote, sched.Schedule{Interval: 30 * time.Minute, Enabled: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -235,9 +348,12 @@ func TestScheduledEngineProcessesTagDurableResults(t *testing.T) {
 	engines := map[string]bool{}
 	for _, row := range rows {
 		engines[row.Engine] = true
+		if !row.ServerSelectionKnown || row.PinnedServerID != nil {
+			t.Fatalf("automatic selection snapshot=%+v", row)
+		}
 		wire, _ := json.Marshal(row)
 		var parsed map[string]any
-		if err = json.Unmarshal(wire, &parsed); err != nil || parsed["engine"] != row.Engine {
+		if err = json.Unmarshal(wire, &parsed); err != nil || parsed["engine"] != row.Engine || parsed["serverSelectionKnown"] != true {
 			t.Fatal(parsed, err)
 		}
 	}

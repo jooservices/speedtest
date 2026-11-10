@@ -52,8 +52,31 @@ export function nodesSuite(T, ctx) {
     await libre.getByRole('row').filter({ hasText: 'Singapore' }).getByRole('button', { name: 'Pin' }).click();
     await T.toast('LibreSpeed server selection saved').waitFor();
     await T.toast('LibreSpeed server selection saved').waitFor({ state: 'hidden' });
-    assert.equal(T.db("select pinned_server_id from node_engine_servers c join nodes n on n.id=c.node_id where n.name='E2E-1' and c.engine='librespeed'"), '12345');
+    assert.equal(T.db("select pinned_server_id from node_engine_servers c join nodes n on n.id=c.node_id where n.name='E2E-1' and c.engine='librespeed'"), '52');
+    const enabled = page.getByRole('checkbox', { name: 'LibreSpeed enabled' });
+    if (!(await enabled.isChecked())) await enabled.click();
+    await T.press('Save engine schedules');
+    await T.toast('Engine schedules saved').waitFor();
+    assert.equal(T.db("select s.enabled from engine_schedules s join nodes n on n.id=s.node_id where n.name='E2E-1' and s.engine='librespeed'"), 't');
     return libre;
+  }
+
+  async function runLibreSpeedFallbackAndCheckHistory() {
+    T.db("update nodes set primary_engine='librespeed',server_id=52,config_revision=config_revision+1 where name='E2E-1'");
+    await T.press('Run test');
+    const run = T.dialog('Running speed test');
+    await run.getByText(/Mbps ↓|Gbps ↓|kbps ↓/).waitFor({ timeout: 90000 });
+    await T.press('Close', run.locator('.modal-foot'));
+    const saved = T.db("select r.server_id::text||':'||r.pinned_server_id_at_test::text||':'||coalesce(r.server->>'host','')||':'||r.server_selection_known::text||':'||r.warnings::text from results r join nodes n on n.id=r.node_id where n.name='E2E-1' and r.engine='librespeed' and r.manual order by r.ts desc limit 1");
+    assert.match(saved, /^51:52:hn\.example\.test:true:.*Pinned server was unreachable/);
+    await T.open('#/history', 'Results');
+    await T.fill('Search results', 'E2E-1');
+    const resultRow = page.getByRole('row').filter({ hasText: 'Different from pinned' }).first();
+    await resultRow.waitFor();
+    await resultRow.click();
+    await page.getByText(/instead of pinned server #52/).waitFor();
+    await page.getByText(/Pinned server was unreachable/).waitFor();
+    await page.locator('dd').filter({ hasText: /Hanoi.*#51/ }).waitFor();
   }
 
   async function checkServerPickerResponsive(libre) {
@@ -163,6 +186,7 @@ export function nodesSuite(T, ctx) {
       await T.dismiss();
       const libre = await pinLibreSpeedAndCheckPicker();
       await checkServerPickerResponsive(libre);
+      await runLibreSpeedFallbackAndCheckHistory();
     },
 
     // Wizard validation: nothing is created from an incomplete or duplicate form.

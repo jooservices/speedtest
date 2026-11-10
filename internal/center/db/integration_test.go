@@ -239,6 +239,7 @@ func TestServerCatalogMigrationUpDownIntegration(t *testing.T) {
 	if err := pool.QueryRow(ctx, "SELECT pinned_server_id FROM node_engine_servers WHERE node_id=$1 AND engine='ookla'", node).Scan(&pin); err != nil || pin != 42 {
 		t.Fatalf("legacy pin backfill=%d err=%v", pin, err)
 	}
+	assertServerSelectionSnapshotMigrationUp(t, ctx, pool, node)
 	exec(t, ctx, pool, "INSERT INTO agent_commands(id,node_id,type,engine) VALUES ('00000000-0000-4000-8000-000000000178','"+node+"','list_servers','ookla')")
 	if err := db.Migrate(ctx, pool, "down"); err != nil {
 		t.Fatal(err)
@@ -248,13 +249,30 @@ func TestServerCatalogMigrationUpDownIntegration(t *testing.T) {
 	logMigrationRollbackPass(t)
 }
 
+func assertServerSelectionSnapshotMigrationUp(t *testing.T, ctx context.Context, pool *pgxpool.Pool, node string) {
+	t.Helper()
+	var known bool
+	var pin *int64
+	if err := pool.QueryRow(ctx, `SELECT server_selection_known,pinned_server_id_at_test FROM results WHERE node_id=$1`, node).Scan(&known, &pin); err != nil || known || pin != nil {
+		t.Fatalf("pre-migration result selection known=%t pin=%v err=%v", known, pin, err)
+	}
+	var digest []byte
+	if err := pool.QueryRow(ctx, `SELECT ack_payload_sha256 FROM agent_commands WHERE node_id=$1 AND type='run_now'`, node).Scan(&digest); err != nil || digest != nil {
+		t.Fatalf("pre-migration command digest=%x err=%v", digest, err)
+	}
+}
+
 func assertServerCatalogMigrationDown(t *testing.T, ctx context.Context, pool *pgxpool.Pool, node string) {
 	t.Helper()
-	var catalog, engineColumn bool
+	var catalog, engineColumn, digestColumn, pinColumn, knownColumn bool
 	if err := pool.QueryRow(ctx, `SELECT
 EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='node_engine_servers'),
-EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='agent_commands' AND column_name='engine')`).Scan(&catalog, &engineColumn); err != nil || catalog || engineColumn {
-		t.Fatalf("down migration retained catalog=%t engine-column=%t err=%v", catalog, engineColumn, err)
+EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='agent_commands' AND column_name='engine'),
+EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='agent_commands' AND column_name='ack_payload_sha256'),
+EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='results' AND column_name='pinned_server_id_at_test'),
+EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='results' AND column_name='server_selection_known')`).
+		Scan(&catalog, &engineColumn, &digestColumn, &pinColumn, &knownColumn); err != nil || catalog || engineColumn || digestColumn || pinColumn || knownColumn {
+		t.Fatalf("down migration retained catalog=%t engine=%t digest=%t pin=%t known=%t err=%v", catalog, engineColumn, digestColumn, pinColumn, knownColumn, err)
 	}
 	var pin int
 	if err := pool.QueryRow(ctx, "SELECT server_id FROM nodes WHERE id=$1", node).Scan(&pin); err != nil || pin != 42 {
