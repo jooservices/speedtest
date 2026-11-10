@@ -35,6 +35,16 @@ func TestEnsureAndLink(t *testing.T) {
 	}
 }
 
+func TestEnsureSkipsASNOutsideUint32(t *testing.T) {
+	if uint64(^uint(0)) <= uint64(maxASN) {
+		t.Skip("uint cannot represent an out-of-range ASN on this architecture")
+	}
+	e, err := Ensure(context.Background(), newFake(), uint(uint64(maxASN)+1), "invalid")
+	if err != nil || e != nil {
+		t.Fatalf("out-of-range ASN should be ignored: %#v %v", e, err)
+	}
+}
+
 func TestEnsureErrors(t *testing.T) {
 	db := newFake()
 	db.queryErr = errors.New("boom")
@@ -43,8 +53,8 @@ func TestEnsureErrors(t *testing.T) {
 	}
 	db = newFake()
 	db.execErr = errors.New("write")
-	if _, err := Ensure(context.Background(), db, 1, "Org"); err == nil {
-		t.Fatal("expected exec error")
+	if _, err := LinkAddress(context.Background(), db, "203.0.113.1", 1, "Org"); err == nil {
+		t.Fatal("expected address lock error")
 	}
 }
 

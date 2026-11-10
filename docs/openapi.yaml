@@ -1210,6 +1210,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
@@ -1454,6 +1455,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "404":
           $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/ServerError"
     post:
@@ -1492,6 +1495,8 @@ paths:
           $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/ServerError"
   /api/isps/{id}/plans/{planId}:
@@ -1536,6 +1541,8 @@ paths:
           $ref: "#/components/responses/NotFound"
         "422":
           $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/ServerError"
     delete:
@@ -1567,6 +1574,8 @@ paths:
           $ref: "#/components/responses/Forbidden"
         "404":
           $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/ServerError"
   /api/stats/summary:
@@ -2383,6 +2392,7 @@ paths:
           schema:
             $ref: "#/components/schemas/Severity"
         - $ref: "#/components/parameters/Node"
+        - $ref: "#/components/parameters/ISP"
   /api/alerts/events/{id}:
     get:
       operationId: getEvent
@@ -3799,6 +3809,7 @@ components:
         asn:
           type: integer
           minimum: 0
+          maximum: 4294967295
         asnOrg:
           type: string
         isp:
@@ -3876,6 +3887,8 @@ components:
           description: User-supplied display label.
           maxLength: 200
           default: ""
+        ispPlanId:
+          $ref: "#/components/schemas/ID"
         expectedDown:
           type: number
           exclusiveMinimum: 0
@@ -3907,8 +3920,12 @@ components:
           default: false
       required:
         - name
-        - expectedDown
-        - expectedUp
+      allOf:
+        - if:
+            required: [ispPlanId]
+          then: {}
+          else:
+            required: [expectedDown, expectedUp]
     NodePatch:
       type: object
       additionalProperties: false
@@ -3931,6 +3948,10 @@ components:
           description: User-supplied display label.
           maxLength: 200
           default: ""
+        ispPlanId:
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
         expectedDown:
           type: number
           exclusiveMinimum: 0
@@ -4429,6 +4450,11 @@ components:
           anyOf:
             - $ref: "#/components/schemas/Geo"
             - type: "null"
+        ispId:
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
+          description: ISP associated with the result's public IP at ingestion time.
         loadedDown:
           anyOf:
             - $ref: "#/components/schemas/LoadedLatency"
@@ -4483,6 +4509,7 @@ components:
         - raw
         - server
         - geo
+        - ispId
       description: Stored fields plus resolved server and location. nodeId is derived from the credential
         on ingestion, never trusted from agent input. raw is {} if no raw engine JSON was supplied.
         Engine-specific loss/jitter/loaded metrics may be null even on success when unavailable;
@@ -4545,6 +4572,10 @@ components:
           description: User-supplied display label.
           maxLength: 200
           default: ""
+        ispPlanId:
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
         expectedDown:
           type: number
           exclusiveMinimum: 0
@@ -4658,6 +4689,7 @@ components:
         - currentIp
         - geo
         - isp
+        - ispPlanId
         - updateVersion
       description: paused if disabled; otherwise offline if never seen or heartbeat age >90 seconds (three
         30-second heartbeat intervals); otherwise failed/degraded from latest result, else online.
@@ -5562,6 +5594,11 @@ components:
             - type: "null"
         nodeId:
           $ref: "#/components/schemas/ID"
+        ispId:
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
+          description: ISP captured at event time and retained after result cleanup.
         severity:
           $ref: "#/components/schemas/Severity"
         ts:
@@ -5580,6 +5617,7 @@ components:
         - id
         - ruleId
         - nodeId
+        - ispId
         - severity
         - ts
         - resolvedAt
@@ -6529,6 +6567,7 @@ components:
         asn:
           type: integer
           minimum: 1
+          maximum: 4294967295
         organisation:
           type: string
         name:
@@ -6547,6 +6586,7 @@ components:
         asn:
           type: integer
           minimum: 1
+          maximum: 4294967295
         organisation:
           type: string
         name:

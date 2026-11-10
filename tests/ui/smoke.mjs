@@ -13,7 +13,7 @@ try {
     await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ?
       { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}) });
 } catch (error) { await server.close(); throw error; }
-const routes = ['/', '/nodes', '/nodes/node-contract', '/history', '/stats', '/network', '/schedules', '/alerts', '/settings'];
+const routes = ['/', '/nodes', '/nodes/node-contract', '/history', '/stats', '/network', '/isps', '/schedules', '/alerts', '/settings'];
 const diagnostics = [];
 const page = await browser.newPage();
 const coverage = await trackCoverage(page);
@@ -52,8 +52,37 @@ try {
         }
       }
     }
-    console.log(`PASS smoke run ${run}: all 9 routes, demo/API, dark/light, 390/768/1440px`);
+    console.log(`PASS smoke run ${run}: all 10 routes, demo/API, dark/light, 390/768/1440px`);
   }
+  await goto('/isps', true);
+  await page.locator('#view table').first().getByRole('row').nth(1).click();
+  await page.locator('#view .grid-2 svg[role="img"]').waitFor();
+
+  await goto('/isps', false);
+  const ispRow = () => page.locator('#view table').first().getByRole('row').nth(1);
+  await ispRow().waitFor();
+  server.control.empty = true;
+  await ispRow().click();
+  await page.getByText('No samples').waitFor();
+  server.control.empty = false;
+  await ispRow().click();
+  await page.locator('#view .grid-2 svg[aria-label="Fixture ISP download trend"]').waitFor();
+  const trendPath = `/api/isps/${server.data.isp.id}/trend`;
+  server.control.failPaths.add(trendPath);
+  await ispRow().click();
+  await page.getByText('Could not load trend').waitFor();
+  server.control.failPaths.delete(trendPath);
+  await ispRow().click();
+  await page.locator('#view .grid-2 svg[aria-label="Fixture ISP download trend"]').waitFor();
+
+  server.control.failPaths.add('/api/isps');
+  await page.goto(`${server.origin}/#/isps`);
+  await page.waitForFunction(() => ST.remote.status === 'ready');
+  await page.getByText('Could not load ISPs').waitFor();
+  server.control.failPaths.delete('/api/isps');
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await ispRow().waitFor();
+
   for (const route of routes) {
     // Delay each bootstrap so loading is observable on every route.
     server.control.delay = 50;

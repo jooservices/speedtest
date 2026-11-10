@@ -14,6 +14,8 @@ import (
 
 var uuidPattern = regexp.MustCompile(`(?i)^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
+const maxASN = 1<<32 - 1
+
 // ErrInvalid reports ASN or organisation input that cannot form an ISP.
 var ErrInvalid = errors.New("invalid ISP")
 
@@ -41,47 +43,49 @@ func newID() (string, error) {
 	return fmt.Sprintf("%x-%x-%x-%x-%x", b[0:4], b[4:6], b[6:8], b[8:10], b[10:]), nil
 }
 
-// Ensure upserts an ISP for the ASN and returns it. ASN 0 or empty organisation is skipped.
+func hasIdentity(asn uint, _ string) bool {
+	return asn > 0 && asn <= maxASN
+}
+
+// Ensure upserts an ISP for the ASN and returns it. Missing organisations use an AS-number fallback.
 func Ensure(ctx context.Context, db DB, asn uint, organisation string) (*Entity, error) {
 	organisation = strings.TrimSpace(organisation)
-	if asn == 0 || organisation == "" {
+	if !hasIdentity(asn, "") {
 		return nil, nil
+	}
+	if organisation == "" {
+		organisation = fmt.Sprintf("AS%d", asn)
 	}
 	name := NormaliseName(organisation)
 	if name == "" {
 		name = fmt.Sprintf("AS%d", asn)
 	}
-	var e Entity
-	err := db.QueryRow(ctx, `SELECT id::text, asn, organisation, name FROM isps WHERE asn=$1`, asn).
-		Scan(&e.ID, &e.ASN, &e.Organisation, &e.Name)
-	if err == nil {
-		if e.Organisation != organisation || e.Name != name {
-			if _, err = db.Exec(ctx, `UPDATE isps SET organisation=$2, name=$3, updated_at=now() WHERE id=$1::uuid`, e.ID, organisation, name); err != nil {
-				return nil, err
-			}
-			e.Organisation, e.Name = organisation, name
-		}
-		return &e, nil
-	}
-	if !errors.Is(err, pgx.ErrNoRows) {
-		return nil, err
-	}
 	id, err := newID()
 	if err != nil {
 		return nil, err
 	}
-	if _, err = db.Exec(ctx, `INSERT INTO isps(id,asn,organisation,name) VALUES ($1::uuid,$2,$3,$4)
-		ON CONFLICT (asn) DO UPDATE SET organisation=EXCLUDED.organisation, name=EXCLUDED.name, updated_at=now()`,
-		id, asn, organisation, name); err != nil {
-		return nil, err
-	}
-	err = db.QueryRow(ctx, `SELECT id::text, asn, organisation, name FROM isps WHERE asn=$1`, asn).
+	var e Entity
+	err = db.QueryRow(ctx, `INSERT INTO isps(id,asn,organisation,name) VALUES ($1::uuid,$2,$3,$4)
+		ON CONFLICT (asn) DO UPDATE SET organisation=EXCLUDED.organisation, name=EXCLUDED.name, updated_at=now()
+		RETURNING id::text, asn, organisation, name`, id, asn, organisation, name).
 		Scan(&e.ID, &e.ASN, &e.Organisation, &e.Name)
 	return &e, err
 }
 
+// LockAddress takes the address lock before any ISP upsert in an ingestion transaction.
+func LockAddress(ctx context.Context, db DB, ip string) error {
+	_, err := db.Exec(ctx, `SELECT ip FROM ip_addresses WHERE ip=$1::inet FOR NO KEY UPDATE`, ip)
+	return err
+}
+
 // LinkAddress sets ip_addresses.isp_id for the address when an ISP can be derived.
 func LinkAddress(ctx context.Context, db DB, ip string, asn uint, organisation string) (*Entity, error) {
+	if !hasIdentity(asn, "") {
+		return nil, nil
+	}
+	if err := LockAddress(ctx, db, ip); err != nil {
+		return nil, err
+	}
 	e, err := Ensure(ctx, db, asn, organisation)
 	if err != nil || e == nil {
 		return e, err

@@ -105,6 +105,17 @@ func TestNodeCredentialHTTPFlowIntegration(t *testing.T) {
 	if createResponse.Code != http.StatusCreated {
 		t.Fatalf("bootstrap create status = %d", createResponse.Code)
 	}
+	var createdEnvelope struct {
+		Data struct {
+			Node map[string]any `json:"node"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &createdEnvelope); err != nil {
+		t.Fatal("decode node creation response", err)
+	}
+	if isp, exists := createdEnvelope.Data.Node["isp"]; !exists || isp != nil {
+		t.Fatal("new node without a current IP must expose isp: null")
+	}
 	nodeID := responseString(t, createResponse.Body.Bytes(), "data", "node", "id")
 	token := responseString(t, createResponse.Body.Bytes(), "data", "token")
 

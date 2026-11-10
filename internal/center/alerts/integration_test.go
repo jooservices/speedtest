@@ -306,6 +306,18 @@ func TestOfflineRuleUsesThreeScheduleIntervalsIntegration(t *testing.T) {
 	pool, ctx := integrationDB(t)
 	old := time.Date(2026, 11, 3, 8, 0, 0, 0, time.UTC)
 	addNode(t, ctx, pool, testNodeID, "offline-edge", old, 5)
+	const ispID = "20000000-0000-4000-8000-0000000000a1"
+	const resultID = "20000000-0000-4000-8000-0000000000a2"
+	if _, err := pool.Exec(ctx, `INSERT INTO isps(id,asn,organisation,name) VALUES($1,64500,'Event ISP','Event ISP')`, ispID); err != nil {
+		t.Fatal("seed event-time ISP:", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO ip_addresses(ip,isp_id) VALUES('203.0.113.44',$1)`, ispID); err != nil {
+		t.Fatal("seed event-time address:", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,ip,threads,server,engine,isp_id)
+		VALUES($1,$2,$3,'ok',80,40,8,1,'203.0.113.44',4,'{"id":1,"name":"fixture"}'::jsonb,'ookla',$4)`, resultID, testNodeID, old.Add(5*time.Minute), ispID); err != nil {
+		t.Fatal("seed event-time result:", err)
+	}
 	now := old.Add(16 * time.Minute)
 	store := &alerts.Store{DB: pool, AppKey: []byte(appKey), Now: func() time.Time { return now }}
 	ruleID := addRule(t, ctx, store, "offline-rule", alerts.RuleInput{Name: "Node offline", Metric: "offline", Op: "=", Value: 1,
@@ -318,6 +330,17 @@ func TestOfflineRuleUsesThreeScheduleIntervalsIntegration(t *testing.T) {
 	}
 	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE rule_id=$1`, ruleID) != 1 || scalar(t, ctx, pool, `SELECT count(*) FROM alert_notification_outbox WHERE event_id IN (SELECT id FROM alert_events WHERE rule_id=$1)`, ruleID) != 1 {
 		t.Fatal("three missed intervals did not open one offline alert and handoff")
+	}
+	events, total, err := store.ListEvents(ctx, alerts.EventFilter{State: "all", ISPID: ispID}, 1, 25)
+	if err != nil || total != 1 || events[0].ISPID == nil || *events[0].ISPID != ispID {
+		t.Fatalf("result-less offline event ISP attribution: total=%d events=%+v err=%v", total, events, err)
+	}
+	if _, err := pool.Exec(ctx, `DELETE FROM results WHERE id=$1`, resultID); err != nil {
+		t.Fatal("delete retained trigger context result:", err)
+	}
+	events, total, err = store.ListEvents(ctx, alerts.EventFilter{State: "all", ISPID: ispID}, 1, 25)
+	if err != nil || total != 1 || events[0].ISPID == nil || *events[0].ISPID != ispID {
+		t.Fatalf("result-less event lost ISP after result retention: total=%d events=%+v err=%v", total, events, err)
 	}
 	if _, err := pool.Exec(ctx, `UPDATE nodes SET last_seen_at=$2 WHERE id=$1`, testNodeID, now); err != nil {
 		t.Fatal("restore node heartbeat")

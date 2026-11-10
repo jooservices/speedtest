@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -157,6 +158,28 @@ func TestOwnerISPPlanValidationAndErrors(t *testing.T) {
 	}
 	if rec := do(h, http.MethodPatch, "/api/isps/"+ispID+"/plans/"+planID, "", ownerWriteWith(nil)); rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("plan patch=%d", rec.Code)
+	}
+}
+
+func TestOwnerISPPlanSchemaBoundaries(t *testing.T) {
+	const ispID = "00000000-0000-4000-8000-000000000001"
+	const planID = "00000000-0000-4000-8000-0000000000aa"
+	h := ispHandler(&fakeOwnerISP{plan: map[string]any{"id": planID}})
+	path := "/api/isps/" + ispID + "/plans"
+	item := path + "/" + planID
+	valid := func(name string) string { return `{"name":"` + name + `","advertisedDown":300,"advertisedUp":100}` }
+	for method, target := range map[string]string{http.MethodPost: path, http.MethodPut: item} {
+		if got := do(h, method, target, valid(strings.Repeat("x", 200)), ownerWriteWith(nil)).Code; got != map[string]int{http.MethodPost: http.StatusCreated, http.MethodPut: http.StatusOK}[method] {
+			t.Errorf("%s accepts 200-rune name: %d", method, got)
+		}
+		for label, body := range map[string]string{
+			"unknown property": valid("x")[:len(valid("x"))-1] + `,"unexpected":true}`,
+			"long name":        valid(strings.Repeat("x", 201)),
+		} {
+			if got := do(h, method, target, body, ownerWriteWith(nil)).Code; got != http.StatusUnprocessableEntity {
+				t.Errorf("%s %s -> %d, want 422", method, label, got)
+			}
+		}
 	}
 }
 
