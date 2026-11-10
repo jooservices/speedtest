@@ -18,6 +18,10 @@
 - The JOOST-71 engine selector filters dashboard, results and statistics views; different engines remain separate series and are never combined into one average.
 - On phones the top bar keeps the menu, time range and Run action on one row. Active-node status, theme and sign-out actions live in the menu.
 - Enter activates a focused row or node card. Enter on a nested Run button opens the test dialog without also activating its parent.
+- Interactive tables keep native table semantics and expose the primary row action as a descriptively named link or button in a data cell. The node list links to node details; result rows open their details, and nested Run controls remain separate.
+- Dashboard comparison responses update only the five KPI values and deltas in place. Navigation invalidates pending comparisons, so a delayed response cannot rebuild a different page or move dashboard focus.
+- Statistics sparse warnings count valid plotted hourly or daily buckets in each displayed trend series. Each warning also reports its raw sample count, in demo and API modes.
+- The UI coverage report publishes function counts alongside line coverage and requires every function in the reviewed dashboard, Statistics and shared UI files to run.
 - The E2E accessibility scenario runs axe against the WCAG 2.0, 2.1 and 2.2 A/AA tags on every page and verifies visible keyboard focus, row/card activation and nested Run behavior.
 
 ## API foundation (JOOST-37)

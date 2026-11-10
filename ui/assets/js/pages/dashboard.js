@@ -3,27 +3,52 @@
   'use strict';
   var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
   var state = { metric: 'down', mode: 'abs', hidden: {} };
-  var dashboardComparisons = {}, dashboardRequests = {}, dashboardRevision = 0;
+  var dashboardComparisons = {}, dashboardRequests = {}, dashboardRevision = 0, activeComparisonDisplay = null;
 
   ST.on('settings', function () { dashboardComparisons = {}; dashboardRequests = {}; dashboardRevision++; });
+  window.addEventListener('hashchange', function () { dashboardRequests = {}; dashboardRevision++; activeComparisonDisplay = null; });
+
+  function dashboardIsActive() {
+    var path = (location.hash || '#/').slice(1).split('?')[0] || '/';
+    return path === '/' && !ST.demo;
+  }
+
+  function displayComparison(key, data, error) {
+    var display = activeComparisonDisplay;
+    if (!dashboardIsActive() || !display || display.key !== key) return;
+    Object.keys(display.fields).forEach(function (name) {
+      var field = display.fields[name];
+      var nextDelta = error ? h('span', { class: 'delta flat', title: 'Refresh the page to retry' }, 'Comparison unavailable') : null;
+      if (!error) {
+        var current = data.current[name], previous = data.previous[name];
+        field.value.textContent = field.format(current);
+        nextDelta = U.deltaTag(current, previous, field.goodHigh);
+      }
+      field.delta.replaceWith(nextDelta);
+      field.delta = nextDelta;
+    });
+  }
 
   function comparison(range) {
     if (ST.demo) return null;
     var key = range + '|' + ST.selectedEngine;
-    if (dashboardComparisons[key]) return dashboardComparisons[key];
-    if (dashboardRequests[key] || ST.remote.status !== 'ready') return { pending: true };
+    if (dashboardComparisons[key]) return Object.assign({ key: key }, dashboardComparisons[key]);
+    if (dashboardRequests[key] || ST.remote.status !== 'ready') return { key: key, pending: true };
     var revision = dashboardRevision;
-    dashboardRequests[key] = true;
+    var request = {};
+    dashboardRequests[key] = request;
     ST.api.request('/api/dashboard?range=' + encodeURIComponent(range) + ST.engineQuery()).then(function (response) {
-      if (revision !== dashboardRevision) return;
+      if (dashboardRequests[key] !== request || revision !== dashboardRevision || !dashboardIsActive()) return;
+      delete dashboardRequests[key];
       dashboardComparisons[key] = { data: response.data };
-      delete dashboardRequests[key]; ST.refresh();
+      displayComparison(key, response.data, null);
     }, function (error) {
-      if (revision !== dashboardRevision) return;
+      if (dashboardRequests[key] !== request || revision !== dashboardRevision || !dashboardIsActive()) return;
+      delete dashboardRequests[key];
       dashboardComparisons[key] = { error: error };
-      delete dashboardRequests[key]; ST.refresh();
+      displayComparison(key, null, error);
     });
-    return { pending: true };
+    return { key: key, pending: true };
   }
 
   ST.sevInfo = function (sev) {
@@ -62,16 +87,21 @@
       return U.deltaTag(value, previous, goodHigh);
     }
     var tiles = h('div', { class: 'grid cols-5 mb' });
-    function tile(label, icon, value, unit, delta, hint) {
+    var comparisonDisplay = { key: comparisonState && comparisonState.key, fields: {} };
+    activeComparisonDisplay = comparisonDisplay;
+    function tile(label, icon, value, unit, delta, hint, field, format, goodHigh) {
+      var valueText = h('span', null, value), deltaContent = delta || h('span', { class: 'delta flat' }, ' ');
+      var deltaValue = deltaContent.classList && deltaContent.classList.contains('delta') ? deltaContent : deltaContent.querySelector('.delta');
+      if (field && comparisonDisplay.key) comparisonDisplay.fields[field] = { value: valueText, delta: deltaValue, format: format, goodHigh: goodHigh };
       return h('div', { class: 'card stat', title: hint }, h('div', { class: 'stat-label' }, U.icon(icon, 15), label),
-        h('div', { class: 'stat-value tabnum' }, value, unit ? h('small', null, unit) : null), h('div', { style: 'margin-top:2px' }, delta || h('span', { class: 'delta flat' }, ' ')));
+        h('div', { class: 'stat-value tabnum' }, valueText, unit ? h('small', null, unit) : null), h('div', { style: 'margin-top:2px' }, deltaContent));
     }
-    tiles.appendChild(tile('Download vs. expected', 'down', cur.down == null ? '—' : F.num(cur.down, 0), '%', delta(cur.down, prev.down, true), 'Average of each node’s download compared with the speed you expect from it'));
-    tiles.appendChild(tile('Upload vs. expected', 'up', cur.up == null ? '—' : F.num(cur.up, 0), '%', delta(cur.up, prev.up, true), 'Average of each node’s upload compared with the speed you expect from it'));
-    tiles.appendChild(tile('Median latency', 'activity', cur.ping == null ? '—' : F.num(cur.ping, 1), 'ms', delta(cur.ping, prev.ping, false)));
-    tiles.appendChild(tile('Tests succeeded', 'check', cur.success == null ? '—' : F.num(cur.success, 1), '%', delta(cur.success, prev.success, true), F.num(cur.count) + ' tests in this range'));
+    tiles.appendChild(tile('Download vs. expected', 'down', cur.down == null ? '—' : F.num(cur.down, 0), '%', delta(cur.down, prev.down, true), 'Average of each node’s download compared with the speed you expect from it', 'down', function (v) { return v == null ? '—' : F.num(v, 0); }, true));
+    tiles.appendChild(tile('Upload vs. expected', 'up', cur.up == null ? '—' : F.num(cur.up, 0), '%', delta(cur.up, prev.up, true), 'Average of each node’s upload compared with the speed you expect from it', 'up', function (v) { return v == null ? '—' : F.num(v, 0); }, true));
+    tiles.appendChild(tile('Median latency', 'activity', cur.ping == null ? '—' : F.num(cur.ping, 1), 'ms', delta(cur.ping, prev.ping, false), null, 'ping', function (v) { return v == null ? '—' : F.num(v, 1); }, false));
+    tiles.appendChild(tile('Tests succeeded', 'check', cur.success == null ? '—' : F.num(cur.success, 1), '%', delta(cur.success, prev.success, true), F.num(cur.count) + ' tests in this range', 'success', function (v) { return v == null ? '—' : F.num(v, 1); }, true));
     tiles.appendChild(tile('IP changes', 'swap', String(cur.ips), cur.ips === 1 ? 'change' : 'changes',
-      h('span', { class: 'row wrap', style: 'gap:8px' }, delta(cur.ips, prev.ips, false), h('a', { href: '#/network', class: 'hint' }, 'See history'))));
+      h('span', { class: 'row wrap', style: 'gap:8px' }, delta(cur.ips, prev.ips, false), h('a', { href: '#/network', class: 'hint' }, 'See history')), null, 'ips', String, false));
     root.appendChild(tiles);
 
     /* ---- node cards ---- */
@@ -165,7 +195,10 @@
         { key: 'up', label: 'Up', num: true, render: function (r) { return F.speed(r.up); } },
         { key: 'ping', label: 'Ping', num: true, render: function (r) { return F.ms(r.ping); } },
         { key: 'st', label: 'Status', render: U.resultStatus }],
-      rows: recent, onRow: function (r) { ST.openResult(r); }
+      rows: recent, onRow: function (r) { ST.openResult(r); }, rowAction: {
+        column: 'ts', label: function (r) { var n = ST.node(r.nodeId); return 'Open result details for ' + (n ? n.name : 'unknown node') + ' at ' + F.date(r.ts); },
+        onClick: function (r) { ST.openResult(r); }
+      }
     });
     var evs = ST.events().filter(function (e) { return !e.acked; }).slice(0, 6);
     var evList = h('div');

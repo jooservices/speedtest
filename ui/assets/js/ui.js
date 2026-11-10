@@ -173,6 +173,13 @@
   };
 
   /* ---------- Data table ---------- */
+  function rowActionControl(action, row, content) {
+    var common = { class: 'table-row-action', onClick: function (e) { e.stopPropagation(); } };
+    if (action.label) common['aria-label'] = action.label(row);
+    if (action.href) return h('a', Object.assign(common, { href: action.href(row) }), content);
+    return h('button', Object.assign(common, { type: 'button', onClick: function (e) { e.stopPropagation(); action.onClick(row); } }), content);
+  }
+
   U.table = function (o) {
     var wrap = h('div', { class: 'table-wrap' }), t = h('table', { class: 'data' + (o.cards ? ' cards' : '') });
     var thead = h('thead'), tr = h('tr');
@@ -187,7 +194,11 @@
     o.rows.forEach(function (r) {
       var row = h('tr', { class: o.onRow ? 'clickable' : '', tabindex: o.onRow ? 0 : null, onClick: o.onRow ? function () { o.onRow(r); } : null,
         onKeydown: o.onRow ? function (e) { if (e.key === 'Enter' && e.target === e.currentTarget) o.onRow(r); } : null });
-      o.columns.forEach(function (c) { row.appendChild(h('td', { class: c.num ? 'num' : '', 'data-label': o.cards && c.label ? c.label : null }, c.render ? c.render(r) : r[c.key])); });
+      o.columns.forEach(function (c) {
+        var content = c.render ? c.render(r) : r[c.key];
+        if (o.rowAction && c.key === o.rowAction.column) content = rowActionControl(o.rowAction, r, content);
+        row.appendChild(h('td', { class: c.num ? 'num' : '', 'data-label': o.cards && c.label ? c.label : null }, content));
+      });
       tb.appendChild(row);
     });
     t.appendChild(tb); wrap.appendChild(t);

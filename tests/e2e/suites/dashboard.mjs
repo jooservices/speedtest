@@ -28,6 +28,45 @@ function cleanupKpiFixture(T) {
     DELETE FROM ip_addresses WHERE ip IN ('203.0.113.81','${KPI_IP}') AND NOT EXISTS (SELECT 1 FROM results WHERE ip IN ('203.0.113.81','${KPI_IP}'));`);
 }
 
+async function delayedComparisonPreservesEdit(T, page, status) {
+  let releaseRequest, requestSeen, routeFinished;
+  const held = new Promise(resolve => { releaseRequest = resolve; });
+  const seen = new Promise(resolve => { requestSeen = resolve; });
+  const finished = new Promise(resolve => { routeFinished = resolve; });
+  const handler = async route => {
+    requestSeen();
+    await held;
+    if (status === 500) await route.fulfill({ status, contentType: 'application/problem+json', body: JSON.stringify({
+      type: '/problems/internal', title: 'Internal Server Error', status, detail: 'Temporary failure.'
+    }) });
+    else await route.continue();
+    routeFinished();
+  };
+  await page.route('**/api/dashboard**', handler);
+  try {
+    await page.goto(T.url('#/'));
+    await T.heading('Dashboard').waitFor();
+    await seen;
+    await page.evaluate(() => { location.hash = '#/nodes/10000000-0000-4000-8000-000000000001'; });
+    await T.heading(/VM1/).waitFor();
+    await T.tab('Settings');
+    const download = page.getByLabel('Expected download', { exact: true });
+    await download.fill('777');
+    await download.focus();
+    const response = page.waitForResponse(item => item.url().includes('/api/dashboard'));
+    releaseRequest();
+    await response;
+    await finished;
+    await page.waitForTimeout(150);
+    if (status === 500) T.expectRefusal(500);
+    T.assert.equal(await download.inputValue(), '777', `${status} comparison response keeps the unsaved download value`);
+    T.assert.equal(await download.evaluate(el => el === document.activeElement), true, `${status} comparison response keeps keyboard focus`);
+  } finally {
+    releaseRequest();
+    await page.unroute('**/api/dashboard**', handler);
+  }
+}
+
 async function assertKpi(T, label, value, delta) {
   const card = T.page.locator('.stat').filter({ hasText: label }).first();
   T.assert.equal((await card.locator('.stat-value').innerText()).replace(/\s/g, ''), value.replace(/\s/g, ''), `${label} current value`);
@@ -76,6 +115,7 @@ export function dashboardSuite(T) {
         await assertKpi(T, 'Median latency', '30.0 ms', '▼ 25.0%');
         await assertKpi(T, 'Tests succeeded', '83.3%', '▲ 33.3%');
         await assertKpi(T, 'IP changes', '2 changes', '▼ 50.0%');
+        await page.getByRole('link', { name: 'See history' }).waitFor();
 
         const zeroBaseline = await T.api('/api/dashboard?range=6h&engine=librespeed');
         assert.equal(zeroBaseline.status, 200, 'the fresh dashboard snapshot is available');
@@ -121,25 +161,77 @@ export function dashboardSuite(T) {
       }
     },
 
+    async delayedComparisonKeepsNodeEdit() {
+      await delayedComparisonPreservesEdit(T, page, 200);
+      await delayedComparisonPreservesEdit(T, page, 500);
+      await page.goto(T.url('#/'));
+      await T.heading('Dashboard').waitFor();
+      await T.expectNoLoadError();
+    },
+
     // The comparison chart: every metric, speed versus % of expected, chart versus table, hiding a node.
     async compareConnections() {
-      await T.open('#/', 'Dashboard');
-      const card = page.locator('.card').filter({ hasText: 'Compare connections' });
-      for (const metric of ['Upload', 'Latency', 'Jitter', 'Loss', 'Download']) {
-        await card.getByRole('tab', { name: metric }).click();
-        await T.expectNoLoadError();
+      const previousDemo = await page.evaluate(() => localStorage.getItem('st.demo.v1'));
+      try {
+        await page.goto(T.url('?demo=1#/'));
+        await T.heading('Dashboard').waitFor();
+        const card = page.locator('.card').filter({ hasText: 'Compare connections' });
+        const hit = card.locator('.chart svg rect.hit').first();
+        await hit.scrollIntoViewIfNeeded();
+        const bounds = await hit.boundingBox();
+        await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        await card.locator('.tooltip.show').waitFor();
+        for (const metric of ['Upload', 'Latency', 'Jitter', 'Loss', 'Download']) {
+          await card.getByRole('tab', { name: metric }).click();
+          await T.expectNoLoadError();
+        }
+        await card.getByRole('tab', { name: '% of expected' }).click();
+        await card.getByRole('tab', { name: 'Table' }).click();
+        await card.locator('table').waitFor();
+        assert.ok(await card.locator('table tbody tr').count() > 3, 'the table lists the hourly or daily values');
+        await card.getByRole('tab', { name: 'Chart' }).click();
+        await card.getByRole('tab', { name: 'Speed' }).click();
+        const legend = card.locator('.legend button').first();
+        await legend.click();
+        assert.ok((await legend.getAttribute('class') || '').includes('off'), 'a clicked node is hidden from the chart');
+        await card.locator('.legend button').first().click();
+        assert.ok(!((await card.locator('.legend button').first().getAttribute('class')) || '').includes('off'), 'and shown again');
+      } finally {
+        await page.evaluate(value => { if (value == null) localStorage.removeItem('st.demo.v1'); else localStorage.setItem('st.demo.v1', value); }, previousDemo);
+        await page.goto(T.url('#/'));
+        await T.heading('Dashboard').waitFor();
       }
-      await card.getByRole('tab', { name: '% of expected' }).click();
-      await card.getByRole('tab', { name: 'Table' }).click();
-      await card.locator('table').waitFor();
-      assert.ok(await card.locator('table tbody tr').count() > 3, 'the table lists the hourly or daily values');
-      await card.getByRole('tab', { name: 'Chart' }).click();
-      await card.getByRole('tab', { name: 'Speed' }).click();
-      const legend = card.locator('.legend button').first();
-      await legend.click();
-      assert.ok((await legend.getAttribute('class') || '').includes('off'), 'a clicked node is hidden from the chart');
-      await card.locator('.legend button').first().click();
-      assert.ok(!((await card.locator('.legend button').first().getAttribute('class')) || '').includes('off'), 'and shown again');
+    },
+
+    async dashboardResultActions() {
+      await T.open('#/', 'Dashboard');
+      const latest = page.locator('.card').filter({ hasText: 'Latest results' }).first();
+      const row = latest.getByRole('row').nth(1), action = row.getByRole('button', { name: /Open result details for/ });
+      assert.equal(await action.count(), 1, 'the dashboard result row exposes its named action');
+      await action.focus();
+      await page.keyboard.press('Enter');
+      await page.getByRole('dialog', { name: 'Result details' }).waitFor();
+      await page.keyboard.press('Escape');
+      await row.locator('td').nth(3).click();
+      await page.getByRole('dialog', { name: 'Result details' }).waitFor();
+      await page.keyboard.press('Escape');
+    },
+
+    async dashboardAlertCanBeAcknowledgedInDemo() {
+      const previousDemo = await page.evaluate(() => localStorage.getItem('st.demo.v1'));
+      try {
+        await page.goto(T.url('?demo=1#/'));
+        await T.heading('Dashboard').waitFor();
+        const alerts = page.locator('.card').filter({ hasText: 'Open alerts' }).first();
+        const acknowledge = alerts.getByRole('button', { name: 'Acknowledge' }).first();
+        await acknowledge.waitFor();
+        await acknowledge.click();
+        await T.toast('Alert acknowledged').waitFor();
+      } finally {
+        await page.evaluate(value => { if (value == null) localStorage.removeItem('st.demo.v1'); else localStorage.setItem('st.demo.v1', value); }, previousDemo);
+        await page.goto(T.url('#/'));
+        await T.heading('Dashboard').waitFor();
+      }
     },
 
     // Every shortcut on the page leads where it says.

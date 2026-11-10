@@ -1,6 +1,9 @@
 const UPLOAD_NODE_ID = '82000000-0000-4000-8000-000000000091';
 const UPLOAD_IP = '203.0.113.91';
 const SPARSE_IP = '203.0.113.92';
+const ONE_BUCKET_NODE_ID = '82000000-0000-4000-8000-000000000101';
+const TWO_BUCKET_NODE_ID = '82000000-0000-4000-8000-000000000102';
+const BUCKET_IP = '203.0.113.101';
 
 function refuseManualRun(route) {
   return route.fulfill({ status: 409, contentType: 'application/problem+json', body: JSON.stringify({
@@ -35,8 +38,8 @@ function seedSparseTrendFixture(T) {
       '${SPARSE_IP}',4,1000,500,1,CASE WHEN v.status='failed' THEN 'Synthetic sparse-series failure' ELSE NULL END,'librespeed'
     FROM nodes n JOIN (VALUES
       ('VM1',1,'failed',1),('VM2',2,'ok',1),('VM3',3,'ok',1),('VM3',4,'ok',2),
-      ('VM4',5,'ok',1),('VM4',6,'ok',2),('VM4',7,'ok',3),
-      ('VM5',2,'ok',1),('VM5',3,'ok',2),('VM5',4,'ok',3),('VM5',5,'ok',4)
+      ('VM4',5,'ok',1),('VM4',29,'ok',2),('VM4',53,'ok',3),
+      ('VM5',2,'ok',1),('VM5',26,'ok',2),('VM5',50,'ok',3),('VM5',74,'ok',4)
     ) AS v(name,hours,status,seq) ON n.name=v.name;`);
 }
 
@@ -44,9 +47,34 @@ function cleanupSparseTrendFixture(T) {
   T.db(`DELETE FROM results WHERE ip='${SPARSE_IP}' AND engine='librespeed'; DELETE FROM ip_addresses WHERE ip='${SPARSE_IP}' AND NOT EXISTS (SELECT 1 FROM results WHERE ip='${SPARSE_IP}');`);
 }
 
+function seedSparseBuckets(T) {
+  T.db(`INSERT INTO ip_addresses(ip) VALUES ('${BUCKET_IP}') ON CONFLICT DO NOTHING;
+    INSERT INTO nodes(id,name,label,expected_down_mbps,expected_up_mbps,color_slot,host,agent) VALUES
+      ('${ONE_BUCKET_NODE_ID}','One bucket fixture','Three samples',200,100,7,'one-bucket-fixture','test'),
+      ('${TWO_BUCKET_NODE_ID}','Two bucket fixture','Five samples',200,100,8,'two-bucket-fixture','test');
+    INSERT INTO engine_schedules(node_id,engine) VALUES ('${ONE_BUCKET_NODE_ID}','ookla'),('${TWO_BUCKET_NODE_ID}','ookla');
+    WITH base AS (SELECT date_trunc('day', now()) - interval '12 hours' AS anchor), samples AS (
+      SELECT '${ONE_BUCKET_NODE_ID}'::uuid AS node_id, anchor - v.hours * interval '1 hour' AS ts, v.seq FROM base CROSS JOIN (VALUES (0,1),(1,2),(2,3)) v(hours,seq)
+      UNION ALL
+      SELECT '${TWO_BUCKET_NODE_ID}'::uuid, anchor - v.hours * interval '1 hour', v.seq FROM base CROSS JOIN (VALUES (0,1),(1,2),(2,3)) v(hours,seq)
+      UNION ALL
+      SELECT '${TWO_BUCKET_NODE_ID}'::uuid, anchor - interval '1 day' - v.hours * interval '1 hour', v.seq FROM base CROSS JOIN (VALUES (0,4),(1,5)) v(hours,seq)
+    )
+    INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,bytes_down,bytes_up,duration_seconds,engine)
+    SELECT gen_random_uuid(), node_id, ts, 'ok', 100+seq, 50+seq, 10+seq, 9, '{"id":9,"name":"Bucket fixture"}'::jsonb, '${BUCKET_IP}', 4, 1000, 500, 1, 'ookla' FROM samples;`);
+}
+
+function cleanupSparseBuckets(T) {
+  T.db(`DELETE FROM results WHERE node_id IN ('${ONE_BUCKET_NODE_ID}','${TWO_BUCKET_NODE_ID}');
+    DELETE FROM engine_schedules WHERE node_id IN ('${ONE_BUCKET_NODE_ID}','${TWO_BUCKET_NODE_ID}');
+    DELETE FROM nodes WHERE id IN ('${ONE_BUCKET_NODE_ID}','${TWO_BUCKET_NODE_ID}');
+    DELETE FROM ip_addresses WHERE ip='${BUCKET_IP}' AND NOT EXISTS (SELECT 1 FROM results WHERE ip='${BUCKET_IP}');`);
+}
+
 async function checkNodeChartReferences(T, id, name, sparse) {
   await T.open('#/nodes/' + id, new RegExp(name));
   const card = T.page.locator('.card').filter({ hasText: 'Speed over time' }).first(), svg = card.locator('.chart svg').first();
+  await svg.waitFor();
   const refs = svg.locator('line[stroke-dasharray="5 4"]');
   const lines = await svg.locator('line').evaluateAll(items => items.map(line => ({ dash: line.getAttribute('stroke-dasharray'), y: line.getAttribute('y1') })));
   T.assert.equal(await refs.count(), 2, `${name} shows separate expected download and upload lines; rendered lines: ${JSON.stringify(lines)}`);
@@ -54,6 +82,18 @@ async function checkNodeChartReferences(T, id, name, sparse) {
   T.assert.ok(y.every(value => Number.isFinite(value) && value >= 24 && value <= 254), `${name} reference lines stay within the chart plot: ${y}`);
   if (sparse) await T.see('Not enough data yet', card);
   else T.assert.equal(await card.getByText(/Not enough data yet/).count(), 0, `${name} has enough data for a trend`);
+}
+
+async function hoverChartValue(page, cardName) {
+  const card = page.locator('.card').filter({ hasText: cardName }).first();
+  const hit = card.locator('.chart svg rect.hit').first();
+  await hit.scrollIntoViewIfNeeded();
+  const bounds = await hit.boundingBox();
+  for (let hour = 0; hour <= 23; hour++) {
+    await page.mouse.move(bounds.x + bounds.width * hour / 23, bounds.y + bounds.height / 2);
+    if (await card.locator('.tooltip.show').count()) return;
+  }
+  throw new Error(`${cardName} chart did not show a tooltip for any plotted time`);
 }
 
 export function nodesSuite(T, ctx) {
@@ -84,6 +124,13 @@ export function nodesSuite(T, ctx) {
       await T.row('VM2').focus();
       await page.keyboard.press('Enter');
       await page.getByRole('heading', { name: /VM2/, level: 1 }).waitFor();
+      await T.open('#/nodes', 'Nodes');
+      assert.equal(await page.getByRole('table').count(), 1, 'the node list keeps table semantics');
+      const openNode = T.row('VM1').getByRole('link', { name: /VM1.*Viettel Fast 50/ });
+      assert.equal(await openNode.count(), 1, 'the node row exposes its primary action in the accessibility tree');
+      await openNode.focus();
+      await page.keyboard.press('Enter');
+      await page.getByRole('heading', { name: /VM1/, level: 1 }).waitFor();
       await T.open('#/nodes', 'Nodes');
       const run = T.row('VM1').getByRole('button', { name: 'Run a test on VM1' });
       await page.route('**/api/nodes/*/run', refuseManualRun);
@@ -146,7 +193,7 @@ export function nodesSuite(T, ctx) {
         const trend = page.locator('.card').filter({ hasText: 'Trend' }).first();
         const statsNote = trend.locator('.callout').filter({ hasText: 'Not enough data yet' });
         const statsText = await statsNote.innerText();
-        for (const expected of ['A download trend', 'VM1: 0', 'VM2: 1', 'VM3: 2']) assert.ok(statsText.includes(expected), `Statistics sparse state includes ${expected}: ${statsText}`);
+        for (const expected of ['A download trend', 'VM1: 0 samples in 0 plotted daily buckets', 'VM2: 1 sample in 1 plotted daily bucket', 'VM3: 2 samples in 1 plotted daily bucket']) assert.ok(statsText.includes(expected), `Statistics sparse state includes ${expected}: ${statsText}`);
         assert.ok(!statsText.includes('VM4:'), 'three valid measurements do not show a Statistics warning');
         for (const name of ['VM1', 'VM2', 'VM3']) {
           await page.locator('.legend.mb button').filter({ hasText: name }).click();
@@ -160,6 +207,62 @@ export function nodesSuite(T, ctx) {
         cleanupSparseTrendFixture(T);
         await page.goto(T.url('#/'));
         await page.reload();
+        await T.heading('Dashboard').waitFor();
+      }
+    },
+    async sparseWarningsCountBuckets() {
+      seedSparseBuckets(T);
+      const previousDemo = await page.evaluate(() => localStorage.getItem('st.demo.v1'));
+      try {
+        await page.goto(T.url('#/'));
+        await page.reload();
+        await T.heading('Dashboard').waitFor();
+        await T.open('#/stats', 'Statistics');
+        await page.getByLabel('Time range').selectOption('7d');
+        await T.settled();
+        const apiTrend = page.locator('.card').filter({ hasText: 'Trend' }).first();
+        const apiNote = apiTrend.locator('.callout').filter({ hasText: 'Not enough data yet' });
+        const apiText = await apiNote.innerText();
+        assert.ok(apiText.includes('One bucket fixture: 3 samples in 1 plotted daily bucket'), `API mode reports raw samples and plotted buckets: ${apiText}`);
+        assert.ok(apiText.includes('Two bucket fixture: 5 samples in 2 plotted daily buckets'), `API mode handles two occupied buckets: ${apiText}`);
+        await page.getByRole('row').filter({ hasText: 'One bucket fixture' }).locator('td').nth(1).click();
+        await page.getByRole('heading', { name: /One bucket fixture/ }).waitFor();
+        await T.open('#/stats', 'Statistics');
+
+        await page.goto(T.url('?demo=1#/stats'));
+        await page.waitForFunction(() => window.ST && ST.demo);
+        await page.evaluate(() => {
+          const one = ST.addNode({ name: 'One bucket fixture', label: 'Three samples', expectedDown: 200, expectedUp: 100 });
+          const two = ST.addNode({ name: 'Two bucket fixture', label: 'Five samples', expectedDown: 200, expectedUp: 100 });
+          const anchor = Date.now() - 12 * 60 * 60 * 1000;
+          const add = (node, hours, seq) => ({ id: 'bucket-' + node.id + '-' + seq, nodeId: node.id, ts: anchor - hours * 3600000,
+            status: 'ok', down: 100 + seq, up: 50 + seq, ping: 10 + seq, jitter: 1, loss: 0, dLat: 10, uLat: 10,
+            serverId: 1001, ip: '198.51.100.101', threads: 4, bytesDown: 1000, bytesUp: 500, duration: 1, engine: 'ookla' });
+          ST.state.settings.range = '7d';
+          ST.state.extra = [0, 1, 2].map(i => add(one, i, i + 1)).concat([0, 1, 2].map(i => add(two, i, i + 1)), [0, 1].map(i => add(two, 24 + i, i + 4)));
+          ST.persist();
+        });
+        await page.reload();
+        await T.heading('Statistics').waitFor();
+        await T.settled();
+        const demoTrend = page.locator('.card').filter({ hasText: 'Trend' }).first();
+        const demoText = await demoTrend.locator('.callout').filter({ hasText: 'Not enough data yet' }).innerText();
+        assert.ok(demoText.includes('One bucket fixture: 3 samples in 1 plotted daily bucket'), `demo mode reports raw samples and plotted buckets: ${demoText}`);
+        assert.ok(demoText.includes('Two bucket fixture: 5 samples in 2 plotted daily buckets'), `demo mode handles two occupied buckets: ${demoText}`);
+        await page.getByLabel('Add combined total').check();
+        await T.settled();
+        await hoverChartValue(page, 'Trend');
+        await hoverChartValue(page, 'Time of day');
+        const heatmap = page.locator('.card').filter({ hasText: 'Week at a glance' }).first();
+        const cell = heatmap.locator('svg rect[style*="--heat-"]').first();
+        await cell.waitFor();
+        const bounds = await cell.boundingBox();
+        await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        await heatmap.locator('.tooltip.show').waitFor();
+      } finally {
+        await page.evaluate(value => { if (value == null) localStorage.removeItem('st.demo.v1'); else localStorage.setItem('st.demo.v1', value); }, previousDemo);
+        cleanupSparseBuckets(T);
+        await page.goto(T.url('#/'));
         await T.heading('Dashboard').waitFor();
       }
     },

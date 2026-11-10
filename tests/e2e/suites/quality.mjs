@@ -126,5 +126,28 @@ export function qualitySuite(T) {
         assert.ok(focused.visible && focused.outline !== 'none', `${title}: keyboard focus is not visible`);
       }
     },
+
+    async sharedUiActionsAreOperable() {
+      await T.open('#/', 'Dashboard');
+      await page.evaluate(() => {
+        const view = document.getElementById('view'), data = ST.ui.h('div', { dataset: { coverageProbe: 'true' } });
+        if (data.dataset.coverageProbe !== 'true') throw new Error('data attributes are not applied');
+        view.appendChild(data);
+        view.appendChild(ST.ui.nodeTag(ST.nodes()[0]));
+        view.appendChild(ST.ui.code('Coverage copy sample'));
+        Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+      });
+      try {
+        await page.getByRole('button', { name: 'Copy', exact: true }).last().click();
+        await T.toast('Copied to clipboard').waitFor();
+      } finally {
+        await page.evaluate(() => { delete navigator.clipboard; });
+      }
+      await page.evaluate(() => ST.ui.modal({ title: 'Coverage modal', body: 'Close this modal with its named control.' }));
+      await page.getByRole('dialog', { name: 'Coverage modal' }).getByRole('button', { name: 'Close' }).click();
+      await page.evaluate(() => ST.ui.drawer({ title: 'Coverage drawer', body: 'Close this drawer with its named control.' }));
+      await page.getByRole('dialog', { name: 'Coverage drawer' }).getByRole('button', { name: 'Close' }).click();
+      await T.expectNoLoadError();
+    },
   };
 }
