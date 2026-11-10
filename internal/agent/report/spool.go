@@ -87,6 +87,7 @@ func Open(cfg SpoolConfig, logger *slog.Logger) (*Spool, error) {
 	db.SetMaxOpenConns(1)
 	_, err = db.Exec(`PRAGMA busy_timeout=5000; PRAGMA synchronous=FULL; PRAGMA journal_mode=DELETE;
  CREATE TABLE IF NOT EXISTS command_state(id TEXT PRIMARY KEY, payload BLOB NOT NULL);
+ CREATE TABLE IF NOT EXISTS rate_limit_state(engine TEXT PRIMARY KEY, deadline INTEGER NOT NULL, attempt INTEGER NOT NULL, recorded INTEGER NOT NULL);
  CREATE TABLE IF NOT EXISTS pending(seq INTEGER PRIMARY KEY AUTOINCREMENT, id TEXT NOT NULL UNIQUE, ts INTEGER NOT NULL, payload BLOB NOT NULL);
  CREATE TABLE IF NOT EXISTS quarantine(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT NOT NULL UNIQUE,ts INTEGER NOT NULL,payload BLOB NOT NULL);`)
 	if err != nil {
@@ -111,6 +112,11 @@ func (s *Spool) Append(r Result) error { return s.AppendWithState(r, "", nil) }
 // AppendWithState commits a result and its composing command state together.
 // State is private local metadata, never part of the wire result.
 func (s *Spool) AppendWithState(r Result, key string, state json.RawMessage) error {
+	return s.AppendWithMetadata(r, key, state, nil)
+}
+
+// AppendWithMetadata commits a result, its command state, and one rate-limit state update together.
+func (s *Spool) AppendWithMetadata(r Result, key string, state json.RawMessage, update *RateLimitStateUpdate) error {
 	if err := r.Validate(); err != nil {
 		return err
 	}
@@ -128,39 +134,108 @@ func (s *Spool) AppendWithState(r Result, key string, state json.RawMessage) err
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
-	var existing []byte
-	err = tx.QueryRow(`SELECT payload FROM pending WHERE id=?`, r.ID).Scan(&existing)
-	if err == nil {
-		if string(existing) != string(data) {
-			return errors.New("spool UUID content conflict")
-		}
-	} else {
-		if !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
-		ts, _ := time.Parse(time.RFC3339, r.TS)
-		if _, err = tx.Exec(`INSERT INTO pending(id,ts,payload) VALUES(?,?,?)`, r.ID, ts.Unix(), data); err != nil {
-			return err
-		}
+	if err = appendPendingResult(tx, r, data); err != nil {
+		return err
 	}
-
-	if key != "" {
-		if _, err = tx.Exec(`INSERT INTO command_state(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload`, key, []byte(state)); err != nil {
-			return err
-		}
+	if err = appendCommandState(tx, key, state); err != nil {
+		return err
 	}
-	dropped, err := s.prune(tx, "pending")
+	if err = appendRateLimitState(tx, update); err != nil {
+		return err
+	}
+	dropped, err := s.commitAppend(tx)
 	if err != nil {
-		return err
-	}
-	if _, err = s.prune(tx, "quarantine"); err != nil {
-		return err
-	}
-	if err = tx.Commit(); err != nil {
 		return err
 	}
 	s.warn(dropped)
 	return nil
+}
+
+func appendPendingResult(tx *sql.Tx, result Result, data []byte) error {
+	var existing []byte
+	err := tx.QueryRow(`SELECT payload FROM pending WHERE id=?`, result.ID).Scan(&existing)
+	if err == nil {
+		if string(existing) != string(data) {
+			return errors.New("spool UUID content conflict")
+		}
+		return nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	ts, _ := time.Parse(time.RFC3339, result.TS)
+	_, err = tx.Exec(`INSERT INTO pending(id,ts,payload) VALUES(?,?,?)`, result.ID, ts.Unix(), data)
+	return err
+}
+
+func appendCommandState(tx *sql.Tx, key string, state json.RawMessage) error {
+	if key == "" {
+		return nil
+	}
+	_, err := tx.Exec(`INSERT INTO command_state(id,payload) VALUES(?,?) ON CONFLICT(id) DO UPDATE SET payload=excluded.payload`, key, []byte(state))
+	return err
+}
+
+func appendRateLimitState(tx *sql.Tx, update *RateLimitStateUpdate) error {
+	if update == nil {
+		return nil
+	}
+	if update.Engine == "" {
+		return errors.New("rate-limit engine must not be empty")
+	}
+	if update.State == nil {
+		_, err := tx.Exec(`DELETE FROM rate_limit_state WHERE engine=?`, engineKey(update.Engine))
+		return err
+	}
+	if update.State.Attempt < 1 || !update.State.Recorded || update.State.Deadline.IsZero() {
+		return errors.New("invalid rate-limit state")
+	}
+	_, err := tx.Exec(`INSERT INTO rate_limit_state(engine,deadline,attempt,recorded) VALUES(?,?,?,1)
+		ON CONFLICT(engine) DO UPDATE SET deadline=excluded.deadline,attempt=excluded.attempt,recorded=excluded.recorded`,
+		engineKey(update.Engine), update.State.Deadline.UnixNano(), update.State.Attempt)
+	return err
+}
+
+func (s *Spool) commitAppend(tx *sql.Tx) (int, error) {
+	dropped, err := s.prune(tx, "pending")
+	if err != nil {
+		return 0, err
+	}
+	if _, err = s.prune(tx, "quarantine"); err != nil {
+		return 0, err
+	}
+	if err = tx.Commit(); err != nil {
+		return 0, err
+	}
+	return dropped, nil
+}
+
+// RateLimitStates reads all durable engine windows before the agent resumes work.
+func (s *Spool) RateLimitStates() (map[string]RateLimitState, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows, err := s.db.Query(`SELECT engine,deadline,attempt,recorded FROM rate_limit_state ORDER BY engine`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	states := make(map[string]RateLimitState)
+	for rows.Next() {
+		var engine string
+		var deadline int64
+		var state RateLimitState
+		var recorded int
+		if err := rows.Scan(&engine, &deadline, &state.Attempt, &recorded); err != nil {
+			return nil, err
+		}
+		if (engine != "ookla" && engine != "librespeed") || deadline <= 0 || state.Attempt < 1 || recorded != 1 {
+			return nil, errors.New("invalid durable rate-limit state")
+		}
+		state.Deadline = time.Unix(0, deadline).UTC()
+		state.Recorded = true
+		states[engine] = state
+	}
+	return states, rows.Err()
 }
 
 // Prune drops oldest results until all limits hold, including during outages.
