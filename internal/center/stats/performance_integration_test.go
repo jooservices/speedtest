@@ -54,6 +54,9 @@ func openStatsIntegrationStore(t *testing.T) (*pgxpool.Pool, context.Context, *S
 }
 
 func TestStatisticsQueriesMeetLatencyTargetOnOneYearDataset(t *testing.T) {
+	if testing.CoverMode() != "" {
+		t.Skip("latency measurements are not representative with coverage instrumentation")
+	}
 	pool, ctx, store := openStatsIntegrationStore(t)
 	const nodeCount = 5
 	const samplesPerNode = 365 * 48
