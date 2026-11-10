@@ -15,7 +15,7 @@ export function statisticsSuite(T) {
       await T.tab('Upload');
       await page.getByRole('heading', { name: 'Summary by node' }).waitFor();
       assert.notEqual(await page.locator('table').first().innerText(), before, 'switching to upload changes the figures');
-      for (const section of ['Trend', 'Time of day', 'Week at a glance', 'Distribution']) await page.getByRole('heading', { name: section }).waitFor();
+      for (const section of ['Trend', 'Time of day', 'Week at a glance', 'Distribution']) await page.getByRole('heading', { name: section, exact: true }).waitFor();
       await T.expectNoLoadError();
     },
 
@@ -39,7 +39,7 @@ export function statisticsSuite(T) {
       await page.locator('.card').filter({ hasText: 'Trend' }).locator('table').waitFor();
       await T.tab('Chart');
       await T.choose(page.locator('.card').filter({ hasText: 'Week at a glance' }).locator('select'), '10000000-0000-4000-8000-000000000002');
-      await page.getByRole('img', { name: 'Heatmap for VM2' }).waitFor();
+      await page.getByRole('grid', { name: 'Heatmap for VM2' }).waitFor();
       await T.choose(page.locator('#topbar select').first(), '24h');
       await T.see('last 24 hours', page.locator('#view'));
       await T.choose(page.locator('#topbar select').first(), '7d');
