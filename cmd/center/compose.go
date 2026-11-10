@@ -14,6 +14,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/dashboard"
 	"github.com/jooservices/speedtest/internal/center/geo"
+	"github.com/jooservices/speedtest/internal/center/geo/budget"
 	"github.com/jooservices/speedtest/internal/center/installer"
 	"github.com/jooservices/speedtest/internal/center/ipapi"
 	"github.com/jooservices/speedtest/internal/center/ipwatch"
@@ -70,6 +71,7 @@ func newAuthService(store auth.Store, cfg config.CenterConfig) (*auth.Service, e
 // buildServices wires every store and background job of the center. The returned function releases what was
 // opened here (the offline location database).
 func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterConfig, logger *slog.Logger) (services, func(), error) {
+	operational := telemetry.New(version)
 	store, err := auth.NewPostgresStore(pool)
 	if err != nil {
 		return services{}, nil, err
@@ -78,7 +80,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 	if err != nil {
 		return services{}, nil, err
 	}
-	watcher, closeGeo, err := ipwatch.Open(logger)
+	watcher, closeGeo, err := ipwatch.OpenObserved(logger, pool, operational.GeoProvider)
 	if err != nil {
 		return services{}, nil, err
 	}
@@ -92,7 +94,6 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		cleanup()
 		return services{}, nil, err
 	}
-	operational := telemetry.New(version)
 	operational.RegisterDatabase(pool)
 	if notifications != nil {
 		notifications.ObserveRun = func(ok bool) { operational.Job("notification", ok) }
@@ -104,6 +105,29 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		return services{}, nil, err
 	}
 	retention := &jobs.Retention{DB: pool, Logger: logger, ObserveRun: func(ok bool) { operational.Job("retention", ok) }}
+	backfillConfig, err := geo.BackfillConfigFromEnv()
+	if err != nil {
+		cleanup()
+		return services{}, nil, err
+	}
+	var batch geo.BatchLookup
+	if watcher.Providers.IPAPIEnabled {
+		batch, err = geo.NewIPAPIProvider(watcher.Providers)
+		if err != nil {
+			cleanup()
+			return services{}, nil, err
+		}
+	}
+	backfillFallbacks := make([]geo.Fallback, 0, len(watcher.Fallbacks))
+	for _, provider := range watcher.Fallbacks {
+		if provider.Source() != "ip-api" {
+			backfillFallbacks = append(backfillFallbacks, provider)
+		}
+	}
+	backfill := &geo.Backfill{DB: pool, Cache: geo.NewPostgresCache(pool),
+		Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, backfillFallbacks...).WithPurpose(budget.Background),
+		Batch:    batch, MaxPerRun: backfillConfig.MaxPerRun, BatchSize: backfillConfig.BatchSize, Pause: backfillConfig.Pause,
+		HourUTC: backfillConfig.HourUTC, Logger: logger, ObserveRun: func(ok bool) { operational.Job("geo_backfill", ok) }}
 	installerService, err := buildInstaller(ctx, pool, cfg, nodeService, logger)
 	if err != nil {
 		cleanup()
@@ -126,7 +150,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		OwnerSchedules:     owner,
 		OwnerStats:         statsStore,
 		Settings:           preferences,
-		OwnerIP:            &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...).WithConsensus(watcher.Consensus, logger)},
+		OwnerIP:            &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...), ProviderSettings: &watcher.Providers},
 		OwnerDashboard:     &dashboard.Cached{Source: &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore}, TTL: 5 * time.Second},
 		OwnerAlerts:        alertStore,
 		OwnerJobs:          &jobs.Registry{DB: pool},
@@ -137,12 +161,16 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 				go notifications.Loop(ctx)
 			}
 			go retention.Loop(ctx)
+			go backfill.Loop(ctx)
 			if watcher.Reader != nil {
 				// GeoLite2 (weekly, needs a licence key) or DB-IP Lite (monthly, free): the first one configured wins.
 				if os.Getenv("SPEEDTEST_GEOLITE2_LICENSE_KEY") != "" {
 					go watcher.Reader.Run(ctx, geo.EnvironmentSettings{})
 				}
 				go watcher.Reader.RunDBIP(ctx, dbip)
+				if os.Getenv("SPEEDTEST_GEO_IPINFO_TOKEN") != "" {
+					go watcher.Reader.RunIPInfo(ctx)
+				}
 			}
 			alertStore.Loop(ctx)
 		},

@@ -31,15 +31,28 @@ type Resolver interface {
 
 // Store reads IP data for the owner.
 type Store struct {
-	DB       DB
-	Resolver Resolver
+	DB               DB
+	Resolver         Resolver
+	ProviderSettings *geo.ProviderConfig
 }
 
-func geoOf(ip string, source *string, raw []byte) any {
+// Providers returns provider state and durable daily usage without exposing credentials.
+func (s *Store) Providers(ctx context.Context) ([]geo.ProviderStatus, error) {
+	if s.ProviderSettings == nil {
+		return []geo.ProviderStatus{}, nil
+	}
+	return s.ProviderSettings.Status(ctx)
+}
+
+func geoOf(ip string, source *string, raw []byte, lookedUpAt *time.Time) any {
 	if source == nil {
 		return nil
 	}
-	if g := ownerapi.GeoObject(ip, *source, raw); g != nil {
+	ageDays := 0
+	if lookedUpAt != nil {
+		ageDays = max(0, int(time.Since(*lookedUpAt).Hours()/24))
+	}
+	if g := ownerapi.GeoObjectAt(ip, *source, raw, ageDays); g != nil {
 		return g
 	}
 	return nil
@@ -58,7 +71,7 @@ func (s *Store) History(ctx context.Context, node string, page, size int) ([]map
 	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM node_ip_history WHERE from_ip IS NOT NULL AND ($1::uuid IS NULL OR node_id = $1::uuid)`, nodeArg(node)).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.DB.Query(ctx, `SELECT h.id::text, h.node_id::text, h.ts, host(h.from_ip), host(h.to_ip), fi.source, fi.geo, ti.source, ti.geo
+	rows, err := s.DB.Query(ctx, `SELECT h.id::text, h.node_id::text, h.ts, host(h.from_ip), host(h.to_ip), fi.source, fi.geo, fi.looked_up_at, ti.source, ti.geo, ti.looked_up_at
 		FROM node_ip_history h
 		JOIN ip_addresses ti ON ti.ip = h.to_ip
 		JOIN ip_addresses fi ON fi.ip = h.from_ip
@@ -73,12 +86,13 @@ func (s *Store) History(ctx context.Context, node string, page, size int) ([]map
 		var id, nodeID, from, to string
 		var ts time.Time
 		var fromSource, toSource *string
+		var fromLookedUpAt, toLookedUpAt *time.Time
 		var fromGeo, toGeo []byte
-		if err := rows.Scan(&id, &nodeID, &ts, &from, &to, &fromSource, &fromGeo, &toSource, &toGeo); err != nil {
+		if err := rows.Scan(&id, &nodeID, &ts, &from, &to, &fromSource, &fromGeo, &fromLookedUpAt, &toSource, &toGeo, &toLookedUpAt); err != nil {
 			return nil, 0, err
 		}
 		items = append(items, map[string]any{"id": id, "nodeId": nodeID, "ts": ts.UTC().Format(time.RFC3339Nano), "from": from, "to": to,
-			"fromGeo": geoOf(from, fromSource, fromGeo), "toGeo": geoOf(to, toSource, toGeo)})
+			"fromGeo": geoOf(from, fromSource, fromGeo, fromLookedUpAt), "toGeo": geoOf(to, toSource, toGeo, toLookedUpAt)})
 	}
 	return items, total, rows.Err()
 }
@@ -91,7 +105,7 @@ func (s *Store) Addresses(ctx context.Context, node string, page, size int) ([]m
 	}
 	rows, err := s.DB.Query(ctx, `SELECT a.node_id::text, host(a.ip), a.first_seen, a.last_seen, a.tests,
 		CASE WHEN a.speed_tests > 0 THEN (a.down_sum / a.speed_tests)::float8 END,
-		CASE WHEN a.speed_tests > 0 THEN (a.up_sum / a.speed_tests)::float8 END, i.source, i.geo
+		CASE WHEN a.speed_tests > 0 THEN (a.up_sum / a.speed_tests)::float8 END, i.source, i.geo, i.looked_up_at
 		FROM node_ip_addresses a JOIN ip_addresses i ON i.ip = a.ip
 		WHERE $1::uuid IS NULL OR a.node_id = $1::uuid
 		ORDER BY a.last_seen DESC, a.node_id, a.ip LIMIT $2 OFFSET $3`, nodeArg(node), size, (page-1)*size)
@@ -106,12 +120,13 @@ func (s *Store) Addresses(ctx context.Context, node string, page, size int) ([]m
 		var tests int64
 		var down, up *float64
 		var source *string
+		var lookedUpAt *time.Time
 		var raw []byte
-		if err := rows.Scan(&nodeID, &ip, &first, &last, &tests, &down, &up, &source, &raw); err != nil {
+		if err := rows.Scan(&nodeID, &ip, &first, &last, &tests, &down, &up, &source, &raw, &lookedUpAt); err != nil {
 			return nil, 0, err
 		}
 		item := map[string]any{"nodeId": nodeID, "ip": ip, "first": first.UTC().Format(time.RFC3339Nano), "last": last.UTC().Format(time.RFC3339Nano),
-			"tests": tests, "avgDown": nil, "avgUp": nil, "geo": geoOf(ip, source, raw)}
+			"tests": tests, "avgDown": nil, "avgUp": nil, "geo": geoOf(ip, source, raw, lookedUpAt)}
 		if down != nil {
 			item["avgDown"] = *down
 		}
@@ -125,7 +140,7 @@ func (s *Store) Addresses(ctx context.Context, node string, page, size int) ([]m
 
 // Map returns the most recently observed address of each node with its location; nodes that never reported an address are left out.
 func (s *Store) Map(ctx context.Context, node string) ([]map[string]any, error) {
-	rows, err := s.DB.Query(ctx, `SELECT DISTINCT ON (a.node_id) a.node_id::text, host(a.ip), i.source, i.geo
+	rows, err := s.DB.Query(ctx, `SELECT DISTINCT ON (a.node_id) a.node_id::text, host(a.ip), i.source, i.geo, i.looked_up_at
 		FROM node_ip_addresses a JOIN ip_addresses i ON i.ip = a.ip
 		WHERE $1::uuid IS NULL OR a.node_id = $1::uuid
 		ORDER BY a.node_id, a.last_seen DESC, a.ip`, nodeArg(node))
@@ -137,11 +152,12 @@ func (s *Store) Map(ctx context.Context, node string) ([]map[string]any, error) 
 	for rows.Next() {
 		var nodeID, ip string
 		var source *string
+		var lookedUpAt *time.Time
 		var raw []byte
-		if err := rows.Scan(&nodeID, &ip, &source, &raw); err != nil {
+		if err := rows.Scan(&nodeID, &ip, &source, &raw, &lookedUpAt); err != nil {
 			return nil, err
 		}
-		items = append(items, map[string]any{"nodeId": nodeID, "ip": ip, "geo": geoOf(ip, source, raw)})
+		items = append(items, map[string]any{"nodeId": nodeID, "ip": ip, "geo": geoOf(ip, source, raw, lookedUpAt)})
 	}
 	return items, rows.Err()
 }

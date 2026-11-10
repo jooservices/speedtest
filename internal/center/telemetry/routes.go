@@ -91,6 +91,7 @@ var apiRoutes = map[string]bool{
 	"/api/ip/addresses":                  true,
 	"/api/ip/lookup":                     true,
 	"/api/ip/map":                        true,
+	"/api/ip/providers":                  true,
 	"/api/jobs/{id}":                     true,
 	"/api/installer/probes":              true,
 	"/api/nodes/{id}/installations":      true,

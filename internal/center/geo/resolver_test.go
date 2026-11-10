@@ -83,14 +83,15 @@ func (f testFallback) Lookup(ctx context.Context, ip string) (Location, error) {
 }
 
 func TestResolverCacheHitSkipsAllLookups(t *testing.T) {
-	want := Location{City: "London", Country: "GB", ASN: 64500}
+	want := Location{City: "London", Region: "England", Country: "GB", Latitude: 51.5, Longitude: -0.1,
+		TimeZone: "Europe/London", AccuracyRadius: 20, ASN: 64500, Organisation: "Example"}
 	cache := &testCache{entries: map[string]cachedResult{"81.2.69.160": {location: want, source: "ip-api"}}}
 	offline := &testGeo{err: ErrNotFound}
 	fallback := testFallback{name: "ip-api", geo: &testGeo{err: errors.New("must not call provider")}}
 	resolver := NewResolver(cache, offline, fallback)
 
 	got, err := resolver.Lookup(context.Background(), "81.2.69.160")
-	if err != nil || got != want {
+	if err != nil || got.City != want.City || got.Country != want.Country || got.ASN != want.ASN || got.QualityScore == 0 {
 		t.Fatalf("Lookup() = %+v, %v; want %+v", got, err, want)
 	}
 	if offline.calls.Load() != 0 || fallback.geo.calls.Load() != 0 {
@@ -101,11 +102,12 @@ func TestResolverCacheHitSkipsAllLookups(t *testing.T) {
 func TestResolverOfflineThenFallbackAndPersistsSource(t *testing.T) {
 	t.Run("offline result", func(t *testing.T) {
 		cache := &testCache{}
-		want := Location{City: "London", Country: "GB"}
+		want := Location{City: "London", Region: "England", Country: "GB", Latitude: 51.5, Longitude: -0.1,
+			TimeZone: "Europe/London", AccuracyRadius: 20, ASN: 64500, Organisation: "Example"}
 		offline := &testGeo{location: want}
 		provider := testFallback{name: "ip-api", geo: &testGeo{err: errors.New("unexpected provider call")}}
 		got, err := NewResolver(cache, offline, provider).Lookup(context.Background(), "81.2.69.160")
-		if err != nil || got != want || cache.entries["81.2.69.160"].source != GeoLiteSource {
+		if err != nil || got.City != want.City || got.Country != want.Country || got.QualityScore == 0 || cache.entries["81.2.69.160"].source != GeoLiteSource {
 			t.Fatalf("got %+v, %v; cache=%+v", got, err, cache.entries)
 		}
 		if provider.geo.calls.Load() != 0 || cache.puts != 1 {
@@ -119,8 +121,8 @@ func TestResolverOfflineThenFallbackAndPersistsSource(t *testing.T) {
 		first := testFallback{name: "ip-api", geo: &testGeo{err: ErrNotFound}}
 		want := Location{Country: "US", ASN: 15169, Organisation: "Google LLC"}
 		second := testFallback{name: "ipinfo-lite", geo: &testGeo{location: want}}
-		got, err := NewResolver(cache, offline, first, second).Lookup(context.Background(), "8.8.8.8")
-		if err != nil || got != want || cache.entries["8.8.8.8"].source != "ipinfo-lite" {
+		got, err := NewResolver(cache, offline, first, second).WithHighValue(true).Lookup(context.Background(), "8.8.8.8")
+		if err != nil || got.Country != want.Country || got.ASN != want.ASN || got.Organisation != want.Organisation || cache.entries["8.8.8.8"].source != "ipinfo-lite" {
 			t.Fatalf("got %+v, %v; cache=%+v", got, err, cache.entries)
 		}
 		if first.geo.calls.Load() != 1 || second.geo.calls.Load() != 1 {
@@ -176,7 +178,7 @@ func TestResolverErrorAndInvalidIPPaths(t *testing.T) {
 		offline := &testGeo{err: ErrNotFound}
 		first := testFallback{name: "ip-api", geo: &testGeo{err: errors.New("temporary provider error")}}
 		second := testFallback{name: "ipinfo-lite", geo: &testGeo{err: ErrNotFound}}
-		_, err := NewResolver(nil, offline, first, second).Lookup(context.Background(), "8.8.4.4")
+		_, err := NewResolver(nil, offline, first, second).WithHighValue(true).Lookup(context.Background(), "8.8.4.4")
 		if !errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "temporary provider error") {
 			t.Fatalf("expected not-found with provider cause, got %v", err)
 		}

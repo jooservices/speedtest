@@ -2558,6 +2558,30 @@ paths:
           description: IPv4/IPv6 literal; no DNS lookup.
           schema:
             $ref: "#/components/schemas/IP"
+  /api/ip/providers:
+    get:
+      operationId: listGeoProviders
+      tags:
+        - IP
+      summary: Read configured geolocation providers and daily usage
+      description: Returns enabled state, whether a key is configured, and persisted UTC-day usage; secret values are never returned.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listGeoProvidersResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
   /api/ip/map:
     get:
       operationId: getMap
@@ -3525,6 +3549,30 @@ components:
           type: string
         source:
           type: string
+        qualityScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+        fieldSources:
+          type: object
+          additionalProperties: false
+          properties:
+            city:
+              type: string
+            region:
+              type: string
+            country:
+              type: string
+            time_zone:
+              type: string
+            organisation:
+              type: string
+            coordinates:
+              type: string
+            asn:
+              type: string
+            accuracy_radius:
+              type: string
       required:
         - ip
         - version
@@ -5814,6 +5862,38 @@ components:
         - fallback
         - updatedAt
         - cachedAddresses
+    GeoProviderStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          enum:
+            - freeipapi
+            - geojs
+            - ip-api
+            - ipapi-co
+            - ipgeolocation
+            - ipinfo-lite
+            - ipwho
+            - ripestat
+        enabled:
+          type: boolean
+        keyConfigured:
+          type: boolean
+        requestsToday:
+          type: integer
+          minimum: 0
+        dailyBudget:
+          type: integer
+          minimum: 0
+          description: Zero means no local daily cap.
+      required:
+        - name
+        - enabled
+        - keyConfigured
+        - requestsToday
+        - dailyBudget
     Job:
       type: object
       additionalProperties: false
@@ -6580,6 +6660,17 @@ components:
               anyOf:
                 - $ref: "#/components/schemas/Geo"
                 - type: "null"
+    listGeoProvidersResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/GeoProviderStatus"
     getMapResponse:
       allOf:
         - $ref: "#/components/schemas/Success"

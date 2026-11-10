@@ -275,7 +275,7 @@ inclusive. Constant data uses a nonzero range centered on the value; no samples
 returns `bins: []` and `count: 0`.
 
 Settings defaults match the preview: dark, 7d, auto units, browser timezone,
-24-hour clock, one decimal, 365-day retention (0=forever), GeoLite2 + ip-api fallback,
+24-hour clock, one decimal, 365-day retention (0=forever), offline geolocation plus the configured quota-aware fallbacks,
 weekly updates, Ookla/auto server/4 threads, stagger on/maxConcurrent=1, empty
 quiet hours, email enabled to `ops@example.com`, other channels off/empty.
 Public center URL comes from deployment `.env`, not the demo URL. New nodes
@@ -386,7 +386,7 @@ const paths = [
   '/api/stats/hour-of-day', '/api/stats/heatmap', '/api/stats/distribution',
   '/api/dashboard', '/api/series', '/api/schedules/{node}', '/api/alerts/rules',
   '/api/alerts/events', '/api/notifications/test/{channel}', '/api/settings',
-  '/api/ip/history', '/api/ip/addresses', '/api/ip/lookup', '/api/ip/map',
+  '/api/ip/history', '/api/ip/addresses', '/api/ip/lookup', '/api/ip/map', '/api/ip/providers',
   '/api/auth/login', '/api/auth/logout', '/api/auth/me', '/api/auth/password',
   '/api/auth/2fa', '/api/auth/2fa/setup', '/api/auth/2fa/enable', '/api/auth/2fa/disable'
 ];
@@ -514,13 +514,15 @@ A daily job (03:15 UTC) deletes results older than the `retentionDays` setting (
 
 ## IP and location views
 
-All four routes need a session and only read. `GET /api/ip/history?node=` lists address changes newest first (the first address a node ever reports is not a change), with the location of the old and new address (`fromGeo`, `toGeo`, null when unknown). `GET /api/ip/addresses?node=` lists the distinct addresses each node has used, most recently seen first, with first/last seen, number of tests and the average download/upload of the non-failed tests (null when there were none). `GET /api/ip/map?node=` gives the most recently observed address of each node with its location, leaving out nodes that never reported one. Locations come from the cache of `ip_addresses`; an address whose lookup has not happened or found nothing has `geo: null`, never invented coordinates. Lists are paginated with `page` and `size`.
+The IP history, addresses, map and lookup routes require a session and only read. `GET /api/ip/history?node=` lists address changes newest first (the first address a node ever reports is not a change), with the location of the old and new address (`fromGeo`, `toGeo`, null when unknown). `GET /api/ip/addresses?node=` lists the distinct addresses each node has used, most recently seen first, with first/last seen, number of tests and the average download/upload of the non-failed tests (null when there were none). `GET /api/ip/map?node=` gives the most recently observed address of each node with its location, leaving out nodes that never reported one. Locations come from the cache of `ip_addresses`; an address whose lookup has not happened or found nothing has `geo: null`, never invented coordinates. Known API locations include `qualityScore` and per-field `fieldSources`. Lists are paginated with `page` and `size`.
 
-`GET /api/ip/lookup?ip=` accepts only an IPv4 or IPv6 literal (host names, ports, prefixes and zones answer 422 before anything is looked up) and runs the geolocation chain: cache, offline GeoLite2, then the configured fallback providers; a found location is cached. An address no source knows returns `data: null` with status 200.
+`GET /api/ip/lookup?ip=` accepts only an IPv4 or IPv6 literal (host names, ports, prefixes and zones answer 422 before anything is looked up) and runs the geolocation chain: cache, offline databases, then at most one configured fallback provider for this interactive request; a found location is cached and includes its quality score and field sources. An address no source knows returns `data: null` with status 200.
+
+`GET /api/ip/providers` returns the configured provider list and today's durable request counts. Each item reports `name`, `enabled`, `keyConfigured`, `requestsToday` and `dailyBudget`; it never returns credential values. The endpoint requires an owner session. A `dailyBudget` of zero means no configured local daily cap. Background lookups may use at most 80% of each configured daily quota, keeping the rest available for interactive lookups.
 
 ## Settings
 
-`GET /api/settings` (session) returns the owner's preferences with `ETag`; `PUT /api/settings` (session, CSRF, origin, `If-Match`) replaces them and answers 422 with field-level `errors` for invalid values, 428 without `If-Match` and 412 when the tag is stale. Before anything is saved the ETag is `"0"`, so the first save always moves it. Defaults match the UI preview (dark theme, 7d range, auto units, 1 decimal, 365 days retention, GeoLite2 with ip-api fallback, Ookla, 4 threads, concurrency 1, stagger on).
+`GET /api/settings` (session) returns the owner's preferences with `ETag`; `PUT /api/settings` (session, CSRF, origin, `If-Match`) replaces them and answers 422 with field-level `errors` for invalid values, 428 without `If-Match` and 412 when the tag is stale. Before anything is saved the ETag is `"0"`, so the first save always moves it. Defaults match the UI preview (dark theme, 7d range, auto units, 1 decimal, 365 days retention, offline geolocation plus configured quota-aware fallbacks, Ookla, 4 threads, concurrency 1, stagger on).
 
 Secrets (the location-service key, email/Telegram/Slack credentials and the webhook URL) are write-only: they are encrypted with AES-GCM using `APP_KEY` from `.env` before they are stored and are never returned; the read model only says which are configured. Omitting a secret on PUT keeps the stored one.
 

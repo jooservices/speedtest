@@ -12,18 +12,22 @@ import (
 	"strings"
 )
 
-// extraProviderEnv reads the optional providers added in JOOST-75. Every one is off by default.
+// extraProviderEnv reads the provider controls added after the original fallback chain.
 func extraProviderEnv(cfg *ProviderConfig) error {
 	var err error
 	for _, p := range []struct {
 		enabled *bool
 		url     *string
 		rpm     *int
+		rpd     *int
 		key     string
 	}{
-		{&cfg.IPWhoEnabled, &cfg.IPWhoURL, &cfg.IPWhoRequestsPerMinute, "IPWHO"},
-		{&cfg.IPAPICoEnabled, &cfg.IPAPICoURL, &cfg.IPAPICoRequestsPerMinute, "IPAPICO"},
-		{&cfg.IPGeoEnabled, &cfg.IPGeoURL, &cfg.IPGeoRequestsPerMinute, "IPGEOLOCATION"},
+		{&cfg.IPWhoEnabled, &cfg.IPWhoURL, &cfg.IPWhoRequestsPerMinute, &cfg.IPWhoRequestsPerDay, "IPWHO"},
+		{&cfg.FreeIPAPIEnabled, &cfg.FreeIPAPIURL, &cfg.FreeIPAPIRequestsPerMinute, &cfg.FreeIPAPIRequestsPerDay, "FREEIPAPI"},
+		{&cfg.GeoJSEnabled, &cfg.GeoJSURL, &cfg.GeoJSRequestsPerMinute, &cfg.GeoJSRequestsPerDay, "GEOJS"},
+		{&cfg.RIPEStatEnabled, &cfg.RIPEStatURL, &cfg.RIPEStatRequestsPerMinute, &cfg.RIPEStatRequestsPerDay, "RIPESTAT"},
+		{&cfg.IPAPICoEnabled, &cfg.IPAPICoURL, &cfg.IPAPICoRequestsPerMinute, &cfg.IPAPICoRequestsPerDay, "IPAPICO"},
+		{&cfg.IPGeoEnabled, &cfg.IPGeoURL, &cfg.IPGeoRequestsPerMinute, &cfg.IPGeoRequestsPerDay, "IPGEOLOCATION"},
 	} {
 		if *p.enabled, err = envBool("SPEEDTEST_GEO_"+p.key+"_ENABLED", *p.enabled); err != nil {
 			return err
@@ -34,6 +38,12 @@ func extraProviderEnv(cfg *ProviderConfig) error {
 		}
 		if *p.rpm < 0 {
 			return errors.New("geolocation provider request rates cannot be negative")
+		}
+		if *p.rpd, err = envInt("SPEEDTEST_GEO_"+p.key+"_REQUESTS_PER_DAY", *p.rpd); err != nil {
+			return err
+		}
+		if *p.rpd < 0 {
+			return errors.New("geolocation provider daily limits cannot be negative")
 		}
 	}
 	if cfg.IPGeoEnabled && strings.TrimSpace(cfg.IPGeoKey) == "" {
@@ -47,6 +57,20 @@ func extraProviderEnv(cfg *ProviderConfig) error {
 func extraProviders(cfg ProviderConfig, providers []Fallback) ([]Fallback, error) {
 	if cfg.IPWhoEnabled {
 		p, err := newJSONProvider("ipwho", cfg.IPWhoURL, cfg.IPWhoRequestsPerMinute, "", cfg, parseIPWho, ipwhoEndpoint)
+		if err != nil {
+			return nil, err
+		}
+		providers = append(providers, p)
+	}
+	if cfg.FreeIPAPIEnabled {
+		p, err := newJSONProvider("freeipapi", cfg.FreeIPAPIURL, cfg.FreeIPAPIRequestsPerMinute, "", cfg, parseFreeIPAPI, freeIPAPIEndpoint)
+		if err != nil {
+			return nil, err
+		}
+		providers = append(providers, p)
+	}
+	if cfg.GeoJSEnabled {
+		p, err := newJSONProvider("geojs", cfg.GeoJSURL, cfg.GeoJSRequestsPerMinute, "", cfg, parseGeoJS, geoJSEndpoint)
 		if err != nil {
 			return nil, err
 		}
@@ -69,7 +93,63 @@ func extraProviders(cfg ProviderConfig, providers []Fallback) ([]Fallback, error
 		}
 		providers = append(providers, p)
 	}
+	if cfg.RIPEStatEnabled {
+		p, err := newJSONProvider("ripestat", cfg.RIPEStatURL, cfg.RIPEStatRequestsPerMinute, "", cfg, parseRIPEStat, ripeStatEndpoint)
+		if err != nil {
+			return nil, err
+		}
+		providers = append(providers, p)
+	}
 	return providers, nil
+}
+
+func ripeStatEndpoint(base, ip, _ string) (string, error) {
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" {
+		return "", errors.New("invalid endpoint")
+	}
+	q := u.Query()
+	q.Set("resource", ip)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
+}
+
+func parseRIPEStat(body []byte, _ string) (Location, error) {
+	var r struct {
+		Data struct {
+			ASNs []json.RawMessage `json:"asns"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return Location{}, errors.New("invalid RIPEstat response")
+	}
+	for _, raw := range r.Data.ASNs {
+		var number uint64
+		if json.Unmarshal(raw, &number) == nil && number > 0 {
+			return Location{ASN: uint(number)}, nil
+		}
+		var text string
+		if json.Unmarshal(raw, &text) == nil {
+			asn, _ := parseAS(text, "")
+			if asn > 0 {
+				return Location{ASN: asn}, nil
+			}
+		}
+	}
+	return Location{}, ErrNotFound
+}
+
+func freeIPAPIEndpoint(base, ip, _ string) (string, error) { return pathEndpoint(base, ip, "") }
+
+func geoJSEndpoint(base, ip, _ string) (string, error) {
+	u, err := url.Parse(base)
+	if err != nil || u.Host == "" {
+		return "", errors.New("invalid endpoint")
+	}
+	q := u.Query()
+	q.Set("ip", ip)
+	u.RawQuery = q.Encode()
+	return u.String(), nil
 }
 
 // jsonProvider is a provider whose only differences are the URL shape and the response mapping.
@@ -186,6 +266,81 @@ func parseIPWho(body []byte, ip string) (Location, error) {
 	}
 	return Location{City: r.City, Region: r.Region, Country: r.Country, Latitude: r.Latitude, Longitude: r.Longitude,
 		TimeZone: r.TimeZone.ID, ASN: r.Connection.ASN, Organisation: org}, nil
+}
+
+func parseFreeIPAPI(body []byte, ip string) (Location, error) {
+	var r struct {
+		IP           string          `json:"ipAddress"`
+		Country      string          `json:"countryCode"`
+		Region       string          `json:"regionName"`
+		City         string          `json:"cityName"`
+		Latitude     float64         `json:"latitude"`
+		Longitude    float64         `json:"longitude"`
+		TimeZones    []string        `json:"timeZones"`
+		ASN          json.RawMessage `json:"asn"`
+		Organisation string          `json:"asnOrganization"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return Location{}, errors.New("invalid freeipapi response")
+	}
+	if !matchesResponseIP(r.IP, ip) {
+		return Location{}, errors.New("unexpected freeipapi response")
+	}
+	asn, organisation := parseASNValue(r.ASN, r.Organisation)
+	location := Location{City: r.City, Region: r.Region, Country: r.Country, Latitude: r.Latitude,
+		Longitude: r.Longitude, ASN: asn, Organisation: organisation}
+	if len(r.TimeZones) != 0 {
+		location.TimeZone = r.TimeZones[0]
+	}
+	return location, nil
+}
+
+func parseGeoJS(body []byte, ip string) (Location, error) {
+	var r struct {
+		IP           string          `json:"ip"`
+		Country      string          `json:"country_code"`
+		Region       string          `json:"region"`
+		City         string          `json:"city"`
+		Latitude     string          `json:"latitude"`
+		Longitude    string          `json:"longitude"`
+		TimeZone     string          `json:"timezone"`
+		ASN          json.RawMessage `json:"asn"`
+		Organization string          `json:"organization"`
+		OrgName      string          `json:"organization_name"`
+		Accuracy     uint16          `json:"accuracy"`
+	}
+	if err := json.Unmarshal(body, &r); err != nil {
+		return Location{}, errors.New("invalid GeoJS response")
+	}
+	if !matchesResponseIP(r.IP, ip) {
+		return Location{}, errors.New("unexpected GeoJS response")
+	}
+	var asnNumber uint64
+	_ = json.Unmarshal(r.ASN, &asnNumber)
+	organisation := r.OrgName
+	if organisation == "" {
+		_, organisation = parseAS(string(r.ASN), r.Organization)
+	}
+	latitude, _ := strconv.ParseFloat(r.Latitude, 64)
+	longitude, _ := strconv.ParseFloat(r.Longitude, 64)
+	return Location{City: r.City, Region: r.Region, Country: r.Country, Latitude: latitude, Longitude: longitude,
+		TimeZone: r.TimeZone, AccuracyRadius: r.Accuracy, ASN: uint(asnNumber), Organisation: organisation}, nil
+}
+
+func parseASNValue(raw json.RawMessage, fallbackOrganisation string) (uint, string) {
+	var number uint64
+	if json.Unmarshal(raw, &number) == nil {
+		return uint(number), fallbackOrganisation
+	}
+	var value string
+	if json.Unmarshal(raw, &value) != nil {
+		return 0, fallbackOrganisation
+	}
+	if strings.HasPrefix(strings.ToUpper(value), "AS") {
+		return parseAS(value, fallbackOrganisation)
+	}
+	number, _ = strconv.ParseUint(value, 10, 0)
+	return uint(number), fallbackOrganisation
 }
 
 func parseIPAPICo(body []byte, ip string) (Location, error) {

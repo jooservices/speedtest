@@ -137,7 +137,7 @@ var routeWords = map[string]bool{
 	"run": true, "commands": true, "credential": true, "uninstallations": true, "tokens": true, "enroll": true, "heartbeat": true,
 	"config": true, "test": true, "deliveries": true, "summary": true, "trend": true, "hour-of-day": true, "heatmap": true,
 	"distribution": true, "password": true, "2fa": true, "setup": true, "enable": true, "disable": true, "me": true, "login": true, "logout": true, "enrolment-key": true, "lookup": true,
-	"map": true, "history": true, "addresses": true, "probes": true, "csv": true, "json": true, "csv.": true, "results.csv": true,
+	"map": true, "history": true, "addresses": true, "providers": true, "probes": true, "csv": true, "json": true, "csv.": true, "results.csv": true,
 	"results.json": true, "export.csv": true, "export.json": true, "events.": true, "ack.": true, "install.sh": true, "download": true,
 	"healthz": true, "readyz": true, "metrics": true,
 }

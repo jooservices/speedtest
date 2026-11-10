@@ -44,6 +44,11 @@ export function settingsSuite(T, ctx) {
       await T.choose(setting('Server choice').locator('select'), 'pinned');
       await T.settled();
       await T.tab('Location');
+      await T.see('Provider budgets');
+      await setting('Provider budgets').getByText('IPinfo Lite', { exact: true }).waitFor();
+      const providers = await T.api('/api/ip/providers');
+      assert.ok(Array.isArray(providers.body.data) && providers.body.data.some(p => p.name === 'ipwho' && Number.isInteger(p.requestsToday)), 'provider switches and persisted usage are visible');
+      assert.ok(!providers.text.toLowerCase().includes('token'), 'provider status never returns a credential');
       await T.fillAndLeave('MaxMind license key', 'e2e-licence-key-123');
       await T.settled();
       await setting('Update the database weekly').locator('.switch').click();

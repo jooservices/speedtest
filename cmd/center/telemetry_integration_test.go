@@ -21,6 +21,14 @@ func TestTelemetryCompositionIntegration(t *testing.T) {
 	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "false")
 	t.Setenv("SPEEDTEST_GEO_DBIP_AUTO_UPDATE", "false")
 	t.Setenv("SPEEDTEST_GEO_IPINFO_ENABLED", "false")
+	for _, name := range []string{"IPWHO", "FREEIPAPI", "GEOJS", "RIPESTAT", "IPAPICO", "IPGEOLOCATION"} {
+		t.Setenv("SPEEDTEST_GEO_"+name+"_ENABLED", "false")
+	}
+	t.Setenv("SPEEDTEST_GEO_IPWHO_ENABLED", "true")
+	t.Setenv("SPEEDTEST_GEO_IPWHO_URL", "https://ipwho.is")
+	t.Setenv("SPEEDTEST_GEO_CONSENSUS", "false")
+	t.Setenv("SPEEDTEST_GEOLITE2_LICENSE_KEY", "")
+	t.Setenv("SPEEDTEST_GEO_IPINFO_TOKEN", "")
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal(err)
@@ -63,6 +71,19 @@ func TestTelemetryCompositionIntegration(t *testing.T) {
 			t.Fatal("missing composed collector", name)
 		}
 	}
+	background, stop := context.WithCancel(t.Context())
+	stop()
+	svc.Background(background)
+	t.Setenv("SPEEDTEST_GEO_DBIP_AUTO_UPDATE", "invalid")
+	if _, _, err := buildServices(t.Context(), pool, cfg, logger); err == nil {
+		t.Fatal("invalid DB-IP settings were accepted")
+	}
+	t.Setenv("SPEEDTEST_GEO_DBIP_AUTO_UPDATE", "false")
+	t.Setenv("SPEEDTEST_GEO_BACKFILL_BATCH_SIZE", "101")
+	if _, _, err := buildServices(t.Context(), pool, cfg, logger); err == nil {
+		t.Fatal("invalid geolocation backfill settings were accepted")
+	}
+	t.Setenv("SPEEDTEST_GEO_BACKFILL_BATCH_SIZE", "100")
 	cfg.PublicURL = "invalid-url"
 	if _, _, err := buildServices(t.Context(), pool, cfg, logger); err == nil {
 		t.Fatal("invalid installer composition accepted")
