@@ -59,12 +59,7 @@ func proxyServer(ctx context.Context, remote *mcp.ClientSession) (*mcp.Server, e
 	}
 	for _, tool := range tools.Tools {
 		copy := *tool
-		server.AddTool(&copy, func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
-			if request.Params == nil {
-				return nil, errors.New("tool arguments are required")
-			}
-			return remote.CallTool(ctx, &mcp.CallToolParams{Name: copy.Name, Arguments: request.Params.Arguments})
-		})
+		server.AddTool(&copy, proxyTool(remote, copy.Name))
 	}
 	resources, err := remote.ListResources(ctx, nil)
 	if err != nil {
@@ -72,11 +67,24 @@ func proxyServer(ctx context.Context, remote *mcp.ClientSession) (*mcp.Server, e
 	}
 	for _, resource := range resources.Resources {
 		copy := *resource
-		server.AddResource(&copy, func(ctx context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
-			return remote.ReadResource(ctx, &mcp.ReadResourceParams{URI: copy.URI})
-		})
+		server.AddResource(&copy, proxyResource(remote, copy.URI))
 	}
 	return server, nil
+}
+
+func proxyTool(remote *mcp.ClientSession, name string) mcp.ToolHandler {
+	return func(ctx context.Context, request *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+		if request == nil || request.Params == nil {
+			return nil, errors.New("tool arguments are required")
+		}
+		return remote.CallTool(ctx, &mcp.CallToolParams{Name: name, Arguments: request.Params.Arguments})
+	}
+}
+
+func proxyResource(remote *mcp.ClientSession, uri string) mcp.ResourceHandler {
+	return func(ctx context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+		return remote.ReadResource(ctx, &mcp.ReadResourceParams{URI: uri})
+	}
 }
 
 type bearerTransport struct {

@@ -27,6 +27,7 @@ type Operation struct {
 	Scope                                        Scope
 	Parameters                                   []Parameter
 	BodySchema                                   map[string]any
+	ResponseHeaders                              []string
 }
 
 // Parameter maps one MCP input field to an OpenAPI path or query parameter.
@@ -39,25 +40,34 @@ type Parameter struct {
 type document struct {
 	Paths      map[string]yaml.Node `yaml:"paths"`
 	Components struct {
-		Schemas map[string]map[string]any `yaml:"schemas"`
+		Schemas    map[string]map[string]any `yaml:"schemas"`
+		Parameters map[string]parameter      `yaml:"parameters"`
 	} `yaml:"components"`
 }
 
 type rawOperation struct {
-	ID          string      `yaml:"operationId"`
-	Summary     string      `yaml:"summary"`
-	Description string      `yaml:"description"`
-	Tool        string      `yaml:"x-mcp-tool"`
-	Scope       Scope       `yaml:"x-access-token-scope"`
-	Parameters  []parameter `yaml:"parameters"`
-	RequestBody requestBody `yaml:"requestBody"`
+	ID          string                 `yaml:"operationId"`
+	Summary     string                 `yaml:"summary"`
+	Description string                 `yaml:"description"`
+	Tool        string                 `yaml:"x-mcp-tool"`
+	Scope       Scope                  `yaml:"x-access-token-scope"`
+	Parameters  []parameter            `yaml:"parameters"`
+	RequestBody requestBody            `yaml:"requestBody"`
+	Responses   map[string]rawResponse `yaml:"responses"`
 }
 
 type parameter struct {
+	Ref      string         `yaml:"$ref"`
 	Name     string         `yaml:"name"`
 	In       string         `yaml:"in"`
 	Required bool           `yaml:"required"`
 	Schema   map[string]any `yaml:"schema"`
+}
+
+type rawResponse struct {
+	Headers map[string]struct {
+		Ref string `yaml:"$ref"`
+	} `yaml:"headers"`
 }
 
 type requestBody struct {
@@ -100,6 +110,11 @@ func parseOpenAPI(raw []byte) ([]Operation, error) {
 			if err := node.Decode(&pathParameters); err != nil {
 				return nil, fmt.Errorf("parse OpenAPI path parameters %s: %w", path, err)
 			}
+			resolvedParameters, err := resolveParameters(pathParameters, doc.Components.Parameters)
+			if err != nil {
+				return nil, fmt.Errorf("resolve OpenAPI path parameters %s: %w", path, err)
+			}
+			pathParameters = resolvedParameters
 		}
 		for method, node := range pathFields {
 			if !httpMethods[method] {
@@ -109,28 +124,84 @@ func parseOpenAPI(raw []byte) ([]Operation, error) {
 			if err := node.Decode(&op); err != nil {
 				return nil, fmt.Errorf("parse OpenAPI operation %s %s: %w", method, path, err)
 			}
-			parameters := append(append([]parameter(nil), pathParameters...), op.Parameters...)
+			operationParameters, err := resolveParameters(op.Parameters, doc.Components.Parameters)
+			if err != nil {
+				return nil, fmt.Errorf("resolve OpenAPI parameters %s: %w", op.ID, err)
+			}
+			parameters := append(append([]parameter(nil), pathParameters...), operationParameters...)
+			converted, err := convertParameters(parameters, doc.Components.Schemas)
+			if err != nil {
+				return nil, fmt.Errorf("convert OpenAPI parameters %s: %w", op.ID, err)
+			}
 			body, err := resolveSchema(op.RequestBody.Content["application/json"].Schema, doc.Components.Schemas)
 			if err != nil {
 				return nil, fmt.Errorf("resolve OpenAPI schema %s: %w", op.ID, err)
 			}
+			headers, err := successHeaders(op.Responses)
+			if err != nil {
+				return nil, fmt.Errorf("resolve OpenAPI response headers %s: %w", op.ID, err)
+			}
 			operations = append(operations, Operation{ID: op.ID, Tool: op.Tool, Method: strings.ToUpper(method), Path: path,
 				Summary: op.Summary, Description: op.Description, Scope: op.Scope,
-				Parameters: convertParameters(parameters, doc.Components.Schemas), BodySchema: body})
+				Parameters: converted, BodySchema: body, ResponseHeaders: headers})
 		}
 	}
 	return operations, nil
 }
 
-func convertParameters(parameters []parameter, schemas map[string]map[string]any) []Parameter {
+func resolveParameters(parameters []parameter, components map[string]parameter) ([]parameter, error) {
+	result := make([]parameter, 0, len(parameters))
+	for _, p := range parameters {
+		if p.Ref == "" {
+			result = append(result, p)
+			continue
+		}
+		const prefix = "#/components/parameters/"
+		if !strings.HasPrefix(p.Ref, prefix) {
+			return nil, fmt.Errorf("unsupported parameter reference %q", p.Ref)
+		}
+		name, err := url.PathUnescape(strings.TrimPrefix(p.Ref, prefix))
+		if err != nil || components[name].Name == "" {
+			return nil, fmt.Errorf("unknown parameter reference %q", p.Ref)
+		}
+		result = append(result, components[name])
+	}
+	return result, nil
+}
+
+func successHeaders(responses map[string]rawResponse) ([]string, error) {
+	var headers []string
+	for status, response := range responses {
+		if len(status) != 3 || status[0] != '2' {
+			continue
+		}
+		for name, header := range response.Headers {
+			if header.Ref != "" && !strings.HasPrefix(header.Ref, "#/components/headers/") {
+				return nil, fmt.Errorf("unsupported response header reference %q", header.Ref)
+			}
+			if strings.EqualFold(name, "ETag") {
+				headers = append(headers, "ETag")
+			}
+		}
+	}
+	return headers, nil
+}
+
+func convertParameters(parameters []parameter, schemas map[string]map[string]any) ([]Parameter, error) {
 	result := make([]Parameter, 0, len(parameters))
 	for _, p := range parameters {
-		if p.In == "path" || p.In == "query" {
-			schema, _ := resolveSchema(p.Schema, schemas)
+		if p.In == "path" || p.In == "query" || p.In == "header" {
+			if p.In == "header" && (strings.EqualFold(p.Name, "X-CSRF-Token") || strings.EqualFold(p.Name, "Origin")) {
+				continue
+			}
+			schema, err := resolveSchema(p.Schema, schemas)
+			if err != nil {
+				return nil, fmt.Errorf("parameter %q: %w", p.Name, err)
+			}
 			result = append(result, Parameter{Name: p.Name, In: p.In, Required: p.Required, Schema: schema})
 		}
 	}
-	return result
+	return result, nil
 }
 
 func resolveSchema(schema map[string]any, schemas map[string]map[string]any) (map[string]any, error) {
@@ -223,14 +294,21 @@ func (op Operation) InputSchema() (json.RawMessage, error) {
 		}
 	}
 	if body := op.BodySchema; body != nil {
-		bodyProperties, _ := body["properties"].(map[string]any)
-		for key, value := range bodyProperties {
+		for key, value := range bodyFields(body) {
 			properties[key] = value
 		}
-		if bodyRequired, _ := body["required"].([]any); bodyRequired != nil {
-			for _, field := range bodyRequired {
-				required = append(required, fmt.Sprint(field))
+		required = append(required, stringFields(body["required"])...)
+		if alternatives := bodyAlternatives(body); len(alternatives) > 0 {
+			branches := make([]any, 0, len(alternatives))
+			for _, alternative := range alternatives {
+				branchRequired := append(append([]string(nil), required...), stringFields(alternative["required"])...)
+				branches = append(branches, map[string]any{"required": uniqueStrings(branchRequired)})
 			}
+			schema := map[string]any{"type": "object", "properties": properties, "additionalProperties": false, "oneOf": branches}
+			if len(required) > 0 {
+				schema["required"] = uniqueStrings(required)
+			}
+			return json.Marshal(schema)
 		}
 	}
 	schema := map[string]any{"type": "object", "properties": properties, "additionalProperties": false}
@@ -239,6 +317,51 @@ func (op Operation) InputSchema() (json.RawMessage, error) {
 	}
 	raw, err := json.Marshal(schema)
 	return raw, err
+}
+
+func bodyFields(schema map[string]any) map[string]any {
+	if fields, ok := schema["properties"].(map[string]any); ok {
+		return fields
+	}
+	fields := map[string]any{}
+	for _, alternative := range bodyAlternatives(schema) {
+		for name, value := range bodyFields(alternative) {
+			fields[name] = value
+		}
+	}
+	return fields
+}
+
+func bodyAlternatives(schema map[string]any) []map[string]any {
+	values, _ := schema["oneOf"].([]any)
+	result := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		if alternative, ok := value.(map[string]any); ok {
+			result = append(result, alternative)
+		}
+	}
+	return result
+}
+
+func stringFields(value any) []string {
+	values, _ := value.([]any)
+	result := make([]string, 0, len(values))
+	for _, field := range values {
+		result = append(result, fmt.Sprint(field))
+	}
+	return result
+}
+
+func uniqueStrings(values []string) []string {
+	seen := make(map[string]bool, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		if !seen[value] {
+			seen[value] = true
+			result = append(result, value)
+		}
+	}
+	return result
 }
 
 // Find matches an HTTP method and concrete URL path against an OpenAPI route template.
@@ -294,6 +417,10 @@ func Allows(grant, required Scope) bool {
 // MCPTools returns only operations explicitly marked with x-mcp-tool in OpenAPI.
 func MCPTools() ([]Operation, error) {
 	operations, err := Operations()
+	return toolsFromOperations(operations, err)
+}
+
+func toolsFromOperations(operations []Operation, err error) ([]Operation, error) {
 	if err != nil {
 		return nil, err
 	}

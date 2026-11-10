@@ -82,7 +82,7 @@ func callOperation(ctx context.Context, api http.Handler, principal apitoken.Pri
 	}
 	recorder := newResponseRecorder()
 	api.ServeHTTP(recorder, req.WithContext(apitoken.WithPrincipal(req.Context(), principal)))
-	return responseResult(recorder), nil
+	return responseResult(recorder, operation.ResponseHeaders), nil
 }
 
 func operationRequest(ctx context.Context, operation apicontract.Operation, arguments map[string]any) (*http.Request, error) {
@@ -90,7 +90,7 @@ func operationRequest(ctx context.Context, operation apicontract.Operation, argu
 	for _, parameter := range operation.Parameters {
 		allowed[parameter.Name] = true
 	}
-	bodyFields, _ := operation.BodySchema["properties"].(map[string]any)
+	bodyFields := requestFields(operation.BodySchema)
 	for name := range bodyFields {
 		allowed[name] = true
 	}
@@ -117,7 +117,7 @@ func operationRequest(ctx context.Context, operation apicontract.Operation, argu
 		}
 	}
 	path = addQuery(path, query)
-	body, err := requestBody(operation.BodySchema, bodyFields, arguments)
+	body, err := requestBody(operation.BodySchema, arguments)
 	if err != nil {
 		return nil, err
 	}
@@ -125,12 +125,34 @@ func operationRequest(ctx context.Context, operation apicontract.Operation, argu
 	if err == nil && len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	if err == nil {
+		for _, parameter := range operation.Parameters {
+			if parameter.In == "header" {
+				if value, exists := arguments[parameter.Name]; exists {
+					req.Header.Set(parameter.Name, fmt.Sprint(value))
+				}
+			}
+		}
+	}
 	return req, err
 }
 
-func requestBody(schema map[string]any, fields map[string]any, args map[string]any) ([]byte, error) {
+func requestBody(schema map[string]any, args map[string]any) ([]byte, error) {
 	if schema == nil {
 		return nil, nil
+	}
+	fields := requestFields(schema)
+	if alternatives := requestAlternatives(schema); len(alternatives) > 0 {
+		var matches []map[string]any
+		for _, alternative := range alternatives {
+			if matchesBody(alternative, fields, args) {
+				matches = append(matches, alternative)
+			}
+		}
+		if len(matches) != 1 {
+			return nil, fmt.Errorf("tool arguments must match exactly one request-body format")
+		}
+		fields = requestFields(matches[0])
 	}
 	body := make(map[string]any, len(fields))
 	for name := range fields {
@@ -139,6 +161,56 @@ func requestBody(schema map[string]any, fields map[string]any, args map[string]a
 		}
 	}
 	return json.Marshal(body)
+}
+
+func matchesBody(schema map[string]any, fields map[string]any, args map[string]any) bool {
+	allowed := requestFields(schema)
+	for name := range fields {
+		if _, provided := args[name]; provided {
+			if _, accepted := allowed[name]; !accepted {
+				return false
+			}
+		}
+	}
+	for _, name := range requiredFields(schema) {
+		if _, provided := args[name]; !provided {
+			return false
+		}
+	}
+	return true
+}
+
+func requestFields(schema map[string]any) map[string]any {
+	if fields, ok := schema["properties"].(map[string]any); ok {
+		return fields
+	}
+	fields := map[string]any{}
+	for _, alternative := range requestAlternatives(schema) {
+		for name, value := range requestFields(alternative) {
+			fields[name] = value
+		}
+	}
+	return fields
+}
+
+func requestAlternatives(schema map[string]any) []map[string]any {
+	values, _ := schema["oneOf"].([]any)
+	result := make([]map[string]any, 0, len(values))
+	for _, value := range values {
+		if alternative, ok := value.(map[string]any); ok {
+			result = append(result, alternative)
+		}
+	}
+	return result
+}
+
+func requiredFields(schema map[string]any) []string {
+	values, _ := schema["required"].([]any)
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		result = append(result, fmt.Sprint(value))
+	}
+	return result
 }
 
 func queryValue(value any) string {
@@ -172,13 +244,31 @@ func (r *responseRecorder) Header() http.Header            { return r.header }
 func (r *responseRecorder) WriteHeader(code int)           { r.code = code }
 func (r *responseRecorder) Write(data []byte) (int, error) { return r.body.Write(data) }
 
-func responseResult(response *responseRecorder) *mcp.CallToolResult {
+func responseResult(response *responseRecorder, exposedHeaders []string) *mcp.CallToolResult {
 	var payload any
 	if err := json.Unmarshal(response.body.Bytes(), &payload); err != nil {
 		payload = map[string]any{"status": response.code, "detail": "The API returned an invalid response."}
 	}
+	meta := mcp.Meta{}
+	headers := map[string]any{}
+	for _, name := range exposedHeaders {
+		if value := response.header.Get(name); value != "" {
+			headers[name] = value
+		}
+	}
+	if len(headers) > 0 {
+		meta["http"] = map[string]any{"headers": headers}
+		if envelope, ok := payload.(map[string]any); ok {
+			responseMeta, ok := envelope["meta"].(map[string]any)
+			if !ok {
+				responseMeta = map[string]any{}
+				envelope["meta"] = responseMeta
+			}
+			responseMeta["etag"] = headers["ETag"]
+		}
+	}
 	encoded, _ := json.Marshal(payload)
-	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}, StructuredContent: payload, IsError: response.code < 200 || response.code >= 300}
+	return &mcp.CallToolResult{Meta: meta, Content: []mcp.Content{&mcp.TextContent{Text: string(encoded)}}, StructuredContent: payload, IsError: response.code < 200 || response.code >= 300}
 }
 
 func toolError(message string) *mcp.CallToolResult {
