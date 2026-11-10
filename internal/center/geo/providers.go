@@ -281,8 +281,14 @@ func (p *IPAPIProvider) LookupBatch(ctx context.Context, addresses []string, pur
 		}
 		canonical[i] = ip
 	}
-	if p.core.budget != nil {
-		allowed, err := p.core.budget.Allow(ctx, p.Source(), purpose)
+	requestCtx, cancel := context.WithTimeout(ctx, p.core.timeout)
+	defer cancel()
+	if p.core.budget == nil {
+		if err := p.batchLimiter.Wait(requestCtx); err != nil {
+			return nil, err
+		}
+	} else {
+		allowed, err := p.core.budget.AllowTogether(requestCtx, purpose, p.Source(), "ip-api-batch")
 		if err != nil {
 			p.observe("error")
 			return nil, err
@@ -292,17 +298,13 @@ func (p *IPAPIProvider) LookupBatch(ctx context.Context, addresses []string, pur
 			return nil, ErrBudgetExhausted
 		}
 	}
-	requestCtx, cancel := context.WithTimeout(ctx, p.core.timeout)
-	defer cancel()
-	if err := p.batchLimiter.Wait(requestCtx); err != nil {
-		return nil, err
-	}
 	body, _ := json.Marshal(canonical)
 	endpoint, err := ipAPIBatchEndpoint(p.core.endpoint)
 	if err != nil {
+		p.observe("error")
 		return nil, err
 	}
-	data, status, err := p.core.requestWithLimiter(requestCtx, http.MethodPost, endpoint, "", bytes.NewReader(body), p.batchLimiter)
+	data, status, err := p.core.requestWithQuota(requestCtx, http.MethodPost, endpoint, "", bytes.NewReader(body), p.batchLimiter, "ip-api-batch")
 	if err != nil {
 		p.observe("error")
 		return nil, err
@@ -559,6 +561,10 @@ func (c *providerCore) request(ctx context.Context, method, endpoint, token stri
 }
 
 func (c *providerCore) requestWithLimiter(ctx context.Context, method, endpoint, token string, requestBody io.Reader, limiter *rateLimiter) ([]byte, int, error) {
+	return c.requestWithQuota(ctx, method, endpoint, token, requestBody, limiter, c.name)
+}
+
+func (c *providerCore) requestWithQuota(ctx context.Context, method, endpoint, token string, requestBody io.Reader, limiter *rateLimiter, quotaProvider string) ([]byte, int, error) {
 	request, err := http.NewRequestWithContext(ctx, method, endpoint, requestBody)
 	if err != nil {
 		return nil, 0, errors.New("cannot create provider request")
@@ -585,7 +591,7 @@ func (c *providerCore) requestWithLimiter(ctx context.Context, method, endpoint,
 		if value, parseErr := strconv.Atoi(response.Header.Get("X-Ttl")); parseErr == nil && value > 0 {
 			ttl = time.Duration(value) * time.Second
 		}
-		if err := c.budget.ObserveQuota(ctx, c.name, remaining, ttl, response.StatusCode); err != nil {
+		if err := c.budget.ObserveQuota(ctx, quotaProvider, remaining, ttl, response.StatusCode); err != nil {
 			return nil, response.StatusCode, errors.New("cannot persist provider quota cooldown")
 		}
 	}

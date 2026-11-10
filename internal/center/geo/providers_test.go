@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -94,6 +95,230 @@ func TestIPAPIBatchLookup(t *testing.T) {
 	if _, err := provider.LookupBatch(context.Background(), make([]string, 101), budget.Background); err == nil {
 		t.Fatal("accepted more than 100 addresses")
 	}
+}
+
+type providerBudgetStore struct {
+	mu       sync.Mutex
+	used     map[string]int
+	minutes  map[string]int
+	blocked  map[string]time.Time
+	err      error
+	blockErr error
+}
+
+func newProviderBudgetStore() *providerBudgetStore {
+	return &providerBudgetStore{used: map[string]int{}, minutes: map[string]int{}, blocked: map[string]time.Time{}}
+}
+
+func providerDay(provider string, day time.Time) string {
+	return provider + "|" + day.UTC().Format(time.DateOnly)
+}
+func providerMinute(provider string, minute time.Time) string {
+	return provider + "|" + minute.UTC().Format("2006-01-02T15:04")
+}
+
+func (s *providerBudgetStore) Used(_ context.Context, provider string, day time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.used[providerDay(provider, day)], nil
+}
+
+func (s *providerBudgetStore) Reserve(_ context.Context, provider string, day, minute, now time.Time, daily, perMinute int) (bool, error) {
+	return s.ReserveMany(context.Background(), []budget.Reservation{{Provider: provider, Day: day, Minute: minute, Now: now, DailyLimit: daily, MinuteLimit: perMinute}})
+}
+
+func (s *providerBudgetStore) ReserveMany(_ context.Context, reservations []budget.Reservation) (bool, error) {
+	if s.err != nil {
+		return false, s.err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	used, minutes := cloneCounts(s.used), cloneCounts(s.minutes)
+	for _, r := range reservations {
+		dayKey, minuteKey := providerDay(r.Provider, r.Day), providerMinute(r.Provider, r.Minute)
+		if s.blocked[r.Provider].After(r.Now) || r.DailyLimit < 0 || r.MinuteLimit < 0 ||
+			(r.DailyLimit > 0 && used[dayKey] >= r.DailyLimit) || (r.MinuteLimit > 0 && minutes[minuteKey] >= r.MinuteLimit) {
+			return false, nil
+		}
+		used[dayKey]++
+		minutes[minuteKey]++
+	}
+	s.used, s.minutes = used, minutes
+	return true, nil
+}
+
+func TestIPAPIBatchRejectsInputsAndReportsFailures(t *testing.T) {
+	var requests atomic.Int32
+	var outcome string
+	status, response := http.StatusOK, `[]`
+	quotaHeaders := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		if quotaHeaders {
+			w.Header().Set("X-Rl", "0")
+			w.Header().Set("X-Ttl", "60")
+		}
+		w.WriteHeader(status)
+		_, _ = fmt.Fprint(w, response)
+	}))
+	defer server.Close()
+	cfg := providerTestConfig()
+	cfg.IPAPIURL, cfg.Observe = server.URL+"/json", func(_, got string) { outcome = got }
+	_, cfg.Budget = batchBudgetConfig(t, server.URL)
+	provider, err := NewIPAPIProvider(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, addresses := range [][]string{nil, make([]string, 101), {"bad"}} {
+		if _, err := provider.LookupBatch(context.Background(), addresses, budget.Interactive); err == nil {
+			t.Fatalf("invalid batch %v was accepted", addresses)
+		}
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("invalid batches sent %d requests", requests.Load())
+	}
+	for _, tc := range []struct {
+		name, body, wantOutcome string
+		status                  int
+		wantErr                 bool
+	}{
+		{name: "http failure", status: http.StatusServiceUnavailable, body: ``, wantOutcome: "error", wantErr: true},
+		{name: "invalid response", status: http.StatusOK, body: `{`, wantOutcome: "error", wantErr: true},
+		{name: "no matching records", status: http.StatusOK, body: `[{"status":"success","query":"1.1.1.1"}]`, wantOutcome: "not_found"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			status, response, outcome = tc.status, tc.body, ""
+			locations, err := provider.LookupBatch(context.Background(), []string{"8.8.8.8"}, budget.Interactive)
+			if (err != nil) != tc.wantErr || (!tc.wantErr && len(locations) != 0) {
+				t.Fatalf("invalid or empty provider result = (%v,%v)", locations, err)
+			}
+			if outcome != tc.wantOutcome {
+				t.Fatalf("provider outcome=%q, want %q", outcome, tc.wantOutcome)
+			}
+		})
+	}
+	provider.core.endpoint = ":"
+	if _, err := provider.LookupBatch(context.Background(), []string{"8.8.8.8"}, budget.Interactive); err == nil || outcome != "error" {
+		t.Fatalf("invalid endpoint result = (%v,%q)", err, outcome)
+	}
+	store := newProviderBudgetStore()
+	store.err = errors.New("quota store unavailable")
+	broker, err := budget.New(map[string]budget.Limit{"ip-api": {PerMinute: 45}, "ip-api-batch": {PerMinute: 15, MinuteWindow: true}}, store, 0.2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Budget = broker
+	provider, err = NewIPAPIProvider(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outcome = ""
+	if _, err := provider.LookupBatch(context.Background(), []string{"8.8.8.8"}, budget.Interactive); err == nil || outcome != "error" {
+		t.Fatalf("quota store error result = (%v,%q)", err, outcome)
+	}
+	store.err = nil
+	store.blockErr = errors.New("cooldown persistence unavailable")
+	quotaBroker, err := budget.New(map[string]budget.Limit{"ip-api": {PerMinute: 45}, "ip-api-batch": {PerMinute: 15, MinuteWindow: true}}, store, 0.2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Budget = quotaBroker
+	provider, err = NewIPAPIProvider(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status, response, quotaHeaders, outcome = http.StatusOK, `[{"status":"success","query":"8.8.8.8","countryCode":"US"}]`, true, ""
+	if _, err := provider.LookupBatch(context.Background(), []string{"8.8.8.8"}, budget.Interactive); err == nil || outcome != "error" {
+		t.Fatalf("quota cooldown persistence error = (%v,%q)", err, outcome)
+	}
+}
+
+func cloneCounts(values map[string]int) map[string]int {
+	cloned := make(map[string]int, len(values))
+	for key, value := range values {
+		cloned[key] = value
+	}
+	return cloned
+}
+
+func (s *providerBudgetStore) BlockUntil(_ context.Context, provider string, _, until time.Time) error {
+	if s.blockErr != nil {
+		return s.blockErr
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if until.After(s.blocked[provider]) {
+		s.blocked[provider] = until
+	}
+	return nil
+}
+
+func TestIPAPIBatchQuotaSharedMinuteLimit(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("X-Rl", "15")
+		w.Header().Set("X-Ttl", "60")
+		_, _ = fmt.Fprint(w, `[{"status":"success","query":"8.8.8.8","countryCode":"US"}]`)
+	}))
+	defer server.Close()
+	cfg, broker := batchBudgetConfig(t, server.URL)
+	var now = time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	broker.WithClock(func() time.Time { return now })
+	first, err := NewIPAPIProvider(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 15 {
+		if _, err := first.LookupBatch(context.Background(), []string{"8.8.8.8"}, budget.Background); err != nil {
+			t.Fatalf("batch before cap: %v", err)
+		}
+	}
+	second, err := NewIPAPIProvider(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := second.LookupBatch(context.Background(), []string{"8.8.8.8"}, budget.Background); !errors.Is(err, ErrBudgetExhausted) || requests.Load() != 15 {
+		t.Fatalf("new provider instance exceeded persisted 15/minute limit: err=%v requests=%d", err, requests.Load())
+	}
+}
+
+func TestIPAPIBatch429CooldownPersistsAcrossProviders(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		w.Header().Set("X-Rl", "0")
+		w.Header().Set("X-Ttl", "30")
+		w.WriteHeader(http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	cfg, broker := batchBudgetConfig(t, server.URL)
+	var now = time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	broker.WithClock(func() time.Time { return now })
+	first, _ := NewIPAPIProvider(cfg)
+	if _, err := first.LookupBatch(context.Background(), []string{"8.8.8.8"}, budget.Background); err == nil {
+		t.Fatal("HTTP 429 was accepted")
+	}
+	second, _ := NewIPAPIProvider(cfg)
+	if _, err := second.LookupBatch(context.Background(), []string{"8.8.8.8"}, budget.Background); !errors.Is(err, ErrBudgetExhausted) || requests.Load() != 1 {
+		t.Fatalf("X-Ttl cooldown did not survive a new provider instance: err=%v requests=%d", err, requests.Load())
+	}
+	now = now.Add(31 * time.Second)
+	if _, err := second.LookupBatch(context.Background(), []string{"8.8.8.8"}, budget.Background); err == nil || requests.Load() != 2 {
+		t.Fatalf("batch after X-Ttl did not retry: err=%v requests=%d", err, requests.Load())
+	}
+}
+
+func batchBudgetConfig(t *testing.T, baseURL string) (ProviderConfig, *budget.Broker) {
+	t.Helper()
+	store := newProviderBudgetStore()
+	broker, err := budget.New(map[string]budget.Limit{"ip-api": {PerMinute: 45}, "ip-api-batch": {PerMinute: 15, MinuteWindow: true}}, store, 0.2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg := providerTestConfig()
+	cfg.IPAPIURL, cfg.Budget = baseURL+"/json", broker
+	return cfg, broker
 }
 
 func TestIPInfoLiteProviderUsesBearerAndMapsFreeFields(t *testing.T) {

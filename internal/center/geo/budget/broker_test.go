@@ -3,6 +3,8 @@ package budget
 import (
 	"context"
 	"errors"
+	"fmt"
+	"math"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -68,12 +70,44 @@ func (f *fakeStore) Reserve(_ context.Context, provider string, day, minute, now
 	dayKey := f.key(provider, day)
 	minuteKey := provider + "|" + minute.UTC().Format("2006-01-02T15:04")
 	if blocked := f.blocked[provider]; blocked.After(now) ||
-		(dailyLimit > 0 && f.counts[dayKey] >= dailyLimit) ||
+		(dailyLimit < 0 || (dailyLimit > 0 && f.counts[dayKey] >= dailyLimit)) ||
 		(minuteLimit > 0 && f.minutes[minuteKey] >= minuteLimit) {
 		return false, nil
 	}
 	f.counts[dayKey]++
 	f.minutes[minuteKey]++
+	return true, nil
+}
+
+func (f *fakeStore) ReserveMany(_ context.Context, reservations []Reservation) (bool, error) {
+	if f.usedErr != nil {
+		return false, f.usedErr
+	}
+	if f.addErr != nil {
+		return false, f.addErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	counts, minutes := map[string]int{}, map[string]int{}
+	for key, value := range f.counts {
+		counts[key] = value
+	}
+	for key, value := range f.minutes {
+		minutes[key] = value
+	}
+	for _, reservation := range reservations {
+		dayKey := f.key(reservation.Provider, reservation.Day)
+		minuteKey := reservation.Provider + "|" + reservation.Minute.UTC().Format("2006-01-02T15:04")
+		blocked := f.blocked[reservation.Provider].After(reservation.Now)
+		if blocked || reservation.DailyLimit < 0 || reservation.MinuteLimit < 0 ||
+			(reservation.DailyLimit > 0 && counts[dayKey] >= reservation.DailyLimit) ||
+			(reservation.MinuteLimit > 0 && minutes[minuteKey] >= reservation.MinuteLimit) {
+			return false, nil
+		}
+		counts[dayKey]++
+		minutes[minuteKey]++
+	}
+	f.counts, f.minutes = counts, minutes
 	return true, nil
 }
 
@@ -341,6 +375,106 @@ func TestRemaining(t *testing.T) {
 	}
 }
 
+func TestDailyCeilingDistinguishesUnlimitedAndZeroBackgroundShare(t *testing.T) {
+	for _, limit := range []int{0, 1, 2} {
+		for _, purpose := range []Purpose{Interactive, Background} {
+			t.Run(fmt.Sprintf("limit-%d-purpose-%d", limit, purpose), func(t *testing.T) {
+				store := newFakeStore()
+				broker, err := New(map[string]Limit{testProvider: {PerDay: limit}}, store, 0.2)
+				if err != nil {
+					t.Fatal(err)
+				}
+				broker.WithClock((&fakeClock{now: noon}).read)
+				want := limit
+				if limit == 0 {
+					want = -1
+				} else if purpose == Background {
+					want = int(math.Floor(float64(limit)*0.8 + 1e-9))
+				}
+				for i := 0; i < max(want, 1)+1; i++ {
+					allowed, err := broker.Allow(context.Background(), testProvider, purpose)
+					if err != nil {
+						t.Fatal(err)
+					}
+					wantAllowed := want < 0 || i < want
+					if allowed != wantAllowed {
+						t.Fatalf("request %d allowed=%v, want %v (ceiling %d)", i, allowed, wantAllowed, want)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestAtomicBatchWindowPersistsAcrossBrokerInstancesAndCooldowns(t *testing.T) {
+	store := newFakeStore()
+	now := noon
+	limits := map[string]Limit{"ip-api": {PerMinute: 45}, "ip-api-batch": {PerMinute: 15, MinuteWindow: true}}
+	newBroker := func() *Broker {
+		broker, err := New(limits, store, 0.2)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return broker.WithClock(func() time.Time { return now })
+	}
+	broker := newBroker()
+	for range 15 {
+		if allowed, err := broker.AllowTogether(context.Background(), Background, "ip-api", "ip-api-batch"); err != nil || !allowed {
+			t.Fatalf("batch reservation before cap = (%v,%v)", allowed, err)
+		}
+	}
+	if allowed, err := newBroker().AllowTogether(context.Background(), Background, "ip-api", "ip-api-batch"); err != nil || allowed {
+		t.Fatalf("replica exceeded persisted batch cap: (%v,%v)", allowed, err)
+	}
+	if used, _ := store.Used(context.Background(), "ip-api", utcDay(now)); used != 15 {
+		t.Fatalf("refused batch consumed shared provider quota: %d", used)
+	}
+	if err := broker.ObserveQuota(context.Background(), "ip-api-batch", 0, 90*time.Second, 200); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if allowed, err := newBroker().AllowTogether(context.Background(), Background, "ip-api", "ip-api-batch"); err != nil || allowed {
+		t.Fatalf("provider cooldown was not durable across the minute window: (%v,%v)", allowed, err)
+	}
+	now = now.Add(time.Minute)
+	if allowed, err := newBroker().AllowTogether(context.Background(), Background, "ip-api", "ip-api-batch"); err != nil || !allowed {
+		t.Fatalf("batch reservation after cap and cooldown = (%v,%v)", allowed, err)
+	}
+}
+
+func TestAllowTogetherValidationAndStoreFailures(t *testing.T) {
+	t.Run("store lacks atomic support", func(t *testing.T) {
+		store := newFakeStore()
+		broker, err := New(map[string]Limit{testProvider: {}}, storeOnly{Store: store}, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if allowed, err := broker.AllowTogether(context.Background(), Interactive, testProvider); allowed || err == nil {
+			t.Fatalf("non-atomic store result = (%v,%v)", allowed, err)
+		}
+	})
+	broker, err := New(map[string]Limit{testProvider: {}}, newFakeStore(), 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, providers := range [][]string{{testProvider, testProvider}, {"unknown"}} {
+		if allowed, err := broker.AllowTogether(context.Background(), Interactive, providers...); allowed || err == nil {
+			t.Fatalf("invalid reservation %v result = (%v,%v)", providers, allowed, err)
+		}
+	}
+	store := newFakeStore()
+	store.usedErr = errBoom
+	broker, err = New(map[string]Limit{testProvider: {}}, store, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := broker.AllowTogether(context.Background(), Interactive, testProvider); allowed || !errors.Is(err, errBoom) {
+		t.Fatalf("atomic store error result = (%v,%v)", allowed, err)
+	}
+}
+
+type storeOnly struct{ Store }
+
 func TestNewValidatesArguments(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -429,6 +563,113 @@ func (r fakeRow) Scan(dest ...any) error {
 	}
 	*dest[0].(*int) = r.value
 	return nil
+}
+
+type fakeTransactionalDB struct {
+	*fakeDB
+	tx       *fakeReservationTx
+	beginErr error
+}
+
+func (d *fakeTransactionalDB) Begin(context.Context) (pgx.Tx, error) { return d.tx, d.beginErr }
+
+type fakeReservationTx struct {
+	pgx.Tx
+	rows      []pgx.Row
+	calls     []Reservation
+	queries   int
+	commits   int
+	rollbacks int
+	commitErr error
+}
+
+func (tx *fakeReservationTx) QueryRow(_ context.Context, _ string, args ...any) pgx.Row {
+	if len(args) >= 2 {
+		provider, _ := args[0].(string)
+		day, _ := args[1].(time.Time)
+		tx.calls = append(tx.calls, Reservation{Provider: provider, Day: day})
+	}
+	if tx.queries < len(tx.rows) {
+		row := tx.rows[tx.queries]
+		tx.queries++
+		return row
+	}
+	tx.queries++
+	return fakeRow{value: 1}
+}
+
+func TestPostgresStoreReserveManySortsSameProviderByDay(t *testing.T) {
+	firstDay, secondDay := noon.Add(24*time.Hour), noon
+	tx := &fakeReservationTx{}
+	db := &fakeTransactionalDB{fakeDB: &fakeDB{}, tx: tx}
+	reservations := []Reservation{
+		{Provider: "beta", Day: noon},
+		{Provider: "alpha", Day: firstDay},
+		{Provider: "alpha", Day: secondDay},
+	}
+	if allowed, err := NewPostgresStore(db).ReserveMany(context.Background(), reservations); err != nil || !allowed {
+		t.Fatalf("ReserveMany = (%v,%v)", allowed, err)
+	}
+	want := []Reservation{{Provider: "alpha", Day: secondDay}, {Provider: "alpha", Day: firstDay}, {Provider: "beta", Day: noon}}
+	if len(tx.calls) != len(want) {
+		t.Fatalf("reservation order calls = %+v", tx.calls)
+	}
+	for i := range want {
+		if tx.calls[i].Provider != want[i].Provider || !tx.calls[i].Day.Equal(want[i].Day) {
+			t.Fatalf("reservation order = %+v, want %+v", tx.calls, want)
+		}
+	}
+}
+
+func (tx *fakeReservationTx) Commit(context.Context) error {
+	tx.commits++
+	return tx.commitErr
+}
+
+func (tx *fakeReservationTx) Rollback(context.Context) error {
+	tx.rollbacks++
+	return nil
+}
+
+func TestPostgresStoreReserveManyTransactionBehavior(t *testing.T) {
+	ctx := context.Background()
+	reservation := Reservation{Provider: "first", Day: noon, Minute: noon, Now: noon, DailyLimit: 2}
+	if allowed, err := NewPostgresStore(&fakeDB{}).ReserveMany(ctx, nil); err != nil || !allowed {
+		t.Fatalf("empty reservation = (%v,%v)", allowed, err)
+	}
+	if allowed, err := NewPostgresStore(&fakeDB{}).ReserveMany(ctx, []Reservation{reservation}); allowed || err == nil {
+		t.Fatalf("nontransactional store = (%v,%v)", allowed, err)
+	}
+	db := &fakeTransactionalDB{fakeDB: &fakeDB{}, beginErr: errBoom}
+	if allowed, err := NewPostgresStore(db).ReserveMany(ctx, []Reservation{reservation}); allowed || !errors.Is(err, errBoom) {
+		t.Fatalf("begin failure = (%v,%v)", allowed, err)
+	}
+	cases := []struct {
+		name      string
+		rows      []pgx.Row
+		commitErr error
+		want      bool
+		wantErr   error
+	}{
+		{name: "commits ordered reservations", rows: []pgx.Row{fakeRow{value: 1}, fakeRow{value: 1}}, want: true},
+		{name: "denial rolls back prior reservation", rows: []pgx.Row{fakeRow{value: 1}, fakeRow{err: pgx.ErrNoRows}}},
+		{name: "reservation error rolls back", rows: []pgx.Row{fakeRow{err: errBoom}}, wantErr: errBoom},
+		{name: "commit error is returned", rows: []pgx.Row{fakeRow{value: 1}}, commitErr: errBoom, wantErr: errBoom},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tx := &fakeReservationTx{rows: tc.rows, commitErr: tc.commitErr}
+			db := &fakeTransactionalDB{fakeDB: &fakeDB{}, tx: tx}
+			allowed, err := NewPostgresStore(db).ReserveMany(ctx, []Reservation{reservation,
+				{Provider: "second", Day: noon, Minute: noon, Now: noon, DailyLimit: 2}})
+			if allowed != tc.want || !errors.Is(err, tc.wantErr) || tx.rollbacks != 1 {
+				t.Fatalf("ReserveMany = (%v,%v), rollbacks=%d", allowed, err, tx.rollbacks)
+			}
+			if (tc.commitErr != nil || tc.want && err == nil) != (tx.commits == 1) {
+				t.Fatalf("commit calls = %d", tx.commits)
+			}
+		})
+	}
 }
 
 func TestPostgresStoreCallsAndErrors(t *testing.T) {

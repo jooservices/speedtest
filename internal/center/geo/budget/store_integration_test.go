@@ -4,6 +4,7 @@ package budget
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -119,4 +120,56 @@ func TestPostgresStoreDailyCountsIntegration(t *testing.T) {
 			t.Fatalf("expired cooldown = (%v,%v), want (true,nil)", ok, err)
 		}
 	})
+}
+
+func TestPostgresStoreZeroCeilingsAndAtomicBatchWindowIntegration(t *testing.T) {
+	pool, ctx := budgetIntegrationPool(t)
+	store := NewPostgresStore(pool)
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	for _, limit := range []int{0, 1, 2} {
+		provider := fmt.Sprintf("ceiling-%d", limit)
+		allowedCount := max(limit, 3)
+		if limit > 0 {
+			allowedCount = limit
+		}
+		for i := 0; i < allowedCount; i++ {
+			allowed, err := store.Reserve(ctx, provider, now, now.Truncate(time.Minute), now, limit, limit)
+			if err != nil || !allowed {
+				t.Fatalf("initial ceiling %d reservation %d = (%v,%v)", limit, i, allowed, err)
+			}
+		}
+		if limit > 0 {
+			allowed, err := store.Reserve(ctx, provider, now, now.Truncate(time.Minute), now, limit, limit)
+			if err != nil || allowed {
+				t.Fatalf("ceiling %d allowed request beyond cap: (%v,%v)", limit, allowed, err)
+			}
+		}
+	}
+	batchDay := time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC)
+	reserveBatch := func(at time.Time) (bool, error) {
+		return store.ReserveMany(ctx, []Reservation{
+			{Provider: "ip-api", Day: utcDay(at), Minute: at.Truncate(time.Minute), Now: at, DailyLimit: 0, MinuteLimit: 45},
+			{Provider: "ip-api-batch", Day: batchDay, Minute: at.Truncate(time.Minute), Now: at, DailyLimit: 0, MinuteLimit: 15},
+		})
+	}
+	for range 15 {
+		if allowed, err := reserveBatch(now); err != nil || !allowed {
+			t.Fatalf("batch reservation before cap = (%v,%v)", allowed, err)
+		}
+	}
+	if allowed, err := reserveBatch(now); err != nil || allowed {
+		t.Fatalf("16th batch reservation = (%v,%v), want (false,nil)", allowed, err)
+	}
+	if used, err := store.Used(ctx, "ip-api", utcDay(now)); err != nil || used != 15 {
+		t.Fatalf("atomic refusal consumed shared ip-api budget: used=%d err=%v", used, err)
+	}
+	if err := store.BlockUntil(ctx, "ip-api-batch", now, now.Add(90*time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := reserveBatch(now.Add(time.Minute)); err != nil || allowed {
+		t.Fatalf("batch cooldown did not survive the minute boundary: (%v,%v)", allowed, err)
+	}
+	if allowed, err := reserveBatch(now.Add(2 * time.Minute)); err != nil || !allowed {
+		t.Fatalf("batch reservation after cooldown = (%v,%v)", allowed, err)
+	}
 }

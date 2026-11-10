@@ -10,14 +10,17 @@ CREATE TABLE geo_provider_usage (
     PRIMARY KEY (provider, day)
 );
 
--- A single keyset cursor makes the slow cache refresh resumable within its UTC day.
+-- A priority/IP keyset cursor makes the slow cache refresh resumable across UTC days.
 CREATE TABLE geo_backfill_state (
     singleton boolean PRIMARY KEY DEFAULT true CHECK (singleton),
     run_day date NOT NULL,
     cursor inet,
+    cursor_node_priority boolean NOT NULL DEFAULT true,
     updated_at timestamptz NOT NULL DEFAULT now()
 );
+CREATE INDEX node_ip_addresses_ip_idx ON node_ip_addresses(ip);
 
 -- +goose Down
+DROP INDEX node_ip_addresses_ip_idx;
 DROP TABLE geo_backfill_state;
 DROP TABLE geo_provider_usage;

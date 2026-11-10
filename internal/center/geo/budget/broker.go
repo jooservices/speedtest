@@ -20,6 +20,19 @@ const (
 // Limit is a provider's free quota; zero means "no limit of that kind".
 type Limit struct {
 	PerMinute, PerDay int
+	MinuteWindow      bool
+}
+
+// Reservation is one quota dimension in an atomic multi-provider reservation.
+type Reservation struct {
+	Provider                string
+	Day, Minute, Now        time.Time
+	DailyLimit, MinuteLimit int
+}
+
+// MultiReserver atomically reserves multiple provider dimensions or none.
+type MultiReserver interface {
+	ReserveMany(context.Context, []Reservation) (bool, error)
 }
 
 // Usage is the safe operator view of one provider's persisted daily budget.
@@ -81,7 +94,32 @@ func (b *Broker) Allow(ctx context.Context, provider string, p Purpose) (bool, e
 		return false, ErrUnknownProvider
 	}
 	now := b.now().UTC()
-	return b.store.Reserve(ctx, provider, utcDay(now), now.Truncate(time.Minute), now, b.dailyCeiling(limit.PerDay, p), limit.PerMinute)
+	return b.store.Reserve(ctx, provider, reservationDay(now, limit), now.Truncate(time.Minute), now, b.dailyCeiling(limit.PerDay, p), limit.PerMinute)
+}
+
+// AllowTogether counts multiple related provider dimensions in one transaction.
+// It fails closed when the configured store cannot make the reservation atomic.
+func (b *Broker) AllowTogether(ctx context.Context, p Purpose, providers ...string) (bool, error) {
+	store, ok := b.store.(MultiReserver)
+	if !ok {
+		return false, errors.New("geolocation budget store does not support atomic multi-reservations")
+	}
+	now := b.now().UTC()
+	reservations := make([]Reservation, 0, len(providers))
+	seen := make(map[string]struct{}, len(providers))
+	for _, provider := range providers {
+		if _, duplicate := seen[provider]; duplicate {
+			return false, fmt.Errorf("duplicate geolocation provider reservation %q", provider)
+		}
+		seen[provider] = struct{}{}
+		limit, known := b.limits[provider]
+		if !known {
+			return false, ErrUnknownProvider
+		}
+		reservations = append(reservations, Reservation{Provider: provider, Day: reservationDay(now, limit),
+			Minute: now.Truncate(time.Minute), Now: now, DailyLimit: b.dailyCeiling(limit.PerDay, p), MinuteLimit: limit.PerMinute})
+	}
+	return store.ReserveMany(ctx, reservations)
 }
 
 // ObserveQuota persists a provider cooldown when its response exhausts the advertised window or returns 429.
@@ -108,11 +146,15 @@ func (b *Broker) Remaining(ctx context.Context, provider string, p Purpose) (int
 	if limit.PerDay == 0 {
 		return -1, nil
 	}
+	ceiling := b.dailyCeiling(limit.PerDay, p)
+	if ceiling < 0 {
+		return 0, nil
+	}
 	used, err := b.store.Used(ctx, provider, utcDay(b.now()))
 	if err != nil {
 		return 0, err
 	}
-	return max(b.dailyCeiling(limit.PerDay, p)-used, 0), nil
+	return max(ceiling-used, 0), nil
 }
 
 // Usage reports the durable count and configured daily cap without exposing store details.
@@ -133,11 +175,25 @@ func (b *Broker) Usage(ctx context.Context, provider string) (Usage, error) {
 // dailyCeiling is the most requests of the day the purpose may use. Anything other than Interactive
 // gets the reduced share, so an unknown purpose fails towards the stricter limit.
 func (b *Broker) dailyCeiling(perDay int, p Purpose) int {
+	if perDay == 0 {
+		return 0
+	}
 	if p == Interactive {
 		return perDay
 	}
 	// The epsilon absorbs binary rounding, for example 0.29 * 100 is 28.999... and would lose a request.
-	return int(math.Floor(float64(perDay)*(1-b.reserve) + 1e-9))
+	ceiling := int(math.Floor(float64(perDay)*(1-b.reserve) + 1e-9))
+	if ceiling == 0 {
+		return -1
+	}
+	return ceiling
+}
+
+func reservationDay(now time.Time, limit Limit) time.Time {
+	if limit.MinuteWindow {
+		return time.Date(1, time.January, 1, 0, 0, 0, 0, time.UTC)
+	}
+	return utcDay(now)
 }
 
 // utcDay returns midnight UTC of the day containing t, the key the daily counts are stored under.

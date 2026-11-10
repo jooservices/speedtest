@@ -131,6 +131,19 @@ func TestResolverOfflineThenFallbackAndPersistsSource(t *testing.T) {
 	})
 }
 
+func TestResolverLowValueFallbackSkipsUnusableProvidersUntilSuccess(t *testing.T) {
+	for _, firstErr := range []error{ErrBudgetExhausted, ErrNotFound, errors.New("provider unavailable")} {
+		first := testFallback{name: "first", geo: &testGeo{err: firstErr}}
+		second := testFallback{name: "second", geo: &testGeo{location: Location{Country: "US"}}}
+		third := testFallback{name: "third", geo: &testGeo{err: errors.New("must stop after a result")}}
+		got, err := NewResolver(nil, nil, first, second, third).Lookup(context.Background(), "8.8.8.8")
+		if err != nil || got.Country != "US" || first.geo.calls.Load() != 1 || second.geo.calls.Load() != 1 || third.geo.calls.Load() != 0 {
+			t.Fatalf("first=%v lookup = %+v, %v; calls=(%d,%d,%d)", firstErr, got, err,
+				first.geo.calls.Load(), second.geo.calls.Load(), third.geo.calls.Load())
+		}
+	}
+}
+
 func TestResolverErrorAndInvalidIPPaths(t *testing.T) {
 	t.Run("cancelled context", func(t *testing.T) {
 		cache := &testCache{}

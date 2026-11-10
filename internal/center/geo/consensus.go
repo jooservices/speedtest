@@ -68,47 +68,91 @@ func (r *Resolver) lookupConsensus(ctx context.Context, ip string) (Location, er
 // answers (the first non-empty value of each field wins) and names the sources. The third result lists the
 // competing country votes when providers disagree, empty otherwise.
 func pickConsensus(answers []sourced) (Location, string, string) {
-	votes := map[string]int{}
-	order := []string{}
-	for _, a := range answers {
-		c := strings.ToUpper(a.location.Country)
-		if _, seen := votes[c]; !seen {
-			order = append(order, c)
-		}
-		votes[c]++
-	}
-	winner := order[0]
-	for _, c := range order {
-		if votes[c] > votes[winner] {
-			winner = c
-		}
-	}
+	winner, disagreement := countryConsensus(answers)
 	var merged Location
 	var names []string
 	for _, a := range answers {
-		if strings.ToUpper(a.location.Country) != winner {
+		country := strings.ToUpper(a.location.Country)
+		if country == "" {
+			asn := Location{ASN: a.location.ASN, Organisation: a.location.Organisation,
+				FieldSources: FieldSources{ASN: a.location.FieldSources.ASN, Organisation: a.location.FieldSources.Organisation}}
+			var contributed bool
+			merged, contributed = fillSourced(merged, asn, a.source)
+			if contributed {
+				names = append(names, a.source)
+			}
 			continue
 		}
-		names = append(names, a.source)
-		merged = fill(merged, a.location)
+		if country != winner {
+			continue
+		}
+		var contributed bool
+		merged, contributed = fillSourced(merged, a.location, a.source)
+		if contributed {
+			names = append(names, a.source)
+		}
+	}
+	if len(names) == 0 {
+		names = append(names, answers[0].source)
 	}
 	source := names[0]
 	if len(names) > 1 {
 		source = "consensus:" + strings.Join(names, "+")
 	}
+	return merged, source, disagreement
+}
+
+func countryConsensus(answers []sourced) (string, string) {
+	votes := map[string]int{}
+	order := []string{}
+	for _, a := range answers {
+		c := strings.ToUpper(a.location.Country)
+		if c == "" {
+			continue
+		}
+		if _, seen := votes[c]; !seen {
+			order = append(order, c)
+		}
+		votes[c]++
+	}
+	winner := ""
+	for _, c := range order {
+		if winner == "" || votes[c] > votes[winner] {
+			winner = c
+		}
+	}
 	disagreement := ""
 	if len(order) > 1 {
-		parts := make([]string, 0, len(order))
-		for _, c := range order {
-			label := c
-			if label == "" {
-				label = "none"
-			}
-			parts = append(parts, label)
-		}
-		disagreement = strings.Join(parts, ",")
+		disagreement = strings.Join(order, ",")
 	}
-	return merged, source, disagreement
+	return winner, disagreement
+}
+
+func fillSourced(base, other Location, fallbackSource string) (Location, bool) {
+	before := base
+	incomingSources := mapsForMerge(other, fallbackSource)
+	base = fill(base, other)
+	sources := base.FieldSources.asMap()
+	for _, field := range []struct {
+		name string
+		was  bool
+		now  bool
+	}{
+		{"city", before.City != "", base.City != ""},
+		{"region", before.Region != "", base.Region != ""},
+		{"country", before.Country != "", base.Country != ""},
+		{"time_zone", before.TimeZone != "", base.TimeZone != ""},
+		{"organisation", before.Organisation != "", base.Organisation != ""},
+		{"coordinates", before.Latitude != 0 || before.Longitude != 0, base.Latitude != 0 || base.Longitude != 0},
+		{"asn", before.ASN > 0, base.ASN > 0},
+		{"accuracy_radius", before.AccuracyRadius > 0, base.AccuracyRadius > 0},
+	} {
+		if !field.was && field.now {
+			sources[field.name] = incomingSources[field.name]
+		}
+	}
+	base.FieldSources = fieldSources(sources)
+	return base, base != before
 }
 
 // fill returns base with every empty field taken from other.

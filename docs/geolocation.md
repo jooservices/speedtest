@@ -193,7 +193,9 @@ The stored quality score is 0–100, combines location completeness, source and 
 threshold. It is recomputed from stored fields and lookup age on reads. Merge fills missing fields; it replaces a populated
 field only when the incoming source ranks higher, and stores provenance for each field. Offline data is checked before
 online requests. Node-address lookups may use consensus; interactive owner lookups are limited to one configured
-provider to conserve free quotas.
+provider to conserve free quotas. A lookup that adds no field value or better provenance does not renew the cached
+observation time. Consensus votes only on known countries; a countryless RIPEstat ASN can fill an ASN gap while each
+field keeps its actual contributing provider.
 
 `geo_provider_usage` stores per-provider UTC-day request totals, current-minute counts and provider cooldowns in
 PostgreSQL. Reservations are atomic across center processes and survive restarts. A daily limit of zero means no local
@@ -201,12 +203,21 @@ daily cap. Background work can use at most 80% of a configured daily quota, leav
 The broker observes ip-api `X-Rl`, `X-Ttl` and HTTP 429 responses and blocks calls until the provider window expires.
 The ip-api free endpoint defaults off; enabling it logs a warning that request IPs travel over plaintext HTTP and that
 the free service is for non-commercial use. Single lookups are paced to 45/minute; batch requests are paced to 15/minute
-and contain at most 100 IPs per request.
+and contain at most 100 IPs per request. The batch window has its own durable reservation key; batch calls atomically
+reserve both that window and the shared ip-api request budget, and batch `X-Rl`/`X-Ttl` or 429 responses persist its
+cooldown across restarts and center replicas.
 
 At the configured UTC hour (02:00 by default), the resumable backfill selects at most 100 weak or aged addresses per
-night, in bounded batches of up to 100. It uses ip-api batching when enabled and otherwise the budgeted fallback chain.
-The cursor is persisted after each completed batch in `geo_backfill_state`; a later UTC day starts a fresh pass. Daily
-limits and batch size/pause are configurable in `.env.example`.
+night, in bounded batches of up to 100. It includes unlooked placeholders, visits node addresses before lookup-only
+addresses, and uses ip-api batching when enabled and otherwise the budgeted fallback chain. If ingestion finds every
+provider out of budget, it commits the measurement and leaves an unlooked address for this scheduled retry path.
+`geo_backfill_state` stores the node-priority/IP cursor across UTC days and budget stops; after the keyspace is fully
+visited, the next pass starts from the highest-priority address again. Daily limits and batch size/pause are configurable
+in `.env.example`.
+
+`python3 scripts/geo-test-fixtures.py` verifies pinned public MMDB fixtures, including IPinfo's vendor sample database.
+IPinfo Lite stores ASN values as strings such as `AS174`; the reader validates and converts that value while keeping
+GeoLite fields available if the supplemental IPinfo record cannot be decoded.
 
 `GET /api/ip/providers` is session-protected and reports provider state, key-configured state, daily limit and today's
 request count. The Settings location panel never exposes a credential. Stored `ip_addresses.geo` uses `quality_score`

@@ -215,7 +215,7 @@ func TestTransactionFailures(t *testing.T) {
 	}
 }
 func TestGeoLookupAndDegradation(t *testing.T) {
-	for _, err := range []error{nil, geo.ErrNotFound, errFailure} {
+	for _, err := range []error{nil, geo.ErrNotFound, geo.ErrBudgetExhausted, errFailure} {
 		tx := testTransaction(nil, nil, false)
 		source := &lookup{err: err}
 		w := &Watcher{Offline: source, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
