@@ -4,6 +4,18 @@ Owner decision, 2026-11-02. A ticket is **Done only when the work is proven to w
 
 The reviewer (Claude) checks every item below with evidence. A developer's own statement is not evidence.
 
+## 0. What "done" means (owner decision 2026-11-09)
+
+A ticket is done only when **all three** are true:
+
+1. **PR done**: the change is a reviewed pull request (a branch per ticket, reviewed against the ticket's acceptance criteria). Until the repository has a remote, the
+   reviewed branch merged by `.tmp/dev`'s merge step is the pull request.
+2. **Green**: every check is green on the final code, not on an earlier commit: `make ci` (vet, tests, build, lint, installer test, test matrix), the integration suite, the E2E suite,
+   UI coverage at 85% per file, govulncheck. A flaky timing failure is a finding to fix or to prove (a clean rerun), never a reason to merge.
+3. **Merged**: the branch is merged into `develop`. The Jira ticket moves to Done only after the merge, with the evidence in a comment.
+
+Code that is written but not merged, or merged without a green run, is not done and is never reported as done.
+
 ## 1. Correctness
 - [ ] Every acceptance criterion in the ticket is met and demonstrated (command output, screenshot, or test name), not just claimed.
 - [ ] Error paths, empty states, boundary values and concurrency behave correctly, not only the happy path.
