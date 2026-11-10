@@ -18,7 +18,10 @@ installation limit per node. It stores no SSH credentials or enrollment tokens.
 `00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
 `00017_node_engine_servers.sql` adds per-node/per-engine server catalogs, engine-scoped discovery
 commands and pins. Existing primary-engine pins are backfilled from `nodes.server_id`; the legacy
-column remains synchronized for compatibility with the current center binary.
+column remains synchronized for compatibility with older agents. Results record whether the
+measurement-time selection is known and the pin active then; old result rows remain unknown.
+Terminal catalog acknowledgements store a payload digest so a conflicting retry can be rejected
+without replacing a newer catalog refresh.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file
@@ -81,7 +84,7 @@ that a subsequent up can reapply version 1.
 | `sessions` | Hashed opaque token and CSRF token, optional user for anonymous bootstrap, expiry |
 | `nodes` | Independent node settings, expected speeds, binding, revision and heartbeat |
 | `node_credentials` | Hashed single-use enrollment tokens and bearer credentials, expiration/revocation |
-| `results` | Client UUID, normalized nullable measurements, original engine JSON and metadata |
+| `results` | Client UUID, normalized nullable measurements, original engine JSON, metadata and measurement-time pin snapshot |
 | `ip_addresses` | IPv4/IPv6 host address and cached geolocation JSON |
 | `node_ip_history` | Measurement-ordered address boundaries per node (initial row has null from_ip) |
 | `node_ip_addresses` | Per-node/address counts, first/last measurement time and speed sums |

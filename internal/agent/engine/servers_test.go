@@ -74,6 +74,14 @@ func TestParseLibreSpeedListRows(t *testing.T) {
 	if err != nil || len(got) != 1 || got[0].ID != 3 {
 		t.Fatalf("table rows = %#v, %v", got, err)
 	}
+	fixture, err := os.ReadFile("../testdata/fake-speedtest/librespeed-servers-v1.0.14.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = ParseLibreSpeedList(fixture)
+	if err != nil || len(got) != 2 || got[0].ID != 51 || got[0].Name != "Hanoi, Vietnam (Hanoi Speedtest)" || got[0].Host != "hn.example.test" || got[0].ISP != "Hanoi ISP" || got[0].DistanceKM != nil || got[1].ID != 52 || got[1].Host != "sg.example.test" || got[1].ISP != "Singapore ISP" {
+		t.Fatalf("LibreSpeed CLI rows = %#v, %v", got, err)
+	}
 	if _, err := ParseLibreSpeedList([]byte("no servers")); err == nil {
 		t.Fatal("accepted output without server rows")
 	}
@@ -82,6 +90,26 @@ func TestParseLibreSpeedListRows(t *testing.T) {
 	}
 	if _, err := ParseLibreSpeedList([]byte("4  Duplicate\n4  Duplicate\n")); err == nil {
 		t.Fatal("duplicate server ID accepted")
+	}
+}
+
+func TestParseLibreSpeedCLIEntryRejectsMalformedRows(t *testing.T) {
+	for _, line := range []string{
+		"bad-id: Server (https://server.example)",
+		"1: Server",
+		"1: Server (unterminated URL",
+		"1: Server (https://[invalid)",
+		"1: Server (https://user:password@server.example)",
+		"1: (https://server.example)",
+		"1: Server (https://server.example) [Sponsor: " + strings.Repeat("x", 201) + "]",
+	} {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			t.Fatal("empty malformed fixture")
+		}
+		if server, ok := parseLibreSpeedCLIEntry(line, fields[0]); ok {
+			t.Errorf("accepted malformed row %#v from %q", server, line)
+		}
 	}
 }
 
@@ -123,6 +151,28 @@ cat "$SERVER_LIST_OUTPUT"
 	args, err = os.ReadFile(argsPath)
 	if err != nil || string(args) != "--list\n--server-json\nhttps://servers.example/list.json\n--source\n192.0.2.10\n" {
 		t.Fatalf("LibreSpeed arguments = %q, %v", args, err)
+	}
+	defaultLibre, err := NewLibreSpeed(LibreSpeedConfig{Binary: bin})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err = defaultLibre.ListServers(context.Background(), Options{})
+	if err != nil || len(got) != 1 {
+		t.Fatalf("LibreSpeed default list = %#v, %v", got, err)
+	}
+	args, err = os.ReadFile(argsPath)
+	if err != nil || string(args) != "--list\n" {
+		t.Fatalf("LibreSpeed default arguments = %q, %v", args, err)
+	}
+	if _, err := defaultLibre.ListServers(context.Background(), Options{InterfaceName: "eth0"}); err == nil {
+		t.Fatal("LibreSpeed server discovery accepted unsupported interface binding")
+	}
+	missing, err := NewLibreSpeed(LibreSpeedConfig{Binary: filepath.Join(t.TempDir(), "missing")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := missing.ListServers(context.Background(), Options{}); err == nil {
+		t.Fatal("LibreSpeed server discovery accepted a missing executable")
 	}
 }
 

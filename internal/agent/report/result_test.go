@@ -32,6 +32,28 @@ func TestValidateFailed(t *testing.T) {
 	}
 }
 
+func TestServerSelectionSnapshotWireFields(t *testing.T) {
+	r := okResult("00000000-0000-4000-8000-000000000001")
+	legacy, err := json.Marshal(r)
+	if err != nil || strings.Contains(string(legacy), "serverSelectionKnown") || strings.Contains(string(legacy), "pinnedServerId") {
+		t.Fatalf("legacy result snapshot fields=%s err=%v", legacy, err)
+	}
+	r.ServerSelectionKnown = true
+	r.PinnedServerID = i64p(54321)
+	if err := r.Validate(); err != nil {
+		t.Fatal("valid pin snapshot rejected:", err)
+	}
+	encoded, err := json.Marshal(r)
+	var fields map[string]any
+	if err != nil || json.Unmarshal(encoded, &fields) != nil || fields["serverSelectionKnown"] != true || fields["pinnedServerId"] != float64(54321) {
+		t.Fatalf("pin snapshot wire fields=%s err=%v", encoded, err)
+	}
+	r.ServerSelectionKnown = false
+	if err := r.Validate(); err == nil {
+		t.Fatal("pin value without a known measurement selection was accepted")
+	}
+}
+
 func TestValidateRejectsBadInput(t *testing.T) {
 	base := okResult("00000000-0000-4000-8000-000000000001")
 	cases := map[string]func(*Result){

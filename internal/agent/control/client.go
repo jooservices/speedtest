@@ -53,11 +53,12 @@ type QuietHours struct {
 // GET /api/agent/config. Only the fields the scheduler needs are decoded; the
 // rest are ignored.
 type AgentConfig struct {
-	Schedules []ScheduleInput `json:"schedules,omitempty"`
-	Engine    string          `json:"engine"`
-	Threads   int             `json:"threads"`
-	Server    json.RawMessage `json:"server"`
-	Binding   *struct {
+	Schedules                []ScheduleInput `json:"schedules,omitempty"`
+	Engine                   string          `json:"engine"`
+	ServerSelectionSnapshots bool            `json:"serverSelectionSnapshots,omitempty"`
+	Threads                  int             `json:"threads"`
+	Server                   json.RawMessage `json:"server"`
+	Binding                  *struct {
 		Interface string  `json:"iface"`
 		SourceIP  *string `json:"sourceIp"`
 	} `json:"binding"`

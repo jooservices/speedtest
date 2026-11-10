@@ -3,6 +3,7 @@ package agentapi
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"net/netip"
 	"net/url"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -23,34 +25,36 @@ var (
 
 // Result preserves nullable measurements and original engine details.
 type Result struct {
-	Engine          string          `json:"engine,omitempty"`
-	ID              string          `json:"id"`
-	TS              string          `json:"ts"`
-	Status          string          `json:"status"`
-	Down            *float64        `json:"down"`
-	Up              *float64        `json:"up"`
-	Ping            *float64        `json:"ping"`
-	Jitter          *float64        `json:"jitter"`
-	DLat            *float64        `json:"dLat"`
-	ULat            *float64        `json:"uLat"`
-	Loss            *float64        `json:"loss"`
-	ServerID        *int            `json:"serverId"`
-	IP              *string         `json:"ip"`
-	Threads         int             `json:"threads"`
-	BytesDown       int64           `json:"bytesDown"`
-	BytesUp         int64           `json:"bytesUp"`
-	Duration        float64         `json:"duration"`
-	Error           *string         `json:"error"`
-	Manual          bool            `json:"manual"`
-	Raw             json.RawMessage `json:"raw"`
-	LoadedDown      *LoadedLatency  `json:"loadedDown"`
-	LoadedUp        *LoadedLatency  `json:"loadedUp"`
-	Server          *Server         `json:"server"`
-	EngineISP       *string         `json:"engineISP"`
-	EngineResultID  *string         `json:"engineResultId"`
-	EngineResultURL *string         `json:"engineResultUrl"`
-	EngineIP        *string         `json:"engineIp"`
-	Warnings        []string        `json:"warnings"`
+	Engine               string          `json:"engine,omitempty"`
+	ID                   string          `json:"id"`
+	TS                   string          `json:"ts"`
+	Status               string          `json:"status"`
+	Down                 *float64        `json:"down"`
+	Up                   *float64        `json:"up"`
+	Ping                 *float64        `json:"ping"`
+	Jitter               *float64        `json:"jitter"`
+	DLat                 *float64        `json:"dLat"`
+	ULat                 *float64        `json:"uLat"`
+	Loss                 *float64        `json:"loss"`
+	ServerID             *int            `json:"serverId"`
+	IP                   *string         `json:"ip"`
+	Threads              int             `json:"threads"`
+	BytesDown            int64           `json:"bytesDown"`
+	BytesUp              int64           `json:"bytesUp"`
+	Duration             float64         `json:"duration"`
+	Error                *string         `json:"error"`
+	Manual               bool            `json:"manual"`
+	Raw                  json.RawMessage `json:"raw"`
+	LoadedDown           *LoadedLatency  `json:"loadedDown"`
+	LoadedUp             *LoadedLatency  `json:"loadedUp"`
+	Server               *Server         `json:"server"`
+	EngineISP            *string         `json:"engineISP"`
+	EngineResultID       *string         `json:"engineResultId"`
+	EngineResultURL      *string         `json:"engineResultUrl"`
+	EngineIP             *string         `json:"engineIp"`
+	Warnings             []string        `json:"warnings"`
+	ServerSelectionKnown bool            `json:"serverSelectionKnown"`
+	PinnedServerID       *int64          `json:"pinnedServerId,omitempty"`
 }
 
 type LoadedLatency struct {
@@ -199,7 +203,7 @@ func ParseResult(data []byte) (Result, error) {
 			return r, ErrInvalid
 		}
 	}
-	if r.Loss != nil && *r.Loss > 100 || r.ServerID != nil && *r.ServerID < 1 {
+	if r.Loss != nil && *r.Loss > 100 || r.ServerID != nil && *r.ServerID < 1 || r.PinnedServerID != nil && (*r.PinnedServerID < 1 || *r.PinnedServerID > math.MaxInt32 || !r.ServerSelectionKnown) {
 		return r, ErrInvalid
 	}
 	switch r.Status {
@@ -324,6 +328,7 @@ type Command struct {
 	Pct       float64    `json:"pct"`
 	ResultID  *string    `json:"resultId"`
 	Error     *string    `json:"error"`
+	AckDigest []byte     `json:"-"`
 }
 
 // ApplyAck enforces monotonic progress and immutable terminal acknowledgements.
@@ -341,6 +346,13 @@ func ApplyAck(c Command, a Ack) (Command, error) {
 		next.ResultID = &id
 	}
 	next.Error = a.Error
+	if a.Servers != nil {
+		digest, err := serverOptionsDigest(*a.Servers)
+		if err != nil {
+			return c, ErrInvalid
+		}
+		next.AckDigest = digest
+	}
 	terminal := c.Status == "succeeded" || c.Status == "failed"
 	if next.Pct < c.Pct || terminal && !sameAck(c, next) {
 		return c, ErrConflict
@@ -348,9 +360,20 @@ func ApplyAck(c Command, a Ack) (Command, error) {
 	return next, nil
 }
 func sameAck(a, b Command) bool {
-	return a.Status == b.Status && a.Phase == b.Phase && a.Pct == b.Pct && equalString(a.ResultID, b.ResultID) && equalString(a.Error, b.Error)
+	return a.Status == b.Status && a.Phase == b.Phase && a.Pct == b.Pct && equalString(a.ResultID, b.ResultID) && equalString(a.Error, b.Error) && bytes.Equal(a.AckDigest, b.AckDigest)
 }
 func equalString(a, b *string) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
+
+func serverOptionsDigest(servers []ServerOption) ([]byte, error) {
+	ordered := append([]ServerOption(nil), servers...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
+	payload, err := json.Marshal(ordered)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(payload)
+	return digest[:], nil
+}
 
 func (r Result) validateDetails(data []byte) error {
 	for key, loaded := range map[string]*LoadedLatency{"loadedDown": r.LoadedDown, "loadedUp": r.LoadedUp} {

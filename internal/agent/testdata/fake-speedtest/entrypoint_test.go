@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"strings"
@@ -13,6 +16,32 @@ func TestMainProcessHelper(t *testing.T) {
 	}
 	os.Args = []string{"fake-speedtest", "--scenario", "crash"}
 	main()
+}
+
+func TestLibreSpeedFixtureOutputAndPinnedFallback(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	if status := run(context.Background(), []string{"--list"}, &stdout, &stderr); status != 0 || stdout.String() != libreSpeedServerList {
+		t.Fatalf("captured LibreSpeed list status=%d output=%q stderr=%q", status, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if status := run(context.Background(), []string{"--json", "--server", "52"}, &stdout, &stderr); status == 0 || !strings.Contains(stderr.String(), "server unavailable") {
+		t.Fatalf("pinned LibreSpeed server status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
+	}
+	stdout.Reset()
+	stderr.Reset()
+	if status := run(context.Background(), []string{"--json"}, &stdout, &stderr); status != 0 {
+		t.Fatalf("automatic LibreSpeed status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
+	}
+	var result struct {
+		Server struct {
+			Name string `json:"name"`
+			URL  string `json:"url"`
+		} `json:"server"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil || !strings.Contains(result.Server.Name, "Hanoi") || !strings.Contains(result.Server.URL, "hn.example.test") {
+		t.Fatalf("automatic LibreSpeed server=%+v err=%v", result.Server, err)
+	}
 }
 
 func TestMainProcessReportsEngineCrash(t *testing.T) {

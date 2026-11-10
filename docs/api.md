@@ -169,6 +169,11 @@ Successful/degraded results require down/up/ping, a non-null IP, a server object
 loss/jitter/loaded latency even on success; preserve those as null. Optional
 loadedDown/loadedUp retain low/iqm/high; engine details retain ISP, result ID/URL,
 external IP and mismatch warnings, with remaining original fields in raw.
+New centers advertise `serverSelectionSnapshots: true` in agent config. Agents that
+receive it include `serverSelectionKnown` and the pinned server ID captured when
+the test started. Older agents may omit both fields; those stored results remain
+unknown instead of inheriting a later pin. The result read model returns that
+snapshot in `pinnedServerId`, not the node's current pin.
 After each measurement, including engine failures, the agent calls `GET /api/agent/ip` over the
 same selected interface/source IP. The center-observed `data.ip` is the result's
 public IP; preserve the engine-reported address as `engineIp` and add a `warnings`
@@ -191,9 +196,11 @@ Each agent schedule includes its own `serverId`, so one engine's pin cannot affe
 The picker searches server name, city and ISP. Ookla distance is displayed when the server list
 provides it; LibreSpeed has no coordinates, so it is sorted by server name and shows no distance.
 When a pinned server cannot be reached, the agent retries with automatic selection and attaches a
-warning to the result. Result reads include the server actually used in `serverId` and the current
-pin for that node and engine in `pinnedServerId`; the UI identifies a mismatch and shows any fallback
-warning.
+warning to the result. Result reads include the server actually used in `serverId` and the pin snapshot
+for that measurement in `pinnedServerId`; the UI identifies a mismatch and shows any fallback warning.
+LibreSpeed automatic results omit the numeric server ID. The center resolves it from the stored catalog
+only when the reported host matches exactly one catalog entry; missing or ambiguous matches remain
+unknown.
 
 Agent config advertises the latest release URL/version/sha256 and defaults
 autoUpdate to false. The owner enables it per node; verify checksums, replace
@@ -204,6 +211,9 @@ Poll commands oldest-first, up to 100 per call. Redeliver until terminal ack;
 agents remember command IDs to prevent duplicate execution. Running a manual
 test returns a Command to poll; progress acks carry phase/pct/resultId/error.
 Terminal acks replay idempotently; conflicting terminal changes return 409.
+Successful `list_servers` acks include the catalog payload; identical retries remain
+idempotent even after a later refresh, while a changed payload for the same command
+returns 409 and leaves the newer catalog intact.
 Each agent gets only its own configuration, effective offset and quiet hours.
 The center coordinates offsets; there is no WAN, load-balancer or peer-node model.
 

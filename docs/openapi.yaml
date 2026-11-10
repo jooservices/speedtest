@@ -3981,6 +3981,9 @@ components:
             - librespeed
             - cloudflare
           default: ookla
+        serverSelectionSnapshots:
+          type: boolean
+          description: True when result reports may include the pin captured at measurement time.
         threads:
           type: integer
           minimum: 1
@@ -4146,6 +4149,16 @@ components:
             - type: integer
               minimum: 1
             - type: "null"
+        serverSelectionKnown:
+          type: boolean
+          description: Present on agents that support pin snapshots; false or absent means the effective selection is unknown.
+        pinnedServerId:
+          anyOf:
+            - type: integer
+              minimum: 1
+              maximum: 2147483647
+            - type: "null"
+          description: Pin active when the measurement ran; omitted by older agents and null when no pin was active.
         ip:
           anyOf:
             - $ref: "#/components/schemas/IP"
@@ -4309,7 +4322,10 @@ components:
               minimum: 1
               maximum: 2147483647
             - type: "null"
-          description: Current pin for this result's node and engine; compare with serverId.
+          description: Pin reported for this measurement; null for automatic selection or older records without a snapshot.
+        serverSelectionKnown:
+          type: boolean
+          description: False when an older agent or historical record did not report the selection used at measurement time.
         ip:
           anyOf:
             - $ref: "#/components/schemas/IP"
@@ -4395,6 +4411,7 @@ components:
         - loss
         - serverId
         - pinnedServerId
+        - serverSelectionKnown
         - ip
         - threads
         - bytesDown

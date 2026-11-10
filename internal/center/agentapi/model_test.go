@@ -78,6 +78,23 @@ func TestResultValidation(t *testing.T) {
 		t.Fatal("trailing JSON")
 	}
 }
+
+func TestResultSelectionSnapshotDecode(t *testing.T) {
+	legacy, err := ParseResult([]byte(validResult))
+	if err != nil || legacy.ServerSelectionKnown || legacy.PinnedServerID != nil {
+		t.Fatalf("legacy result snapshot=%+v err=%v", legacy, err)
+	}
+	known := change(validResult, "serverSelectionKnown", true)
+	known = change(string(known), "pinnedServerId", 54321)
+	result, err := ParseResult(known)
+	if err != nil || !result.ServerSelectionKnown || result.PinnedServerID == nil || *result.PinnedServerID != 54321 {
+		t.Fatalf("known result snapshot=%+v err=%v", result, err)
+	}
+	unknown := change(validResult, "pinnedServerId", 54321)
+	if _, err := ParseResult(unknown); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("accepted pin without a known measurement selection: %v", err)
+	}
+}
 func TestHeartbeatValidation(t *testing.T) {
 	valid := `{"agent":"1.0","uptime":0,"lastTest":null}`
 	for _, data := range []string{valid, `{"agent":"","uptime":12,"lastTest":"2026-11-03T00:00:00Z","updateResult":{"version":"v1","status":"succeeded","ts":"2026-11-03T00:00:00Z","error":null}}`} {
@@ -159,6 +176,24 @@ func TestServerListAcknowledgementValidation(t *testing.T) {
 		if _, err := ParseAck([]byte(data)); err == nil {
 			t.Errorf("accepted %s", data)
 		}
+	}
+}
+
+func TestTerminalCatalogAckDigestAllowsIdenticalRetryAndRejectsChanges(t *testing.T) {
+	pct := float64(100)
+	first := []ServerOption{{ID: 12, Name: "Hanoi"}, {ID: 13, Name: "Hue"}}
+	terminal, err := ApplyAck(Command{Status: "pending"}, Ack{Status: "succeeded", Pct: &pct, Servers: &first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reordered := []ServerOption{first[1], first[0]}
+	replay, err := ApplyAck(terminal, Ack{Status: "succeeded", Pct: &pct, Servers: &reordered})
+	if err != nil || !sameAck(terminal, replay) {
+		t.Fatalf("identical catalog retry=%+v err=%v", replay, err)
+	}
+	changed := []ServerOption{{ID: 12, Name: "Different Hanoi"}, {ID: 13, Name: "Hue"}}
+	if _, err := ApplyAck(terminal, Ack{Status: "succeeded", Pct: &pct, Servers: &changed}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed terminal catalog error=%v, want conflict", err)
 	}
 }
 

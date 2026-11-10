@@ -58,13 +58,86 @@ func jsonValue(value any) any {
 	}
 	return string(data)
 }
-func (r Result) values(node string) ([]string, []any) {
+
+var resultColumns = [...]string{
+	"id", "node_id", "ts", "status", "down_mbps", "up_mbps", "ping_ms", "jitter_ms", "down_latency_ms", "up_latency_ms",
+	"loss_percent", "server_id", "ip", "threads", "bytes_down", "bytes_up", "duration_seconds", "error", "manual", "raw",
+	"loaded_down", "loaded_up", "server", "engine_isp", "engine_result_id", "engine_result_url", "engine_ip", "warnings", "engine",
+	"pinned_server_id_at_test", "server_selection_known",
+}
+
+const resultInsertQuery = `INSERT INTO results (
+	id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,down_latency_ms,up_latency_ms,
+	loss_percent,server_id,ip,threads,bytes_down,bytes_up,duration_seconds,error,manual,raw,
+	loaded_down,loaded_up,server,engine_isp,engine_result_id,engine_result_url,engine_ip,warnings,engine,
+	pinned_server_id_at_test,server_selection_known
+) VALUES (
+	$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+	$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31
+) ON CONFLICT(id) DO NOTHING`
+
+func (r Result) values(node string) []any {
 	ts, _ := time.Parse(time.RFC3339Nano, r.TS)
-	return []string{"id", "node_id", "ts", "status", "down_mbps", "up_mbps", "ping_ms", "jitter_ms", "down_latency_ms", "up_latency_ms", "loss_percent", "server_id", "ip", "threads", "bytes_down", "bytes_up", "duration_seconds", "error", "manual", "raw", "loaded_down", "loaded_up", "server", "engine_isp", "engine_result_id", "engine_result_url", "engine_ip", "warnings", "engine"},
-		[]any{r.ID, node, ts, r.Status, r.Down, r.Up, r.Ping, r.Jitter, r.DLat, r.ULat, r.Loss, r.ServerID, r.IP, r.Threads, r.BytesDown, r.BytesUp, r.Duration, r.Error, r.Manual, jsonValue(r.Raw), jsonValue(r.LoadedDown), jsonValue(r.LoadedUp), jsonValue(r.Server), r.EngineISP, r.EngineResultID, r.EngineResultURL, r.EngineIP, jsonValue(r.Warnings), resultEngine(r.Engine)}
+	return []any{r.ID, node, ts, r.Status, r.Down, r.Up, r.Ping, r.Jitter, r.DLat, r.ULat, r.Loss, r.ServerID, r.IP, r.Threads, r.BytesDown, r.BytesUp, r.Duration, r.Error, r.Manual, jsonValue(r.Raw), jsonValue(r.LoadedDown), jsonValue(r.LoadedUp), jsonValue(r.Server), r.EngineISP, r.EngineResultID, r.EngineResultURL, r.EngineIP, jsonValue(r.Warnings), resultEngine(r.Engine), r.PinnedServerID, r.ServerSelectionKnown}
+}
+
+func resolveMissingServerID(ctx context.Context, tx pgx.Tx, node string, result *Result) error {
+	if result.ServerID != nil || result.Server == nil || result.Server.Host == "" {
+		return nil
+	}
+	var id *int64
+	err := tx.QueryRow(ctx, `SELECT CASE WHEN count(*)=1 THEN min(server_id) END FROM (
+		SELECT (entry->>'id')::bigint AS server_id FROM node_engine_servers
+		CROSS JOIN LATERAL jsonb_array_elements(servers) AS entry
+		WHERE node_id=$1 AND engine=$2 AND lower(entry->>'host')=lower($3)
+	) matches`, node, resultEngine(result.Engine), result.Server.Host).Scan(&id)
+	if err != nil || id == nil {
+		return err
+	}
+	serverID := int(*id)
+	result.ServerID = &serverID
+	result.Server.ID = &serverID
+	return nil
+}
+
+func alignServerIdentityWithStoredResult(ctx context.Context, tx pgx.Tx, node string, result *Result) error {
+	if result.Server == nil || result.Server.Host == "" {
+		return nil
+	}
+	var owner string
+	var serverID *int
+	var host *string
+	err := tx.QueryRow(ctx, `SELECT node_id::text,server_id,server->>'host' FROM results WHERE id=$1`, result.ID).Scan(&owner, &serverID, &host)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && owner != node {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if host != nil && strings.EqualFold(*host, result.Server.Host) {
+		result.ServerID, result.Server.ID = serverID, serverID
+	}
+	return nil
+}
+
+func resultReplayMatches(ctx context.Context, tx pgx.Tx, node string, result *Result, alignServer bool) (bool, error) {
+	if alignServer {
+		if err := alignServerIdentityWithStoredResult(ctx, tx, node, result); err != nil {
+			return false, err
+		}
+	}
+	args := result.values(node)
+	comparisons := make([]string, len(resultColumns))
+	for i, column := range resultColumns {
+		comparisons[i] = column + " IS NOT DISTINCT FROM " + fmt.Sprintf("$%d", i+1)
+	}
+	var identical bool
+	err := tx.QueryRow(ctx, "SELECT "+strings.Join(comparisons, " AND ")+" FROM results WHERE id=$1", args...).Scan(&identical)
+	return identical, err
 }
 
 func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool, error) {
+	serverIdentityMissing := r.ServerID == nil && r.Server != nil && r.Server.Host != ""
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -80,25 +153,20 @@ func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool,
 			return false, err
 		}
 	}
-	columns, args := r.values(node)
-	params := make([]string, len(columns))
-	comparisons := make([]string, len(columns))
-	for i, column := range columns {
-		params[i] = fmt.Sprintf("$%d", i+1)
-		comparisons[i] = column + " IS NOT DISTINCT FROM " + params[i]
+	if err = resolveMissingServerID(ctx, tx, node, &r); err != nil {
+		return false, err
 	}
-	query := "INSERT INTO results (" + strings.Join(columns, ",") + ") VALUES (" + strings.Join(params, ",") + ") ON CONFLICT(id) DO NOTHING"
-	tag, err := tx.Exec(ctx, query, args...)
+	args := r.values(node)
+	tag, err := tx.Exec(ctx, resultInsertQuery, args...)
 	if err != nil {
 		return false, err
 	}
 	if tag.RowsAffected() == 0 {
-		var identical bool
 		// A new READ COMMITTED statement sees a concurrent insert after ON CONFLICT
 		// waits for it. Compare every stored field, never return foreign row data.
-		err = tx.QueryRow(ctx, "SELECT "+strings.Join(comparisons, " AND ")+" FROM results WHERE id=$1", args...).Scan(&identical)
-		if err != nil {
-			return false, err
+		identical, compareErr := resultReplayMatches(ctx, tx, node, &r, serverIdentityMissing)
+		if compareErr != nil {
+			return false, compareErr
 		}
 		if !identical {
 			return false, ErrConflict
@@ -152,7 +220,7 @@ func (s *Postgres) Config(ctx context.Context, node string) (map[string]any, err
 	if server != nil {
 		serverValue = *server
 	}
-	return map[string]any{"revision": fmt.Sprintf("%d.%d", revision, scheduleRevision), "schedules": json.RawMessage(engineSchedules), "name": name, "expectedDown": down, "expectedUp": up,
+	return map[string]any{"revision": fmt.Sprintf("%d.%d", revision, scheduleRevision), "schedules": json.RawMessage(engineSchedules), "serverSelectionSnapshots": true, "name": name, "expectedDown": down, "expectedUp": up,
 		"schedule": map[string]any{"interval": interval, "offset": offset, "enabled": enabled},
 		"quiet":    map[string]any{"quietStart": defaults["quietStart"], "quietEnd": defaults["quietEnd"], "timezone": defaults["timezone"]},
 		"engine":   primary, "threads": threads, "server": serverValue, "binding": map[string]any{"iface": iface, "sourceIp": source}, "autoUpdate": autoUpdate, "release": defaults["agentRelease"]}, nil
@@ -167,14 +235,14 @@ func (s *Postgres) Heartbeat(ctx context.Context, node string, h Heartbeat) (tim
 	return received, err
 }
 
-const commandColumns = `id::text,node_id::text,type,engine,version,status,created_at,acked_at,phase,pct,result_id::text,error`
+const commandColumns = `id::text,node_id::text,type,engine,version,status,created_at,acked_at,phase,pct,result_id::text,error,ack_payload_sha256`
 
 type scanner interface{ Scan(...any) error }
 
 func scanCommand(row scanner) (Command, error) {
 	var c Command
 	var engine *string
-	err := row.Scan(&c.ID, &c.NodeID, &c.Type, &engine, &c.Version, &c.Status, &c.CreatedAt, &c.AckedAt, &c.Phase, &c.Pct, &c.ResultID, &c.Error)
+	err := row.Scan(&c.ID, &c.NodeID, &c.Type, &engine, &c.Version, &c.Status, &c.CreatedAt, &c.AckedAt, &c.Phase, &c.Pct, &c.ResultID, &c.Error, &c.AckDigest)
 	if engine != nil {
 		c.Engine = *engine
 	}
@@ -228,7 +296,7 @@ func (s *Postgres) Ack(ctx context.Context, node, id string, a Ack) (Command, er
 	if sameAck(current, next) {
 		return current, nil
 	}
-	next, err = scanCommand(tx.QueryRow(ctx, `UPDATE agent_commands SET status=$3,phase=$4,pct=$5,result_id=$6,error=$7,acked_at=CASE WHEN $3 IN ('succeeded','failed') THEN clock_timestamp() ELSE NULL END WHERE id=$1 AND node_id=$2 RETURNING `+commandColumns, id, node, next.Status, next.Phase, next.Pct, next.ResultID, next.Error))
+	next, err = scanCommand(tx.QueryRow(ctx, `UPDATE agent_commands SET status=$3,phase=$4,pct=$5,result_id=$6,error=$7,ack_payload_sha256=$8,acked_at=CASE WHEN $3 IN ('succeeded','failed') THEN clock_timestamp() ELSE NULL END WHERE id=$1 AND node_id=$2 RETURNING `+commandColumns, id, node, next.Status, next.Phase, next.Pct, next.ResultID, next.Error, next.AckDigest))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {

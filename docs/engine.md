@@ -99,6 +99,11 @@ and reachability or timeout configuration for `timeout`. `execution` and
 do not log unredacted diagnostics. These errors are returned to the caller;
 this library does not create logs or retry.
 
+If a pinned server returns `server_unavailable`, `no_route` or `timeout` while the
+caller is still active, the agent retries once with automatic selection under its
+own engine timeout and adds a warning to the result. Caller cancellation and an
+expired caller deadline do not start another measurement.
+
 ## LibreSpeed CLI engine
 
 Install the official `librespeed-cli` executable on each node and configure
@@ -116,9 +121,15 @@ the one-element array used by newer versions. Speeds in the JSON are already
 Mbps. The engine maps download, upload, ping, jitter, byte counts, server URL,
 client IP and available ISP text to `Result`. The CLI does not report a server
 ID for automatic selection, location, loaded latency, packet loss, result ID or
-measurement duration; these remain unavailable (server ID is populated when a
-server is pinned). The raw report is retained. Telemetry is not enabled by the
-runner.
+measurement duration. A pinned run carries its selected ID; for automatic runs,
+the center resolves the server ID only when the reported host matches one stored
+catalog entry. Missing or ambiguous matches remain unknown. The raw report is
+retained. Telemetry is not enabled by the runner.
+
+Server discovery runs `librespeed-cli --list`. Version 1.0.14 prints one row as
+`<id>: <name> (<server URL>) [Sponsor: <sponsor>]`; it does not report distance.
+The agent retains the row name, URL host and sponsor without inventing city or
+coordinate data.
 
 Select LibreSpeed in a node config with:
 

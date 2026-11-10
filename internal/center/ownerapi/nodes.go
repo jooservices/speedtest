@@ -304,6 +304,11 @@ func (s *Store) Update(ctx context.Context, id string, patch map[string]json.Raw
 		}
 		return nil, "", err
 	}
+	if _, changed := patch["server"]; changed {
+		if err := syncPrimaryServerPin(ctx, tx, id, n.PrimaryEngine, in.ServerID); err != nil {
+			return nil, "", err
+		}
+	}
 	view, updated, err := s.one(ctx, tx, id, false)
 	if err != nil {
 		return nil, "", err
@@ -312,6 +317,12 @@ func (s *Store) Update(ctx context.Context, id string, patch map[string]json.Raw
 		return nil, "", err
 	}
 	return view, ETag(updated.Revision), nil
+}
+
+func syncPrimaryServerPin(ctx context.Context, tx pgx.Tx, nodeID, engine string, serverID *int) error {
+	_, err := tx.Exec(ctx, `INSERT INTO node_engine_servers(node_id,engine,pinned_server_id) VALUES($1,$2,$3)
+		ON CONFLICT(node_id,engine) DO UPDATE SET pinned_server_id=EXCLUDED.pinned_server_id`, nodeID, engine, serverID)
+	return err
 }
 
 func applyPatch(in *nodes.Input, patch map[string]json.RawMessage) error {
