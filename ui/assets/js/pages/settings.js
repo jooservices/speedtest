@@ -208,15 +208,17 @@
       var name = U.input('', null, { maxlength: 80, autocomplete: 'off', 'aria-label': 'Token name', placeholder: 'e.g. monitoring' });
       var scope = U.select([{ value: 'read', label: 'Read only' }, { value: 'read-write', label: 'Read and write' }, { value: 'full', label: 'Full access' }], 'read', null, { 'aria-label': 'Token scope' });
       var expiry = U.input('', null, { type: 'datetime-local', 'aria-label': 'Optional expiry' });
-      var list = h('div', { 'aria-live': 'polite' }), disclosure = h('div');
+      var list = h('div', { 'aria-live': 'polite' }), disclosures = h('div', { class: 'stack', 'aria-live': 'polite' });
       function displayToken(raw) {
-        U.clear(disclosure);
-        disclosure.appendChild(U.callout('Copy this token now. It will not be shown again after you leave this page.', 'warn'));
-        disclosure.appendChild(h('pre', { class: 'recovery-codes', style: 'overflow-wrap:anywhere;white-space:pre-wrap;user-select:all' }, raw));
-        disclosure.appendChild(U.btn('Copy token', { size: 'sm', icon: 'copy', onClick: function () {
+	      var disclosure = h('section', { class: 'stack token-disclosure', 'aria-label': 'New API token' });
+	      disclosure.appendChild(U.callout('Copy this token now. It will not be shown again after you leave this page.', 'warn'));
+	      disclosure.appendChild(h('pre', { class: 'recovery-codes', style: 'overflow-wrap:anywhere;white-space:pre-wrap;user-select:all' }, raw));
+	      disclosure.appendChild(U.btn('Copy token', { size: 'sm', icon: 'copy', onClick: function () {
           if (!navigator.clipboard) return U.toast('Clipboard access is unavailable. Select and copy the token.', 'error');
           navigator.clipboard.writeText(raw).then(function () { U.toast('Token copied'); }, function () { U.toast('Could not copy the token. Select it and copy manually.', 'error'); });
         } }));
+	      disclosure.appendChild(U.btn('I saved this token', { size: 'sm', onClick: function () { disclosure.remove(); } }));
+	      disclosures.appendChild(disclosure);
       }
       function loadTokens() {
         U.clear(list); list.appendChild(h('p', { class: 'hint' }, 'Loading access tokens…'));
@@ -233,11 +235,18 @@
           { key: 'createdAt', label: 'Created', render: function (token) { return F.date(Date.parse(token.createdAt), 'full'); } },
           { key: 'expiresAt', label: 'Expires', render: function (token) { return token.expiresAt ? F.date(Date.parse(token.expiresAt), 'full') : 'Never'; } },
           { key: 'lastUsedAt', label: 'Last used', render: function (token) { return token.lastUsedAt ? F.date(Date.parse(token.lastUsedAt), 'full') : 'Never'; } },
-          { key: 'state', label: 'State', render: function (token) { return token.revokedAt ? 'Revoked' : 'Active'; } },
+          { key: 'state', label: 'State', render: function (token) { return tokenState(token); } },
           { key: 'actions', label: '', render: function (token) { return token.revokedAt ? '—' : U.btn('Revoke', { size: 'sm', variant: 'danger', onClick: function () { revokeToken(token); } }); } }
         ], rows: tokens }));
       }
+      function tokenState(token) {
+        if (token.revokedAt) return 'Revoked';
+        if (token.expiresAt && Date.parse(token.expiresAt) <= Date.now()) return 'Expired';
+        return 'Active';
+      }
+      var createButton, creating = false;
       function createToken() {
+	      if (creating) return;
         var tokenName = name.value.trim(), scopeValue = scope.value, expiration = null;
         if (!tokenName) return U.toast('Enter a name for this token.', 'error');
         if (expiry.value) {
@@ -245,9 +254,10 @@
           if (!Number.isFinite(instant) || instant <= Date.now()) return U.toast('Choose an expiry date and time in the future.', 'error');
           expiration = new Date(instant).toISOString();
         }
+        creating = true; createButton.disabled = true;
         ST.api.request('/api/access-tokens', { method: 'POST', body: { name: tokenName, scope: scopeValue, expiresAt: expiration } }).then(function (reply) {
           displayToken(reply.data.token); name.value = ''; expiry.value = ''; U.toast('API token created'); loadTokens();
-        }, fail);
+        }, fail).finally(function () { creating = false; createButton.disabled = false; });
       }
       function revokeToken(token) {
         U.confirm({ title: 'Revoke “' + token.name + '”?', text: 'Any request using this token will stop working immediately.', confirm: 'Revoke', danger: true }).then(function (ok) {
@@ -260,7 +270,7 @@
           h('div', { class: 'hint' }, 'Bearer tokens are shown once. Read only permits queries; read and write excludes destructive actions; full access includes all documented owner operations. Use HTTPS when connecting remotely.')),
         h('div', { class: 's-ctl', style: 'width:min(100%,680px)' },
           h('div', { class: 'stack', style: 'gap:8px' }, U.field('Name', name), U.field('Scope', scope), U.field('Expiry (optional)', expiry),
-            U.btn('Create API token', { variant: 'primary', onClick: createToken }), disclosure, list))));
+            (createButton = U.btn('Create API token', { variant: 'primary', onClick: createToken })), disclosures, list))));
       loadTokens();
     }
 

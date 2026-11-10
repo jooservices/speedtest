@@ -2,6 +2,7 @@ package apicontract
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -50,7 +51,7 @@ func TestMCPToolsMatchOperationCatalogAndScope(t *testing.T) {
 	}
 	want := map[string]Scope{
 		"list_nodes": ScopeRead, "get_node": ScopeRead, "list_results": ScopeRead,
-		"get_statistics": ScopeRead, "get_dashboard": ScopeRead, "list_alerts": ScopeRead,
+		"get_statistics": ScopeRead, "get_dashboard": ScopeRead, "list_alerts": ScopeRead, "get_alert": ScopeRead,
 		"acknowledge_alert": ScopeReadWrite, "run_test": ScopeReadWrite,
 		"get_schedule": ScopeRead, "update_schedule": ScopeReadWrite,
 	}
@@ -66,6 +67,85 @@ func TestMCPToolsMatchOperationCatalogAndScope(t *testing.T) {
 	if len(want) != 0 {
 		t.Errorf("missing MCP tools: %v", want)
 	}
+}
+
+func TestMCPToolsReturnsCatalogError(t *testing.T) {
+	want := errors.New("catalog unavailable")
+	if _, err := toolsFromOperations(nil, want); !errors.Is(err, want) {
+		t.Fatalf("toolsFromOperations error = %v, want %v", err, want)
+	}
+}
+
+func TestMCPContractPreservesReferencedFiltersHeadersAndBodyAlternatives(t *testing.T) {
+	operations, err := Operations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	byTool := map[string]Operation{}
+	for _, operation := range operations {
+		if operation.Tool != "" {
+			byTool[operation.Tool] = operation
+		}
+	}
+	for _, tool := range []string{"list_nodes", "list_results", "list_alerts"} {
+		operation := byTool[tool]
+		if operation.ID == "" {
+			t.Fatalf("tool %q is missing", tool)
+		}
+		if !hasParameter(operation.Parameters, "page", "query") || !hasParameter(operation.Parameters, "size", "query") {
+			t.Errorf("tool %q is missing referenced pagination parameters: %+v", tool, operation.Parameters)
+		}
+	}
+	results := byTool["list_results"]
+	for _, name := range []string{"engine", "nodes", "range", "from", "to", "status", "sort", "dir", "page", "size"} {
+		if !hasParameter(results.Parameters, name, "query") {
+			t.Errorf("list_results is missing filter %q", name)
+		}
+	}
+	for _, name := range []string{"If-Match"} {
+		if !hasParameter(byTool["acknowledge_alert"].Parameters, name, "header") || !hasParameter(byTool["update_schedule"].Parameters, name, "header") {
+			t.Errorf("write tools do not expose conditional header %q", name)
+		}
+	}
+	for _, operation := range []Operation{byTool["get_alert"], byTool["get_schedule"]} {
+		if !contains(operation.ResponseHeaders, "ETag") {
+			t.Errorf("tool %q does not expose response ETag: %+v", operation.Tool, operation.ResponseHeaders)
+		}
+	}
+	schedule := byTool["update_schedule"]
+	if got := len(bodyAlternatives(schedule.BodySchema)); got != 2 {
+		t.Fatalf("update_schedule has %d body alternatives, want 2", got)
+	}
+	input, err := schedule.InputSchema()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{`"interval"`, `"offset"`, `"enabled"`, `"engines"`, `"If-Match"`} {
+		if !strings.Contains(string(input), name) {
+			t.Errorf("update_schedule schema is missing %s: %s", name, input)
+		}
+	}
+	if strings.Contains(string(input), `"X-CSRF-Token"`) || strings.Contains(string(input), `"Origin"`) {
+		t.Fatalf("browser-only CSRF/Origin headers leaked into bearer MCP schema: %s", input)
+	}
+}
+
+func hasParameter(parameters []Parameter, name, location string) bool {
+	for _, parameter := range parameters {
+		if parameter.Name == name && parameter.In == location {
+			return true
+		}
+	}
+	return false
+}
+
+func contains(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
 }
 
 func TestAllowsScopeHierarchy(t *testing.T) {
@@ -110,6 +190,59 @@ func TestParseOpenAPIErrorsAndPathParameters(t *testing.T) {
 	operations, err := parseOpenAPI([]byte("paths:\n  /items/{id}:\n    parameters:\n      - name: id\n        in: path\n        required: true\n        schema: {type: string}\n    get:\n      operationId: getItem\n      parameters:\n        - name: include\n          in: query\n          schema: {type: boolean}\n    x-note: ignored\n"))
 	if err != nil || len(operations) != 1 || len(operations[0].Parameters) != 2 {
 		t.Fatalf("parsed operations = %+v, error = %v", operations, err)
+	}
+}
+
+func TestParseOpenAPIResolvesComponentParametersAndResponseHeaders(t *testing.T) {
+	raw := []byte(`components:
+  schemas:
+    ID: {type: string}
+    A: {type: object, properties: {interval: {type: integer}}, required: [interval]}
+    B: {type: object, properties: {engines: {type: array}}, required: [engines]}
+  parameters:
+    NodeID: {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/ID'}}
+    IfMatch: {name: If-Match, in: header, required: true, schema: {type: string}}
+  headers:
+    ETag: {schema: {type: string}}
+paths:
+  /nodes/{id}:
+    parameters:
+      - {$ref: '#/components/parameters/NodeID'}
+    get:
+      operationId: readNode
+      x-mcp-tool: get_node
+      parameters:
+        - {$ref: '#/components/parameters/IfMatch'}
+      responses:
+        '200':
+          description: OK
+          headers:
+            ETag: {$ref: '#/components/headers/ETag'}
+    put:
+      operationId: updateNode
+      requestBody:
+        content:
+          application/json:
+            schema:
+              oneOf:
+                - {$ref: '#/components/schemas/A'}
+                - {$ref: '#/components/schemas/B'}
+      responses:
+        '204': {description: Updated}
+`)
+	operations, err := parseOpenAPI(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(operations) != 2 || len(operations[0].Parameters) != 2 || !contains(operations[0].ResponseHeaders, "ETag") {
+		t.Fatalf("resolved operations = %+v", operations)
+	}
+	input, err := operations[1].InputSchema()
+	if err != nil || !strings.Contains(string(input), `"interval"`) || !strings.Contains(string(input), `"engines"`) || !strings.Contains(string(input), `"oneOf"`) {
+		t.Fatalf("resolved oneOf input = %s, error = %v", input, err)
+	}
+	if _, err := parseOpenAPI([]byte("components:\n  parameters: {}\npaths:\n  /nodes:\n    get:\n      operationId: broken\n      parameters:\n        - {$ref: '#/components/parameters/Missing'}\n")); err == nil {
+		t.Fatal("unknown component parameter reference was accepted")
 	}
 }
 

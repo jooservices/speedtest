@@ -372,7 +372,7 @@ paths:
             type: integer
             minimum: 1
             maximum: 100
-            default: 20
+            default: 25
       responses:
         "200":
           description: Token metadata page
@@ -382,8 +382,12 @@ paths:
                 $ref: "#/components/schemas/listAccessTokensResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/Validation"
         "405":
           $ref: "#/components/responses/MethodNotAllowed"
+        "429":
+          $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/ServerError"
     post:
@@ -415,6 +419,8 @@ paths:
                 $ref: "#/components/schemas/createAccessTokenResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "400":
+          $ref: "#/components/responses/BadRequest"
         "403":
           $ref: "#/components/responses/Forbidden"
         "405":
@@ -2288,6 +2294,7 @@ paths:
     get:
       operationId: getEvent
       x-access-token-scope: read
+      x-mcp-tool: get_alert
       tags:
         - Alerts
       summary: Read event
@@ -2341,6 +2348,9 @@ paths:
       responses:
         "200":
           description: Success
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:

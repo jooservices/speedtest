@@ -45,11 +45,14 @@ Restart Claude Code and run `/mcp` to confirm the server and tools are available
 | `get_statistics` | Read summary statistics | `read` | Range, timezone and node filters |
 | `get_dashboard` | Read dashboard snapshot | `read` | Dashboard query filters |
 | `list_alerts` | List alert events | `read` | State, node, time and pagination filters |
+| `get_alert` | Read one alert event and its version | `read` | Alert ID |
 | `acknowledge_alert` | Acknowledge or reopen one alert | `read-write` | Alert ID and acknowledgement state |
 | `run_test` | Queue a node test | `read-write` | Node ID |
 | `get_schedule` | Read a node schedule | `read` | Node ID |
 | `update_schedule` | Replace a node schedule | `read-write` | Node ID and documented schedule fields |
 
 A read token sees only read tools; read-write and full tokens also see read tools and non-destructive tools allowed by their scope. Destructive actions are not exposed as MCP tools. The ISP-list operation will be added to this catalog when its API operation from JOOST-74 is available in the OpenAPI contract.
+
+Conditional write tools require the current ETag. Call `get_alert` before `acknowledge_alert`, or `get_schedule` before `update_schedule`; copy the ETag from the MCP result metadata at `_meta.http.headers.ETag` (also mirrored as `structuredContent.meta.etag`) into the write tool's `If-Match` argument. A stale value returns the API's precondition error and must be refreshed with the read tool. Bearer calls do not require the browser-only CSRF token or Origin header.
 
 The `speedtest://docs/metrics` MCP resource contains metric units and aggregation definitions. These definitions match the [metric reference](mcp-metrics.md) and API contract.

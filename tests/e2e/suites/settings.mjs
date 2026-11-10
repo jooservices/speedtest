@@ -173,14 +173,62 @@ export function settingsSuite(T, ctx) {
     async apiTokenCanBeCreatedUsedAndRevoked() {
       await T.open('#/settings', 'Settings');
       await T.tab('Access');
-      await page.getByLabel('Token name').fill('e2e-read-token');
+      const tokenName = page.getByLabel('Token name');
+      const create = page.getByRole('button', { name: 'Create API token' });
+      await tokenName.fill('e2e-read-token');
       await page.getByLabel('Scope').selectOption('read');
-      await T.press('Create API token');
+      let failOnce = true;
+      await page.route('**/api/access-tokens', async route => {
+        if (route.request().method() === 'POST' && failOnce) {
+          failOnce = false;
+          await route.fulfill({ status: 422, contentType: 'application/problem+json', body: JSON.stringify({ type: '/problems/validation', status: 422, title: 'Validation failed', detail: 'Try again.' }) });
+          return;
+        }
+        await route.continue();
+      });
+      await create.click();
+      await T.eventually(async () => !(await create.isDisabled()), 'a failed create can be retried');
+      T.expectRefusal(422);
+      assert.equal(await tokenName.inputValue(), 'e2e-read-token', 'a failed create leaves the name available for retry');
+      await page.unroute('**/api/access-tokens');
+
+      let releasePost, requestSeen;
+      const postGate = new Promise(resolve => { releasePost = resolve; });
+      const arrived = new Promise(resolve => { requestSeen = resolve; });
+      let postCount = 0;
+      await page.route('**/api/access-tokens', async route => {
+        if (route.request().method() !== 'POST') return route.continue();
+        postCount++;
+        requestSeen();
+        await postGate;
+        await route.continue();
+      });
+      const submission = create.click();
+      await arrived;
+      assert.equal(await create.isDisabled(), true, 'the create button stays disabled while its request is pending');
+      await create.evaluate(button => button.click());
+      await page.waitForTimeout(100);
+      assert.equal(postCount, 1, 'a second click cannot issue another token while creation is pending');
+      releasePost();
+      await submission;
+      await page.unroute('**/api/access-tokens');
       await T.see('API token created');
-      const raw = (await page.locator('.recovery-codes').last().innerText()).trim();
+      const disclosures = page.locator('.token-disclosure .recovery-codes');
+      const raw = (await disclosures.nth(0).innerText()).trim();
       assert.ok(raw.startsWith('st_at_'), 'the bearer credential is shown after creation');
       const storedHash = T.db("select encode(token_hash,'hex') from api_access_tokens where name='e2e-read-token'");
       assert.ok(storedHash === createHash('sha256').update(raw).digest('hex'), 'only its SHA-256 digest is stored');
+
+      await tokenName.fill('e2e-expiring-token');
+      await page.getByLabel('Optional expiry').fill(new Date(Date.now() + 86400000).toISOString().slice(0, 16));
+      await create.click();
+      await T.see('API token created');
+      const expiringRaw = (await disclosures.nth(1).innerText()).trim();
+      assert.ok(expiringRaw.startsWith('st_at_'), 'the second credential is shown');
+      assert.equal(await disclosures.count(), 2, 'issuing a second token retains the first one-time disclosure');
+      await page.getByRole('button', { name: 'I saved this token' }).first().click();
+      assert.equal(await disclosures.count(), 1, 'a disclosure can be removed after explicit acknowledgement');
+
       const client = await apiRequest.newContext();
       try {
         const read = await client.get(ctx.stack.origin + '/api/nodes', { headers: { Authorization: `Bearer ${raw}` } });
@@ -193,10 +241,20 @@ export function settingsSuite(T, ctx) {
       } finally {
         await client.dispose();
       }
+      T.db("update api_access_tokens set expires_at=now()-interval '1 minute' where name='e2e-expiring-token'");
+      await page.reload();
+      await T.tab('Access');
+      await T.eventually(async () => await T.row('e2e-read-token').getByText('Active').count() === 1, 'an unexpired token is active');
+      await T.eventually(async () => await T.row('e2e-expiring-token').getByText('Expired').count() === 1, 'an elapsed expiry is shown as expired');
+      await T.press('Revoke', T.row('e2e-expiring-token'));
+      await T.press('Revoke', page.getByRole('dialog'));
+      await T.see('API token revoked');
+      await T.eventually(async () => await T.row('e2e-expiring-token').getByText('Revoked').count() === 1, 'revoked takes precedence over expired');
       const item = T.row('e2e-read-token');
       await T.press('Revoke', item);
       await T.press('Revoke', page.getByRole('dialog'));
       await T.see('API token revoked');
+      await T.eventually(() => T.db("select revoked_at is not null from api_access_tokens where name='e2e-read-token'") === 't', 'the second revoke request is committed');
       const clientAfterRevoke = await apiRequest.newContext();
       try {
         const response = await clientAfterRevoke.get(ctx.stack.origin + '/api/nodes', { headers: { Authorization: `Bearer ${raw}` } });

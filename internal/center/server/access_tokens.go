@@ -33,22 +33,38 @@ type issuedAccessToken struct {
 }
 
 func newAccessTokenHandler(store AccessTokenStore, auth *serverAuth) http.Handler {
+	return newAccessTokenHandlerWithLimiter(store, auth, newOwnerRateLimiter())
+}
+
+func newAccessTokenHandlerWithLimiter(store AccessTokenStore, auth *serverAuth, limiter *nodeRateLimiter) http.Handler {
 	h := &accessTokens{store: store}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if len(r.Header.Values("Authorization")) != 0 {
 			writeBearerUnauthorized(w, r)
 			return
 		}
-		switch r.Method {
-		case http.MethodGet:
-			ownerReader(auth, newOwnerRateLimiter(), h.list).ServeHTTP(w, r)
-		case http.MethodPost:
-			auth.requireOwner(http.HandlerFunc(h.create)).ServeHTTP(w, r)
-		case http.MethodDelete:
-			auth.requireOwner(http.HandlerFunc(h.revoke)).ServeHTTP(w, r)
-		default:
-			methodNotAllowed(w, r, "GET, POST, DELETE")
+		if r.URL.Path == "/api/access-tokens" {
+			switch r.Method {
+			case http.MethodGet:
+				ownerReader(auth, limiter, h.list).ServeHTTP(w, r)
+			case http.MethodPost:
+				auth.requireOwner(http.HandlerFunc(h.create)).ServeHTTP(w, r)
+			default:
+				methodNotAllowed(w, r, "GET, POST")
+			}
+			return
 		}
+		const prefix = "/api/access-tokens/"
+		id := strings.TrimPrefix(r.URL.Path, prefix)
+		if !strings.HasPrefix(r.URL.Path, prefix) || id == "" || strings.Contains(id, "/") {
+			writeNotFoundProblem(w, r)
+			return
+		}
+		if r.Method != http.MethodDelete {
+			methodNotAllowed(w, r, http.MethodDelete)
+			return
+		}
+		auth.requireOwner(http.HandlerFunc(h.revoke)).ServeHTTP(w, r)
 	})
 }
 

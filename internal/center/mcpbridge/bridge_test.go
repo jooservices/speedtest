@@ -1,9 +1,11 @@
 package mcpbridge
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -74,6 +76,32 @@ func TestRunHidesRemoteConnectionDetails(t *testing.T) {
 	}
 }
 
+func TestRunReturnsRemoteToolDiscoveryFailure(t *testing.T) {
+	remoteServer := mcp.NewServer(&mcp.Implementation{Name: "remote", Version: "1"}, nil)
+	stream := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return remoteServer }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		var request struct {
+			Method string `json:"method"`
+		}
+		if json.Unmarshal(body, &request) == nil && request.Method == "tools/list" {
+			http.Error(w, "tool listing failed", http.StatusInternalServerError)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		stream.ServeHTTP(w, r)
+	}))
+	defer endpoint.Close()
+	err := run(context.Background(), endpoint.URL, "token", failingTransport{err: errors.New("local transport must not start")})
+	if err == nil || !strings.Contains(err.Error(), "could not list Speedtest MCP tools") {
+		t.Fatalf("run tool discovery error = %v", err)
+	}
+}
+
 func TestBearerTransportSetsCredentialWithoutMutatingRequest(t *testing.T) {
 	seen := make(chan string, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -122,6 +150,10 @@ func TestProxyServerForwardsToolCalls(t *testing.T) {
 			value := args["value"]
 			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: value}}}, nil
 		})
+	remoteServer.AddResource(&mcp.Resource{URI: "speedtest://fixture/docs", Name: "Fixture docs", MIMEType: "text/plain"},
+		func(_ context.Context, _ *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
+			return &mcp.ReadResourceResult{Contents: []*mcp.ResourceContents{{URI: "speedtest://fixture/docs", MIMEType: "text/plain", Text: "resource-ok"}}}, nil
+		})
 	remoteHTTP := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return remoteServer }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 	remoteEndpoint := httptest.NewServer(remoteHTTP)
 	defer remoteEndpoint.Close()
@@ -152,6 +184,10 @@ func TestProxyServerForwardsToolCalls(t *testing.T) {
 	if err != nil || result.IsError || result.Content[0].(*mcp.TextContent).Text != "hello" {
 		t.Fatalf("proxied call = %+v, error = %v", result, err)
 	}
+	resource, err := local.ReadResource(ctx, &mcp.ReadResourceParams{URI: "speedtest://fixture/docs"})
+	if err != nil || len(resource.Contents) != 1 || resource.Contents[0].Text != "resource-ok" {
+		t.Fatalf("proxied resource = %+v, error = %v", resource, err)
+	}
 }
 
 func TestProxyServerHandlesRemoteToolListFailure(t *testing.T) {
@@ -168,5 +204,42 @@ func TestProxyServerHandlesRemoteToolListFailure(t *testing.T) {
 	cancel()
 	if _, err := proxyServer(ctx, remote); err == nil || !strings.Contains(err.Error(), "could not list Speedtest MCP tools") {
 		t.Fatalf("proxyServer canceled list error = %v", err)
+	}
+}
+
+func TestProxyServerHandlesRemoteResourceListFailure(t *testing.T) {
+	remoteServer := mcp.NewServer(&mcp.Implementation{Name: "remote", Version: "1"}, nil)
+	stream := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return remoteServer }, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		var request struct {
+			Method string `json:"method"`
+		}
+		if json.Unmarshal(body, &request) == nil && request.Method == "resources/list" {
+			http.Error(w, "resource listing failed", http.StatusInternalServerError)
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		stream.ServeHTTP(w, r)
+	}))
+	defer endpoint.Close()
+	client := mcp.NewClient(&mcp.Implementation{Name: "test-client", Version: "1"}, nil)
+	remote, err := client.Connect(context.Background(), &mcp.StreamableClientTransport{Endpoint: endpoint.URL, HTTPClient: endpoint.Client()}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeSession(t, remote)
+	if _, err := proxyServer(context.Background(), remote); err == nil || !strings.Contains(err.Error(), "could not list Speedtest MCP resources") {
+		t.Fatalf("proxyServer resource list error = %v", err)
+	}
+}
+
+func TestProxyToolRejectsMissingArguments(t *testing.T) {
+	if _, err := proxyTool(nil, "example")(context.Background(), nil); err == nil || err.Error() != "tool arguments are required" {
+		t.Fatalf("missing tool request error = %v", err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,6 +15,7 @@ import (
 )
 
 type accessTokenTestStore struct {
+	mu          sync.Mutex
 	items       []apitoken.Token
 	createToken apitoken.Token
 	raw         string
@@ -23,6 +25,7 @@ type accessTokenTestStore struct {
 	revokeErr   error
 	listedPage  int
 	listedSize  int
+	listCalls   int
 	ownerID     string
 	name        string
 	scope       apitoken.Scope
@@ -36,7 +39,10 @@ func (s *accessTokenTestStore) Create(_ context.Context, owner string, input api
 	return s.createToken, s.raw, s.createErr
 }
 func (s *accessTokenTestStore) List(_ context.Context, owner string, page, size int) ([]apitoken.Token, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.ownerID, s.listedPage, s.listedSize = owner, page, size
+	s.listCalls++
 	return s.items, s.total, s.listErr
 }
 func (s *accessTokenTestStore) Revoke(_ context.Context, owner, id string) error {
@@ -140,8 +146,75 @@ func TestAccessTokenHTTPRejectsBearerManagementAndInvalidIDs(t *testing.T) {
 	wrongMethod := withTestOwner(http.MethodPut, "/api/access-tokens", "")
 	methodResponse := httptest.NewRecorder()
 	handler.ServeHTTP(methodResponse, wrongMethod)
-	if methodResponse.Code != http.StatusMethodNotAllowed || methodResponse.Header().Get("Allow") != "GET, POST, DELETE" {
+	if methodResponse.Code != http.StatusMethodNotAllowed || methodResponse.Header().Get("Allow") != "GET, POST" {
 		t.Fatalf("wrong method status=%d Allow=%q", methodResponse.Code, methodResponse.Header().Get("Allow"))
+	}
+}
+
+func TestAccessTokenRouteMethodsMatchCollectionAndResourcePaths(t *testing.T) {
+	store := &accessTokenTestStore{}
+	handler := newAccessTokenHandler(store, &serverAuth{})
+	for _, test := range []struct {
+		method, path, allow string
+	}{
+		{http.MethodGet, "/api/access-tokens/123e4567-e89b-12d3-a456-426614174000", http.MethodDelete},
+		{http.MethodPost, "/api/access-tokens/123e4567-e89b-12d3-a456-426614174000", http.MethodDelete},
+		{http.MethodDelete, "/api/access-tokens", "GET, POST"},
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, withTestOwner(test.method, test.path, `{"name":"must-not-create","scope":"read"}`))
+		if response.Code != http.StatusMethodNotAllowed || response.Header().Get("Allow") != test.allow {
+			t.Errorf("%s %s = %d Allow=%q, want 405 Allow=%q", test.method, test.path, response.Code, response.Header().Get("Allow"), test.allow)
+		}
+	}
+	if store.listCalls != 0 || store.name != "" {
+		t.Fatalf("wrong-route request reached store: list calls=%d name=%q", store.listCalls, store.name)
+	}
+	badPath := httptest.NewRecorder()
+	handler.ServeHTTP(badPath, withTestOwner(http.MethodDelete, "/api/access-tokens/id/extra", ""))
+	if badPath.Code != http.StatusNotFound {
+		t.Fatalf("malformed token path status=%d, want 404", badPath.Code)
+	}
+}
+
+func TestAccessTokenOwnerListRateLimiterIsSharedAcrossRequests(t *testing.T) {
+	store := &accessTokenTestStore{}
+	handler := newAccessTokenHandlerWithLimiter(store, &serverAuth{}, newNodeRateLimiter(1, 1))
+	first := httptest.NewRecorder()
+	handler.ServeHTTP(first, withTestOwner(http.MethodGet, "/api/access-tokens", ""))
+	second := httptest.NewRecorder()
+	handler.ServeHTTP(second, withTestOwner(http.MethodGet, "/api/access-tokens", ""))
+	if first.Code != http.StatusOK || second.Code != http.StatusTooManyRequests || second.Header().Get("Retry-After") == "" || store.listCalls != 1 {
+		t.Fatalf("shared limiter statuses=(%d,%d), calls=%d retry=%q", first.Code, second.Code, store.listCalls, second.Header().Get("Retry-After"))
+	}
+	concurrentStore := &accessTokenTestStore{}
+	concurrentHandler := newAccessTokenHandlerWithLimiter(concurrentStore, &serverAuth{}, newNodeRateLimiter(1, 1))
+	statuses := make(chan int, 20)
+	var workers sync.WaitGroup
+	for range 20 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			response := httptest.NewRecorder()
+			concurrentHandler.ServeHTTP(response, withTestOwner(http.MethodGet, "/api/access-tokens", ""))
+			statuses <- response.Code
+		}()
+	}
+	workers.Wait()
+	close(statuses)
+	allowed, limited := 0, 0
+	for status := range statuses {
+		switch status {
+		case http.StatusOK:
+			allowed++
+		case http.StatusTooManyRequests:
+			limited++
+		default:
+			t.Errorf("concurrent list status = %d", status)
+		}
+	}
+	if allowed != 1 || limited != 19 || concurrentStore.listCalls != 1 {
+		t.Fatalf("concurrent limiter allowed=%d limited=%d list calls=%d", allowed, limited, concurrentStore.listCalls)
 	}
 }
 
