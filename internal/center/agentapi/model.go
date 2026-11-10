@@ -185,8 +185,7 @@ func text(value *string, max int) bool { return value == nil || utf8.RuneCountIn
 // ParseResult validates one item independently of its siblings.
 func ParseResult(data []byte) (Result, error) {
 	var r Result
-	if Decode(data, &r, "id", "ts", "status", "down", "up", "ping", "jitter", "dLat", "uLat", "loss", "serverId", "ip", "threads", "bytesDown", "bytesUp", "duration", "error", "manual") != nil ||
-		!nonNull(data, "id", "ts", "status", "threads", "bytesDown", "bytesUp", "duration", "manual", "raw", "warnings") {
+	if Decode(data, &r, "id", "ts", "status", "down", "up", "ping", "jitter", "dLat", "uLat", "loss", "serverId", "ip", "threads", "bytesDown", "bytesUp", "duration", "error", "manual") != nil {
 		return r, ErrInvalid
 	}
 	if r.Engine == "" {
