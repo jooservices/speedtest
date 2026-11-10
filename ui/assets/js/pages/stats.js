@@ -112,6 +112,7 @@
       } }, U.dot(ST.nodeColor(n)), ST.nodeTitle(n)));
     });
     root.appendChild(nodeBox);
+    ST.bandwidth.panel(root);
 
     /* ---- summary table ---- */
     var hourly = ST.ranges[range] <= ST.DAY, showSum = q.sum && ST.metrics[m].unit === 'speed' && sel.length > 1;

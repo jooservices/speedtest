@@ -16,6 +16,12 @@ state and replayable progress events, with hashed idempotency keys and an active
 installation limit per node. It stores no SSH credentials or enrollment tokens.
 
 `00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
+`00018_bandwidth_usage_budgets.sql` adds a monthly per-node/engine byte rollup
+refreshed when a budget is configured and maintained by an insert trigger while
+budgets exist (so older center writers remain compatible),
+optional global/node budget state, a durable budget-event extension queue and
+monthly schedule overrides. New node schedules default to 60 minutes; the down
+migration restores the former 30-minute default without changing existing rows.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file
@@ -97,6 +103,10 @@ that a subsequent up can reapply version 1.
 | `installer_jobs` | Owner-scoped installation state; at most one active job per node |
 | `installer_events` | Safe, replayable plain-language progress events |
 | `installer_idempotency` | HMAC-protected install request digest and job link, expiring after 24 hours |
+| `usage_monthly_totals` | Insert-maintained UTC calendar-month byte totals by node and engine |
+| `usage_budgets` | Optional global or per-node monthly byte limits and at-limit action |
+| `usage_budget_events` | Deduplicated warning/limit/action events and JOOST-78 extension queue |
+| `usage_budget_overrides` | Original schedule state used for next-month restoration |
 
 All IDs are UUIDs. A result ID has **no server default**, so retries cannot
 accidentally obtain another identity. The primary key rejects duplicate UUIDs;

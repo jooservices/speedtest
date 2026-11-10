@@ -34,7 +34,7 @@
     root.appendChild(U.pageHead('Settings', 'Preferences for this dashboard and for every node.'));
     root.appendChild(U.tabs([
       { value: 'general', label: 'General' }, { value: 'engine', label: 'Speed test' }, { value: 'geo', label: 'Location' },
-      { value: 'notify', label: 'Notifications' }, { value: 'data', label: 'Data' }, { value: 'access', label: 'Access' }].concat(real ? [{ value: 'activity', label: 'Activity log' }] : []), tab, function (v) { tab = v; ST.refresh(); }));
+      { value: 'notify', label: 'Notifications' }, { value: 'data', label: 'Data' }, { value: 'bandwidth', label: 'Bandwidth' }, { value: 'access', label: 'Access' }].concat(real ? [{ value: 'activity', label: 'Activity log' }] : []), tab, function (v) { tab = v; ST.refresh(); }));
     var body = h('div', { class: 'card card-pad', style: 'max-width:860px' });
     if (real) body.addEventListener('change', function () { flush(); });
     root.appendChild(body);
@@ -278,6 +278,7 @@
       body.appendChild(host); body.appendChild(more);
       draw(); load();
     }
+    if (tab === 'bandwidth') ST.bandwidth.budgets(body);
     if (tab === 'activity' && real) realActivity();
     if (tab === 'access' && real) realAccess();
     else if (tab === 'access') {

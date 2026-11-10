@@ -8,7 +8,7 @@ export function settingsSuite(T, ctx) {
       await T.open('#/settings', 'Settings');
       await T.choose(setting('Decimal places').locator('select'), '2');
       await T.toast('Saved').waitFor();
-      assert.equal(T.db("select value->>'decimals' from settings where key='display'"), '2');
+      await T.eventually(() => T.db("select value->>'decimals' from settings where key='display'") === '2', 'the decimal preference is stored');
       await T.settled();
       await T.choose(setting('Speed units').locator('select'), 'Mbps');
       await T.settled();
@@ -120,12 +120,79 @@ export function settingsSuite(T, ctx) {
       await T.tab('Data');
       await T.choose(setting('Keep results for').locator('select'), '90');
       await T.settled();
-      assert.equal(T.db("select value #>> '{}' from settings where key='retentionDays'"), '90');
+      await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '90', 'the retention period is stored');
       const csv = await T.download(() => T.press('CSV', setting('Export all results')));
       assert.ok(csv.startsWith('time,node,status,download_mbps'), 'the CSV export has its header');
       const json = await T.download(() => T.press('JSON', setting('Export all results')));
       assert.ok(Array.isArray(JSON.parse(json)) || JSON.parse(json).data, 'the JSON export parses');
       await T.choose(setting('Keep results for').locator('select'), '365'); await T.settled();
+    },
+
+    async bandwidthBudgets() {
+      await budgetReadFailureRetries(T);
+      await T.open('#/settings', 'Settings');
+      await T.tab('Bandwidth');
+      await page.getByRole('heading', { name: 'Monthly bandwidth budgets' }).waitFor();
+      const usage = (await T.api('/api/usage')).body.data;
+      assert.ok(usage.monthToDate.totalBytes > 0, 'the seeded results have measured traffic');
+      const amountGiB = Math.max(0.1, Math.floor((usage.monthToDate.totalBytes / 1073741824 / 0.9) * 10) / 10);
+      const form = page.locator('form');
+      await T.choose(form.getByLabel('Scope'), 'global');
+      await T.fill('Monthly budget (GiB)', String(amountGiB), form);
+      await T.choose(form.getByLabel('At 100%'), 'pause');
+      await form.getByRole('button', { name: 'Save budget' }).click();
+      await T.toast('Bandwidth budget saved').waitFor();
+      await T.eventually(() => T.db("select count(*) from usage_budgets where scope_key='global'") === '1', 'the global budget is stored');
+      assert.equal(T.db("select action from usage_budgets where scope_key='global'"), 'pause');
+      const vm1 = usage.byNodeEngine.filter(row => row.nodeName === 'VM1').reduce((sum, row) => sum + row.monthToDate.totalBytes, 0);
+      const nodeBudgetGiB = Math.max(0.1, Math.floor((vm1 / 1073741824 / 0.9) * 10) / 10);
+      const nodeForm = page.locator('form');
+      await T.choose(nodeForm.getByLabel('Scope'), '10000000-0000-4000-8000-000000000001');
+      await T.fill('Monthly budget (GiB)', String(nodeBudgetGiB), nodeForm);
+      await T.choose(nodeForm.getByLabel('At 100%'), 'widen');
+      await nodeForm.getByRole('button', { name: 'Save budget' }).click();
+      await T.toast('Bandwidth budget saved').waitFor();
+      await T.eventually(() => T.db('select count(*) from usage_budgets') === '2', 'the node budget is stored alongside the global budget');
+      assert.equal(T.db("select count(*) from usage_budgets"), '2');
+      await T.open('#/nodes/10000000-0000-4000-8000-000000000001', /VM1/);
+      await T.tab('Settings');
+      await T.see('Recommended minimum interval', page);
+      await T.fillAndLeave('VM1 Ookla proposed interval in minutes', '120', page);
+      await T.see('Estimate for every 120 minutes', page);
+      await T.fillAndLeave('VM1 Ookla proposed monthly budget in GiB', '0.001', page);
+      await T.see('This budget cannot be met even at a 24-hour interval.', page);
+      await T.fillAndLeave('VM1 Ookla proposed monthly budget in GiB', '1000', page);
+      await T.see('Recommended minimum interval', page);
+      await page.screenshot({ path: '.tmp/e2e/shots/JOOST-80-node-bandwidth-advice.png', fullPage: true });
+      await T.open('#/', 'Dashboard');
+      await T.see('Monthly bandwidth budget is at least 80% used', page.locator('#view'));
+      await T.see('The configured schedule policy applies when the budget is reached.', page.locator('#view'));
+      await page.screenshot({ path: '.tmp/e2e/shots/JOOST-80-dashboard-budget-warning.png', fullPage: true });
+      await T.open('#/settings', 'Settings');
+      await T.tab('Bandwidth');
+      const limitForm = page.locator('form');
+      const exhaustedGiB = Math.max(0.001, Number((usage.monthToDate.totalBytes / 1073741824 * 0.5).toFixed(3)));
+      await T.choose(limitForm.getByLabel('Scope'), 'global');
+      await T.fill('Monthly budget (GiB)', String(exhaustedGiB), limitForm);
+      await T.choose(limitForm.getByLabel('At 100%'), 'pause');
+      await limitForm.getByRole('button', { name: 'Save budget' }).click();
+      await T.toast('Bandwidth budget saved').waitFor();
+      await T.eventually(() => T.db('select count(*) from engine_schedules where enabled') === '0', 'the global policy pauses every schedule at 100%');
+      await T.open('#/', 'Dashboard');
+      await T.see('Monthly bandwidth budget reached', page.locator('#view'));
+      await T.see('Tests are paused until the budget resets.', page.locator('#view'));
+      await page.screenshot({ path: '.tmp/e2e/shots/JOOST-80-dashboard-budget-limit.png', fullPage: true });
+      assert.ok(Number(T.db("select count(*) from audit_log where action='usage_budget.tests_paused'")) > 0, 'the automatic pause is audited');
+      await T.open('#/settings', 'Settings');
+      await T.tab('Bandwidth');
+      await page.locator('.list-row').filter({ hasText: 'Global' }).getByRole('button', { name: 'Remove' }).click();
+      await T.toast('Budget removed').waitFor();
+      await T.eventually(() => T.db("select count(*) from usage_budgets where scope_key='global'") === '0', 'the global budget is removed');
+      assert.equal(T.db("select count(*) from usage_budgets where scope_key='global'"), '0');
+      await page.locator('.list-row').filter({ hasText: 'VM1' }).getByRole('button', { name: 'Remove' }).click();
+      await T.toast('Budget removed').waitFor();
+      await T.eventually(() => T.db('select count(*) from usage_budgets') === '0', 'all budgets are removed');
+      assert.equal(T.db('select count(*) from usage_budgets'), '0');
     },
 
     // The activity log lists the changes made earlier in the run, filters by kind and never shows secrets.
@@ -142,7 +209,8 @@ export function settingsSuite(T, ctx) {
       assert.equal(await page.getByText('Changed settings').count(), 0, 'the node filter hides settings changes');
       await T.see('Added a node');
       const entries = (await T.api('/api/audit?size=100')).body.data;
-      assert.ok(entries.every(e => e.actor === 'jooservices@gmail.com' && e.summary && !/secret|password/i.test(JSON.stringify(e).replace('Changed the password', ''))), 'entries name the owner and hold no secrets');
+      assert.ok(entries.some(e => e.actor === 'system:usage-budget' && e.action === 'usage_budget.tests_paused'), 'automatic budget actions are attributed to the system');
+      assert.ok(entries.every(e => ['jooservices@gmail.com', 'system:usage-budget'].includes(e.actor) && e.summary && !/secret|password/i.test(JSON.stringify(e).replace('Changed the password', ''))), 'entries name the owner or system and hold no secrets');
       assert.ok(Number(T.db('select count(*) from audit_log')) >= entries.length, 'the entries are stored on the center');
       const refused = await T.api('/api/audit?action=' + 'a'.repeat(61));
       assert.equal(refused.status, 422);
@@ -166,4 +234,34 @@ export function settingsSuite(T, ctx) {
       await T.press('Cancel', page.getByRole('dialog'));
     },
   };
+}
+
+async function budgetReadFailureRetries(T) {
+  const { page, assert } = T;
+  let reads = 0;
+  const countRead = request => {
+    const url = new URL(request.url());
+    if (request.method() === 'GET' && url.pathname === '/api/usage/budgets') reads++;
+  };
+  page.on('request', countRead);
+  await page.route('**/api/usage/budgets', async route => {
+    const url = new URL(route.request().url());
+    if (route.request().method() === 'GET' && url.pathname === '/api/usage/budgets' && reads === 1) {
+      await route.fulfill({ status: 503, contentType: 'application/problem+json', body: JSON.stringify({ type: 'about:blank', title: 'Temporary failure', status: 503, detail: 'Retry the budget request.' }) });
+      return;
+    }
+    await route.continue();
+  });
+  await page.reload();
+  await T.open('#/settings', 'Settings');
+  await T.tab('Bandwidth');
+  await page.getByRole('heading', { name: 'Budgets are unavailable' }).waitFor();
+  await page.waitForTimeout(150);
+  assert.equal(reads, 1, 'a failed budget request does not retry itself');
+  T.expectRefusal(503);
+  await page.getByRole('button', { name: 'Retry budgets' }).click();
+  await page.getByRole('heading', { name: 'Monthly bandwidth budgets' }).waitFor();
+  assert.equal(reads, 2, 'the accessible retry makes one new request');
+  await page.unroute('**/api/usage/budgets');
+  page.off('request', countRead);
 }

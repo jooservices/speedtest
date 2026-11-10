@@ -25,6 +25,8 @@ tags:
     description: History and exports
   - name: Statistics
     description: Aggregates and charts
+  - name: Bandwidth
+    description: Measured test traffic, budgets and cost advice
   - name: Dashboard
     description: Fleet overview
   - name: Schedules
@@ -1500,6 +1502,237 @@ paths:
             minimum: 1
             maximum: 100
             default: 15
+  /api/usage:
+    get:
+      operationId: getUsage
+      tags:
+        - Bandwidth
+      summary: Read measured traffic by node, engine and UTC period
+      description: Omit from/to for a trailing 30-day range. Otherwise provide both inclusive/exclusive RFC 3339 bounds, at most 366 days. Buckets remain separated by node and engine.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/Node"
+        - $ref: "#/components/parameters/Engine"
+        - name: from
+          in: query
+          required: false
+          description: Inclusive RFC 3339 start; must be paired with to.
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          description: Exclusive RFC 3339 end; must be paired with from.
+          schema:
+            type: string
+            format: date-time
+        - name: group
+          in: query
+          required: false
+          description: UTC calendar bucket size.
+          schema:
+            type: string
+            enum: [day, week, month]
+            default: day
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getUsageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/usage/advice:
+    get:
+      operationId: getUsageAdvice
+      tags:
+        - Bandwidth
+      summary: Estimate traffic at a selected node, engine and interval
+      description: Estimates daily and 30-day traffic from the selected node/engine's previous 30 days of results.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: node
+          in: query
+          required: true
+          description: Node UUID.
+          schema:
+            $ref: "#/components/schemas/UUID"
+        - name: engine
+          in: query
+          required: true
+          description: Measurement engine; engines are estimated independently.
+          schema:
+            $ref: "#/components/schemas/Engine"
+        - name: interval
+          in: query
+          required: true
+          description: Proposed test interval in minutes.
+          schema:
+            type: integer
+            minimum: 5
+            maximum: 1440
+        - name: budgetBytes
+          in: query
+          required: false
+          description: Optional monthly budget override; otherwise node then global budget is used.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getUsageAdviceResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/usage/budgets:
+    get:
+      operationId: getUsageBudgets
+      tags:
+        - Bandwidth
+      summary: Read configured monthly budgets
+      description: Collection ETag is required in If-Match on every budget replacement or deletion.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getUsageBudgetsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          description: The budget store is temporarily unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/usage/budgets/{scope}:
+    put:
+      operationId: replaceUsageBudget
+      tags:
+        - Bandwidth
+      summary: Replace one global or node monthly budget
+      description: Requires owner privileges, same-origin CSRF and the current budget collection ETag.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: scope
+          in: path
+          required: true
+          description: The literal global or a node UUID.
+          schema:
+            type: string
+            pattern: "^(global|[0-9a-fA-F-]{36})$"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UsageBudgetInput"
+      responses:
+        "200":
+          description: Budget collection after replacement
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/replaceUsageBudgetResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    delete:
+      operationId: deleteUsageBudget
+      tags:
+        - Bandwidth
+      summary: Remove one global or node monthly budget
+      description: Requires owner privileges, same-origin CSRF and the current budget collection ETag.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: scope
+          in: path
+          required: true
+          description: The literal global or a node UUID.
+          schema:
+            type: string
+            pattern: "^(global|[0-9a-fA-F-]{36})$"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      responses:
+        "204":
+          description: Budget removed
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
   /api/dashboard:
     get:
       operationId: getDashboard
@@ -4045,6 +4278,232 @@ components:
                 $ref: "#/components/schemas/Server"
               error:
                 type: "null"
+    UsageBytes:
+      type: object
+      additionalProperties: false
+      properties:
+        bytesDown:
+          type: integer
+          format: int64
+          minimum: 0
+        bytesUp:
+          type: integer
+          format: int64
+          minimum: 0
+        totalBytes:
+          type: integer
+          format: int64
+          minimum: 0
+      required: [bytesDown, bytesUp, totalBytes]
+    UsageBucket:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/UUID"
+        engine:
+          $ref: "#/components/schemas/Engine"
+        start:
+          $ref: "#/components/schemas/Timestamp"
+        bytesDown:
+          type: integer
+          format: int64
+          minimum: 0
+        bytesUp:
+          type: integer
+          format: int64
+          minimum: 0
+        totalBytes:
+          type: integer
+          format: int64
+          minimum: 0
+      required: [nodeId, engine, start, bytesDown, bytesUp, totalBytes]
+    UsageNodeEngine:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/UUID"
+        nodeName:
+          type: string
+        engine:
+          $ref: "#/components/schemas/Engine"
+        bytesDown:
+          type: integer
+          format: int64
+          minimum: 0
+        bytesUp:
+          type: integer
+          format: int64
+          minimum: 0
+        totalBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        monthToDate:
+          $ref: "#/components/schemas/UsageBytes"
+        projectedMonthEnd:
+          $ref: "#/components/schemas/UsageBytes"
+        previousMonth:
+          $ref: "#/components/schemas/UsageBytes"
+      required: [nodeId, nodeName, engine, bytesDown, bytesUp, totalBytes, monthToDate, projectedMonthEnd, previousMonth]
+    UsageComparison:
+      type: object
+      additionalProperties: false
+      properties:
+        currentMonthToDateBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        previousMonthBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        projectedMonthEndBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        changePercent:
+          type:
+            - number
+            - "null"
+      required: [currentMonthToDateBytes, previousMonthBytes, projectedMonthEndBytes, changePercent]
+    UsageBudgetStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        scopeKey:
+          type: string
+        nodeId:
+          $ref: "#/components/schemas/UUID"
+        monthlyBytes:
+          type: integer
+          format: int64
+          minimum: 1
+        usedBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        ratio:
+          type: number
+          minimum: 0
+        action:
+          type: string
+          enum: [widen, pause]
+        alert:
+          type: boolean
+      required: [scopeKey, monthlyBytes, usedBytes, ratio, action, alert]
+    Usage:
+      type: object
+      additionalProperties: false
+      properties:
+        from:
+          $ref: "#/components/schemas/Timestamp"
+        to:
+          $ref: "#/components/schemas/Timestamp"
+        group:
+          type: string
+          enum: [day, week, month]
+        totals:
+          $ref: "#/components/schemas/UsageBytes"
+        monthToDate:
+          $ref: "#/components/schemas/UsageBytes"
+        projectedMonthEnd:
+          $ref: "#/components/schemas/UsageBytes"
+        previousMonth:
+          $ref: "#/components/schemas/UsageBytes"
+        comparison:
+          $ref: "#/components/schemas/UsageComparison"
+        byNodeEngine:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageNodeEngine"
+        series:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageBucket"
+        budgets:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageBudgetStatus"
+      required: [from, to, group, totals, monthToDate, projectedMonthEnd, previousMonth, comparison, byNodeEngine, series, budgets]
+    UsageBudget:
+      type: object
+      additionalProperties: false
+      properties:
+        scopeKey:
+          type: string
+          description: global or a lower-case node UUID.
+        nodeId:
+          $ref: "#/components/schemas/UUID"
+        monthlyBytes:
+          type: integer
+          format: int64
+          minimum: 1
+        action:
+          type: string
+          enum: [widen, pause]
+        widenMultiplier:
+          type: integer
+          minimum: 2
+          maximum: 10
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+      required: [scopeKey, monthlyBytes, action, widenMultiplier, revision]
+    UsageBudgetInput:
+      type: object
+      additionalProperties: false
+      properties:
+        monthlyBytes:
+          type: integer
+          format: int64
+          minimum: 1
+        action:
+          type: string
+          enum: [widen, pause]
+        widenMultiplier:
+          type: integer
+          minimum: 2
+          maximum: 10
+          default: 2
+      required: [monthlyBytes, action]
+    UsageAdvice:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/UUID"
+        engine:
+          $ref: "#/components/schemas/Engine"
+        intervalMinutes:
+          type: integer
+          minimum: 5
+          maximum: 1440
+        averageBytesPerTest:
+          type: number
+          minimum: 0
+        estimatedBytesPerDay:
+          type: number
+          minimum: 0
+        estimatedBytesPerMonth:
+          type: number
+          minimum: 0
+        budgetBytes:
+          type: integer
+          format: int64
+          minimum: 1
+        recommendedIntervalMinutes:
+          type:
+            - integer
+            - "null"
+          minimum: 5
+          maximum: 1440
+        recommendationStatus:
+          type: string
+          enum: [feasible, infeasible, unavailable]
+      required: [nodeId, engine, intervalMinutes, averageBytesPerTest, estimatedBytesPerDay, estimatedBytesPerMonth, recommendedIntervalMinutes, recommendationStatus]
     Result:
       type: object
       additionalProperties: false
@@ -4093,10 +4552,19 @@ components:
           maximum: 64
           default: 4
         bytesDown:
-          type: integer
+          type:
+            - integer
+            - "null"
           minimum: 0
         bytesUp:
-          type: integer
+          type:
+            - integer
+            - "null"
+          minimum: 0
+        bytesTotal:
+          type:
+            - integer
+            - "null"
           minimum: 0
         duration:
           type: number
@@ -4171,6 +4639,7 @@ components:
         - threads
         - bytesDown
         - bytesUp
+        - bytesTotal
         - duration
         - error
         - manual
@@ -6259,6 +6728,46 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/Distribution"
+    getUsageResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Usage"
+    getUsageAdviceResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/UsageAdvice"
+    getUsageBudgetsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/UsageBudget"
+    replaceUsageBudgetResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/UsageBudget"
     getDashboardResponse:
       allOf:
         - $ref: "#/components/schemas/Success"

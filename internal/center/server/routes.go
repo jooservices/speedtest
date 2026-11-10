@@ -57,6 +57,9 @@ func ownerAreas(o Options, auth *serverAuth) routeTable {
 	if o.OwnerSchedules != nil {
 		t.add(newOwnerSchedulesHandler(o.OwnerSchedules, auth), onPath(ownerSchedulesRoute))
 	}
+	if o.OwnerUsage != nil {
+		t.add(newOwnerUsageHandler(o.OwnerUsage, auth), onPath(ownerUsageRoute))
+	}
 	if o.OwnerJobs != nil {
 		t.add(newOwnerJobsHandler(o.OwnerJobs, auth), onPath(ownerJobsRoute))
 	}

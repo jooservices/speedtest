@@ -50,6 +50,7 @@
           { key: 'node', label: 'Node', sort: true, render: function (r) { var n = ST.node(r.nodeId); return h('span', { class: 'row' }, U.dot(ST.nodeColor(n)), n.name); } },
           { key: 'down', label: 'Download', sort: true, num: true, render: function (r) { return F.speed(r.down); } },
           { key: 'up', label: 'Upload', sort: true, num: true, render: function (r) { return F.speed(r.up); } },
+          { key: 'bytesTotal', label: 'Data used', sort: false, render: function (r) { return F.bytes(r.bytesDown) + ' down · ' + F.bytes(r.bytesUp) + ' up · ' + F.bytes(F.bytesTotal(r.bytesDown, r.bytesUp)) + ' total'; } },
           { key: 'ping', label: 'Ping', sort: true, num: true, render: function (r) { return F.ms(r.ping); } },
           { key: 'jitter', label: 'Jitter', sort: true, num: true, render: function (r) { return F.ms(r.jitter); } },
           { key: 'loss', label: 'Loss', sort: true, num: true, render: function (r) { return r.loss == null ? '—' : F.num(r.loss, 1) + '%'; } },

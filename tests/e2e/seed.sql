@@ -23,7 +23,8 @@ SELECT gen_random_uuid(), n.id, now() - (g * interval '30 minutes') - (n.color_s
   CASE WHEN g % 97 = 0 THEN NULL ELSE 9 END,
   CASE WHEN g % 97 = 0 THEN NULL ELSE '{"id":9,"name":"Viettel","city":"Hanoi","sponsor":"Viettel Group"}'::jsonb END,
   CASE WHEN n.color_slot <= 2 THEN (CASE WHEN g > 150 THEN '203.0.113.11' ELSE '203.0.113.12' END)::inet ELSE (CASE WHEN g > 200 THEN '198.51.100.21' ELSE '198.51.100.22' END)::inet END,
-  4, 400000000 + g, 50000000 + g, 28.0,
+  4, CASE WHEN g % 97 = 0 THEN NULL ELSE 400000000 + g END,
+  CASE WHEN g % 97 = 0 THEN NULL ELSE 50000000 + g END, 28.0,
   CASE WHEN g % 97 = 0 THEN 'The test server did not answer in time' END
 FROM nodes n CROSS JOIN generate_series(0, 335) g;
 INSERT INTO node_ip_addresses (node_id, ip, tests, first_seen, last_seen, speed_tests, down_sum, up_sum)

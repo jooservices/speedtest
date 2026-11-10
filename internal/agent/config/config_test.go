@@ -32,7 +32,7 @@ func TestLoadDefaultsNoFile(t *testing.T) {
 		Name:                 "node",
 		ExpectedDownloadMbps: 0,
 		ExpectedUploadMbps:   0,
-		Interval:             30 * time.Minute,
+		Interval:             60 * time.Minute,
 	}
 	if cfg != want {
 		t.Fatalf("Load() = %+v, want %+v", cfg, want)
@@ -46,7 +46,7 @@ func TestLoadEmptyFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v, want nil", err)
 	}
-	if cfg.Name != "node" || cfg.Interval != 30*time.Minute {
+	if cfg.Name != "node" || cfg.Interval != 60*time.Minute {
 		t.Fatalf("Load() = %+v, want defaults", cfg)
 	}
 }
@@ -90,84 +90,37 @@ func TestLoadPartialFileKeepsDefaults(t *testing.T) {
 	if cfg.Name != "only-name" {
 		t.Fatalf("Name = %q, want only-name", cfg.Name)
 	}
-	if cfg.Engine != "ookla" || cfg.ExpectedDownloadMbps != 0 || cfg.ExpectedUploadMbps != 0 || cfg.Interval != 30*time.Minute {
+	if cfg.Engine != "ookla" || cfg.ExpectedDownloadMbps != 0 || cfg.ExpectedUploadMbps != 0 || cfg.Interval != 60*time.Minute {
 		t.Fatalf("Load() = %+v, want file name with default speeds/interval", cfg)
 	}
 }
 
+type loadErrorCase struct{ name, file, wantErr string }
+
 func TestLoadErrors(t *testing.T) {
-	tests := []struct {
-		name    string
-		file    string
-		wantErr string
-	}{
-		{
-			name:    "malformed yaml",
-			file:    "name: [unclosed",
-			wantErr: "parse config",
-		},
-		{
-			name:    "unknown key",
-			file:    "nam: typo\n",
-			wantErr: "parse config",
-		},
-		{
-			name:    "unknown engine",
-			file:    "engine: speedtest-cli\n",
-			wantErr: "engine must be ookla, librespeed or speedtestcli",
-		},
-		{
-			name:    "download not an integer",
-			file:    "expected_download_mbps: fast\n",
-			wantErr: "parse config",
-		},
-		{
-			name:    "interval not a duration",
-			file:    "interval: often\n",
-			wantErr: "interval must be a duration",
-		},
-		{
-			name:    "file download negative",
-			file:    "expected_download_mbps: -1\n",
-			wantErr: "expected_download_mbps must be >= 0",
-		},
-		{
-			name:    "file name blank",
-			file:    "name: '   '\n",
-			wantErr: "name must not be blank",
-		},
-		{
-			name:    "file interval zero",
-			file:    "interval: 0s\n",
-			wantErr: "interval must be greater than 0",
-		},
-		{
-			name:    "both network selectors",
-			file:    "network_interface: eth0\nsource_ip: 192.0.2.10\n",
-			wantErr: "set only one of network_interface or source_ip",
-		},
-		{
-			name:    "invalid source IP",
-			file:    "source_ip: not-an-ip\n",
-			wantErr: "source_ip \"not-an-ip\" must be an IPv4 or IPv6 literal",
-		},
+	tests := []loadErrorCase{
+		{"malformed yaml", "name: [unclosed", "parse config"},
+		{"unknown key", "nam: typo\n", "parse config"},
+		{"unknown engine", "engine: speedtest-cli\n", "engine must be ookla, librespeed or speedtestcli"},
+		{"download not an integer", "expected_download_mbps: fast\n", "parse config"},
+		{"interval not a duration", "interval: often\n", "interval must be a duration"},
+		{"file download negative", "expected_download_mbps: -1\n", "expected_download_mbps must be >= 0"},
+		{"file name blank", "name: '   '\n", "name must not be blank"},
+		{"file interval zero", "interval: 0s\n", "interval must be greater than 0"},
+		{"both network selectors", "network_interface: eth0\nsource_ip: 192.0.2.10\n", "set only one of network_interface or source_ip"},
+		{"invalid source IP", "source_ip: not-an-ip\n", "source_ip \"not-an-ip\" must be an IPv4 or IPv6 literal"},
 	}
-
 	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "missing.yaml")
-			if tt.file != "" {
-				path = writeFile(t, t.TempDir(), "config.yaml", tt.file)
-			}
+		t.Run(tt.name, func(t *testing.T) { assertLoadError(t, tt) })
+	}
+}
 
-			_, err := Load(path)
-			if err == nil {
-				t.Fatalf("Load() error = nil, want an error containing %q", tt.wantErr)
-			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("Load() error = %v, want it to contain %q", err, tt.wantErr)
-			}
-		})
+func assertLoadError(t *testing.T, tt loadErrorCase) {
+	t.Helper()
+	path := writeFile(t, t.TempDir(), "config.yaml", tt.file)
+	_, err := Load(path)
+	if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+		t.Fatalf("Load() error = %v, want it to contain %q", err, tt.wantErr)
 	}
 }
 
