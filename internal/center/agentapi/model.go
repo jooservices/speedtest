@@ -70,21 +70,31 @@ type Server struct {
 // Decode rejects unknown fields, trailing JSON, missing required keys and null
 // for nonnullable properties. Nullable values remain distinguishable from zero.
 func Decode(data []byte, target any, required ...string) error {
+	_, err := decodeFields(data, target, required...)
+	return err
+}
+
+func decodeFields(data []byte, target any, required ...string) (map[string]json.RawMessage, error) {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(data, &fields) != nil || fields == nil {
-		return ErrInvalid
+		return nil, ErrInvalid
 	}
 	for _, key := range required {
 		if _, ok := fields[key]; !ok {
-			return ErrInvalid
+			return nil, ErrInvalid
 		}
 	}
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(target) != nil || strictShape(data, reflect.TypeOf(target).Elem()) != nil {
-		return ErrInvalid
+	kind := reflect.TypeOf(target).Elem()
+	var shapeErr error
+	if kind.Kind() == reflect.Struct {
+		shapeErr = strictShapeFields(fields, kind)
+	} else {
+		shapeErr = strictShape(data, kind)
 	}
-	return nil
+	if shapeErr != nil || json.Unmarshal(data, target) != nil {
+		return nil, ErrInvalid
+	}
+	return fields, nil
 }
 
 // encoding/json accepts null into scalar fields and matches struct keys without
@@ -108,17 +118,7 @@ func strictShape(data []byte, kind reflect.Type) error {
 		if json.Unmarshal(data, &fields) != nil || fields == nil {
 			return ErrInvalid
 		}
-		known := make(map[string]reflect.Type, kind.NumField())
-		for i := range kind.NumField() {
-			f := kind.Field(i)
-			known[strings.Split(f.Tag.Get("json"), ",")[0]] = f.Type
-		}
-		for key, value := range fields {
-			fieldType, ok := known[key]
-			if !ok || strictShape(value, fieldType) != nil {
-				return ErrInvalid
-			}
-		}
+		return strictShapeFields(fields, kind)
 	case reflect.Slice:
 		var items []json.RawMessage
 		if json.Unmarshal(data, &items) != nil {
@@ -133,11 +133,30 @@ func strictShape(data []byte, kind reflect.Type) error {
 	return nil
 }
 
+func strictShapeFields(fields map[string]json.RawMessage, kind reflect.Type) error {
+	known := make(map[string]reflect.Type, kind.NumField())
+	for i := range kind.NumField() {
+		field := kind.Field(i)
+		known[strings.Split(field.Tag.Get("json"), ",")[0]] = field.Type
+	}
+	for key, value := range fields {
+		fieldType, ok := known[key]
+		if !ok || strictShape(value, fieldType) != nil {
+			return ErrInvalid
+		}
+	}
+	return nil
+}
+
 func nonNull(data []byte, keys ...string) bool {
 	var fields map[string]json.RawMessage
 	if json.Unmarshal(data, &fields) != nil {
 		return false
 	}
+	return nonNullFields(fields, keys...)
+}
+
+func nonNullFields(fields map[string]json.RawMessage, keys ...string) bool {
 	for _, key := range keys {
 		if value, ok := fields[key]; ok && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return false
@@ -171,8 +190,8 @@ func text(value *string, max int) bool { return value == nil || utf8.RuneCountIn
 // ParseResult validates one item independently of its siblings.
 func ParseResult(data []byte) (Result, error) {
 	var r Result
-	if Decode(data, &r, "id", "ts", "status", "down", "up", "ping", "jitter", "dLat", "uLat", "loss", "serverId", "ip", "threads", "bytesDown", "bytesUp", "duration", "error", "manual") != nil ||
-		!nonNull(data, "id", "ts", "status", "threads", "bytesDown", "bytesUp", "duration", "manual", "raw", "warnings") {
+	fields, err := decodeFields(data, &r, "id", "ts", "status", "down", "up", "ping", "jitter", "dLat", "uLat", "loss", "serverId", "ip", "threads", "bytesDown", "bytesUp", "duration", "error", "manual")
+	if err != nil || !nonNullFields(fields, "id", "ts", "status", "threads", "bytesDown", "bytesUp", "duration", "manual", "raw", "warnings") {
 		return r, ErrInvalid
 	}
 	if r.Engine == "" {
@@ -211,7 +230,7 @@ func ParseResult(data []byte) (Result, error) {
 	if len(r.Raw) > 64<<10 || json.Unmarshal(r.Raw, &raw) != nil || raw == nil {
 		return r, ErrInvalid
 	}
-	if err := r.validateDetails(data); err != nil {
+	if err := r.validateDetails(fields); err != nil {
 		return r, err
 	}
 	if r.Warnings == nil {
@@ -318,19 +337,15 @@ func sameAck(a, b Command) bool {
 }
 func equalString(a, b *string) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
 
-func (r Result) validateDetails(data []byte) error {
+func (r Result) validateDetails(fields map[string]json.RawMessage) error {
 	for key, loaded := range map[string]*LoadedLatency{"loadedDown": r.LoadedDown, "loadedUp": r.LoadedUp} {
 		if loaded != nil {
-			var fields map[string]json.RawMessage
-			_ = json.Unmarshal(data, &fields)
 			if Decode(fields[key], new(LoadedLatency), "low", "iqm", "high") != nil || !number(loaded.Low) || !number(loaded.IQM) || !number(loaded.High) {
 				return ErrInvalid
 			}
 		}
 	}
 	if r.Server != nil {
-		var fields map[string]json.RawMessage
-		_ = json.Unmarshal(data, &fields)
 		if Decode(fields["server"], new(Server)) != nil || !nonNull(fields["server"], "id", "name", "city", "sponsor", "host") || (r.Server.ID != nil && *r.Server.ID < 1) || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || utf8.RuneCountInString(r.Server.Host) > 255 {
 			return ErrInvalid
 		}
