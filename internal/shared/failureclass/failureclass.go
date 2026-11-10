@@ -2,7 +2,12 @@
 // stored on results, exposed by the API and shown in the UI.
 package failureclass
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
+
+var http429Status = regexp.MustCompile(`(?i)\b(?:http(?:/\d+(?:\.\d+)?)?|status(?:[\s_-]+code)?|response(?:[\s_-]+status)?(?:[\s_-]+code)?)\s*[:=]?\s*429\b`)
 
 // Fixed vocabulary. New classes require a migration of the results check constraint.
 const (
@@ -39,7 +44,7 @@ func Normalize(class string) string {
 func FromText(s string) string {
 	lower := strings.ToLower(s)
 	switch {
-	case containsAny(lower, "too many requests", "rate limit", "rate_limited", "429"):
+	case IsRateLimitedText(s):
 		return RateLimited
 	case containsAny(lower, "speedtest: binary_missing", "binary_missing", "executable file not found", "not found in $path"):
 		return EngineMissing
@@ -50,12 +55,18 @@ func FromText(s string) string {
 		"public_ip_unavailable", "network path unavailable"):
 		return NoNetwork
 	case containsAny(lower, "speedtest: server_unavailable", "server_unreachable", "server unavailable",
-		"server is unavailable", "no server is currently available", "unable to connect to server",
+		"server is unavailable", "server is unreachable", "no server is currently available", "unable to connect to server",
 		"server is not responding", "server not responding", "connection refused"):
 		return ServerUnreachable
 	default:
 		return Other
 	}
+}
+
+// IsRateLimitedText matches explicit provider phrases or a bounded HTTP 429 status.
+func IsRateLimitedText(s string) bool {
+	lower := strings.ToLower(s)
+	return containsAny(lower, "too many requests", "rate limit", "rate_limited") || http429Status.MatchString(s)
 }
 
 // ShortLabel is the short reason chip text for the Results table.

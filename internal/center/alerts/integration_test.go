@@ -109,6 +109,69 @@ func scalar(t *testing.T, ctx context.Context, pool *pgxpool.Pool, query string,
 	return count
 }
 
+func saveAlertResult(t *testing.T, ctx context.Context, agent *agentapi.Postgres, result agentapi.Result) {
+	t.Helper()
+	if duplicate, err := agent.SaveResult(ctx, testNodeID, result); err != nil || duplicate {
+		t.Fatalf("save alert fixture %s status=%s class=%s: duplicate=%t err=%v", result.ID, result.Status, result.FailureClass, duplicate, err)
+	}
+}
+
+func assertAlertActive(t *testing.T, ctx context.Context, pool *pgxpool.Pool, ruleID string) {
+	t.Helper()
+	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE rule_id=$1 AND resolved_at IS NULL`, ruleID) != 1 {
+		t.Fatalf("rate-limited result changed active alert state for rule %s", ruleID)
+	}
+}
+
+func TestRateLimitedResultsPreserveMeasurementAlertStateIntegration(t *testing.T) {
+	pool, ctx := integrationDB(t)
+	addNode(t, ctx, pool, testNodeID, "alert-rate-limit", time.Now().UTC().Add(-time.Hour), 30)
+	store := &alerts.Store{DB: pool, AppKey: []byte(appKey)}
+	failRule := addRule(t, ctx, store, "rate-fail", alerts.RuleInput{Name: "Failures", Metric: "failed", Op: ">=", Value: 1, ForTests: 2, AllNodes: true, Severity: "warn", Channels: []string{"email"}, Enabled: true})
+	pingRule := addRule(t, ctx, store, "rate-ping", alerts.RuleInput{Name: "High ping", Metric: "ping", Op: ">", Value: 50, ForTests: 2, AllNodes: true, Severity: "warn", Channels: []string{"email"}, Enabled: true})
+	agent := &agentapi.Postgres{Pool: pool, Hook: store}
+	base := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	ip := "203.0.113.81"
+	for index, class := range []string{"ping", "rate_limited", "ping", "rate_limited"} {
+		item := testResult(fmt.Sprintf("73000000-0000-4000-8000-%012x", index+1), base.Add(time.Duration(index)*time.Minute), map[string]string{"ping": "ok", "rate_limited": "failed"}[class], nil, 0)
+		item.Engine = "ookla"
+		if class == "ping" {
+			item = testResult(fmt.Sprintf("73000000-0000-4000-8000-%012x", index+1), base.Add(time.Duration(index)*time.Minute), "ok", &ip, 100)
+			*item.Ping = 100
+		} else {
+			item.FailureClass = "rate_limited"
+		}
+		saveAlertResult(t, ctx, agent, item)
+	}
+	assertAlertActive(t, ctx, pool, pingRule)
+	for index, class := range []string{"failed", "rate_limited", "failed", "rate_limited"} {
+		status := class
+		if class == "rate_limited" {
+			status = "failed"
+		}
+		item := testResult(fmt.Sprintf("73000000-0000-4000-8000-%012x", index+5), base.Add(time.Duration(index+4)*time.Minute), status, nil, 0)
+		item.Engine = "ookla"
+		if class == "rate_limited" {
+			item.FailureClass = "rate_limited"
+		}
+		saveAlertResult(t, ctx, agent, item)
+	}
+	assertAlertActive(t, ctx, pool, failRule)
+	if scalar(t, ctx, pool, `SELECT consecutive_count FROM alert_state WHERE rule_id=$1 AND node_id=$2`, failRule, testNodeID) != 2 {
+		t.Fatal("rate-limited failure changed the consecutive failure count")
+	}
+	t.Log("PASS: intervening and trailing rate-limited results preserve active measurement alerts and streaks")
+	recovery := testResult("73000000-0000-4000-8000-000000000009", base.Add(10*time.Minute), "ok", &ip, 100)
+	*recovery.Ping = 10
+	saveAlertResult(t, ctx, agent, recovery)
+	for _, ruleID := range []string{pingRule, failRule} {
+		if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE rule_id=$1 AND resolved_at IS NOT NULL`, ruleID) != 1 {
+			t.Fatalf("normal recovery result did not resolve rule %s", ruleID)
+		}
+	}
+	t.Log("PASS: normal recovery results still resolve active measurement alerts")
+}
+
 func testResult(id string, ts time.Time, status string, ip *string, down float64) agentapi.Result {
 	result := agentapi.Result{ID: id, TS: ts.UTC().Format(time.RFC3339Nano), Status: status, IP: ip,
 		Threads: 1, BytesDown: 10, BytesUp: 5, Duration: 1, Raw: []byte(`{}`), Warnings: []string{}}
@@ -354,16 +417,17 @@ type previewFixture struct {
 		Enabled  bool            `json:"enabled"`
 	} `json:"rules"`
 	Results []struct {
-		NodeID string   `json:"nodeId"`
-		TS     int64    `json:"ts"`
-		Status string   `json:"status"`
-		Down   *float64 `json:"down"`
-		Up     *float64 `json:"up"`
-		Ping   *float64 `json:"ping"`
-		Jitter *float64 `json:"jitter"`
-		Loss   *float64 `json:"loss"`
-		IP     *string  `json:"ip"`
-		Error  *string  `json:"error"`
+		NodeID       string   `json:"nodeId"`
+		TS           int64    `json:"ts"`
+		Status       string   `json:"status"`
+		FailureClass string   `json:"failureClass"`
+		Down         *float64 `json:"down"`
+		Up           *float64 `json:"up"`
+		Ping         *float64 `json:"ping"`
+		Jitter       *float64 `json:"jitter"`
+		Loss         *float64 `json:"loss"`
+		IP           *string  `json:"ip"`
+		Error        *string  `json:"error"`
 	} `json:"results"`
 	Events []struct {
 		RuleID     string `json:"ruleId"`
@@ -477,7 +541,7 @@ func TestThirtyDayReplayMatchesApprovedUIPreviewIntegration(t *testing.T) {
 	for i, sample := range fixture.Results {
 		id := fmt.Sprintf("50000000-0000-4000-8000-%012x", i+1)
 		result := agentapi.Result{ID: id, TS: time.UnixMilli(sample.TS).UTC().Format(time.RFC3339Nano), Status: sample.Status,
-			Down: sample.Down, Up: sample.Up, Ping: sample.Ping, Jitter: sample.Jitter, Loss: sample.Loss, IP: sample.IP,
+			FailureClass: sample.FailureClass, Down: sample.Down, Up: sample.Up, Ping: sample.Ping, Jitter: sample.Jitter, Loss: sample.Loss, IP: sample.IP,
 			Threads: 1, BytesDown: 1, BytesUp: 1, Duration: 1, Raw: []byte(`{}`), Warnings: []string{}}
 		switch {
 		case result.Status != "failed":

@@ -78,7 +78,7 @@ that a subsequent up can reapply version 1.
 | `sessions` | Hashed opaque token and CSRF token, optional user for anonymous bootstrap, expiry |
 | `nodes` | Independent node settings, expected speeds, binding, revision and heartbeat |
 | `node_credentials` | Hashed single-use enrollment tokens and bearer credentials, expiration/revocation |
-| `results` | Client UUID, normalized nullable measurements, original engine JSON and metadata |
+| `results` | Client UUID, normalized nullable measurements, original engine JSON and metadata, fixed failure class |
 | `ip_addresses` | IPv4/IPv6 host address and cached geolocation JSON |
 | `node_ip_history` | Measurement-ordered address boundaries per node (initial row has null from_ip) |
 | `node_ip_addresses` | Per-node/address counts, first/last measurement time and speed sums |
@@ -197,3 +197,20 @@ with `make migrate` does not resend previously consumed events. Preserve deliver
 history through the operator backup process when needed. On a disposable test
 DB, `TestNotificationMigrationRollback` rehearses populated down/up and verifies
 that events and consumed markers survive without replaying old deliveries.
+
+## Version 13 rollback
+
+Version 13 adds `results.failure_class` as a non-null fixed-vocabulary column
+with default `other` and a partial index for failed results. The previous center
+binary remains compatible: existing result inserts use the column default and
+older queries ignore the added field. To roll back the application, switch to
+the previous center binary before running `make migrate-down`; the JOOST-73
+binary requires the column.
+
+Version 13 down removes the index and column but preserves result rows and their
+measurements. The failure-class values are discarded; reapplying version 13
+assigns `other` to existing rows. On a verified disposable worktree database,
+`TestFailureClassMigrationDefaultAndRollback` verifies populated down/up,
+existing-row defaults, accepted classes, rejection of unknown values, and result
+retention. Rehearse any production rollback on a protected realistic-data copy
+under the owner's separate deployment decision.
