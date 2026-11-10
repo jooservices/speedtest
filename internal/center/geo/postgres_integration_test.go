@@ -14,6 +14,7 @@ import (
 	"github.com/joho/godotenv"
 	centerdb "github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
+	"github.com/jooservices/speedtest/internal/center/geo/budget"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
 
@@ -75,15 +76,18 @@ func TestPostgresCacheRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, source, found, err := cache.Get(ctx, ip)
-	if err != nil || !found || source != "ip-api" || got != want {
+	if err != nil || !found || source != "ip-api" || got.City != want.City || got.Region != want.Region || got.Country != want.Country ||
+		got.Latitude != want.Latitude || got.Longitude != want.Longitude || got.ASN != want.ASN || got.Organisation != want.Organisation ||
+		got.QualityScore != 90 || got.FieldSources.City != "ip-api" || got.FieldSources.Country != "ip-api" {
 		t.Fatalf("cache round trip = %+v, source=%q, found=%v, err=%v", got, source, found, err)
 	}
 	if err := cache.Put(ctx, ip, Location{Country: "US"}, "ipinfo-lite"); err != nil {
 		t.Fatal(err)
 	}
 	got, source, found, err = cache.Get(ctx, ip)
-	if err != nil || !found || source != "ip-api" || got != want {
-		t.Fatalf("cached address was looked up or overwritten again: %+v, source=%q, err=%v", got, source, err)
+	if err != nil || !found || source != "merged:ip-api+ipinfo-lite" || got.Country != "US" || got.City != want.City ||
+		got.FieldSources.City != "ip-api" || got.FieldSources.Country != "ipinfo-lite" {
+		t.Fatalf("higher-ranked provider did not merge provenance: %+v, source=%q, err=%v", got, source, err)
 	}
 	var lookedUpAt time.Time
 	if err := tx.QueryRow(ctx, "SELECT looked_up_at FROM ip_addresses WHERE ip=$1::inet", ip).Scan(&lookedUpAt); err != nil || lookedUpAt.IsZero() {
@@ -127,6 +131,49 @@ func TestPostgresCacheUnlookedMalformedAndCancelled(t *testing.T) {
 		t.Fatal("cancelled cache lookup unexpectedly succeeded")
 	}
 	t.Log("PASS: unlooked rows miss, malformed JSON and invalid IP fail safely, cancellation propagates")
+}
+
+type backfillBatch struct{ calls int }
+
+func (b *backfillBatch) LookupBatch(_ context.Context, ips []string, _ budget.Purpose) (map[string]Location, error) {
+	b.calls++
+	locations := make(map[string]Location, len(ips))
+	for _, ip := range ips {
+		locations[ip] = Location{City: "London", Region: "England", Country: "GB", Latitude: 51.5, Longitude: -0.1,
+			TimeZone: "Europe/London", AccuracyRadius: 5, ASN: 64500, Organisation: "Example Network"}
+	}
+	return locations, nil
+}
+
+func TestBackfillResumesWithinTheUTCDayIntegration(t *testing.T) {
+	pool, ctx := integrationPool(t)
+	base := uint64(time.Now().UnixNano())
+	first := integrationFixtureIP(base)
+	second := integrationFixtureIP(base + 1)
+	for _, ip := range []string{first, second} {
+		if _, err := pool.Exec(ctx, `INSERT INTO ip_addresses(ip,geo,source,looked_up_at) VALUES($1::inet,'{"country":"GB","quality_score":20}'::jsonb,'ipwho',now())`, ip); err != nil {
+			t.Fatal("could not insert weak cache fixture")
+		}
+	}
+	batch := &backfillBatch{}
+	job := &Backfill{DB: pool, Cache: NewPostgresCache(pool), Batch: batch, MaxPerRun: 1, BatchSize: 1,
+		Now: func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) }}
+	for range 2 {
+		processed, err := job.RunOnce(ctx)
+		if err != nil || processed != 1 {
+			t.Fatalf("RunOnce = (%d, %v), want (1, nil)", processed, err)
+		}
+	}
+	if processed, err := job.RunOnce(ctx); err != nil || processed != 0 {
+		t.Fatalf("completed cursor RunOnce = (%d, %v), want (0, nil)", processed, err)
+	}
+	if batch.calls != 2 {
+		t.Fatalf("batch calls = %d, want 2", batch.calls)
+	}
+	var refreshed int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM ip_addresses WHERE ip IN ($1::inet,$2::inet) AND geo->>'city'='London'`, first, second).Scan(&refreshed); err != nil || refreshed != 2 {
+		t.Fatalf("refreshed rows = %d, err=%v", refreshed, err)
+	}
 }
 
 func integrationFixtureIP(seed uint64) string {

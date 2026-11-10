@@ -11,6 +11,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/geo"
+	"github.com/jooservices/speedtest/internal/center/geo/budget"
 )
 
 // Watcher uses transaction-local geo caching and shared provider rate limits.
@@ -20,26 +21,53 @@ type Watcher struct {
 	// Reader is the offline reader behind Offline; the center runs its database updaters on it.
 	Reader    *geo.Reader
 	Fallbacks []geo.Fallback
+	Budget    *budget.Broker
+	Providers geo.ProviderConfig
 	// Consensus asks every fallback provider and keeps the majority answer (SPEEDTEST_GEO_CONSENSUS).
 	Consensus bool
 	Logger    *slog.Logger
 }
 
 // Open configures offline and fallback geolocation from the documented env keys.
-func Open(logger *slog.Logger) (*Watcher, func() error, error) {
+func Open(logger *slog.Logger, databases ...budget.DB) (*Watcher, func() error, error) {
+	return open(logger, nil, databases...)
+}
+
+// OpenObserved configures providers with a bounded metrics observer before constructing them.
+func OpenObserved(logger *slog.Logger, database budget.DB, observe func(string, string)) (*Watcher, func() error, error) {
+	return open(logger, observe, database)
+}
+
+func open(logger *slog.Logger, observe func(string, string), databases ...budget.DB) (*Watcher, func() error, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	cfg, err := geo.ProviderConfigFromEnv()
 	if err != nil {
 		return nil, nil, err
+	}
+	cfg.Observe = observe
+	var broker *budget.Broker
+	if len(databases) > 0 {
+		broker, err = geo.NewBudgetBroker(cfg, budget.NewPostgresStore(databases[0]))
+		if err != nil {
+			return nil, nil, err
+		}
+		cfg.Budget = broker
 	}
 	providers, err := geo.NewFallbackProviders(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
+	if cfg.IPAPIEnabled {
+		logger.Warn("ip-api free endpoint sends IP addresses over plaintext HTTP and is for non-commercial use only")
+	}
 	reader, err := geo.Open(geo.ConfigFromEnv(), logger)
 	if err != nil {
 		return nil, nil, err
 	}
-	return &Watcher{Offline: reader, Reader: reader, Fallbacks: providers, Consensus: cfg.Consensus, Logger: logger}, reader.Close, nil
+	return &Watcher{Offline: reader, Reader: reader, Fallbacks: providers, Budget: broker, Providers: cfg,
+		Consensus: cfg.Consensus, Logger: logger}, reader.Close, nil
 }
 
 // boundCache retains the inet key already locked by ingestion. Resolver may
@@ -55,6 +83,18 @@ func (c boundCache) Get(ctx context.Context, _ string) (geo.Location, string, bo
 }
 func (c boundCache) Put(ctx context.Context, _ string, l geo.Location, source string) error {
 	return c.Cache.Put(ctx, c.ip, l, source)
+}
+
+func (c boundCache) Merge(ctx context.Context, _ string, location geo.Location, source string) (geo.Location, string, error) {
+	if merger, ok := c.Cache.(interface {
+		Merge(context.Context, string, geo.Location, string) (geo.Location, string, error)
+	}); ok {
+		return merger.Merge(ctx, c.ip, location, source)
+	}
+	if err := c.Cache.Put(ctx, c.ip, location, source); err != nil {
+		return geo.Location{}, "", err
+	}
+	return location, source, nil
 }
 
 type position struct{ id, ip string }
@@ -123,17 +163,8 @@ func (w *Watcher) AfterResultStored(ctx context.Context, tx pgx.Tx, node string,
 	speed_tests=node_ip_addresses.speed_tests+EXCLUDED.speed_tests, down_sum=node_ip_addresses.down_sum+EXCLUDED.down_sum, up_sum=node_ip_addresses.up_sum+EXCLUDED.up_sum`, node, ip, ts, r.Status != "failed", r.Down, r.Up); err != nil {
 		return err
 	}
-	// Lock the shared address before using a transaction-local cache. A pool-backed
-	// cache would deadlock on the address placeholder inserted by this transaction.
-	if _, err = tx.Exec(ctx, `SELECT ip FROM ip_addresses WHERE ip=$1 FOR NO KEY UPDATE`, ip); err != nil {
+	if err = w.resolveUnlocated(ctx, tx, node, r.ID, ip); err != nil {
 		return err
-	}
-	resolver := geo.NewResolver(boundCache{Cache: geo.NewPostgresCache(tx), ip: ip}, w.Offline, w.Fallbacks...).WithConsensus(w.Consensus, w.Logger)
-	if _, err = resolver.Lookup(ctx, ip); err != nil {
-		if !errors.Is(err, geo.ErrNotFound) {
-			return err
-		}
-		w.logger().InfoContext(ctx, "public IP location unavailable", "node_id", node, "result_id", r.ID)
 	}
 	if after != nil {
 		w.logger().InfoContext(ctx, "late IP observation reconciled without change signal", "node_id", node, "result_id", r.ID)
@@ -149,6 +180,27 @@ func (w *Watcher) AfterResultStored(ctx context.Context, tx pgx.Tx, node string,
 	}
 	_, err = tx.Exec(ctx, `SELECT pg_notify('ip_changed',$1)`, r.ID)
 	return err
+}
+
+func (w *Watcher) resolveUnlocated(ctx context.Context, tx pgx.Tx, node, resultID, ip string) error {
+	// Lock the shared address before using a transaction-local cache. A pool-backed
+	// cache would deadlock on the address placeholder inserted by this transaction.
+	var located bool
+	if err := tx.QueryRow(ctx, `SELECT looked_up_at IS NOT NULL FROM ip_addresses WHERE ip=$1 FOR NO KEY UPDATE`, ip).Scan(&located); err != nil {
+		return err
+	}
+	if located {
+		return nil
+	}
+	resolver := geo.NewResolver(boundCache{Cache: geo.NewPostgresCache(tx), ip: ip}, w.Offline, w.Fallbacks...).
+		WithPurpose(budget.Background).WithHighValue(true).WithConsensus(w.Consensus, w.Logger)
+	if _, err := resolver.Lookup(ctx, ip); err != nil {
+		if !errors.Is(err, geo.ErrNotFound) {
+			return err
+		}
+		w.logger().InfoContext(ctx, "public IP location unavailable", "node_id", node, "result_id", resultID)
+	}
+	return nil
 }
 
 func (w *Watcher) logger() *slog.Logger {

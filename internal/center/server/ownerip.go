@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/jooservices/speedtest/internal/center/geo"
 	"github.com/jooservices/speedtest/internal/center/ipapi"
 )
 
@@ -14,6 +15,7 @@ type OwnerIPStore interface {
 	Addresses(ctx context.Context, node string, page, size int) ([]map[string]any, int, error)
 	Map(ctx context.Context, node string) ([]map[string]any, error)
 	Lookup(ctx context.Context, ip string) (map[string]any, error)
+	Providers(ctx context.Context) ([]geo.ProviderStatus, error)
 }
 
 type ownerIP struct {
@@ -28,7 +30,7 @@ func newOwnerIPHandler(store OwnerIPStore, auth *serverAuth) http.Handler {
 
 func ownerIPRoute(path string) bool {
 	switch path {
-	case "/api/ip/history", "/api/ip/addresses", "/api/ip/lookup", "/api/ip/map":
+	case "/api/ip/history", "/api/ip/addresses", "/api/ip/lookup", "/api/ip/map", "/api/ip/providers":
 		return true
 	}
 	return false
@@ -49,6 +51,13 @@ func (h *ownerIP) serve(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeEnvelope(w, http.StatusOK, "Success", items)
+	case "/api/ip/providers":
+		providers, err := h.store.Providers(r.Context())
+		if err != nil {
+			writeIPError(w, r, err)
+			return
+		}
+		writeEnvelope(w, http.StatusOK, "Success", providers)
 	default:
 		h.list(w, r)
 	}

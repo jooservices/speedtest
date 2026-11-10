@@ -213,11 +213,9 @@ func (h Handler) results(w http.ResponseWriter, r *http.Request, node string) {
 	for index, item := range batch.Results {
 		result, err := ParseResult(item)
 		outcome := Outcome{Index: index, Outcome: "rejected", Status: 422}
-		// A valid UUID survives unrelated item validation errors.
-		var fields map[string]json.RawMessage
-		var identity string
-		if json.Unmarshal(item, &fields) == nil && json.Unmarshal(fields["id"], &identity) == nil && UUID(identity) {
-			id := strings.ToLower(identity)
+		if err == nil {
+			outcome.ID = &result.ID
+		} else if id := validResultID(item); id != "" {
 			outcome.ID = &id
 		}
 		if err == nil {
@@ -248,6 +246,16 @@ func (h Handler) results(w http.ResponseWriter, r *http.Request, node string) {
 	}
 	success(w, 207, outcomes)
 }
+
+func validResultID(item json.RawMessage) string {
+	var fields map[string]json.RawMessage
+	var identity string
+	if json.Unmarshal(item, &fields) != nil || json.Unmarshal(fields["id"], &identity) != nil || !UUID(identity) {
+		return ""
+	}
+	return strings.ToLower(identity)
+}
+
 func (h Handler) config(w http.ResponseWriter, r *http.Request, node string) {
 	config, err := h.Store.Config(r.Context(), node)
 	if err != nil {

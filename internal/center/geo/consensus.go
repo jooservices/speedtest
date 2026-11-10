@@ -12,6 +12,9 @@ import (
 // A nil logger uses the default logger. It returns the resolver for chaining.
 func (r *Resolver) WithConsensus(on bool, logger *slog.Logger) *Resolver {
 	r.consensus = on
+	if on {
+		r.highValue = true
+	}
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -27,15 +30,18 @@ type sourced struct {
 func (r *Resolver) lookupConsensus(ctx context.Context, ip string) (Location, error) {
 	var answers []sourced
 	var failures []error
+	budgetExhausted := false
 	for _, provider := range r.fallbacks {
 		if err := ctx.Err(); err != nil {
 			return Location{}, err
 		}
-		location, err := provider.Lookup(ctx, ip)
+		location, err := lookupFallback(ctx, provider, ip, r.purpose)
 		switch {
 		case err == nil:
 			answers = append(answers, sourced{provider.Source(), location})
 		case errors.Is(err, ErrNotFound):
+		case errors.Is(err, ErrBudgetExhausted):
+			budgetExhausted = true
 		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			return Location{}, err
 		default:
@@ -43,6 +49,9 @@ func (r *Resolver) lookupConsensus(ctx context.Context, ip string) (Location, er
 		}
 	}
 	if len(answers) == 0 {
+		if budgetExhausted {
+			return Location{}, ErrBudgetExhausted
+		}
 		if len(failures) != 0 {
 			return Location{}, errors.Join(append([]error{ErrNotFound}, failures...)...)
 		}

@@ -54,6 +54,56 @@ func TestExtraProvidersMapResponses(t *testing.T) {
 	}
 }
 
+func TestFreeIPAPIGeoJSAndRIPEStat(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/json/8.8.8.8":
+			_, _ = fmt.Fprint(w, `{"ipAddress":"8.8.8.8","countryCode":"US","regionName":"California","cityName":"Mountain View","latitude":37.4,"longitude":-122,"timeZones":["America/Los_Angeles"],"asn":"AS15169","asnOrganization":"Google LLC"}`)
+		case r.URL.Path == "/geo.json" && r.URL.Query().Get("ip") == "8.8.8.8":
+			_, _ = fmt.Fprint(w, `{"ip":"8.8.8.8","country_code":"US","city":"Mountain View","latitude":"37.4","longitude":"-122","accuracy":5,"organization_name":"Google LLC","asn":15169}`)
+		case r.URL.Path == "/ripe" && r.URL.Query().Get("resource") == "8.8.8.8":
+			_, _ = fmt.Fprint(w, `{"data":{"asns":[15169]}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	cfg := ProviderConfig{Timeout: time.Second, FailureThreshold: 2, BreakerReset: time.Second,
+		FreeIPAPIEnabled: true, FreeIPAPIURL: server.URL + "/api/v1/json", FreeIPAPIRequestsPerMinute: 60,
+		GeoJSEnabled: true, GeoJSURL: server.URL + "/geo.json", GeoJSRequestsPerMinute: 30,
+		RIPEStatEnabled: true, RIPEStatURL: server.URL + "/ripe", RIPEStatRequestsPerMinute: 30}
+	providers, err := NewFallbackProviders(cfg)
+	if err != nil || len(providers) != 3 {
+		t.Fatalf("providers = %d, %v", len(providers), err)
+	}
+	for index, want := range []Location{
+		{City: "Mountain View", Region: "California", Country: "US", Latitude: 37.4, Longitude: -122, TimeZone: "America/Los_Angeles", ASN: 15169, Organisation: "Google LLC"},
+		{City: "Mountain View", Country: "US", Latitude: 37.4, Longitude: -122, AccuracyRadius: 5, Organisation: "Google LLC", ASN: 15169},
+		{ASN: 15169},
+	} {
+		got, err := providers[index].Lookup(context.Background(), "8.8.8.8")
+		if err != nil || got != want {
+			t.Fatalf("%s = %+v, %v; want %+v", providers[index].Source(), got, err, want)
+		}
+	}
+}
+
+func TestProviderDefaultsMatchQuotaPolicy(t *testing.T) {
+	for _, key := range []string{"IPAPI", "IPINFO", "IPWHO", "FREEIPAPI", "GEOJS", "IPAPICO", "IPGEOLOCATION", "RIPESTAT"} {
+		t.Setenv("SPEEDTEST_GEO_"+key+"_ENABLED", "")
+	}
+	t.Setenv("SPEEDTEST_GEO_IPINFO_TOKEN", "")
+	t.Setenv("SPEEDTEST_GEO_IPGEOLOCATION_KEY", "")
+	cfg, err := ProviderConfigFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IPAPIEnabled || cfg.IPInfoEnabled || !cfg.IPWhoEnabled || !cfg.FreeIPAPIEnabled || cfg.GeoJSEnabled ||
+		cfg.IPAPICoEnabled || cfg.IPGeoEnabled || !cfg.RIPEStatEnabled {
+		t.Fatalf("provider defaults do not match the policy: %+v", cfg)
+	}
+}
+
 func TestExtraProviderErrors(t *testing.T) {
 	var body string
 	status := http.StatusOK

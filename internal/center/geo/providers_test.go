@@ -11,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jooservices/speedtest/internal/center/geo/budget"
 )
 
 func providerTestConfig() ProviderConfig {
@@ -51,6 +53,46 @@ func TestIPAPIProviderLookupAndRateHeaders(t *testing.T) {
 	}
 	if requests.Load() != 1 {
 		t.Fatalf("X-Rl/X-Ttl allowed another request: %d requests", requests.Load())
+	}
+}
+
+func TestIPAPIBatchLookup(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		requests.Add(1)
+		w.Header().Set("X-Rl", "0")
+		w.Header().Set("X-Ttl", "1")
+		if req.Method != http.MethodPost || req.URL.Path != "/batch" || req.URL.Query().Get("fields") == "" {
+			t.Errorf("unexpected batch endpoint: %s %s?%s", req.Method, req.URL.Path, req.URL.RawQuery)
+		}
+		body, err := io.ReadAll(req.Body)
+		if err != nil || string(body) != `["81.2.69.160","8.8.8.8"]` {
+			t.Errorf("batch body = %s, err=%v", body, err)
+		}
+		_, _ = fmt.Fprint(w, `[{"status":"success","query":"81.2.69.160","city":"London","countryCode":"GB","lat":51.5,"lon":-0.1,"as":"AS64500 Example ASN"},{"status":"fail","query":"8.8.8.8"}]`)
+	}))
+	defer server.Close()
+	cfg := providerTestConfig()
+	cfg.IPAPIURL = server.URL + "/json"
+	provider, err := NewIPAPIProvider(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	locations, err := provider.LookupBatch(context.Background(), []string{"81.2.69.160", "8.8.8.8"}, budget.Background)
+	want := Location{City: "London", Country: "GB", Latitude: 51.5, Longitude: -0.1, ASN: 64500, Organisation: "Example ASN"}
+	if err != nil || len(locations) != 1 || locations["81.2.69.160"] != want || requests.Load() != 1 {
+		t.Fatalf("LookupBatch() = %+v, %v; requests=%d", locations, err, requests.Load())
+	}
+	provider.batchLimiter.mu.Lock()
+	provider.batchLimiter.next = time.Now().Add(-time.Second)
+	provider.batchLimiter.mu.Unlock()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if _, err := provider.LookupBatch(ctx, []string{"8.8.8.8"}, budget.Background); !errors.Is(err, context.DeadlineExceeded) || requests.Load() != 1 {
+		t.Fatalf("batch cooldown was not honored: err=%v requests=%d", err, requests.Load())
+	}
+	if _, err := provider.LookupBatch(context.Background(), make([]string, 101), budget.Background); err == nil {
+		t.Fatal("accepted more than 100 addresses")
 	}
 }
 
@@ -264,8 +306,11 @@ func TestProviderConfigurationAndLimits(t *testing.T) {
 	} {
 		t.Setenv(key, "")
 	}
+	for _, key := range []string{"SPEEDTEST_GEO_IPWHO_ENABLED", "SPEEDTEST_GEO_FREEIPAPI_ENABLED", "SPEEDTEST_GEO_GEOJS_ENABLED", "SPEEDTEST_GEO_RIPESTAT_ENABLED"} {
+		t.Setenv(key, "false")
+	}
 	cfg, err := ProviderConfigFromEnv()
-	if err != nil || cfg.Timeout != 5*time.Second || cfg.IPAPIRequestsPerMinute != 45 || cfg.IPInfoEnabled || cfg.IPInfoURL != "https://api.ipinfo.io/lite" {
+	if err != nil || cfg.Timeout != 5*time.Second || cfg.IPAPIRequestsPerMinute != 45 || cfg.IPAPIEnabled || cfg.IPInfoEnabled || cfg.IPInfoURL != "https://api.ipinfo.io/lite" {
 		t.Fatalf("unexpected defaults: %+v, %v", cfg, err)
 	}
 	t.Setenv("SPEEDTEST_GEO_IPINFO_ENABLED", "true")
@@ -273,6 +318,7 @@ func TestProviderConfigurationAndLimits(t *testing.T) {
 		t.Fatal("enabled IPinfo without token was accepted or error exposed a value")
 	}
 	t.Setenv("SPEEDTEST_GEO_IPINFO_TOKEN", "test-token")
+	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "true")
 	cfg, err = ProviderConfigFromEnv()
 	if err != nil {
 		t.Fatal(err)
@@ -331,6 +377,9 @@ func TestProviderConfigurationRejectsInvalidValues(t *testing.T) {
 		t.Run(tc.key+"="+tc.value, func(t *testing.T) {
 			for _, key := range keys {
 				t.Setenv(key, "")
+			}
+			if strings.HasPrefix(tc.key, "SPEEDTEST_GEO_IPAPI_REQUESTS_PER_MINUTE") {
+				t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "true")
 			}
 			t.Setenv(tc.key, tc.value)
 			if _, err := ProviderConfigFromEnv(); err == nil {
