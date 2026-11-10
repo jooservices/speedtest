@@ -165,6 +165,9 @@ func (h *ownerStats) heatmap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var ok bool
+	if q.ISPIDs, q.ISPsSet, ok = parseStatsISPs(w, r); !ok {
+		return
+	}
 	if q.Metric, ok = parseStatsMetric(w, r); !ok {
 		return
 	}

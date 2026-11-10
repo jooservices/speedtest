@@ -40,6 +40,16 @@ func (f *fakeDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 		return scanRow{err: f.queryErr}
 	}
 	switch {
+	case strings.Contains(sql, "INSERT INTO isps"):
+		id, asn := args[0].(string), args[1].(uint)
+		organisation, name := args[2].(string), args[3].(string)
+		e := f.isps[asn]
+		if e == nil {
+			e = &Entity{ID: id, ASN: asn}
+			f.put(e)
+		}
+		e.Organisation, e.Name = organisation, name
+		return scanRow{vals: []any{e.ID, e.ASN, e.Organisation, e.Name}}
 	case strings.Contains(sql, "FROM isps WHERE asn"):
 		if e, ok := f.isps[args[0].(uint)]; ok {
 			return scanRow{vals: []any{e.ID, e.ASN, e.Organisation, e.Name}}
@@ -61,9 +71,18 @@ func (f *fakeDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 			return scanRow{vals: []any{e.ID, e.ASN, e.Organisation, e.Name}}
 		}
 		return scanRow{err: pgx.ErrNoRows}
-	case strings.Contains(sql, "FROM isp_plans WHERE id"):
+	case strings.Contains(sql, "FROM isp_plans WHERE id") && !strings.Contains(sql, "WITH old AS MATERIALIZED"):
 		if p, ok := f.plans[args[0].(string)]; ok {
 			return scanRow{vals: []any{p["id"], p["name"], p["advertisedDown"], p["advertisedUp"], p["createdAt"], p["updatedAt"]}}
+		}
+		return scanRow{err: pgx.ErrNoRows}
+	case strings.Contains(sql, "WITH old AS MATERIALIZED"):
+		if f.execErr != nil {
+			return scanRow{err: f.execErr}
+		}
+		if p, ok := f.plans[args[0].(string)]; ok {
+			p["name"], p["advertisedDown"], p["advertisedUp"], p["updatedAt"] = args[2], args[3], args[4], args[5]
+			return scanRow{vals: []any{p["id"]}}
 		}
 		return scanRow{err: pgx.ErrNoRows}
 	case len(f.listRows) > 0:

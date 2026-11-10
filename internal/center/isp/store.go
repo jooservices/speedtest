@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -55,7 +57,7 @@ const ispAggSelect = `i.id::text, i.asn, i.organisation, i.name,
 	AVG(r.down_mbps) FILTER (WHERE r.status <> 'failed'),
 	percentile_cont(0.95) WITHIN GROUP (ORDER BY r.down_mbps) FILTER (WHERE r.status <> 'failed'),
 	AVG(CASE WHEN r.status <> 'failed' THEN r.down_mbps / NULLIF(r.expected_down_mbps,0) * 100 END),
-	CASE WHEN COUNT(r.id)=0 THEN NULL ELSE COUNT(*) FILTER (WHERE r.status='ok')::float8 / COUNT(r.id) END,
+	CASE WHEN COUNT(r.id)=0 THEN NULL ELSE COUNT(r.id) FILTER (WHERE r.status <> 'failed')::float8 / COUNT(r.id) END,
 	AVG(r.ping_ms) FILTER (WHERE r.status <> 'failed')`
 
 func scopedResults(fromIdx, toIdx, engineIdx int, engine string) (string, []any) {
@@ -248,7 +250,7 @@ func (s *Store) CreatePlan(ctx context.Context, ispID, name string, down, up flo
 		return nil, err
 	}
 	name = strings.TrimSpace(name)
-	if name == "" || down <= 0 || up <= 0 {
+	if !validPlan(name, down, up) {
 		return nil, ErrInvalid
 	}
 	id, err := newID()
@@ -271,21 +273,40 @@ func (s *Store) UpdatePlan(ctx context.Context, ispID, planID, name string, down
 		return nil, ErrNotFound
 	}
 	name = strings.TrimSpace(name)
-	if name == "" || down <= 0 || up <= 0 {
+	if !validPlan(name, down, up) {
 		return nil, ErrInvalid
 	}
-	tag, err := s.DB.Exec(ctx, `UPDATE isp_plans SET name=$3, advertised_down_mbps=$4, advertised_up_mbps=$5, updated_at=$6
-		WHERE id=$1::uuid AND isp_id=$2::uuid`, planID, ispID, name, down, up, s.now())
+	var updatedID string
+	err := s.DB.QueryRow(ctx, `WITH old AS MATERIALIZED (
+		SELECT id,advertised_down_mbps AS old_down,advertised_up_mbps AS old_up FROM isp_plans
+		WHERE id=$1::uuid AND isp_id=$2::uuid FOR UPDATE
+	), updated AS (
+		UPDATE isp_plans p SET name=$3,advertised_down_mbps=$4,advertised_up_mbps=$5,updated_at=$6
+		FROM old o WHERE p.id=o.id RETURNING p.id,o.old_down,o.old_up
+	), sync_defaults AS (
+		UPDATE nodes n SET
+			expected_down_mbps=CASE WHEN n.expected_down_mbps=u.old_down THEN $4 ELSE n.expected_down_mbps END,
+			expected_up_mbps=CASE WHEN n.expected_up_mbps=u.old_up THEN $5 ELSE n.expected_up_mbps END,
+			config_revision=n.config_revision+1,updated_at=now()
+		FROM updated u WHERE n.isp_plan_id=u.id AND (n.expected_down_mbps=u.old_down OR n.expected_up_mbps=u.old_up)
+		RETURNING n.id
+	)
+	SELECT id::text FROM updated`, planID, ispID, name, down, up, s.now()).Scan(&updatedID)
 	if err != nil {
 		if isUnique(err) {
 			return nil, ErrInvalid
 		}
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrNotFound
+		}
 		return nil, err
 	}
-	if tag.RowsAffected() == 0 {
-		return nil, ErrNotFound
-	}
 	return s.getPlan(ctx, planID)
+}
+
+func validPlan(name string, down, up float64) bool {
+	return utf8.ValidString(name) && utf8.RuneCountInString(name) > 0 && utf8.RuneCountInString(name) <= 200 &&
+		down > 0 && up > 0 && !math.IsNaN(down) && !math.IsNaN(up) && !math.IsInf(down, 0) && !math.IsInf(up, 0)
 }
 
 // DeletePlan removes a plan.

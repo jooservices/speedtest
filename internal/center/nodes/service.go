@@ -71,6 +71,7 @@ type Input struct {
 	Label        string  `json:"label"`
 	Provider     string  `json:"provider"`
 	Plan         string  `json:"plan"`
+	ISPPlanID    *string `json:"ispPlanId"`
 	ExpectedDown float64 `json:"expectedDown"`
 	ExpectedUp   float64 `json:"expectedUp"`
 	Threads      int     `json:"threads"`
@@ -110,7 +111,10 @@ func (i Input) Normalize() (Input, error) {
 	if !validText(i.Name, 1, 100) || !validText(i.Label, 0, 200) ||
 		!validText(i.Provider, 0, 200) || !validText(i.Plan, 0, 200) ||
 		!validText(i.Note, 0, 4000) || !validText(i.Binding.Iface, 0, 64) ||
-		!positiveFinite(i.ExpectedDown) || !positiveFinite(i.ExpectedUp) {
+		!validPlanSpeeds(i) {
+		return Input{}, ErrInvalidInput
+	}
+	if i.ISPPlanID != nil && !validUUID(*i.ISPPlanID) {
 		return Input{}, ErrInvalidInput
 	}
 	if i.Threads == 0 {
@@ -127,6 +131,13 @@ func (i Input) Normalize() (Input, error) {
 		i.Binding.SourceIP = &normalized
 	}
 	return i, nil
+}
+
+func validPlanSpeeds(i Input) bool {
+	if i.ISPPlanID == nil {
+		return positiveFinite(i.ExpectedDown) && positiveFinite(i.ExpectedUp)
+	}
+	return (i.ExpectedDown == 0 || positiveFinite(i.ExpectedDown)) && (i.ExpectedUp == 0 || positiveFinite(i.ExpectedUp))
 }
 
 func validText(value string, min, max int) bool {
@@ -151,6 +162,21 @@ func (s *Service) CreateNode(ctx context.Context, input Input, principal, idempo
 }
 
 func (s *Service) createNodeTx(ctx context.Context, tx pgx.Tx, input Input) (any, error) {
+	if input.ISPPlanID != nil {
+		var down, up float64
+		if err := tx.QueryRow(ctx, `SELECT advertised_down_mbps,advertised_up_mbps FROM isp_plans WHERE id=$1::uuid`, *input.ISPPlanID).Scan(&down, &up); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return nil, ErrInvalidInput
+			}
+			return nil, err
+		}
+		if input.ExpectedDown == 0 {
+			input.ExpectedDown = down
+		}
+		if input.ExpectedUp == 0 {
+			input.ExpectedUp = up
+		}
+	}
 	nodeID, err := s.uuid()
 	if err != nil {
 		return nil, err
@@ -165,9 +191,9 @@ func (s *Service) createNodeTx(ctx context.Context, tx pgx.Tx, input Input) (any
 	}
 	var createdAt, expiresAt time.Time
 	err = tx.QueryRow(ctx, `
-		INSERT INTO nodes (id,name,label,provider,plan,expected_down_mbps,expected_up_mbps,threads,server_id,color_slot,enabled,auto_update,binding_interface,binding_source_ip,note)
-		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
-		RETURNING created_at`, nodeID, input.Name, input.Label, input.Provider, input.Plan,
+		INSERT INTO nodes (id,name,label,provider,plan,isp_plan_id,expected_down_mbps,expected_up_mbps,threads,server_id,color_slot,enabled,auto_update,binding_interface,binding_source_ip,note)
+		VALUES ($1,$2,$3,$4,$5,$6::uuid,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		RETURNING created_at`, nodeID, input.Name, input.Label, input.Provider, input.Plan, input.ISPPlanID,
 		input.ExpectedDown, input.ExpectedUp, input.Threads, input.ServerID, colorSlot,
 		input.Enabled, input.AutoUpdate, input.Binding.Iface, input.Binding.SourceIP, input.Note).Scan(&createdAt)
 	if err != nil {
@@ -471,14 +497,14 @@ func (n nodeRecord) agentConfig() map[string]any {
 
 func nodeResponse(id string, i Input, colorSlot int, createdAt time.Time, interval, offset int, host, agent string) map[string]any {
 	return map[string]any{
-		"name": i.Name, "label": i.Label, "provider": i.Provider, "plan": i.Plan,
+		"name": i.Name, "label": i.Label, "provider": i.Provider, "plan": i.Plan, "ispPlanId": i.ISPPlanID,
 		"expectedDown": i.ExpectedDown, "expectedUp": i.ExpectedUp, "threads": i.Threads,
 		"server": serverValue(i.ServerID), "note": i.Note, "enabled": i.Enabled,
 		"binding": map[string]any{"iface": i.Binding.Iface, "sourceIp": i.Binding.SourceIP},
 		"id":      id, "colorSlot": colorSlot, "interval": interval, "offset": offset,
 		"host": host, "agent": agent, "createdAt": createdAt.UTC().Format(time.RFC3339Nano),
 		"lastSeen": nil, "status": "offline", "latest": nil, "latestGood": nil,
-		"currentIp": nil, "geo": nil, "updateVersion": nil, "autoUpdate": i.AutoUpdate,
+		"currentIp": nil, "geo": nil, "isp": nil, "updateVersion": nil, "autoUpdate": i.AutoUpdate,
 	}
 }
 

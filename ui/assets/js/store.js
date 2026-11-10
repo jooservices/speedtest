@@ -37,7 +37,7 @@
     ];
   };
 
-  var state = ST.state = { nodes: [], results: [], settings: defaultSettings(), rules: defaultRules(), acked: {}, events: [], now: Date.now() };
+  var state = ST.state = { nodes: [], results: [], isps: [], settings: defaultSettings(), rules: defaultRules(), acked: {}, events: [], now: Date.now() };
 
   function load() {
     var saved = {};
@@ -77,6 +77,23 @@
   ST.settings = function () { return state.settings; };
   ST.setSettings = function (patch, silent) { Object.assign(state.settings, patch); persist(); if (!silent) ST.emit('settings'); };
   ST.nodes = function () { return state.nodes; };
+  ST.isps = function () {
+    if (!ST.demo) return state.isps || [];
+    var byASN = {};
+    state.results.forEach(function (r) {
+      var geo = ST.geo(r.ip), asn = geo && +geo.asn;
+      if (!asn) return;
+      var id = 'as' + asn;
+      byASN[id] = byASN[id] || { id: id, asn: asn, name: geo.isp || geo.asnOrg || id.toUpperCase(), organisation: geo.asnOrg || geo.isp || '' };
+    });
+    return Object.keys(byASN).map(function (id) { return byASN[id]; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+  };
+  ST.ispOptions = function () { return ST.isps().map(function (isp) { return { value: isp.id, label: isp.name + ' (AS' + isp.asn + ')' }; }); };
+  ST.resultISP = function (result) {
+    if (result && result.ispId) return result.ispId;
+    var geo = result && ST.geo(result.ip);
+    return geo && geo.asn ? 'as' + geo.asn : null;
+  };
   ST.node = function (id) { return state.nodes.filter(function (n) { return n.id === id; })[0]; };
   ST.nodeColor = function (node) { return 'var(--' + ST.palette[((node.colorSlot - 1) % 8) + 1] + ')'; };
   ST.nodeTitle = function (n) { return n.name + ' · ' + n.label; };
@@ -132,6 +149,7 @@
         if (r.ts < from || r.ts > to) continue;
         if ((r.engine || 'ookla') !== (o.engine || ST.selectedEngine || (ST.node(id) || {}).primaryEngine || 'ookla')) continue;
         if (o.status && o.status !== 'all' && r.status !== o.status) continue;
+        if (o.ispId && ST.resultISP(r) !== o.ispId) continue;
         out.push(r);
       }
     });
@@ -239,7 +257,7 @@
             streak++;
             if (streak === rule.forTests) {
               open = {
-                id: rule.id + ':' + node.id + ':' + r.ts, ruleId: rule.id, nodeId: node.id, severity: rule.severity, ts: r.ts, resolvedAt: null,
+                id: rule.id + ':' + node.id + ':' + r.ts, ruleId: rule.id, nodeId: node.id, ispId: ST.resultISP(r), severity: rule.severity, ts: r.ts, resolvedAt: null,
                 title: rule.name,
                 detail: rule.metric === 'ip_changed' ? 'Now ' + r.ip + (ST.geo(r.ip) ? ' (' + ST.geo(r.ip).city + ')' : '') : ST.ruleText(rule)
               };
@@ -386,6 +404,10 @@
       slack: { on: false, to: '' }, webhook: { on: false, to: '' } };
     ST.servers = [];
     var geos = {}, addresses = [], changes = [], schedules = { rules: {}, nodes: [], clashes: [] }, controller, revision = 0;
+    ST.resultsISPFilter = '';
+    ST.setResultsISPFilter = function (id) { ST.resultsISPFilter = id || ''; return ST.load(); };
+    ST.alertISPFilter = '';
+    ST.setAlertISPFilter = function (id) { ST.alertISPFilter = id || ''; return ST.load(); };
     var API = ST.api;
     ST.remote = { status: 'idle', error: null };
     ST.geo = function (ip) { return geos[ip] || null; };
@@ -419,10 +441,11 @@
         var range = settings.data.range;
         var snapshot = await Promise.all([
           API.list('/api/nodes', options),
-          API.list('/api/results?range=' + encodeURIComponent(range) + ST.engineQuery(), options),
+          API.list('/api/results?range=' + encodeURIComponent(range) + (ST.resultsISPFilter ? '&isps=' + encodeURIComponent(ST.resultsISPFilter) : '') + ST.engineQuery(), options),
           API.list('/api/alerts/rules', options),
           // state=all: acknowledged alerts stay visible under "All" and can be reopened (the center's default is open only).
-          API.list('/api/alerts/events?state=all&range=' + encodeURIComponent(range), options),
+          API.list('/api/alerts/events?state=all&range=' + encodeURIComponent(range) + (ST.alertISPFilter ? '&isp=' + encodeURIComponent(ST.alertISPFilter) : ''), options),
+          API.request('/api/isps?range=' + encodeURIComponent(range) + ST.engineQuery(), options),
           API.list('/api/ip/addresses', options),
           API.list('/api/ip/history', options),
           API.request('/api/schedules', options)
@@ -439,12 +462,13 @@
         state.results.forEach(remember);
         state.rules = snapshot[2];
         state.events = snapshot[3].map(function (e) { return Object.assign({}, e, { ts: timestamp(e.ts), resolvedAt: timestamp(e.resolvedAt) }); });
-        addresses = snapshot[4].map(function (a) {
+        state.isps = snapshot[4].data;
+        addresses = snapshot[5].map(function (a) {
           if (a.geo) geos[a.ip] = a.geo;
           return Object.assign({}, a, { first: timestamp(a.first), last: timestamp(a.last) });
         });
-        changes = snapshot[5].map(function (c) { return Object.assign({}, c, { ts: timestamp(c.ts) }); });
-        schedules = snapshot[6].data;
+        changes = snapshot[6].map(function (c) { return Object.assign({}, c, { ts: timestamp(c.ts) }); });
+        schedules = snapshot[7].data;
         reindex();
         ST.remote = { status: 'ready', error: null };
         ST.emit('settings');
@@ -486,6 +510,10 @@
     }
     ST.updateNode = function (id, patch) {
       return editable('/api/nodes/' + encodeURIComponent(id), 'PATCH', patch, 'application/merge-patch+json');
+    };
+    ST.listISPPlans = function (id) {
+      if (!id) return Promise.resolve([]);
+      return API.request('/api/isps/' + encodeURIComponent(id) + '/plans').then(function (r) { return r.data; });
     };
     ST.addNode = function (node) { return mutation('/api/nodes', 'POST', node, { idempotencyKey: API.key() }); };
     ST.removeNode = function (id) {

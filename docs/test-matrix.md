@@ -37,10 +37,10 @@ Operations: 78. Without a test: 0.
 | exportFilteredCSV | GET | `/api/results/export.csv` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | exportAllCSV | GET | `/api/export/results.csv` | `internal/center/server/httpx_test.go`<br>`internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | exportAllJSON | GET | `/api/export/results.json` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
-| listISPs | GET | `/api/isps` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs` |
-| compareISPs | GET | `/api/isps/compare` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs` |
-| getISP | GET | `/api/isps/{id}` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs` |
-| getISPTrend | GET | `/api/isps/{id}/trend` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs` |
+| listISPs | GET | `/api/isps` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/ui/contract.test.mjs`<br>`tests/ui/smoke.mjs`<br>+1 more |
+| compareISPs | GET | `/api/isps/compare` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/ui-fixtures/server.mjs` |
+| getISP | GET | `/api/isps/{id}` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/ui/smoke.mjs`<br>`tests/ui-fixtures/server.mjs` |
+| getISPTrend | GET | `/api/isps/{id}/trend` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/ui/smoke.mjs` |
 | listISPPlans | GET | `/api/isps/{id}/plans` | `internal/center/server/ownerisp_test.go` |
 | createISPPlan | POST | `/api/isps/{id}/plans` | `internal/center/server/ownerisp_test.go` |
 | updateISPPlan | PUT | `/api/isps/{id}/plans/{planId}` | `internal/center/server/ownerisp_test.go` |

@@ -119,13 +119,14 @@ export function settingsSuite(T, ctx) {
       await T.open('#/settings', 'Settings');
       await T.tab('Data');
       await T.choose(setting('Keep results for').locator('select'), '90');
-      await T.settled();
-      assert.equal(T.db("select value #>> '{}' from settings where key='retentionDays'"), '90');
+      await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '90', 'the center stores the selected retention period');
+      assert.equal((await T.api('/api/settings')).body.data.retentionDays, 90, 'the settings API returns the saved retention period');
       const csv = await T.download(() => T.press('CSV', setting('Export all results')));
       assert.ok(csv.startsWith('time,node,status,download_mbps'), 'the CSV export has its header');
       const json = await T.download(() => T.press('JSON', setting('Export all results')));
       assert.ok(Array.isArray(JSON.parse(json)) || JSON.parse(json).data, 'the JSON export parses');
-      await T.choose(setting('Keep results for').locator('select'), '365'); await T.settled();
+      await T.choose(setting('Keep results for').locator('select'), '365');
+      await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '365', 'the default retention period is restored');
     },
 
     // The activity log lists the changes made earlier in the run, filters by kind and never shows secrets.

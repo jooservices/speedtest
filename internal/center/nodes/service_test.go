@@ -145,7 +145,8 @@ func TestNodeResponses(t *testing.T) {
 	serverID := 7
 	input := Input{Name: "edge", Label: "label", Provider: "provider", Plan: "plan", ExpectedDown: 300, ExpectedUp: 100, Threads: 4, ServerID: &serverID, Enabled: true, AutoUpdate: true}
 	node := nodeResponse("00000000-0000-4000-8000-000000000001", input, 2, testTime(), 30, 0, "", "")
-	if node["server"] != 7 || node["status"] != "offline" || node["lastSeen"] != nil || node["autoUpdate"] != true {
+	isp, hasISP := node["isp"]
+	if node["server"] != 7 || node["status"] != "offline" || node["lastSeen"] != nil || node["autoUpdate"] != true || !hasISP || isp != nil {
 		t.Fatalf("node response = %#v", node)
 	}
 	record := nodeRecord{ID: "node-id", Name: "edge", ExpectedDown: 300, ExpectedUp: 100, Threads: 4, Revision: 3, Interval: 30, ScheduleOn: true, Enabled: true, AutoUpdate: true, ServerID: pgtype.Int4{Int32: 7, Valid: true}}

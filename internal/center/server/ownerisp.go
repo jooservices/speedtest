@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/jooservices/speedtest/internal/center/isp"
 )
@@ -221,16 +223,29 @@ func readPlanBody(w http.ResponseWriter, r *http.Request) (string, float64, floa
 		writeAPIProblem(w, r, http.StatusBadRequest, "Bad request", "Request body could not be read.")
 		return "", 0, 0, false
 	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body, &fields) != nil || fields == nil {
+		writeAPIProblem(w, r, http.StatusUnprocessableEntity, "Validation failed", "A valid plan object is required.")
+		return "", 0, 0, false
+	}
+	for key := range fields {
+		if key != "name" && key != "advertisedDown" && key != "advertisedUp" {
+			writeAPIProblem(w, r, http.StatusUnprocessableEntity, "Validation failed", "Plan input contains an unknown field.")
+			return "", 0, 0, false
+		}
+	}
 	var in struct {
-		Name string   `json:"name"`
+		Name *string  `json:"name"`
 		Down *float64 `json:"advertisedDown"`
 		Up   *float64 `json:"advertisedUp"`
 	}
-	if json.Unmarshal(body, &in) != nil || in.Down == nil || in.Up == nil {
-		writeAPIProblem(w, r, http.StatusUnprocessableEntity, "Validation failed", "name, advertisedDown and advertisedUp are required.")
+	if json.Unmarshal(body, &in) != nil || in.Name == nil || in.Down == nil || in.Up == nil ||
+		utf8.RuneCountInString(strings.TrimSpace(*in.Name)) == 0 || utf8.RuneCountInString(strings.TrimSpace(*in.Name)) > 200 ||
+		*in.Down <= 0 || *in.Up <= 0 || math.IsNaN(*in.Down) || math.IsNaN(*in.Up) || math.IsInf(*in.Down, 0) || math.IsInf(*in.Up, 0) {
+		writeAPIProblem(w, r, http.StatusUnprocessableEntity, "Validation failed", "Name must be 1–200 characters and advertised speeds must be positive finite numbers.")
 		return "", 0, 0, false
 	}
-	return in.Name, *in.Down, *in.Up, true
+	return *in.Name, *in.Down, *in.Up, true
 }
 
 func writeISPError(w http.ResponseWriter, r *http.Request, err error) {

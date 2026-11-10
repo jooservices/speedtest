@@ -402,18 +402,44 @@
     }
 
     if (tab === 'settings') {
-      var d = { name: n.name, label: n.label, down: n.expectedDown, up: n.expectedUp, threads: n.threads, server: n.server, note: n.note || '' };
+      var d = { name: n.name, label: n.label, down: n.expectedDown, up: n.expectedUp, threads: n.threads, server: n.server, note: n.note || '', ispPlanId: n.ispPlanId || '', downTouched: false, upTouched: false };
       var serverOpts = [{ value: 'auto', label: 'Choose the closest automatically' }].concat(ST.servers.map(function (s) { return { value: String(s.id), label: s.name + ' — ' + s.city }; }));
+      var downInput = U.input(d.down, function (v) { d.down = v; d.downTouched = true; }, { type: 'number', min: 1 });
+      var upInput = U.input(d.up, function (v) { d.up = v; d.upTouched = true; }, { type: 'number', min: 1 });
+      var planField = h('div');
+      function renderPlanField(plans) {
+        var options = [{ value: '', label: 'No ISP plan' }].concat(plans.map(function (p) { return { value: p.id, label: p.name + ' — ' + F.speed(p.advertisedDown) + ' / ' + F.speed(p.advertisedUp) }; }));
+        U.clear(planField);
+        planField.appendChild(U.field('ISP plan', U.select(options, d.ispPlanId, function (value) {
+          d.ispPlanId = value;
+          var selectedPlan = plans.filter(function (p) { return p.id === value; })[0];
+          if (selectedPlan) {
+            if (!d.downTouched) { d.down = selectedPlan.advertisedDown; downInput.value = d.down; }
+            if (!d.upTouched) { d.up = selectedPlan.advertisedUp; upInput.value = d.up; }
+          }
+        }, 'auto'), n.isp ? 'Choose a plan for ' + n.isp.name + '. Advertised speeds fill expected speeds unless you override them.' : 'A plan can be assigned after this node reports an ISP.'));
+      }
+      if (n.isp && n.isp.id && !ST.demo && ST.listISPPlans) {
+        planField.appendChild(h('div', { role: 'status', class: 'hint' }, 'Loading ISP plans…'));
+        ST.listISPPlans(n.isp.id).then(function (plans) { if (planField.isConnected) renderPlanField(plans); }, function (error) {
+          if (planField.isConnected) { U.clear(planField); planField.appendChild(U.callout('Could not load ISP plans: ' + error.message, 'warn', 'alert')); }
+        });
+      }
       var form = h('div', { class: 'stack', style: 'max-width:640px' },
         h('div', { class: 'field-row' }, U.field('Node name', U.input(d.name, function (v) { d.name = v; })), U.field('What does it measure?', U.input(d.label, function (v) { d.label = v; }))),
-        h('div', { class: 'field-row' }, U.field('Expected download', U.suffix(U.input(d.down, function (v) { d.down = v; }, { type: 'number', min: 1 }), 'Mbps')), U.field('Expected upload', U.suffix(U.input(d.up, function (v) { d.up = v; }, { type: 'number', min: 1 }), 'Mbps'))),
+        n.isp && n.isp.id && !ST.demo ? planField : null,
+        h('div', { class: 'field-row' }, U.field('Expected download', U.suffix(downInput, 'Mbps')), U.field('Expected upload', U.suffix(upInput, 'Mbps'))),
         h('div', { class: 'field-row' }, U.field('Test server', U.select(serverOpts, d.server, function (v) { d.server = v; }), 'Which speed test server this node talks to.'),
           U.field('Parallel connections', U.select([1, 2, 4, 6, 8, 12, 16, 32].map(function (x) { return { value: x, label: String(x) }; }), d.threads, function (v) { d.threads = +v; }), 'Use more for fast links or when the node goes through a load balancer.')),
         U.field('Notes', h('textarea', { class: 'input', rows: 3, onInput: function (e) { d.note = e.target.value; } }, d.note)),
         h('div', { class: 'row' }, U.btn('Save changes', { variant: 'primary', onClick: function () {
           if (!d.name.trim()) { U.toast('Node name cannot be empty', 'error'); return; }
           if (!(+d.down > 0) || !(+d.up > 0)) { U.toast('Expected speeds must be above zero', 'error'); return; }
-          var patch = { name: d.name.trim(), label: d.label.trim(), expectedDown: +d.down, expectedUp: +d.up, threads: d.threads, server: ST.demo || d.server === 'auto' ? d.server : +d.server, note: d.note };
+          var patch = { name: d.name.trim(), label: d.label.trim(), ispPlanId: d.ispPlanId || null, expectedDown: +d.down, expectedUp: +d.up, threads: d.threads, server: ST.demo || d.server === 'auto' ? d.server : +d.server, note: d.note };
+          if (d.ispPlanId && d.ispPlanId !== (n.ispPlanId || '')) {
+            if (!d.downTouched) delete patch.expectedDown;
+            if (!d.upTouched) delete patch.expectedUp;
+          }
           Promise.resolve(ST.updateNode(n.id, patch)).then(function () { U.toast('Settings saved'); }, function (error) {
             U.toast(error.status === 409 ? 'Another node already has this name.' : error.status === 412 ? 'This node was changed elsewhere. Reload and try again.' : error.message, 'error');
           });
