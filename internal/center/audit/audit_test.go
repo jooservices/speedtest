@@ -1,6 +1,13 @@
 package audit
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+)
 
 func TestClassify(t *testing.T) {
 	const id = "10000000-0000-4000-8000-000000000001"
@@ -14,6 +21,8 @@ func TestClassify(t *testing.T) {
 		{"POST", "/api/nodes/" + id + "/run", "node.run", id, true},
 		{"PUT", "/api/schedules/rules", "schedule.rules", "", true}, // the literal route wins over /api/schedules/{id}
 		{"PUT", "/api/schedules/" + id, "schedule.update", id, true},
+		{"PUT", "/api/usage/budgets/" + id, "usage_budget.update", id, true},
+		{"DELETE", "/api/usage/budgets/" + id, "usage_budget.delete", id, true},
 		{"POST", "/api/schedules/stagger", "schedule.stagger", "", true},
 		{"PUT", "/api/settings", "settings.update", "", true},
 		{"POST", "/api/settings/enrolment-key", "settings.enrolment_key", "", true},
@@ -54,5 +63,50 @@ func TestRecordRejectsIncompleteEntries(t *testing.T) {
 	}
 	if err := s.Record(t.Context(), Entry{Actor: "a"}); err == nil {
 		t.Fatal("an entry without an action was accepted")
+	}
+}
+
+type auditErrorPool struct {
+	countErr error
+	queryErr error
+}
+
+func (p auditErrorPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, nil
+}
+
+func (p auditErrorPool) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, p.queryErr
+}
+
+func (p auditErrorPool) QueryRow(context.Context, string, ...any) pgx.Row {
+	return auditCountRow{err: p.countErr}
+}
+
+type auditCountRow struct{ err error }
+
+func (r auditCountRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	*dest[0].(*int) = 0
+	return nil
+}
+
+func TestListReturnsDatabaseErrors(t *testing.T) {
+	queryErr := errors.New("query failed")
+	for _, tc := range []struct {
+		name string
+		pool auditErrorPool
+	}{
+		{name: "count", pool: auditErrorPool{countErr: queryErr}},
+		{name: "entries", pool: auditErrorPool{queryErr: queryErr}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			store := &Store{DB: tc.pool}
+			if _, _, err := store.List(t.Context(), Filter{}, 1, 10); !errors.Is(err, queryErr) {
+				t.Fatalf("List error = %v, want %v", err, queryErr)
+			}
+		})
 	}
 }

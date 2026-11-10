@@ -64,6 +64,12 @@ func TestBatchOutcomes(t *testing.T) {
 			t.Fatal(outcome)
 		}
 	}
+	upper := strings.Replace(validResult, "00000000-0000-4000-8000-000000000001", "ABCDEF00-0000-4000-8000-000000000001", 1)
+	w = request(&fakeStore{}, "/api/agent/results", `{"results":[`+upper+`]}`, nil)
+	_ = json.Unmarshal(w.Body.Bytes(), &response)
+	if w.Code != 207 || response.Data[0].ID == nil || *response.Data[0].ID != "abcdef00-0000-4000-8000-000000000001" {
+		t.Fatal(w.Code, w.Body.String())
+	}
 	for _, tc := range []struct {
 		err       error
 		duplicate bool

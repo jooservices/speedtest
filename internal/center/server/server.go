@@ -68,6 +68,8 @@ type Options struct {
 	OwnerResults OwnerResultsStore
 	// OwnerStats optionally serves the owner statistics API.
 	OwnerStats OwnerStatsStore
+	// OwnerUsage optionally serves measured traffic and monthly budget resources.
+	OwnerUsage OwnerUsageStore
 	// OwnerAlerts optionally serves alert-rule and event APIs.
 	OwnerAlerts OwnerAlertsStore
 	// Installer serves SSH fingerprint probes, install jobs, and replayable progress.

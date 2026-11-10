@@ -5,6 +5,11 @@ export function dashboardSuite(T) {
       await T.open('#/', 'Dashboard');
       await T.see('5 of 5 nodes active');
       for (const label of ['Download vs. expected', 'Upload vs. expected', 'Median latency', 'Tests succeeded', 'IP changes']) await T.see(label);
+      for (const label of ['Bandwidth', 'Month to date', 'Projected month end', 'Previous month']) await T.see(label);
+      await page.getByRole('columnheader', { name: 'Engine' }).last().waitFor();
+      await page.getByRole('img', { name: 'Daily bandwidth usage by node and engine' }).waitFor();
+      const bandwidth = page.locator('.card').filter({ hasText: 'Measured download and upload bytes remain separate by node and engine.' });
+      assert.ok(await bandwidth.locator('table').last().locator('tbody tr').count() > 0, 'the daily bandwidth table shows numeric buckets');
       for (const name of ['VM1', 'VM2', 'VM3', 'VM4', 'VM5']) await page.locator('.node-card').filter({ hasText: name }).first().waitFor();
       const changes = await page.locator('.stat').filter({ hasText: 'IP changes' }).locator('.stat-value').innerText();
       assert.match(changes, /^[1-9]\d*\s*change/, 'the seeded address changes must be counted, got ' + JSON.stringify(changes));

@@ -105,6 +105,7 @@
     root.appendChild(h('div', { class: 'grid cols-2 mt' },
       U.card('Coming up', 'The next tests across all nodes.', upList),
       U.card('Data used by tests', 'Estimated from recent results. Shorter intervals use more data — check this if your plan has a data cap.', h('div', { style: 'margin:-8px -18px -18px' }, usageTable))));
+    ST.bandwidth.advicePanel(root);
 
     function tickCountdowns() {
       var t = Date.now();

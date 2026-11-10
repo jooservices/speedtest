@@ -139,7 +139,7 @@ engine: ookla
 name: node
 expected_download_mbps: 0
 expected_upload_mbps: 0
-interval: 30m
+interval: 60m
 # Optional: choose one local path; omit both to use the default route.
 # network_interface: enp1s0
 # source_ip: 192.0.2.10

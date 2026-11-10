@@ -6,7 +6,7 @@ loads the node's YAML and private credential. All paths, executable settings,
 service addresses and retention caps retain the documented `.env.example`
 defaults. No database connection is made from the agent.
 
-Local YAML seeds engine (`ookla`), interval (`30m`), binding (default route),
+Local YAML seeds engine (`ookla`), interval (`60m`), binding (default route),
 `server_id` (`0`, automatic), and `parallel_connections` (`0`, engine default).
 A valid center configuration replaces engine, binding, server, threads and
 schedule atomically; a running measurement retains its original snapshot.

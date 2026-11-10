@@ -201,6 +201,9 @@ func (tx *scriptedTx) QueryRow(_ context.Context, query string, args ...any) pgx
 	}
 	return scriptedRow{err: errors.New("unexpected transaction query")}
 }
+func (tx *scriptedTx) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return scriptedEmptyRows{}, nil
+}
 func (tx *scriptedTx) Exec(_ context.Context, query string, args ...any) (pgconn.CommandTag, error) {
 	if tx.exec != nil {
 		return pgconn.CommandTag{}, tx.exec(query, args...)
@@ -209,6 +212,12 @@ func (tx *scriptedTx) Exec(_ context.Context, query string, args ...any) (pgconn
 }
 func (tx *scriptedTx) Commit(context.Context) error   { return tx.commitErr }
 func (tx *scriptedTx) Rollback(context.Context) error { return nil }
+
+type scriptedEmptyRows struct{ pgx.Rows }
+
+func (scriptedEmptyRows) Next() bool { return false }
+func (scriptedEmptyRows) Close()     {}
+func (scriptedEmptyRows) Err() error { return nil }
 
 type scriptedRow struct {
 	values []any
@@ -422,6 +431,10 @@ func TestCreateNodeTransactionSuccessAndDatabaseBoundaries(t *testing.T) {
 			switch {
 			case strings.Contains(query, "api_idempotency"):
 				return scriptedRow{err: pgx.ErrNoRows}
+			case strings.Contains(query, "FROM usage_budgets"):
+				return scriptedRow{err: pgx.ErrNoRows}
+			case strings.Contains(query, "FROM usage_monthly_totals"):
+				return scriptedRow{values: []any{int64(0)}}
 			case strings.Contains(query, "MAX(color_slot)"):
 				if fail == "color" {
 					return scriptedRow{err: errors.New("color query failed")}

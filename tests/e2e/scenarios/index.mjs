@@ -47,6 +47,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-SET-04', area: 'settings', title: 'a test notification reaches the configured channel', covers: 'webhook test, unset channel refused', run: S.settings.notificationTest },
     { id: 'SC-SET-07', area: 'settings', title: 'notification quiet hours are saved as a complete window', covers: 'quiet hours for messages, critical exemption', run: S.settings.notificationQuietHours },
     { id: 'SC-SET-05', area: 'settings', title: 'retention and the full exports work', covers: 'retention, CSV and JSON export', run: S.settings.dataRetentionAndExport },
+    { id: 'SC-SET-09', area: 'settings', title: 'bandwidth budgets show the warning on the dashboard', covers: 'budget setup, persisted global limit, 80 percent warning, removal', run: S.settings.bandwidthBudgets },
     { id: 'SC-SET-06', area: 'settings', title: 'the enrolment key is shown once', covers: 'enrolment key rotation', run: S.settings.enrolmentKeyShownOnce },
 
     // Adds a real agent and a node; the removal scenario below deletes it again.

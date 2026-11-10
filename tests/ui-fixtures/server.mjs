@@ -11,7 +11,7 @@ export function fixture() {
     latest: null, latestGood: null, currentIp: '203.0.113.9', geo: null, updateVersion: null };
   const result = { id: 'a4bbcf7b-8938-4e90-8128-59047d35b087', nodeId: node.id, ts,
     serverId: 1, threads: 4, ip: '203.0.113.9', status: 'ok', error: null, down: 90, up: 40, ping: 0,
-    jitter: null, loss: null, dLat: null, uLat: null, bytesDown: 1000, bytesUp: 500, duration: 1,
+    jitter: null, loss: null, dLat: null, uLat: null, bytesDown: 1000, bytesUp: 500, bytesTotal: 1500, duration: 1,
     manual: false, raw: {}, server: { id: 1, name: 'Fixture server', city: '', sponsor: '' }, geo: null };
   node.latest = result; node.latestGood = result;
   const notify = Object.fromEntries(['email', 'telegram', 'slack', 'webhook'].map(key => [key, { on: false, to: '', configured: false }]));
@@ -132,6 +132,25 @@ export async function startServer() {
           : [{ nodeId: id, metric: 'down', count: 1, bins: [{ from: 90, to: 91, count: 1, percent: 100 }] }];
         send(200, envelope(body)); return;
       }
+      if (url.pathname === '/api/usage') {
+        const bytes = { bytesDown: data.result.bytesDown, bytesUp: data.result.bytesUp, totalBytes: data.result.bytesTotal };
+        const start = new Date(data.result.ts); start.setUTCHours(0, 0, 0, 0);
+        send(200, envelope({ from: url.searchParams.get('from'), to: url.searchParams.get('to'), group: url.searchParams.get('group') || 'day',
+          totals: bytes, monthToDate: bytes, projectedMonthEnd: bytes, previousMonth: { bytesDown: 0, bytesUp: 0, totalBytes: 0 },
+          comparison: { currentMonthToDateBytes: bytes.totalBytes, previousMonthBytes: 0, projectedMonthEndBytes: bytes.totalBytes, changePercent: null },
+          byNodeEngine: [{ nodeId: data.node.id, nodeName: data.node.name, engine: 'ookla', ...bytes, monthToDate: bytes, projectedMonthEnd: bytes, previousMonth: { bytesDown: 0, bytesUp: 0, totalBytes: 0 } }],
+          series: [{ nodeId: data.node.id, engine: 'ookla', start: start.toISOString(), ...bytes }], budgets: [] })); return;
+      }
+      if (url.pathname === '/api/usage/advice') {
+        const interval = Number(url.searchParams.get('interval') || 60), average = data.result.bytesTotal, budget = Number(url.searchParams.get('budgetBytes') || 0);
+        const estimatedBytesPerDay = average * 1440 / interval;
+        const needed = budget > 0 ? Math.ceil(average * 43200 / budget) : null;
+        const recommendationStatus = needed == null ? 'unavailable' : needed > 1440 ? 'infeasible' : 'feasible';
+        send(200, envelope({ nodeId: url.searchParams.get('node'), engine: url.searchParams.get('engine') || 'ookla', intervalMinutes: interval,
+          averageBytesPerTest: average, estimatedBytesPerDay, estimatedBytesPerMonth: estimatedBytesPerDay * 30, budgetBytes: budget || undefined,
+          recommendedIntervalMinutes: recommendationStatus === 'feasible' ? Math.max(5, needed) : null, recommendationStatus })); return;
+      }
+      if (url.pathname === '/api/usage/budgets') { send(200, envelope([])); return; }
       if (url.pathname === '/api/settings') { send(200, envelope(data.settings)); return; }
       if (url.pathname === '/api/schedules') { send(200, envelope(data.schedules)); return; }
       if (url.pathname.startsWith('/api/schedules/')) { send(200, envelope(data.schedules.nodes[0])); return; }

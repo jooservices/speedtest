@@ -101,28 +101,36 @@ func assertDerived(t *testing.T, p *pgxpool.Pool) {
 	}
 }
 func TestMeasurementTimelineIntegration(t *testing.T) {
-	p, s, l := setup(t)
+	p, store, locations := setup(t)
 	a, b, c := "203.0.113.1", "203.0.113.2", "2001:db8::1"
-	// Starts with A->B, then late samples insert, split and merge boundaries.
-	sequence := []agentapi.Result{result(10, 10, a), result(30, 30, b), result(20, 20, a), result(25, 25, b), result(15, 15, c), result(5, 5, c), result(35, 35, b), result(40, 40, a), result(39, 40, c), result(41, 40, b)}
-	// Failed measurements participate in the IP timeline but not speed averages.
-	sequence[4].Status = "failed"
-	message := "engine unavailable"
-	sequence[4].Error = &message
-	sequence[4].Down = nil
-	sequence[4].Up = nil
-	sequence[4].Ping = nil
-	sequence[4].ServerID = nil
+	sequence := timelineSequence(a, b, c)
 	listener, err := p.Acquire(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer listener.Release()
-	if _, err = listener.Exec(t.Context(), "LISTEN ip_changed"); err != nil {
+	if _, err := listener.Exec(t.Context(), "LISTEN ip_changed"); err != nil {
 		t.Fatal(err)
 	}
+	verifyTimelineSequence(t, p, store, locations, listener, sequence)
+	verifyTimelineReplay(t, p, store, locations, sequence, a, b)
+	verifyLateNullIP(t, p, store, locations, listener)
+	t.Log("PASS: first/repeated/alternating IPs; late insert/split/merge; equal timestamps; known-IP and NULL-IP failures; replay/conflict; cached IPv4/IPv6; only newest changes signal")
+}
+
+func timelineSequence(a, b, c string) []agentapi.Result {
+	sequence := []agentapi.Result{result(10, 10, a), result(30, 30, b), result(20, 20, a), result(25, 25, b), result(15, 15, c), result(5, 5, c), result(35, 35, b), result(40, 40, a), result(39, 40, c), result(41, 40, b)}
+	message := "engine unavailable"
+	sequence[4].Status = "failed"
+	sequence[4].Error = &message
+	sequence[4].Down, sequence[4].Up, sequence[4].Ping, sequence[4].ServerID = nil, nil, nil, nil
+	return sequence
+}
+
+func verifyTimelineSequence(t *testing.T, p *pgxpool.Pool, store *agentapi.Postgres, locations *locator, listener *pgxpool.Conn, sequence []agentapi.Result) {
+	t.Helper()
 	for i, r := range sequence {
-		save(t, s, nodeA, r)
+		save(t, store, nodeA, r)
 		assertDerived(t, p)
 		want := 0
 		if i >= 1 {
@@ -139,33 +147,36 @@ func TestMeasurementTimelineIntegration(t *testing.T) {
 		}
 		if i == 1 || i == 7 || i == 9 {
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
-			notification, e := listener.Conn().WaitForNotification(ctx)
+			notification, err := listener.Conn().WaitForNotification(ctx)
 			cancel()
-			if e != nil || notification.Payload != r.ID {
-				t.Fatal("commit notification", notification, e)
+			if err != nil || notification.Payload != r.ID {
+				t.Fatal("commit notification", notification, err)
 			}
 		}
 	}
 	if n := scalar(t, p, `SELECT count(*) FROM node_ip_history WHERE from_ip IS NULL`); n != 1 {
 		t.Fatal("missing initial opening", n)
 	}
-	if n := scalar(t, p, `SELECT count(*) FROM ip_addresses WHERE looked_up_at IS NOT NULL AND source='geolite2'`); n != 3 || l.calls.Load() != 3 {
-		t.Fatal("geo cache", n, l.calls.Load())
+	if n := scalar(t, p, `SELECT count(*) FROM ip_addresses WHERE looked_up_at IS NOT NULL AND source='geolite2'`); n != 3 || locations.calls.Load() != 3 {
+		t.Fatal("geo cache", n, locations.calls.Load())
 	}
-	// Same address on another independent node reuses the global location cache.
-	save(t, s, nodeB, result(100, 1, a))
+}
+
+func verifyTimelineReplay(t *testing.T, p *pgxpool.Pool, store *agentapi.Postgres, locations *locator, sequence []agentapi.Result, sharedIP, otherIP string) {
+	t.Helper()
+	save(t, store, nodeB, result(100, 1, sharedIP))
 	assertDerived(t, p)
-	if l.calls.Load() != 3 {
+	if locations.calls.Load() != 3 {
 		t.Fatal("repeated global geolocation")
 	}
 	before := scalar(t, p, "SELECT count(*) FROM ip_change_signals")
-	duplicate, err := s.SaveResult(t.Context(), nodeA, sequence[7])
+	duplicate, err := store.SaveResult(t.Context(), nodeA, sequence[7])
 	if err != nil || !duplicate {
 		t.Fatal("replay", duplicate, err)
 	}
 	conflict := sequence[7]
-	conflict.IP = &b
-	if _, err = s.SaveResult(t.Context(), nodeA, conflict); err != agentapi.ErrConflict {
+	conflict.IP = &otherIP
+	if _, err = store.SaveResult(t.Context(), nodeA, conflict); err != agentapi.ErrConflict {
 		t.Fatal("conflicting replay", err)
 	}
 	if n := scalar(t, p, "SELECT count(*) FROM ip_change_signals"); n != before {
@@ -173,40 +184,38 @@ func TestMeasurementTimelineIntegration(t *testing.T) {
 	}
 	assertDerived(t, p)
 	var current string
-	if err = p.QueryRow(t.Context(), `SELECT host(ip) FROM results WHERE node_id=$1 AND ip IS NOT NULL ORDER BY ts DESC,id DESC LIMIT 1`, nodeA).Scan(&current); err != nil || current != b {
+	if err = p.QueryRow(t.Context(), `SELECT host(ip) FROM results WHERE node_id=$1 AND ip IS NOT NULL ORDER BY ts DESC,id DESC LIMIT 1`, nodeA).Scan(&current); err != nil || current != otherIP {
 		t.Fatal("current IP", current, err)
 	}
+}
+
+func verifyLateNullIP(t *testing.T, p *pgxpool.Pool, store *agentapi.Postgres, locations *locator, listener *pgxpool.Conn) {
+	t.Helper()
 	lateUnknown := result(14, 18, "203.0.113.99")
-	lateUnknown.IP = nil
-	lateUnknown.Status = "failed"
-	message = "speedtest: no_route"
-	lateUnknown.Error = &message
-	lateUnknown.Down = nil
-	lateUnknown.Up = nil
-	lateUnknown.Ping = nil
-	lateUnknown.ServerID = nil
+	message := "speedtest: no_route"
+	lateUnknown.IP, lateUnknown.Status, lateUnknown.Error = nil, "failed", &message
+	lateUnknown.Down, lateUnknown.Up, lateUnknown.Ping, lateUnknown.ServerID = nil, nil, nil, nil
 	historyBefore := scalar(t, p, "SELECT count(*) FROM node_ip_history")
 	addressesBefore := scalar(t, p, "SELECT count(*) FROM node_ip_addresses")
 	signalsBefore := scalar(t, p, "SELECT count(*) FROM ip_change_signals")
-	save(t, s, nodeA, lateUnknown)
+	save(t, store, nodeA, lateUnknown)
 	if scalar(t, p, `SELECT count(*) FROM results WHERE id=$1 AND ip IS NULL AND status='failed'`, lateUnknown.ID) != 1 {
 		t.Fatal("late failed NULL-IP result was not stored")
 	}
 	if scalar(t, p, "SELECT count(*) FROM node_ip_history") != historyBefore || scalar(t, p, "SELECT count(*) FROM node_ip_addresses") != addressesBefore || scalar(t, p, "SELECT count(*) FROM ip_change_signals") != signalsBefore {
 		t.Fatal("late failed NULL-IP result changed derived IP state")
 	}
-	if l.calls.Load() != 3 {
-		t.Fatal("late failed NULL-IP result performed geolocation", l.calls.Load())
+	if locations.calls.Load() != 3 {
+		t.Fatal("late failed NULL-IP result performed geolocation", locations.calls.Load())
 	}
 	assertDerived(t, p)
-	// No pending notification was created for a late arrival or a duplicate.
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Millisecond)
 	defer cancel()
-	if n, e := listener.Conn().WaitForNotification(ctx); e == nil {
-		t.Fatal("unexpected notification", n)
+	if notification, err := listener.Conn().WaitForNotification(ctx); err == nil {
+		t.Fatal("unexpected notification", notification)
 	}
-	t.Log("PASS: first/repeated/alternating IPs; late insert/split/merge; equal timestamps; known-IP and NULL-IP failures; replay/conflict; cached IPv4/IPv6; only newest changes signal")
 }
+
 func TestConcurrentIngestionIntegration(t *testing.T) {
 	p, s, l := setup(t)
 	var wg sync.WaitGroup
@@ -257,7 +266,7 @@ func TestMigrationBackfillAndRollbackIntegration(t *testing.T) {
 	for i := range 8 {
 		save(t, s, nodeA, result(i+1, i, fmt.Sprintf("203.0.113.%d", i%2+1)))
 	}
-	for range 6 {
+	for range 7 {
 		if err := db.Migrate(t.Context(), p, "down"); err != nil {
 			t.Fatal(err)
 		}

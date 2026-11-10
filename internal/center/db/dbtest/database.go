@@ -37,11 +37,18 @@ func Reset(t testReporter, pool *pgxpool.Pool) {
 	verify(t, ctx, pool)
 	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS
  public.user_two_factor, public.audit_log, public.installer_idempotency, public.installer_events, public.installer_jobs, public.installer_probe_idempotency, public.installer_probes,
+ public.usage_budget_overrides, public.usage_budget_events, public.usage_budgets, public.usage_monthly_totals,
  public.notification_deliveries, public.ip_change_signals, public.alert_notification_outbox, public.maintenance_jobs, public.node_ip_addresses, public.agent_commands, public.alert_state, public.alert_events, public.alert_rules,
  public.engine_schedules, public.schedules, public.node_ip_history, public.results, public.node_credentials,
  public.sessions, public.users, public.nodes, public.ip_addresses, public.settings,
  public.api_idempotency, public.goose_db_version`); err != nil {
 		t.Fatal("could not reset test database")
+	}
+	if _, err := pool.Exec(ctx, `DROP FUNCTION IF EXISTS speedtest_record_monthly_usage()`); err != nil {
+		t.Fatal("could not reset usage trigger function")
+	}
+	if _, err := pool.Exec(ctx, `DROP FUNCTION IF EXISTS speedtest_lock_usage_budget_changes()`); err != nil {
+		t.Fatal("could not reset usage lifecycle lock function")
 	}
 	var count int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").Scan(&count); err != nil || count != 0 {

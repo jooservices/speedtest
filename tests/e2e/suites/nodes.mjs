@@ -108,6 +108,12 @@ export function nodesSuite(T, ctx) {
       await page.getByRole('heading', { name: /VM3/, level: 1 }).waitFor();
       await T.see('Expected');
       await T.tab('Settings');
+      await T.see('Bandwidth cost advice', page);
+      await T.see('per day', page);
+      await T.fillAndLeave('Ookla interval', '120', page);
+      await T.see('Estimate for every 120 minutes', page);
+      await T.fillAndLeave('Ookla interval', '60', page);
+      await T.see('Estimate for every 60 minutes', page);
       await T.fill('Node name', '', page);
       await T.press('Save changes');
       await T.toast('Node name cannot be empty').waitFor();

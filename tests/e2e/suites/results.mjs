@@ -4,10 +4,14 @@ export function resultsSuite(T) {
     async filterOpenExport() {
       await T.open('#/history', 'Results');
       await T.see('1,680 results');
+      await page.getByRole('columnheader', { name: 'Data used' }).waitFor();
       const status = T.selectWith('Any status');
       await status.selectOption('failed');
       const failed = await page.locator('text=/\\d[\\d,]* results?/').first().innerText();
       assert.ok(/^(\d+) results?$/.test(failed.replace(/,/g, '')) && Number.parseInt(failed, 10) < 1680, `status filter: ${failed}`);
+      await page.getByRole('row').nth(1).click();
+      await T.see('— down · — up · — total', page);
+      await T.dismiss();
       await status.selectOption('all');
       await T.fill('Search results', 'VM3');
       await T.see('336 results');
@@ -17,9 +21,11 @@ export function resultsSuite(T) {
       await T.fill('Search results', '');
       await page.getByRole('row').nth(1).click();
       await page.getByRole('dialog').or(page.locator('.drawer')).first().waitFor();
+      await T.see('Data used');
       await T.dismiss();
       const text = await T.download(() => T.press('Export CSV'));
       assert.ok(text.startsWith('time,node,status,download_mbps'), 'CSV header');
+      assert.ok(text.startsWith('time,node,status,download_mbps,upload_mbps,ping_ms,jitter_ms,packet_loss_pct,bytes_down,bytes_up,bytes_total'), 'byte usage columns');
       assert.ok(text.split('\n').length > 1000, 'the export holds the rows');
     },
 

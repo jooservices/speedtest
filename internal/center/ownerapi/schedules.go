@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/schedules"
+	"github.com/jooservices/speedtest/internal/center/usage"
 )
 
 // ScheduleInput is the owner-editable part of one node's schedule.
@@ -240,6 +241,9 @@ func (s *Store) ReplaceSchedule(ctx context.Context, id string, in ScheduleInput
 		return nil, "", err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := usage.LockBudgetEvaluation(ctx, tx); err != nil {
+		return nil, "", err
+	}
 	rows, err := s.scheduleRows(ctx, tx, true, id)
 	if err != nil {
 		return nil, "", err
@@ -255,6 +259,9 @@ func (s *Store) ReplaceSchedule(ctx context.Context, id string, in ScheduleInput
 		return nil, "", err
 	}
 	if _, err := tx.Exec(ctx, `UPDATE engine_schedules SET interval_minutes=$2,offset_minutes=$3,enabled=$4,revision=revision+1 WHERE node_id=$1 AND engine='ookla'`, id, slot.Interval, slot.Offset, in.Enabled); err != nil {
+		return nil, "", err
+	}
+	if err := usage.ReconcileScheduleEdit(ctx, tx, id, s.now()); err != nil {
 		return nil, "", err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -325,6 +332,9 @@ func (s *Store) ReplaceRules(ctx context.Context, in ScheduleRules, ifMatch stri
 		return nil, "", err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := usage.LockBudgetEvaluation(ctx, tx); err != nil {
+		return nil, "", err
+	}
 	_, etag, rows, _, err := s.collection(ctx, tx, true)
 	if err != nil {
 		return nil, "", err
@@ -366,6 +376,9 @@ func (s *Store) Stagger(ctx context.Context, ifMatch string) (map[string]any, st
 		return nil, "", err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := usage.LockBudgetEvaluation(ctx, tx); err != nil {
+		return nil, "", err
+	}
 	_, etag, rows, _, err := s.collection(ctx, tx, true)
 	if err != nil {
 		return nil, "", err

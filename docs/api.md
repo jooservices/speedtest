@@ -194,12 +194,13 @@ The center coordinates offsets; there is no WAN, load-balancer or peer-node mode
 | Enrollment/control, JOOST-14/17/18/19/22/23 | `/api/agent/{tokens,enroll,results,config,heartbeat,commands,ip}`, command ack; `Enrolled`, `AgentConfig`, `BatchOutcome`, `Command`; node credential rotate/revoke and replacement token |
 | Dashboard, JOOST-27/38 | `/api/dashboard`, `/api/series`; `Fleet` current/previous, `NodeCard` summary/sparkline/latestGood/current IP/city, latest results/open alerts/count, `Series.summary` for table mode |
 | Nodes and wizard, JOOST-25/41/43/44 | node CRUD/run/commands, installer probes/installations/uninstallations and SSE; `Node`, `Enrollment`, `Install`, `InstallEvent`, pinned fingerprint, `Command` progress |
-| Results, JOOST-24/32/38 | results list/detail/filtered CSV and full CSV/JSON exports; `Result` includes every measured field, `Server`, `Geo`, raw JSON and manual flag; search/sort/range/download/status filters |
+| Results, JOOST-24/32/38/80 | results list/detail/filtered CSV and full CSV/JSON exports; `Result` includes every measured field, bytes down/up/total, `Server`, `Geo`, raw JSON and manual flag; search/sort/range/download/status filters |
 | Statistics, JOOST-26/39 | `/api/stats/{summary,trend,hour-of-day,heatmap,distribution}`; `SummaryComparison`, `MetricSummary`, `Series`, `HourSeries`, `Heatmap` counts, `Distribution` edges/count/percent; combined total is display-only |
 | IP & location, JOOST-33/34/35/36/39/42 | `/api/ip/{history,addresses,lookup,map}` (location database updates run on the center's schedule; manual update/refresh/status endpoints are not part of v1); `IPChange`, `IPAddress`, `Geo` (all location/ASN/ISP/accuracy/source fields), `MapLocation`, database timestamp/cache count, maintenance `Job` |
 | Schedules, JOOST-28/39 | `/api/schedules`, per-node GET/PUT, rules PUT, stagger POST; `ScheduleInput`, `ScheduleRules`, `Schedules` clashes/upcoming/nextRun/bytesPerDay/bytesPerMonth |
 | Alerts, JOOST-29/40 | rules CRUD, events list/detail/ack, snapshot acknowledge-all job; `AlertRule`, `AlertEvent` title/detail/severity/ts/resolvedAt/acked; reopen means acked=false |
 | Settings/notifications, JOOST-30/31/40 | Settings GET/PUT/key rotation, test-channel POST, delivery logs/status; `Settings`, `NotificationSettings`, `Delivery`, issuance-only `IssuedKey` |
+| Bandwidth, JOOST-80 | `/api/usage`, `/api/usage/advice`, `/api/usage/budgets`; UTC totals and day/week/month buckets stay separated by node and engine; optional global/node budgets |
 | Installer distribution, JOOST-46 | public `GET /install.sh`; checksum-verifying shell script |
 
 The alert engine's rule validation, per-result streak semantics, offline checks,
@@ -268,6 +269,63 @@ summaries use raw source measurements rather than averages of buckets.
 Hour-of-day always returns all 24 hours. Heatmap requires one node and returns
 168 weekday/hour cells for the rolling 30 days ending at the request snapshot.
 
+### Bandwidth usage and budgets (JOOST-80)
+
+`GET /api/usage` requires an authenticated session. Omit `from` and `to` for
+the trailing 30 days ending at the request snapshot; otherwise provide both as
+RFC 3339 timestamps, inclusive `from` and exclusive `to`, at most 366 days.
+`group` is `day` (default), `week` or `month`; `node` and `engine` are optional.
+When `engine` is omitted, each node/engine remains its own row and series; the
+center never blends different engines into an average. The response also
+contains month-to-date, previous calendar month, a month-end projection and
+configured budget status. The projection scales observed month-to-date usage
+by elapsed UTC calendar time.
+
+```text
+GET /api/usage?group=week&from=<RFC3339>&to=<RFC3339>&node=<node-id>&engine=ookla
+GET /api/usage/advice?node=<node-id>&engine=ookla&interval=60
+GET /api/usage/budgets
+PUT /api/usage/budgets/global
+PUT /api/usage/budgets/<node-id>
+DELETE /api/usage/budgets/<node-id>
+```
+
+Advice estimates daily and 30-day volume from the selected node/engine's
+average measured bytes per test over the prior 30 days and the requested
+interval. If `budgetBytes` is omitted, the node budget is used, then the global
+budget. The response reports `recommendationStatus` as `feasible`,
+`infeasible`, or `unavailable`. A budget that cannot be met even at the
+maximum 1440-minute interval has no recommended interval and is marked
+`infeasible`; the UI tells the owner to increase the budget or reduce the test
+volume. No history or no applicable budget produces no recommendation.
+
+Budgets are optional positive byte limits with `widen` or `pause` action. Read
+the collection ETag before writing; every PUT/DELETE requires that value in
+`If-Match`, and stale updates return 412. At 80% the center records one warning
+event per scope/month. At 100% it records a limit event, applies the configured
+schedule action transactionally, writes an audit entry and records a durable
+notification extension event. JOOST-78 can consume the named
+`PendingNotificationEvents` / `MarkNotificationEventPublished` extension point.
+The effective action is reconciled whenever a budget or schedule changes. A
+pause takes precedence over interval widening when global and node budgets
+overlap; otherwise the largest active widening multiplier applies. Owner
+schedule edits become the new restoration baseline, and deleting a budget
+restores the baseline when no remaining budget requires an override. The
+selected action applies until the next UTC month, when original intervals and
+enabled states are restored, including for paused nodes. New nodes default to a
+60-minute interval and immediately inherit an active global policy.
+
+The center exposes `speedtest_bandwidth_month_to_date_bytes{node_id,engine}`
+and `speedtest_bandwidth_budget_ratio{scope,node_id}` application gauges.
+These are scrape-time values from the current UTC month. System alert rules and
+notification infrastructure are maintained outside the application.
+
+The read-only MCP server exposes the same query as the `get_usage` tool over
+stdio. Run `go run ./cmd/mcp` from the center's working directory; it reads
+`SPEEDTEST_DB_*` from `.env` and verifies the local/test database ownership
+marker before connecting. The tool accepts optional `node`, `engine`, `from`,
+`to` and `group` arguments with the same meanings and limits as `GET /api/usage`.
+
 Distribution accepts `bins` from 1 through 100 (default 15); the preview's
 current chart uses 12, so pass `bins=12` when comparing its histogram directly.
 Bin edges cover the sample minimum through maximum and the last upper edge is
@@ -279,7 +337,7 @@ Settings defaults match the preview: dark, 7d, auto units, browser timezone,
 weekly updates, Ookla/auto server/4 threads, stagger on/maxConcurrent=1, empty
 quiet hours, email enabled to `ops@example.com`, other channels off/empty.
 Public center URL comes from deployment `.env`, not the demo URL. New nodes
-start at interval=30/offset=0, enabled, threads=4, server=auto. Schedule PUT clamps
+start at interval=60/offset=0, enabled, threads=4, server=auto. Schedule PUT clamps
 offset after interval changes; effective quiet timezone is explicit. Usage uses
 up to 200 recent nonfailed results × tests/day, month=30 days; paused/no history=0.
 The UI should display null measurements/location as unavailable, not zero.
@@ -492,7 +550,7 @@ and storage failures (500). An item failure contains only a safe generic problem
 
 `GET /api/results/export.csv` takes the same filter and sort parameters as `GET /api/results` (`nodes`, `range` or `from`+`to`, `status`, `q`, `minDown`, `maxDown`, `sort`, `dir`) and no pagination. It streams every matching row in the requested order (default `ts` descending) as `text/csv; charset=utf-8` with `Content-Disposition: attachment; filename="speedtest-results-YYYY-MM-DD.csv"`. With neither `range` nor `from`/`to` it covers the trailing 7 days, as the list does.
 
-Columns, in order: `time` (RFC 3339 UTC), `node` (name and label), `status`, `download_mbps`, `upload_mbps`, `ping_ms`, `jitter_ms`, `packet_loss_pct`, `loaded_latency_down_ms`, `loaded_latency_up_ms`, `server` (`name - city`), `public_ip`, `error`. Numbers are plain decimals and empty when the engine did not report them. Cells follow RFC 4180 quoting; a text cell that starts with `=`, `+`, `-`, `@`, tab or carriage return is prefixed with `'` so spreadsheets do not run it as a formula. A failure after the first row aborts the connection so a truncated download is never mistaken for a complete one.
+Columns, in order: `time` (RFC 3339 UTC), `node` (name and label), `status`, `download_mbps`, `upload_mbps`, `ping_ms`, `jitter_ms`, `packet_loss_pct`, `bytes_down`, `bytes_up`, `bytes_total`, `loaded_latency_down_ms`, `loaded_latency_up_ms`, `server` (`name - city`), `public_ip`, `error`, `engine`. Byte values are exact integers; missing measurements are empty. Numbers are plain decimals and empty when the engine did not report them. Cells follow RFC 4180 quoting; a text cell that starts with `=`, `+`, `-`, `@`, tab or carriage return is prefixed with `'` so spreadsheets do not run it as a formula. A failure after the first row aborts the connection so a truncated download is never mistaken for a complete one.
 
 ## Schedules
 

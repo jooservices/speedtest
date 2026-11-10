@@ -56,11 +56,22 @@ func ScanResult(row pgx.Row, extra ...any) (ResultView, error) {
 		"engineISP": nullable(engineISP), "engineResultId": nullable(engineResultID),
 		"engineResultUrl": nullable(engineResultURL), "engineIp": nullable(engineIP), "warnings": jsonArray(warnings),
 	}
+	obj["bytesTotal"] = totalBytes(bytesDown, bytesUp)
 	view := ResultView{Object: obj}
 	if ip != nil {
 		view.IP = *ip
 	}
 	return view, nil
+}
+
+func totalBytes(down, up *int64) any {
+	if down == nil || up == nil {
+		return nil
+	}
+	if *up > 0 && *down > int64(^uint64(0)>>1)-*up {
+		return int64(^uint64(0) >> 1)
+	}
+	return *down + *up
 }
 
 func nullable[T any](value *T) any {
