@@ -10,8 +10,12 @@ import (
 
 func withAPITokenAuth(next http.Handler, routes routeTable, auth *serverAuth) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if len(r.Header.Values("Authorization")) == 0 || strings.HasPrefix(r.URL.Path, "/api/agent/") {
+			next.ServeHTTP(w, r)
+			return
+		}
 		required, tokenRoute := routes.tokenPermission(r)
-		if !tokenRoute || len(r.Header.Values("Authorization")) == 0 {
+		if !tokenRoute {
 			next.ServeHTTP(w, r)
 			return
 		}
