@@ -31,6 +31,30 @@ func TestResultValidation(t *testing.T) {
 			t.Fatalf("%s: %+v %v", status, result, err)
 		}
 	}
+	for _, item := range []struct {
+		status string
+		class  string
+		valid  bool
+	}{
+		{status: "ok", class: "other", valid: true},
+		{status: "degraded", class: "other", valid: true},
+		{status: "failed", class: "rate_limited", valid: true},
+		{status: "ok", class: "rate_limited"},
+		{status: "degraded", class: "timeout"},
+	} {
+		data := change(validResult, "status", item.status)
+		data = change(string(data), "failureClass", item.class)
+		if item.status == "failed" {
+			data = change(string(data), "error", "Too many requests")
+			for _, key := range []string{"down", "up", "ping", "serverId"} {
+				data = change(string(data), key, nil)
+			}
+		}
+		_, err := ParseResult(data)
+		if (err == nil) != item.valid {
+			t.Fatalf("status=%s class=%s: valid=%t err=%v", item.status, item.class, item.valid, err)
+		}
+	}
 	full := validResult[:len(validResult)-1] + `,"raw":{"nested":[1,true]},"loadedDown":{"low":null,"iqm":4,"high":10},"loadedUp":{"low":1,"iqm":2,"high":3},"server":{"id":1,"name":"a","city":"b","sponsor":"c","host":"test.example"},"engineISP":"isp","engineResultId":"engine-1","engineResultUrl":"https://example.test/result/1","engineIp":"2001:db8::1","warnings":["IP mismatch"]}`
 	if _, err := ParseResult([]byte(full)); err != nil {
 		t.Fatal(err)

@@ -30,6 +30,10 @@ func TestFromText(t *testing.T) {
 	cases := map[string]string{
 		"Too many requests":                 failureclass.RateLimited,
 		"HTTP 429 from provider":            failureclass.RateLimited,
+		"HTTP/2 429 from provider":          failureclass.RateLimited,
+		"provider status_code: 429":         failureclass.RateLimited,
+		"connection refused by server 1429": failureclass.ServerUnreachable,
+		"429":                               failureclass.Other,
 		"speedtest: timeout":                failureclass.Timeout,
 		"context deadline exceeded":         failureclass.Timeout,
 		"speedtest: no_route":               failureclass.NoNetwork,

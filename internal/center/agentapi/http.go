@@ -213,12 +213,17 @@ func (h Handler) results(w http.ResponseWriter, r *http.Request, node string) {
 	for index, item := range batch.Results {
 		result, err := ParseResult(item)
 		outcome := Outcome{Index: index, Outcome: "rejected", Status: 422}
-		// A valid UUID survives unrelated item validation errors.
-		var fields map[string]json.RawMessage
-		var identity string
-		if json.Unmarshal(item, &fields) == nil && json.Unmarshal(fields["id"], &identity) == nil && UUID(identity) {
-			id := strings.ToLower(identity)
+		if err == nil {
+			id := result.ID
 			outcome.ID = &id
+		} else {
+			// A valid UUID survives unrelated item validation errors.
+			var fields map[string]json.RawMessage
+			var identity string
+			if json.Unmarshal(item, &fields) == nil && json.Unmarshal(fields["id"], &identity) == nil && UUID(identity) {
+				id := strings.ToLower(identity)
+				outcome.ID = &id
+			}
 		}
 		if err == nil {
 			var duplicate bool
