@@ -3,6 +3,28 @@
   'use strict';
   var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
   var state = { metric: 'down', mode: 'abs', hidden: {} };
+  var dashboardComparisons = {}, dashboardRequests = {}, dashboardRevision = 0;
+
+  ST.on('settings', function () { dashboardComparisons = {}; dashboardRequests = {}; dashboardRevision++; });
+
+  function comparison(range) {
+    if (ST.demo) return null;
+    var key = range + '|' + ST.selectedEngine;
+    if (dashboardComparisons[key]) return dashboardComparisons[key];
+    if (dashboardRequests[key] || ST.remote.status !== 'ready') return { pending: true };
+    var revision = dashboardRevision;
+    dashboardRequests[key] = true;
+    ST.api.request('/api/dashboard?range=' + encodeURIComponent(range) + ST.engineQuery()).then(function (response) {
+      if (revision !== dashboardRevision) return;
+      dashboardComparisons[key] = { data: response.data };
+      delete dashboardRequests[key]; ST.refresh();
+    }, function (error) {
+      if (revision !== dashboardRevision) return;
+      dashboardComparisons[key] = { error: error };
+      delete dashboardRequests[key]; ST.refresh();
+    });
+    return { pending: true };
+  }
 
   ST.sevInfo = function (sev) {
     return { crit: { cls: 'crit', icon: 'alert', label: 'Critical' }, warn: { cls: 'warn', icon: 'alert', label: 'Warning' }, info: { cls: 'info', icon: 'info', label: 'Info' } }[sev] || { cls: 'info', icon: 'info', label: sev };
@@ -29,16 +51,25 @@
       var ips = S.sum(nodes.map(function (n) { return ST.ipHistory(n.id).changes.filter(function (c) { return c.ts >= a && c.ts <= b && !(n.ipModel && n.ipModel.kind === 'mix'); }).length; }));
       return { down: S.mean(pcts), up: S.mean(upc), ping: S.summary(pings).median, success: allN ? allOk / allN * 100 : null, ips: ips, count: allN };
     }
-    var cur = fleet(from, now), prev = fleet(prevFrom, from);
+    var cur = fleet(from, now), prev = fleet(prevFrom, from), comparisonState = comparison(s.range);
+    if (comparisonState && comparisonState.data) {
+      cur = comparisonState.data.current;
+      prev = comparisonState.data.previous;
+    }
+    function delta(value, previous, goodHigh) {
+      if (comparisonState && comparisonState.pending) return h('span', { class: 'delta flat', role: 'status' }, 'Loading comparison…');
+      if (comparisonState && comparisonState.error) return h('span', { class: 'delta flat', title: 'Refresh the page to retry' }, 'Comparison unavailable');
+      return U.deltaTag(value, previous, goodHigh);
+    }
     var tiles = h('div', { class: 'grid cols-5 mb' });
     function tile(label, icon, value, unit, delta, hint) {
       return h('div', { class: 'card stat', title: hint }, h('div', { class: 'stat-label' }, U.icon(icon, 15), label),
         h('div', { class: 'stat-value tabnum' }, value, unit ? h('small', null, unit) : null), h('div', { style: 'margin-top:2px' }, delta || h('span', { class: 'delta flat' }, ' ')));
     }
-    tiles.appendChild(tile('Download vs. expected', 'down', cur.down == null ? '—' : F.num(cur.down, 0), '%', U.deltaTag(cur.down, prev.down, true), 'Average of each node’s download compared with the speed you expect from it'));
-    tiles.appendChild(tile('Upload vs. expected', 'up', cur.up == null ? '—' : F.num(cur.up, 0), '%', U.deltaTag(cur.up, prev.up, true), 'Average of each node’s upload compared with the speed you expect from it'));
-    tiles.appendChild(tile('Median latency', 'activity', cur.ping == null ? '—' : F.num(cur.ping, 1), 'ms', U.deltaTag(cur.ping, prev.ping, false)));
-    tiles.appendChild(tile('Tests succeeded', 'check', cur.success == null ? '—' : F.num(cur.success, 1), '%', U.deltaTag(cur.success, prev.success, true), F.num(cur.count) + ' tests in this range'));
+    tiles.appendChild(tile('Download vs. expected', 'down', cur.down == null ? '—' : F.num(cur.down, 0), '%', delta(cur.down, prev.down, true), 'Average of each node’s download compared with the speed you expect from it'));
+    tiles.appendChild(tile('Upload vs. expected', 'up', cur.up == null ? '—' : F.num(cur.up, 0), '%', delta(cur.up, prev.up, true), 'Average of each node’s upload compared with the speed you expect from it'));
+    tiles.appendChild(tile('Median latency', 'activity', cur.ping == null ? '—' : F.num(cur.ping, 1), 'ms', delta(cur.ping, prev.ping, false)));
+    tiles.appendChild(tile('Tests succeeded', 'check', cur.success == null ? '—' : F.num(cur.success, 1), '%', delta(cur.success, prev.success, true), F.num(cur.count) + ' tests in this range'));
     tiles.appendChild(tile('IP changes', 'swap', String(cur.ips), cur.ips === 1 ? 'change' : 'changes', h('a', { href: '#/network', class: 'delta flat' }, 'See history')));
     root.appendChild(tiles);
 
@@ -51,7 +82,7 @@
       var failedNow = last && last.status === 'failed';
       var pct = ok ? ok.down / n.expectedDown * 100 : null;
       var statusChip = !n.enabled ? U.chip('Paused', '', 'pause') : failedNow ? U.chip('Last test failed', 'crit', 'x') : (last && last.status === 'degraded') ? U.chip('Degraded', 'warn', 'alert') : U.chip('Online', 'good', 'check');
-      var card = h('article', { class: 'card node-card', tabindex: 0, role: 'link', 'aria-label': 'Open ' + ST.nodeTitle(n), onClick: function (e) { if (e.target.closest('button')) return; location.hash = '#/nodes/' + n.id; },
+      var card = h('article', { class: 'card node-card', tabindex: 0, role: 'link', onClick: function (e) { if (e.target.closest('button')) return; location.hash = '#/nodes/' + n.id; },
         onKeydown: function (e) { if (e.key === 'Enter') location.hash = '#/nodes/' + n.id; } },
         h('div', { class: 'node-top' },
           h('div', null, h('div', { class: 'node-name' }, U.dot(color), n.name, h('span', { style: 'font-weight:500' }, n.label)), h('div', { class: 'node-meta' }, 'Expected ' + F.speed(n.expectedDown) + ' down · ' + F.speed(n.expectedUp) + ' up')),
@@ -126,7 +157,7 @@
         { key: 'down', label: 'Down', num: true, render: function (r) { return F.speed(r.down); } },
         { key: 'up', label: 'Up', num: true, render: function (r) { return F.speed(r.up); } },
         { key: 'ping', label: 'Ping', num: true, render: function (r) { return F.ms(r.ping); } },
-        { key: 'st', label: 'Status', render: function (r) { return U.statusChip(r.status); } }],
+        { key: 'st', label: 'Status', render: U.resultStatus }],
       rows: recent, onRow: function (r) { ST.openResult(r); }
     });
     var evs = ST.events().filter(function (e) { return !e.acked; }).slice(0, 6);

@@ -151,6 +151,11 @@
     if (s === 'failed') return U.chip('Failed', 'crit', 'x');
     return U.chip(s);
   };
+  U.resultStatus = function (result) {
+    if (result.status !== 'failed') return U.statusChip(result.status);
+    return h('span', { class: 'row wrap' }, U.statusChip(result.status),
+      h('span', { class: 'chip crit result-reason' }, U.icon('alert', 12), ST.fmt.failureReason(result.error)));
+  };
   U.dot = function (color) { return h('span', { class: 'dot', style: { background: color } }); };
   U.nodeTag = function (n) { return h('span', { class: 'row', style: 'gap:7px' }, U.dot(ST.nodeColor(n)), h('span', null, n.name), h('span', { class: 'muted' }, n.label)); };
   U.empty = function (title, text, action) { return h('div', { class: 'empty' }, h('h3', null, title), h('p', null, text), action ? h('div', { style: 'margin-top:12px' }, action) : null); };
@@ -260,13 +265,19 @@
       h('i', { style: { width: pct + '%', background: color } }), h('b', { style: { left: (expected / max * 100) + '%' }, title: 'Expected ' + ST.fmt.speed(expected) }));
   };
   U.deltaTag = function (cur, prev, goodHigh) {
-    if (cur == null || prev == null || prev === 0) return h('span', { class: 'delta flat' }, '—');
+    if (cur == null) return h('span', { class: 'delta flat' }, 'No data');
+    if (prev == null) return h('span', { class: 'delta flat' }, 'No previous period');
+    if (prev === 0) return h('span', { class: 'delta flat' }, cur === 0 ? 'No change' : 'New this period');
     var d = (cur - prev) / Math.abs(prev) * 100, flat = Math.abs(d) < 1;
     var good = goodHigh ? d > 0 : d < 0;
-    return h('span', { class: 'delta ' + (flat ? 'flat' : good ? 'up' : 'down') }, flat ? '≈ same' : (d > 0 ? '▲ ' : '▼ ') + Math.abs(d).toFixed(1) + '%');
+    return h('span', { class: 'delta ' + (flat ? 'flat' : good ? 'up' : 'down'), title: 'Compared with the previous period',
+      'aria-label': (flat ? 'About the same' : (d > 0 ? 'Up ' : 'Down ') + Math.abs(d).toFixed(1) + '%') + ' compared with the previous period' },
+    flat ? '≈ same' : (d > 0 ? '▲ ' : '▼ ') + Math.abs(d).toFixed(1) + '%');
   };
   U.rangeSelect = function (value, onChange) {
-    return U.select(Object.keys(ST.ranges).map(function (k) { return { value: k, label: ST.rangeLabels[k] }; }), value, onChange, 'auto');
+    var select = U.select(Object.keys(ST.ranges).map(function (k) { return { value: k, label: ST.rangeLabels[k] }; }), value, onChange, 'auto');
+    select.setAttribute('aria-label', 'Time range');
+    return select;
   };
   U.legend = function (items, hidden, onToggle) {
     var wrap = h('div', { class: 'legend' });

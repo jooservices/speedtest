@@ -87,6 +87,12 @@ export function qualitySuite(T) {
       for (const [hash, title] of ROUTES) {
         await T.open(hash, title);
         await page.waitForLoadState('networkidle');
+        await page.addScriptTag({ url: new URL('/__e2e_axe.js', T.url(hash)).href });
+        const violations = await page.evaluate(async () => {
+          const result = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } });
+          return result.violations.map(rule => ({ id: rule.id, help: rule.help, targets: rule.nodes.map(node => ({ target: node.target, summary: node.failureSummary })) }));
+        });
+        assert.deepEqual(violations, [], `${title}: axe WCAG 2.2 AA violations`);
         const found = await page.evaluate(() => {
           const out = [];
           const name = el => (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || el.textContent || '').trim()
@@ -101,8 +107,10 @@ export function qualitySuite(T) {
         });
         assert.deepEqual(found, [], `${title}: ${found.join('; ')}`);
         await page.keyboard.press('Tab'); await page.keyboard.press('Tab'); await page.keyboard.press('Tab');
-        const focused = await page.evaluate(() => document.activeElement && document.activeElement !== document.body ? document.activeElement.tagName : '');
-        assert.ok(focused, `${title}: Tab does not move focus into the page`);
+        const focused = await page.evaluate(() => ({ tag: document.activeElement && document.activeElement.tagName,
+          visible: !!document.activeElement && document.activeElement.matches(':focus-visible'), outline: getComputedStyle(document.activeElement).outlineStyle }));
+        assert.ok(focused.tag && focused.tag !== 'BODY', `${title}: Tab does not move focus into the page`);
+        assert.ok(focused.visible && focused.outline !== 'none', `${title}: keyboard focus is not visible`);
       }
     },
   };

@@ -33,7 +33,9 @@
     if (!nodes.length) { root.appendChild(U.card(null, null, U.empty('No data yet', 'Add a node to track its public IP address.'))); return; }
     if (q.node !== 'all' && !ST.node(q.node)) q.node = 'all';
     var sel = q.node === 'all' ? nodes : [ST.node(q.node)];
-    root.appendChild(h('div', { class: 'row wrap mb' }, h('span', { class: 'muted' }, 'Show'), U.select([{ value: 'all', label: 'All nodes' }].concat(nodes.map(function (n) { return { value: n.id, label: ST.nodeTitle(n) }; })), q.node, function (v) { q.node = v; ST.refresh(); }, 'auto')));
+    var nodeFilter = U.select([{ value: 'all', label: 'All nodes' }].concat(nodes.map(function (n) { return { value: n.id, label: ST.nodeTitle(n) }; })), q.node, function (v) { q.node = v; ST.refresh(); }, 'auto');
+    nodeFilter.setAttribute('aria-label', 'Show nodes');
+    root.appendChild(h('div', { class: 'row wrap mb' }, h('span', { class: 'muted' }, 'Show'), nodeFilter));
 
     var hist = {}, entries = [], changes = [];
     sel.forEach(function (n) {

@@ -281,6 +281,11 @@
       default: return dtf({ day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(ts);
     }
   };
+  F.failureReason = function (error) {
+    var reason = typeof error === 'string' ? error.replace(/\s+/g, ' ').trim() : '';
+    if (!reason) return 'Reason unavailable';
+    return reason.length > 32 ? reason.slice(0, 31).trimEnd() + '…' : reason;
+  };
   var partsFmt = {};
   F.parts = function (ts) {
     var k = state.settings.timezone;

@@ -197,6 +197,7 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; }
 .chip.warn { background: var(--warn-soft); color: var(--warn); }
 .chip.crit { background: var(--crit-soft); color: var(--crit); }
 .chip.info { background: var(--info-soft); color: var(--accent-strong); }
+.result-reason { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
 .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
 .badge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 99px; background: var(--crit); color: #fff; font-size: 11.5px; font-weight: 700; display: inline-grid; place-items: center; }
 
@@ -411,7 +412,7 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
 .topbar .row.muted { white-space: nowrap; }
 .topbar select { min-width: 8.5em; }
 .leaflet-control-attribution { background: color-mix(in srgb, var(--surface) 88%, transparent) !important; color: var(--text-2) !important; }
-.leaflet-control-attribution a { color: var(--accent-strong) !important; }
+.leaflet-control-attribution a { color: var(--accent-strong) !important; text-decoration: underline; }
 
 /* Tables marked "cards" (the node list) turn each row into a card on phones instead of scrolling sideways. */
 @media (max-width: 640px) {

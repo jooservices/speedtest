@@ -183,9 +183,11 @@
 
     /* ---- heatmap ---- */
     var heatHost = h('div'), matrix = data.heat.matrix, counts = data.heat.counts;
+    var heatNodeSelect = U.select(all.map(function (n) { return { value: n.id, label: ST.nodeTitle(n) }; }), q.heatNode, function (v) { q.heatNode = v; ST.refresh(); }, 'auto');
+    heatNodeSelect.setAttribute('aria-label', 'Heatmap node');
     root.appendChild(h('div', { class: 'mt' }, U.card('Week at a glance', 'Average ' + ST.metrics[m].label.toLowerCase() + ' for each weekday and hour over the last 30 days. Use the scale below the grid.',
       h('div', null, heatHost, h('div', { class: 'heat-legend', style: 'margin-top:10px' }, h('span', null, ST.metrics[m].good === 'high' ? 'Lowest' : 'Lowest'), h('span', { class: 'ramp' }), h('span', null, ST.metrics[m].good === 'high' ? 'Highest' : 'Highest'))),
-      [U.select(all.map(function (n) { return { value: n.id, label: ST.nodeTitle(n) }; }), q.heatNode, function (v) { q.heatNode = v; ST.refresh(); }, 'auto')])));
+      [heatNodeSelect])));
     ST.charts.heat(heatHost, { rows: DAYS, cols: Array.apply(null, Array(24)).map(function (_, i) { return (i < 10 ? '0' : '') + i; }), values: matrix, counts: counts, name: ST.metrics[m].label, format: function (v) { return fmtM(m, v); }, label: 'Heatmap for ' + heatNode.name });
 
     /* ---- distribution ---- */
