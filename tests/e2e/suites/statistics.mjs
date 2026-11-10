@@ -1,6 +1,24 @@
 export function statisticsSuite(T) {
   const { page, stack, assert } = T;
   return {
+    async unavailableTrendExplainsRetry() {
+      const refuseTrend = route => route.fulfill({ status: 500, contentType: 'application/problem+json', body: JSON.stringify({
+        type: '/problems/internal', title: 'Internal Server Error', status: 500, detail: 'Temporary statistics failure.'
+      }) });
+      await page.route('**/api/stats/trend**', refuseTrend);
+      try {
+        await page.goto(T.url('#/stats'));
+        await page.getByRole('heading', { name: 'Statistics are unavailable' }).waitFor();
+        T.expectRefusal(500);
+      } finally {
+        await page.unroute('**/api/stats/trend**', refuseTrend);
+      }
+      await page.reload();
+      await page.getByRole('heading', { name: 'Statistics' }).waitFor();
+      await T.settled();
+      await T.expectNoLoadError();
+    },
+
     // The figures on the page are the center's, not a browser calculation.
     async summaryMatchesApi() {
       await T.open('#/stats', 'Statistics');

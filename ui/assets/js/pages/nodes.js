@@ -26,7 +26,9 @@
         { key: 'seen', label: 'Last test', render: function (r) { return r.last ? F.rel(r.last.ts) : 'Never'; } },
         { key: 'agent', label: 'Agent', render: function (r) { return h('span', { class: 'mono' }, r.n.agent ? 'v' + r.n.agent : '—'); } },
         { key: 'act', label: '', render: function (r) { return h('span', { class: 'row', style: 'justify-content:flex-end' }, U.btn('', { icon: 'play', size: 'sm', title: 'Run a test on ' + r.n.name, onClick: function (e) { e.stopPropagation(); U.runTestDialog([r.n.id]); } })); } }],
-      rows: rows, cards: true, onRow: function (r) { location.hash = '#/nodes/' + r.n.id; }
+      rows: rows, cards: true, onRow: function (r) { location.hash = '#/nodes/' + r.n.id; }, rowAction: {
+        column: 'name', href: function (r) { return '#/nodes/' + r.n.id; }
+      }
     })));
     root.appendChild(h('div', { class: 'mt' }, U.callout('Each node works on its own. It only needs to know how fast its connection should be; it does not need to know what kind of connection it is attached to.', null, 'info')));
   };
@@ -405,7 +407,9 @@
           { key: 'ping', label: 'Ping', num: true, render: function (r) { return F.ms(r.ping); } },
           { key: 'ip', label: 'Public IP', render: function (r) { return h('span', { class: 'mono' }, r.ip); } },
           { key: 'st', label: 'Status', render: U.resultStatus }],
-        rows: recent, onRow: function (r) { ST.openResult(r); } })),
+        rows: recent, onRow: function (r) { ST.openResult(r); }, rowAction: {
+          column: 'ts', label: function (r) { return 'Open result details for ' + n.name + ' at ' + F.date(r.ts); }, onClick: function (r) { ST.openResult(r); }
+        } })),
       [h('a', { class: 'btn sm', href: '#/history' }, 'All results')])));
     }
 

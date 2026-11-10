@@ -38,7 +38,7 @@ Operations: 70. Without a test: 0.
 | exportAllCSV | GET | `/api/export/results.csv` | `internal/center/server/httpx_test.go`<br>`internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | exportAllJSON | GET | `/api/export/results.json` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | getSummary | GET | `/api/stats/summary` | `internal/center/server/httpx_test.go`<br>`internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/e2e/suites/engines.mjs`<br>+3 more |
-| getTrend | GET | `/api/stats/trend` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
+| getTrend | GET | `/api/stats/trend` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/e2e/suites/statistics.mjs`<br>`tests/ui/contract.test.mjs` |
 | getHourOfDay | GET | `/api/stats/hour-of-day` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
 | getHeatmap | GET | `/api/stats/heatmap` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
 | getDistribution | GET | `/api/stats/distribution` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |

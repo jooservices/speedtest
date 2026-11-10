@@ -11,6 +11,9 @@ export function scenarios({ T, S }) {
     { id: 'SC-DASH-05', area: 'dashboard', title: 'the period comparison recovers after a temporary failure', covers: 'comparison error state and refresh retry', run: S.dashboard.comparisonRecoversFromFailure },
     { id: 'SC-DASH-06', area: 'dashboard', title: 'KPI values and previous-period deltas use exact values and directions', covers: 'download, upload, latency, success and IP change values; zero IP baseline', run: S.dashboard.comparesExactKpis },
     { id: 'SC-DASH-07', area: 'dashboard', title: 'Enter opens a node card and its Run button without activating both', covers: 'node card and nested Run keyboard behavior', run: S.dashboard.keyboardCardDoesNotCatchRunEnter },
+    { id: 'SC-DASH-08', area: 'dashboard', title: 'delayed comparison success and failure preserve node edits and focus', covers: 'stale dashboard responses after navigation', run: S.dashboard.delayedComparisonKeepsNodeEdit },
+    { id: 'SC-DASH-09', area: 'dashboard', title: 'result rows open details by row and by named keyboard action', covers: 'dashboard result table row and link actions', run: S.dashboard.dashboardResultActions },
+    { id: 'SC-DASH-10', area: 'dashboard', title: 'dashboard alerts can be acknowledged in demo mode', covers: 'dashboard alert acknowledge action', run: S.dashboard.dashboardAlertCanBeAcknowledgedInDemo },
 
     { id: 'SC-QA-01', area: 'quality', title: 'every page draws real data without console errors', covers: 'all routes', run: S.quality.everyPageDraws },
     { id: 'SC-QA-02', area: 'quality', title: 'every page holds its layout at 390, 768 and 1440 px in both themes', covers: 'responsive layout, themes', run: S.quality.layoutHolds },
@@ -18,6 +21,8 @@ export function scenarios({ T, S }) {
     { id: 'SC-QA-04', area: 'quality', title: 'the theme switch persists', covers: 'theme preference stored on the center', run: S.quality.themeSwitch },
     { id: 'SC-QA-05', area: 'quality', title: 'on a phone the top bar fits one row and remaining actions work in the menu', covers: '390 px top bar, active-node status, theme and sign out menu actions, download icon', run: S.quality.phoneTopBar },
     { id: 'SC-QA-06', area: 'quality', title: 'dashboard and Statistics explain sparse trends and expected lines stay visible', covers: 'zero, one, two and three measurements; engine/node filtering; hidden series; empty and populated expected-speed lines', run: S.nodes.sparseTrendsExplainThreshold },
+    { id: 'SC-QA-07', area: 'quality', title: 'Statistics counts plotted buckets for sparse trends in demo and API modes', covers: 'three samples in one bucket and five samples in two buckets in both modes', run: S.nodes.sparseWarningsCountBuckets },
+    { id: 'SC-QA-08', area: 'quality', title: 'shared UI helpers apply attributes and keep copy and overlay actions operable', covers: 'dataset, node tag, clipboard fallback, modal close and drawer close', run: S.quality.sharedUiActionsAreOperable },
 
     { id: 'SC-NODE-01', area: 'nodes', title: 'the node list opens by keyboard and Enter on Run does not open its row', covers: 'nodes list, detail, row keyboard navigation, nested Run action', run: S.nodes.listSortsAndOpens },
     { id: 'SC-NODE-09', area: 'nodes', title: 'the node list shows download and upload against the expected speed', covers: 'nodes list upload column', run: S.nodes.listShowsUpload },
@@ -33,6 +38,7 @@ export function scenarios({ T, S }) {
 
     { id: 'SC-STAT-01', area: 'statistics', title: 'statistics show the center figures', covers: '/api/stats summary on the page', run: S.statistics.summaryMatchesApi },
     { id: 'SC-STAT-02', area: 'statistics', title: 'every statistics control works', covers: 'metric tabs, chips, combined total, table, heat map, range', run: S.statistics.everyControl },
+    { id: 'SC-STAT-03', area: 'statistics', title: 'statistics explains an API failure and recovers after retry', covers: 'remote statistics failure callback and reload recovery', run: S.statistics.unavailableTrendExplainsRetry },
 
     { id: 'SC-IP-01', area: 'ip', title: 'the map, lookup and address details work', covers: 'map, lookup, details', run: S.network.mapLookupAndDetails },
     { id: 'SC-IP-02', area: 'ip', title: 'the IP page filters by node and lists address changes', covers: 'node filter, change timeline', run: S.network.filterAndHistory },

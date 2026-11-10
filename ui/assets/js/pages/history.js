@@ -57,7 +57,10 @@
           { key: 'ip', label: 'Public IP', sort: true, render: function (r) { return h('span', { class: 'mono' }, r.ip); } },
           { key: 'status', label: 'Status', sort: true, render: U.resultStatus }],
         rows: slice, sortKey: q.sort, sortDir: q.dir, onSort: function (k) { if (q.sort === k) q.dir = q.dir === 'asc' ? 'desc' : 'asc'; else { q.sort = k; q.dir = k === 'ts' ? 'desc' : 'asc'; } draw(); },
-        onRow: function (r) { ST.openResult(r); },
+        onRow: function (r) { ST.openResult(r); }, rowAction: {
+          column: 'ts', label: function (r) { var n = ST.node(r.nodeId); return 'Open result details for ' + (n ? n.name : 'unknown node') + ' at ' + F.date(r.ts); },
+          onClick: function (r) { ST.openResult(r); }
+        },
         empty: U.empty('No results match', 'Try a wider time range or clear some filters.', U.btn('Clear filters', { onClick: function () { q.nodes = nodes.map(function (n) { return n.id; }); q.status = 'all'; q.text = ''; q.minDown = ''; q.maxDown = ''; q.page = 1; ST.refresh(); } }))
       }));
       var pageSize = U.select([10, 25, 50, 100], q.size, function (v) { q.size = +v; q.page = 1; draw(); }, 'auto');
