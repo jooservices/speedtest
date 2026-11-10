@@ -111,10 +111,12 @@
         if (d.pts.length <= 60) d.pts.forEach(function (p) { root.appendChild(svg('circle', { cx: X(p[0]), cy: Y(p[1]), r: 3, fill: d.s.color, stroke: 'var(--surface)', 'stroke-width': 2 })); });
       });
       (o.events || []).forEach(function (event) {
-        var x = X(Date.parse(event.ts));
+        var timestamp = typeof event.ts === 'number' ? event.ts : Date.parse(event.ts);
+        var x = X(timestamp);
         if (!isFinite(x) || x < M.l || x > W - M.r) return;
         var color = event.type === 'alert' ? 'var(--crit)' : event.type === 'isp_change' ? 'var(--warn)' : 'var(--accent)';
-        root.appendChild(svg('line', { x1: x, x2: x, y1: M.t, y2: M.t + plotH, stroke: color, 'stroke-width': 1, 'stroke-dasharray': '3 3', opacity: .7, 'pointer-events': 'none' }));
+        root.appendChild(svg('line', { class: 'stats-event-marker', 'data-event-type': event.type, 'data-event-ts': timestamp,
+          x1: x, x2: x, y1: M.t, y2: M.t + plotH, stroke: color, 'stroke-width': 1, 'stroke-dasharray': '3 3', opacity: .7, 'pointer-events': 'none' }));
         root.appendChild(svg('circle', { cx: x, cy: M.t + 5, r: 3.5, fill: color, 'pointer-events': 'none' }));
       });
       var cross = svg('line', { y1: M.t, y2: M.t + plotH, stroke: 'var(--line-strong)', 'stroke-width': 1, opacity: 0 });

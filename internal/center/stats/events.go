@@ -23,10 +23,10 @@ type EventsResponse struct {
 
 const eventsSQL = `WITH selected_nodes AS (` + selectedNodes + `),
 scoped AS (
- SELECT r.id, r.node_id, r.ts, r.engine,
-        COALESCE(NULLIF(btrim(r.engine_isp),''), NULLIF(btrim(a.geo->>'organisation'),''), '') AS isp
+ SELECT r.id, r.node_id, r.ts, r.engine, r.ip,
+        CASE WHEN NULLIF(btrim(r.engine_isp),'') IS NOT NULL THEN btrim(r.engine_isp)
+             ELSE COALESCE(NULLIF(btrim((SELECT address.geo->>'organisation' FROM ip_addresses address WHERE address.ip=r.ip)),''),'') END AS isp
  FROM results r JOIN selected_nodes n ON n.id=r.node_id
- LEFT JOIN ip_addresses a ON a.ip=r.ip
  WHERE r.ts >= $2 AND r.ts < $3
    AND r.engine=COALESCE(NULLIF($4::text,''),n.primary_engine)
 ),
@@ -42,21 +42,41 @@ prior AS (
    ORDER BY r.ts DESC,r.id DESC LIMIT 1
  ) p ON true
 ),
+prior_ip AS (
+ SELECT g.node_id,g.engine,p.id,p.ts,p.ip
+ FROM window_groups g
+ JOIN LATERAL (
+   SELECT r.id,r.ts,r.ip
+   FROM results r
+   WHERE r.node_id=g.node_id AND r.engine=g.engine AND r.ts < $2 AND r.ip IS NOT NULL
+   ORDER BY r.ts DESC,r.id DESC LIMIT 1
+ ) p ON true
+),
 known AS (
  SELECT id,node_id,engine,ts,isp FROM scoped WHERE isp <> ''
  UNION ALL SELECT id,node_id,engine,ts,isp FROM prior
+),
+known_ip AS (
+ SELECT id,node_id,engine,ts,ip,isp FROM scoped WHERE ip IS NOT NULL
+ UNION ALL SELECT id,node_id,engine,ts,ip,''::text AS isp FROM prior_ip
 ),
 ordered AS (
  SELECT id,node_id,engine,ts,isp,
         lag(isp) OVER (PARTITION BY node_id,engine ORDER BY ts,id) AS previous_isp
  FROM known
 ),
+ordered_ip AS (
+ SELECT id,node_id,engine,ts,ip,isp,
+        lag(ip) OVER (PARTITION BY node_id,engine ORDER BY ts,id) AS previous_ip
+ FROM known_ip
+),
 ip_events AS (
- SELECT h.id::text AS id,h.node_id::text AS node_id,s.ts,
-        'ip_change'::text AS type,'IP '||host(h.from_ip)||' → '||host(h.to_ip) AS label
- FROM node_ip_history h JOIN scoped s ON s.id=h.id
- WHERE h.from_ip IS NOT NULL
-   AND ($5::text='' OR (s.isp <> '' AND lower(s.isp)=lower($5::text)))
+ SELECT id::text,node_id::text,ts,'ip_change'::text AS type,
+        'IP '||host(previous_ip)||' → '||host(ip) AS label
+ FROM ordered_ip
+ WHERE previous_ip IS NOT NULL AND ip <> previous_ip
+   AND ts >= $2 AND ts < $3
+   AND ($5::text='' OR (isp <> '' AND lower(isp)=lower($5::text)))
 ),
 isp_events AS (
  SELECT id::text,node_id::text,ts,'isp_change'::text AS type,

@@ -31,15 +31,18 @@
     var events = [], selected = {};
     sel.forEach(function (node) {
       selected[node.id] = node;
-      var rows = ST.results({ nodeIds: [node.id], engine: ST.selectedEngine || node.primaryEngine || 'ookla' });
-      var previousIP = null, previousISP = null;
+      var engine = ST.selectedEngine || node.primaryEngine || 'ookla';
+      var rows = ST.results({ nodeIds: [node.id], engine: engine }).slice().sort(function (a, b) { return a.ts - b.ts || String(a.id).localeCompare(String(b.id)); });
+      S.ipChanges(rows, engine, from, to).forEach(function (change) {
+        if (ispMatches(change.result, isp)) events.push({ id: 'ip-' + change.result.id, nodeId: node.id, nodeName: node.name,
+          ts: change.result.ts, type: 'ip_change', label: 'IP ' + change.from + ' → ' + change.result.ip });
+      });
+      var previousISP = null;
       rows.forEach(function (result) {
         var effective = S.effectiveISP(result);
         if (result.ts >= from && result.ts < to) {
-          if (previousIP && previousIP !== result.ip && ispMatches(result, isp)) events.push({ id: 'ip-' + result.id, nodeId: node.id, nodeName: node.name, ts: result.ts, type: 'ip_change', label: 'IP ' + previousIP + ' → ' + result.ip });
           if (previousISP && effective && previousISP.toLowerCase() !== effective.toLowerCase() && ispMatches(result, isp)) events.push({ id: 'isp-' + result.id, nodeId: node.id, nodeName: node.name, ts: result.ts, type: 'isp_change', label: 'ISP ' + previousISP + ' → ' + effective });
         }
-        previousIP = result.ip;
         if (effective) previousISP = effective;
       });
     });
@@ -236,8 +239,9 @@
       return h('li', { class: 'stats-event ' + event.type }, h('time', { dateTime: new Date(eventTS).toISOString() }, F.date(eventTS, 'full')),
         h('b', null, node ? node.name : event.nodeId), h('span', { class: 'tag' }, type), h('span', { class: 'stats-event-label' }, event.label));
     });
-    var eventContent = eventRows.length ? h('ol', { class: 'stats-events' }, eventRows) : U.empty('No events in this range', 'IP changes, ISP changes and alert openings will appear here.');
-    if (data.events.truncated) eventContent.insertBefore(h('p', { class: 'stats-truncated', role: 'status' }, 'Showing the newest 500 events. Older events are omitted.'), eventContent.firstChild);
+    var eventContent = h('div', { class: 'stats-events-content' });
+    if (data.events.truncated) eventContent.appendChild(h('p', { class: 'stats-truncated', role: 'status' }, 'Showing the newest 500 events. Older events are omitted.'));
+    eventContent.appendChild(eventRows.length ? h('ol', { class: 'stats-events' }, eventRows) : U.empty('No events in this range', 'IP changes, ISP changes and alert openings will appear here.'));
     root.appendChild(h('div', { class: 'mt' }, U.card('Trend events', 'IP and known ISP changes and alert openings in ' + ST.timezone() + '.', eventContent)));
 
     /* ---- time of day ---- */

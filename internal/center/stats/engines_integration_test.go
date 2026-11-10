@@ -131,6 +131,81 @@ VALUES (gen_random_uuid(),$1,$2,'ok',$3,20,10,1,'{"name":"Fixture"}'::jsonb,'203
 	}
 }
 
+func TestStatisticsIPEventsFollowSelectedEngineAcrossNullsAndWindowEdges(t *testing.T) {
+	pool, ctx, store := openStatsIntegrationStore(t)
+	const firstNode = "00000000-0000-4000-8000-000000000083"
+	const secondNode = "00000000-0000-4000-8000-000000000084"
+	for _, node := range []string{firstNode, secondNode} {
+		if _, err := pool.Exec(ctx, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES ($1,$2,100,20)`, node, node); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO ip_addresses(ip) SELECT ('203.0.113.' || octet)::inet FROM generate_series(1,7) AS octet`); err != nil {
+		t.Fatal(err)
+	}
+	from := time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)
+	to := from.Add(8 * time.Hour)
+	rows := []struct {
+		id, node string
+		offset   time.Duration
+		engine   string
+		ip       any
+	}{
+		{"00000000-0000-4000-8000-000000000831", firstNode, -time.Hour, "ookla", "203.0.113.1"},
+		{"00000000-0000-4000-8000-000000000832", firstNode, 0, "ookla", "203.0.113.1"},
+		{"00000000-0000-4000-8000-000000000833", firstNode, time.Hour, "librespeed", "203.0.113.2"},
+		{"00000000-0000-4000-8000-000000000834", firstNode, 2 * time.Hour, "ookla", "203.0.113.1"},
+		{"00000000-0000-4000-8000-000000000835", firstNode, 3 * time.Hour, "ookla", "203.0.113.1"},
+		{"00000000-0000-4000-8000-000000000836", firstNode, 4 * time.Hour, "librespeed", "203.0.113.2"},
+		{"00000000-0000-4000-8000-000000000837", firstNode, 5 * time.Hour, "ookla", "203.0.113.2"},
+		{"00000000-0000-4000-8000-000000000838", firstNode, 6 * time.Hour, "ookla", nil},
+		{"00000000-0000-4000-8000-000000000839", firstNode, 7 * time.Hour, "ookla", "203.0.113.2"},
+		{"00000000-0000-4000-8000-00000000083a", firstNode, 8 * time.Hour, "ookla", "203.0.113.3"},
+		{"00000000-0000-4000-8000-000000000841", secondNode, -time.Second, "ookla", "203.0.113.4"},
+		{"00000000-0000-4000-8000-000000000842", secondNode, 0, "ookla", "203.0.113.5"},
+		{"00000000-0000-4000-8000-000000000843", secondNode, time.Hour, "ookla", nil},
+		{"00000000-0000-4000-8000-000000000844", secondNode, 2 * time.Hour, "ookla", "203.0.113.6"},
+		{"00000000-0000-4000-8000-000000000845", secondNode, 8 * time.Hour, "ookla", "203.0.113.7"},
+	}
+	for _, row := range rows {
+		seedIPTransitionResult(t, pool, ctx, row.id, row.node, from.Add(row.offset), row.engine, row.ip)
+	}
+	query := Query{NodeIDs: []string{firstNode, secondNode}, NodesSet: true, Engine: "ookla", From: from, To: to}
+	got, err := store.Events(ctx, query)
+	if err != nil || len(got.Items) != 3 || got.Truncated {
+		t.Fatalf("engine-scoped IP events = %+v err=%v", got, err)
+	}
+	want := []Event{
+		{ID: "00000000-0000-4000-8000-000000000837", NodeID: firstNode, TS: from.Add(5 * time.Hour), Type: "ip_change", Label: "IP 203.0.113.1 → 203.0.113.2"},
+		{ID: "00000000-0000-4000-8000-000000000844", NodeID: secondNode, TS: from.Add(2 * time.Hour), Type: "ip_change", Label: "IP 203.0.113.5 → 203.0.113.6"},
+		{ID: "00000000-0000-4000-8000-000000000842", NodeID: secondNode, TS: from, Type: "ip_change", Label: "IP 203.0.113.4 → 203.0.113.5"},
+	}
+	for i := range want {
+		actual, expected := got.Items[i], want[i]
+		if actual.ID != expected.ID || actual.NodeID != expected.NodeID || !actual.TS.Equal(expected.TS) || actual.Type != expected.Type || actual.Label != expected.Label {
+			t.Fatalf("IP event[%d] = %+v, want %+v", i, got.Items[i], want[i])
+		}
+	}
+	query.Engine = "librespeed"
+	otherEngine, err := store.Events(ctx, query)
+	if err != nil || len(otherEngine.Items) != 0 {
+		t.Fatalf("LibreSpeed IP events = %+v err=%v; IP changes from Ookla rows must not leak", otherEngine, err)
+	}
+}
+
+func seedIPTransitionResult(t *testing.T, pool *pgxpool.Pool, ctx context.Context, id, node string, ts time.Time, engine string, ip any) {
+	t.Helper()
+	status, measured, serverID, server, failure := "ok", any(100), any(1), any(`{"name":"Fixture"}`), any(nil)
+	if ip == nil {
+		status, measured, serverID, server, failure = "failed", nil, nil, nil, "fixture failure"
+	}
+	_, err := pool.Exec(ctx, `INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,engine,engine_isp,error)
+VALUES ($1,$2,$3,$4,$5,$5,$5,$6,$7::jsonb,$8,4,$9,'Carrier A',$10)`, id, node, ts, status, measured, serverID, server, ip, engine, failure)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func seedISPResult(t *testing.T, pool *pgxpool.Pool, ctx context.Context, node, id string, ts time.Time, ip, engine, isp string, down float64) {
 	t.Helper()
 	_, err := pool.Exec(ctx, `INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,engine,engine_isp)

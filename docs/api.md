@@ -289,8 +289,11 @@ returns `bins: []` and `count: 0`.
 `GET /api/stats/events` accepts the same `range` or `from`+`to`, `nodes`,
 `engine` and `isp` filters. It returns `data.items` and `data.truncated`; items
 are newest-first with ties ordered by type and ID, capped at 500. A true
-`truncated` value means more matching events exist. IP changes come from
-`node_ip_history` and omit the initial `from_ip = NULL` row. ISP changes compare
+`truncated` value means more matching events exist. IP changes compare
+consecutive known result IPs per node and selected engine, ordered by `(ts,id)`;
+null IPs are skipped and the selected engine's last known predecessor before
+the requested window is included. This avoids treating another engine's IP
+measurement as a transition for the selected engine. ISP changes compare
 consecutive known effective ISPs per node and engine, ordered by `(ts,id)`, and
 include the last known predecessor before the requested window. IP/ISP marks and
 alerts with a `trigger_result_id` use that result's engine and effective ISP.

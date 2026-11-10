@@ -1522,8 +1522,10 @@ paths:
         - Statistics
       summary: Read bounded IP, ISP and alert marks for statistics
       description: Returns the newest 500 marks in stable order (ts descending, then type and id ascending).
-        IP marks exclude initial addresses. ISP marks compare consecutive known effective ISPs per node and
-        engine, including the predecessor before the requested range. An unlinked alert is included only
+        IP marks compare consecutive known result IPs per node and selected engine in timestamp/ID order,
+        skip null IPs and include the selected engine's predecessor before the requested range. ISP marks
+        compare consecutive known effective ISPs per node and engine, including the predecessor before the
+        requested range. An unlinked alert is included only
         without an ISP filter and is labelled engine unknown. truncated is true when more marks match.
         Event labels are plain text.
       security:

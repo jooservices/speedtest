@@ -242,6 +242,7 @@ func TestOwnerStatsValidationStopsBeforeStore(t *testing.T) {
 		{"repeated bins", "/api/stats/distribution?bins=5&bins=6"},
 		{"invalid event range", "/api/stats/events?range=90d"},
 		{"repeated event engine", "/api/stats/events?engine=ookla&engine=librespeed"},
+		{"invalid event nodes", "/api/stats/events?nodes=not-a-node-id"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
