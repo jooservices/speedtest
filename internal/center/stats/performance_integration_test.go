@@ -105,103 +105,95 @@ FROM results WHERE engine='ookla' AND engine_isp='Carrier A' ORDER BY ts,id LIMI
 		t.Fatal("could not generate 600 linked benchmark events")
 	}
 
-	query := Query{NodeIDs: nodeIDs, NodesSet: true, From: start, To: end, PreviousFrom: start.Add(-365 * 24 * time.Hour), PreviousTo: start,
-		Engine: "ookla", ISP: "Carrier A", Metric: Download, Timezone: "UTC", Bucket: "day", Bins: 15}
-	planSQL, planArgs := scopedQuery(query, summarySQL(), nodeIDs, query.From, query.To, query.PreviousFrom, query.PreviousTo)
-	var explainJSON []byte
-	if err := pool.QueryRow(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+planSQL, planArgs...).Scan(&explainJSON); err != nil {
-		t.Fatal("could not explain the summary query")
+	baseQuery := Query{NodeIDs: nodeIDs, NodesSet: true, From: start, To: end, PreviousFrom: start.Add(-365 * 24 * time.Hour), PreviousTo: start,
+		Metric: Download, Timezone: "UTC", Bucket: "day", Bins: 15}
+	filteredQuery := baseQuery
+	filteredQuery.Engine, filteredQuery.ISP = "ookla", "Carrier A"
+	for _, benchmark := range []struct {
+		name  string
+		query Query
+	}{{"primary engine, all ISPs", baseQuery}, {"Ookla, Carrier A", filteredQuery}} {
+		t.Run(benchmark.name, func(t *testing.T) {
+			logStatisticsPlans(t, pool, ctx, benchmark.query, totalSamples)
+			measureStatisticsQueries(t, store, ctx, benchmark.query, nodeIDs[0], nodeCount, totalSamples, end)
+		})
 	}
-	var explained []struct {
-		Plan struct {
-			NodeType     string       `json:"Node Type"`
-			RelationName string       `json:"Relation Name"`
-			IndexName    string       `json:"Index Name"`
-			Plans        []planDetail `json:"Plans"`
-		} `json:"Plan"`
-		ExecutionTime float64 `json:"Execution Time"`
+}
+
+func logStatisticsPlans(t *testing.T, pool *pgxpool.Pool, ctx context.Context, q Query, totalSamples int) {
+	t.Helper()
+	summarySQLText, summaryArgs := scopedQuery(q, summarySQL(), q.NodeIDs, q.From, q.To, q.PreviousFrom, q.PreviousTo)
+	logStatisticsPlan(t, pool, ctx, "summary", summarySQLText, summaryArgs, totalSamples)
+	logStatisticsPlan(t, pool, ctx, "events", eventsSQL, []any{q.NodeIDs, q.From, q.To, q.Engine, q.ISP}, totalSamples)
+}
+
+func logStatisticsPlan(t *testing.T, pool *pgxpool.Pool, ctx context.Context, name, sql string, args []any, totalSamples int) {
+	t.Helper()
+	var raw []byte
+	if err := pool.QueryRow(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+sql, args...).Scan(&raw); err != nil {
+		t.Fatalf("could not explain the %s query: %v", name, err)
 	}
-	if err := json.Unmarshal(explainJSON, &explained); err != nil || len(explained) != 1 {
-		t.Fatalf("invalid EXPLAIN JSON: %v", err)
-	}
-	var nodesSeen []string
-	var visit func(planDetail)
-	visit = func(node planDetail) {
-		label := node.NodeType
-		if node.RelationName != "" {
-			label += " on " + node.RelationName
-		}
-		if node.IndexName != "" {
-			label += " using " + node.IndexName
-		}
-		nodesSeen = append(nodesSeen, label)
-		for _, child := range node.Plans {
-			visit(child)
-		}
-	}
-	visit(planDetail{NodeType: explained[0].Plan.NodeType, RelationName: explained[0].Plan.RelationName, IndexName: explained[0].Plan.IndexName, Plans: explained[0].Plan.Plans})
-	if !containsRelation(nodesSeen, "results") {
-		t.Fatalf("EXPLAIN did not scan results: %v", nodesSeen)
-	}
-	t.Logf("EXPLAIN summary on %d results: %.2f ms; %v", totalSamples, explained[0].ExecutionTime, nodesSeen)
-	var eventExplain []byte
-	if err := pool.QueryRow(ctx, "EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) "+eventsSQL, nodeIDs, query.From, query.To, query.Engine, query.ISP).Scan(&eventExplain); err != nil {
-		t.Fatalf("could not explain the bounded events query: %v", err)
-	}
-	var eventPlan []struct {
+	var plans []struct {
 		ExecutionTime float64    `json:"Execution Time"`
 		Plan          planDetail `json:"Plan"`
 	}
-	if err := json.Unmarshal(eventExplain, &eventPlan); err != nil || len(eventPlan) != 1 {
-		t.Fatalf("invalid events EXPLAIN JSON: %v", err)
+	if err := json.Unmarshal(raw, &plans); err != nil || len(plans) != 1 {
+		t.Fatalf("invalid %s EXPLAIN JSON: %v", name, err)
 	}
-	var eventScans []string
-	appendPlanScans(eventPlan[0].Plan, &eventScans)
-	t.Logf("EXPLAIN events (ANALYZE, BUFFERS) on %d results and 600 alerts: %.2f ms; shared hits=%d reads=%d; scans=%v",
-		totalSamples, eventPlan[0].ExecutionTime, eventPlan[0].Plan.SharedHitBlocks, eventPlan[0].Plan.SharedReadBlocks, eventScans)
+	var scans []string
+	appendPlanScans(plans[0].Plan, &scans)
+	if name == "summary" && !containsRelation(scans, "results") {
+		t.Fatalf("summary EXPLAIN did not scan results: %v", scans)
+	}
+	t.Logf("EXPLAIN %s (ANALYZE, BUFFERS) on %d results: %.2f ms; hits=%d reads=%d; scans=%v",
+		name, totalSamples, plans[0].ExecutionTime, plans[0].Plan.SharedHitBlocks, plans[0].Plan.SharedReadBlocks, scans)
+}
 
+func measureStatisticsQueries(t *testing.T, store *Store, ctx context.Context, q Query, heatNode string, nodeCount, totalSamples int, end time.Time) {
+	t.Helper()
 	measure := func(name string, run func() error) {
 		t.Helper()
-		best, samples, err := bestStatisticsLatency(run, time.Now)
+		p50, p95, samples, err := statisticsLatency(run, time.Now)
 		if err != nil {
 			t.Fatalf("%s query failed: %v", name, err)
 		}
-		t.Logf("PERF %s: best %.2f ms of %d runs on %d results; samples=%v", name, float64(best)/float64(time.Millisecond), len(samples), totalSamples, samples)
-		if best >= 300*time.Millisecond {
-			t.Fatalf("%s best of %d took %s, target is under 300 ms; samples=%v", name, len(samples), best, samples)
+		t.Logf("PERF %s: p50 %.2f ms, p95 %.2f ms of %d runs on %d results; samples=%v",
+			name, float64(p50)/float64(time.Millisecond), float64(p95)/float64(time.Millisecond), len(samples), totalSamples, samples)
+		if p50 >= 300*time.Millisecond || p95 >= 300*time.Millisecond {
+			t.Fatalf("%s p50=%s p95=%s; both must stay under 300 ms", name, p50, p95)
 		}
 	}
 	var summary []SummaryComparison
-	measure("summary", func() error { var err error; summary, err = store.Summary(ctx, query); return err })
+	measure("summary", func() error { var err error; summary, err = store.Summary(ctx, q); return err })
 	if len(summary) != nodeCount {
 		t.Fatalf("summary returned %d nodes, want %d", len(summary), nodeCount)
 	}
-	trendQuery := query
+	trendQuery := q
 	trendQuery.From, trendQuery.To = end.Truncate(24*time.Hour).Add(-299*24*time.Hour), end
 	var trend []Series
 	measure("daily trend (300 buckets)", func() error { var err error; trend, err = store.Trend(ctx, trendQuery); return err })
 	if len(trend) != nodeCount || len(trend[0].Points) > 300 {
 		t.Fatalf("trend returned %d series / %d points", len(trend), len(trend[0].Points))
 	}
-	var hourSeries []HourSeries
-	measure("hour-of-day", func() error { var err error; hourSeries, err = store.HourOfDay(ctx, query); return err })
-	if len(hourSeries) != nodeCount || len(hourSeries[0].Hours) != 24 {
-		t.Fatalf("hour-of-day returned %d series", len(hourSeries))
+	var hours []HourSeries
+	measure("hour-of-day", func() error { var err error; hours, err = store.HourOfDay(ctx, q); return err })
+	if len(hours) != nodeCount || len(hours[0].Hours) != 24 {
+		t.Fatalf("hour-of-day returned %d series", len(hours))
 	}
-	heatQuery := query
+	heatQuery := q
 	heatQuery.From, heatQuery.To = end.Add(-30*24*time.Hour), end
 	var heatmap Heatmap
-	measure("heatmap", func() error { var err error; heatmap, err = store.Heatmap(ctx, heatQuery, nodeIDs[0]); return err })
+	measure("heatmap", func() error { var err error; heatmap, err = store.Heatmap(ctx, heatQuery, heatNode); return err })
 	if len(heatmap.Cells) != 168 {
 		t.Fatalf("heatmap returned %d cells", len(heatmap.Cells))
 	}
 	var distributions []Distribution
-	measure("distribution", func() error { var err error; distributions, err = store.Distribution(ctx, query); return err })
-	if len(distributions) != nodeCount || len(distributions[0].Bins) != query.Bins {
+	measure("distribution", func() error { var err error; distributions, err = store.Distribution(ctx, q); return err })
+	if len(distributions) != nodeCount || len(distributions[0].Bins) != q.Bins {
 		t.Fatalf("distribution returned %d nodes / %d bins", len(distributions), len(distributions[0].Bins))
 	}
 	var events EventsResponse
-	measure("events (600 linked alerts)", func() error { var err error; events, err = store.Events(ctx, query); return err })
+	measure("events (600 linked alerts)", func() error { var err error; events, err = store.Events(ctx, q); return err })
 	if len(events.Items) != MaxEvents || !events.Truncated {
 		t.Fatalf("events returned %d items, truncated=%t; want %d and true", len(events.Items), events.Truncated, MaxEvents)
 	}
@@ -307,16 +299,23 @@ type planDetail struct {
 	RelationName     string       `json:"Relation Name"`
 	IndexName        string       `json:"Index Name"`
 	ActualTime       float64      `json:"Actual Total Time"`
+	ActualRows       float64      `json:"Actual Rows"`
+	ActualLoops      float64      `json:"Actual Loops"`
 	SharedHitBlocks  int          `json:"Shared Hit Blocks"`
 	SharedReadBlocks int          `json:"Shared Read Blocks"`
 	Plans            []planDetail `json:"Plans"`
 }
 
 func appendPlanScans(plan planDetail, scans *[]string) {
-	if plan.IndexName != "" {
-		*scans = append(*scans, fmt.Sprintf("%s on %s via %s (%.2f ms, hits=%d, reads=%d)",
-			plan.NodeType, plan.RelationName, plan.IndexName, plan.ActualTime, plan.SharedHitBlocks, plan.SharedReadBlocks))
+	label := plan.NodeType
+	if plan.RelationName != "" {
+		label += " on " + plan.RelationName
 	}
+	if plan.IndexName != "" {
+		label += " via " + plan.IndexName
+	}
+	*scans = append(*scans, fmt.Sprintf("%s (%.2f ms rows=%.0f loops=%.0f hits=%d reads=%d)",
+		label, plan.ActualTime, plan.ActualRows, plan.ActualLoops, plan.SharedHitBlocks, plan.SharedReadBlocks))
 	for _, child := range plan.Plans {
 		appendPlanScans(child, scans)
 	}

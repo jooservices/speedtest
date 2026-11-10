@@ -76,7 +76,7 @@ integration secrets cannot be decrypted.
 
 ## Statistics analytics
 
-Statistics use the existing results, IP history, cached geolocation and alert
+Statistics use the existing results, cached geolocation and alert
 tables; this feature adds no schema objects. The events endpoint returns at most
 500 newest matching marks and sets `truncated` when more exist. ISP attribution
 uses the current cached IP organisation when the test engine did not report an
@@ -84,11 +84,14 @@ ISP, so refreshing cached geolocation can change historical attribution. The UI
 labels this source and explains that unknown ISP rows are excluded by a filter.
 
 The guarded `TestStatisticsQueriesMeetLatencyTargetOnOneYearDataset` integration
-test covers five analytics queries and event marks against 87,600 synthetic
-results, two engines, two ISPs and 600 linked alerts; it logs five measured
-samples per operation and `EXPLAIN (ANALYZE, BUFFERS)` plans for summary and
-events. Run it on the disposable worktree/test database only. A rollback is a
-code rollback; no database migration is involved.
+test measures all five analytics queries and event marks against 87,600 synthetic
+results, two engines, two ISPs and 600 linked alerts, for both the default
+primary-engine/all-ISP query and a selective Ookla/Carrier A query. Five samples
+are logged per operation; the empirical p50 and p95 (the maximum of five
+samples for p95) must both stay below 300 ms. The test logs
+`EXPLAIN (ANALYZE, BUFFERS)` plans for summary and events in both filter cases.
+Run it on the disposable worktree/test database only. A rollback is a code
+rollback; no database migration is involved.
 
 ## Capacity
 

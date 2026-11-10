@@ -111,7 +111,12 @@ export function statisticsSuite(T) {
         FROM generate_series(1,501) AS generated(g)`);
       await page.reload(); await T.heading('Statistics').waitFor();
       await T.see('Showing the newest 500 events. Older events are omitted.');
-      assert.equal(await page.locator('.stats-events li').count(), 500);
+      const eventStatus = page.getByRole('status').filter({ hasText: 'Showing the newest 500 events' });
+      const eventList = page.locator('.stats-events');
+      assert.equal(await eventStatus.count(), 1);
+      assert.equal(await eventStatus.locator('xpath=ancestor::ol').count(), 0, 'the truncation status is outside the list in the accessibility tree');
+      assert.equal(await eventList.getByRole('listitem').count(), 500);
+      assert.equal(await eventList.locator(':scope > .stats-truncated').count(), 0, 'the ordered list contains only list items');
       await T.expectNoLoadError();
     },
 
@@ -138,6 +143,23 @@ export function statisticsSuite(T) {
       await T.heading('Statistics').waitFor();
       await page.getByRole('heading', { name: 'Week over week' }).waitFor();
       for (const percentile of ['P50', 'P95', 'P99']) await page.getByRole('columnheader', { name: new RegExp(percentile) }).first().waitFor();
+      const demoEvents = await page.locator('.stats-event').evaluateAll(rows => rows.map(row => ({
+        type: ['ip_change', 'isp_change', 'alert'].find(type => row.classList.contains(type)),
+        ts: Date.parse(row.querySelector('time').dateTime),
+      })));
+      for (const type of ['ip_change', 'isp_change', 'alert']) assert.ok(demoEvents.some(event => event.type === type), `demo event list omitted ${type}`);
+      const trend = page.locator('.card').filter({ has: page.getByRole('heading', { name: 'Trend', exact: true }) });
+      const chart = trend.locator('svg');
+      const viewBoxWidth = Number((await chart.getAttribute('viewBox')).split(/\s+/)[2]);
+      const markers = await chart.locator('line.stats-event-marker').evaluateAll(lines => lines.map(line => ({
+        type: line.getAttribute('data-event-type'), ts: Number(line.getAttribute('data-event-ts')),
+        x1: Number(line.getAttribute('x1')), x2: Number(line.getAttribute('x2')),
+      })));
+      assert.deepEqual(markers.map(({ type, ts }) => ({ type, ts })), demoEvents, 'the SVG renders every numeric-epoch demo event with its type and timestamp');
+      for (const marker of markers) {
+        assert.ok(Number.isFinite(marker.x1) && marker.x1 > 52 && marker.x1 < viewBoxWidth - 14, `event marker has an in-range x coordinate: ${marker.x1}`);
+        assert.equal(marker.x1, marker.x2, 'event marker is vertical at its calculated timestamp position');
+      }
       const shotDir = '.tmp/e2e/joost-81'; mkdirSync(shotDir, { recursive: true });
       for (const theme of ['dark', 'light']) {
         if ((await page.locator('html').getAttribute('data-theme')) !== theme) await T.press('Toggle theme');

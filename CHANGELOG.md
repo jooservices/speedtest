@@ -13,6 +13,9 @@ All notable changes to Speedtest are recorded here. The format follows
 - Optional two-factor sign-in with an authenticator app (TOTP) and ten one-time recovery codes, in Settings > Access; the operator command `disable-2fa` is the recovery path.
 - Geolocation: ipwho.is, ipapi.co and ipgeolocation.io providers (off by default), consensus mode, and a built-in monthly DB-IP Lite database updater.
 
+### Fixed
+- Statistics trend markers render numeric demo timestamps; IP transitions are scoped to known results for the selected engine.
+
 ## [1.0.0] - 2026-11-06
 
 First production release: command center, agents, web UI, alerts and notifications, audit log, Sentry error tracking,

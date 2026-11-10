@@ -164,6 +164,16 @@
     return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
   };
   S.effectiveISP = effectiveISP;
+  S.ipChanges = function (results, engine, from, to) {
+    var previous = null, changes = [];
+    results.filter(function (result) { return (result.engine || 'ookla') === engine && result.ip != null; })
+      .slice().sort(function (a, b) { return a.ts - b.ts || String(a.id).localeCompare(String(b.id)); })
+      .forEach(function (result) {
+        if (previous && result.ts >= from && result.ts < to && previous.ip !== result.ip) changes.push({ result: result, from: previous.ip });
+        previous = result;
+      });
+    return changes;
+  };
   S.weekChange = function (current, previous) {
     return current == null || previous == null || previous === 0 ? null : (current - previous) / previous * 100;
   };
