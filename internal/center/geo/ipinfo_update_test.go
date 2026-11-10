@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -40,6 +41,94 @@ func TestIPInfoUpdateRejectsInvalidDatabaseWithoutLeakingToken(t *testing.T) {
 	}
 }
 
+func TestIPInfoDownloadRejectsUnsafeOriginsAndFailedResponses(t *testing.T) {
+	for _, origin := range []string{"://invalid", "http://example.test/database", "https://user:pass@example.test/database", "https://example.test/database#fragment"} {
+		r := &Reader{cfg: Config{IPInfoURL: origin, IPInfoToken: "test-token"}}
+		if _, err := r.downloadIPInfo(context.Background()); err == nil {
+			t.Errorf("unsafe origin %q was accepted", origin)
+		}
+	}
+	status := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	r := &Reader{cfg: Config{IPInfoURL: status.URL, IPInfoToken: "test-token"}}
+	if _, err := r.downloadIPInfo(context.Background()); err == nil {
+		t.Fatal("non-success HTTP status was accepted")
+	}
+	status.Close()
+	badContextReader := &Reader{cfg: Config{IPInfoURL: "http://127.0.0.1/database"}}
+	//nolint:staticcheck // Exercise net/http's nil-context rejection; production callers pass valid contexts.
+	_, err := badContextReader.downloadIPInfo(nil)
+	if err == nil || !strings.Contains(err.Error(), "cannot create") {
+		t.Fatalf("nil request context error = %v", err)
+	}
+	if _, err := r.downloadIPInfo(context.Background()); err == nil {
+		t.Fatal("transport failure was accepted")
+	}
+	truncated := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		conn, rw, err := w.(http.Hijacker).Hijack()
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		_, _ = fmt.Fprint(rw, "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nx")
+		_ = rw.Flush()
+		_ = conn.Close()
+	}))
+	defer truncated.Close()
+	r.cfg.IPInfoURL = truncated.URL
+	if _, err := r.downloadIPInfo(context.Background()); err == nil {
+		t.Fatal("truncated database response was accepted")
+	}
+}
+
+func TestReaderLookupReturnsClosedDatabaseErrors(t *testing.T) {
+	cityPath, asnPath, infoPath := writeGeoFixture(t, "City"), writeGeoFixture(t, "ASN"), writeGeoFixture(t, "IPinfo")
+	cases := []struct {
+		name   string
+		config Config
+		close  func(*Reader) error
+		ip     string
+		want   string
+	}{
+		{name: "city", config: Config{CityPath: cityPath, ASNPath: asnPath}, close: func(r *Reader) error { return r.city.Close() }, ip: "81.2.69.160", want: "city lookup failed"},
+		{name: "ASN", config: Config{CityPath: cityPath, ASNPath: asnPath}, close: func(r *Reader) error { return r.asn.Close() }, ip: "1.0.0.1", want: "ASN lookup failed"},
+		{name: "IPinfo", config: Config{CityPath: cityPath, ASNPath: asnPath, IPInfoPath: infoPath}, close: func(r *Reader) error { return r.info.Close() }, ip: "1.1.1.1", want: "IPinfo Lite database lookup failed"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := Open(tc.config, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = r.Close() }()
+			if err := tc.close(r); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := r.Lookup(context.Background(), tc.ip); err == nil || err.Error() != tc.want {
+				t.Fatalf("Lookup error = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func writeGeoFixture(t *testing.T, kind string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), strings.ToLower(kind)+".mmdb")
+	if err := os.WriteFile(path, fixture(t, kind), 0600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestParseIPInfoLiteRecordRejectsEmptyAndInvalidRecords(t *testing.T) {
+	for _, tc := range []struct{ country, asn, name string }{
+		{}, {asn: "AS0"}, {asn: "not-an-asn"},
+	} {
+		if got, err := parseIPInfoLiteRecord(tc.country, tc.asn, tc.name); !errors.Is(err, ErrNotFound) || !emptyLocation(got) {
+			t.Errorf("parseIPInfoLiteRecord(%q,%q,%q) = %+v, %v", tc.country, tc.asn, tc.name, got, err)
+		}
+	}
+}
+
 func TestIPInfoRedirectUsesHTTPSWithoutForwardingToken(t *testing.T) {
 	origin, err := url.Parse("https://ipinfo.io/data/ipinfo_lite.mmdb")
 	if err != nil {
@@ -59,12 +148,7 @@ func TestIPInfoRedirectUsesHTTPSWithoutForwardingToken(t *testing.T) {
 
 func ipInfoDatabase(t *testing.T) []byte {
 	t.Helper()
-	data := fixture(t, "City")
-	const source, replacement = "GeoIP2-City", "IPinfo Lite"
-	if len(source) != len(replacement) || !bytes.Contains(data, []byte(source)) {
-		t.Fatal("unexpected MaxMind fixture metadata")
-	}
-	return bytes.Replace(data, []byte(source), []byte(replacement), 1)
+	return fixture(t, "IPinfo")
 }
 
 func TestIPInfoUpdateInstallsVerifiedDatabase(t *testing.T) {
@@ -93,6 +177,81 @@ func TestIPInfoUpdateInstallsVerifiedDatabase(t *testing.T) {
 		t.Fatalf("second update should replace and close the prior reader: %v", err)
 	}
 	_ = r.Close()
+}
+
+func TestReaderUsesVendorIPInfoLiteSchemaAndKeepsOfflineDataOnFailure(t *testing.T) {
+	dir := t.TempDir()
+	infoPath := filepath.Join(dir, "ipinfo.mmdb")
+	if err := os.WriteFile(infoPath, ipInfoDatabase(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	infoOnly, err := Open(Config{IPInfoPath: infoPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := infoOnly.Lookup(context.Background(), "1.1.1.1")
+	if err != nil || got.Country != "AU" || got.ASN != 13335 || got.Organisation != "Cloudflare, Inc." ||
+		got.FieldSources.Country != "ipinfo-lite-mmdb" || got.FieldSources.ASN != "ipinfo-lite-mmdb" {
+		t.Fatalf("vendor IPinfo Lite record = %+v, %v", got, err)
+	}
+	_ = infoOnly.Close()
+
+	cityPath, asnPath := filepath.Join(dir, "city.mmdb"), filepath.Join(dir, "asn.mmdb")
+	if err := os.WriteFile(cityPath, fixture(t, "City"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(asnPath, fixture(t, "ASN"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	offline, err := Open(Config{CityPath: cityPath, ASNPath: asnPath, IPInfoPath: infoPath}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = offline.Close() }()
+	if err := offline.info.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err = offline.Lookup(context.Background(), "1.0.0.1")
+	if err != nil || got.ASN != 15169 || got.FieldSources.ASN != GeoLiteSource {
+		t.Fatalf("offline result was lost after supplemental lookup failure: %+v, %v", got, err)
+	}
+}
+
+func TestLoadIPInfoRequiresVerifiedLiteDatabase(t *testing.T) {
+	if loadIPInfo("") != nil || loadIPInfo(filepath.Join(t.TempDir(), "missing.mmdb")) != nil {
+		t.Fatal("empty or missing IPinfo database path was accepted")
+	}
+	wrongEdition := filepath.Join(t.TempDir(), "city.mmdb")
+	if err := os.WriteFile(wrongEdition, fixture(t, "City"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if db := loadIPInfo(wrongEdition); db != nil {
+		_ = db.Close()
+		t.Fatal("GeoLite City database was accepted as IPinfo Lite")
+	}
+	path := filepath.Join(t.TempDir(), "ipinfo.mmdb")
+	if err := os.WriteFile(path, ipInfoDatabase(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+	db := loadIPInfo(path)
+	if db == nil {
+		t.Fatal("verified IPinfo Lite database was rejected")
+	}
+	_ = db.Close()
+}
+
+func TestDecodeIPInfoRejectsInvalidAndWrongEditionDatabases(t *testing.T) {
+	if db, err := decodeIPInfo([]byte("not an MMDB")); err == nil || db != nil {
+		t.Fatalf("invalid MMDB decode = (%v,%v)", db, err)
+	}
+	if db, err := decodeIPInfo(fixture(t, "City")); err == nil || db != nil {
+		t.Fatalf("GeoLite City decode = (%v,%v)", db, err)
+	}
+	db, err := decodeIPInfo(ipInfoDatabase(t))
+	if err != nil || db == nil {
+		t.Fatalf("vendor IPinfo Lite decode = (%v,%v)", db, err)
+	}
+	_ = db.Close()
 }
 
 func TestIPInfoInstallFailuresAndNoopScheduling(t *testing.T) {

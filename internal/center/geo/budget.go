@@ -12,6 +12,7 @@ const backgroundReserve = 0.2
 func NewBudgetBroker(cfg ProviderConfig, store budget.Store) (*budget.Broker, error) {
 	limits := map[string]budget.Limit{
 		"ip-api":        {PerMinute: cfg.IPAPIRequestsPerMinute, PerDay: cfg.IPAPIRequestsPerDay},
+		"ip-api-batch":  {PerMinute: 15, MinuteWindow: true},
 		"ipinfo-lite":   {PerMinute: cfg.IPInfoRequestsPerMinute, PerDay: cfg.IPInfoRequestsPerDay},
 		"ipwho":         {PerMinute: cfg.IPWhoRequestsPerMinute, PerDay: cfg.IPWhoRequestsPerDay},
 		"ipapi-co":      {PerMinute: cfg.IPAPICoRequestsPerMinute, PerDay: cfg.IPAPICoRequestsPerDay},

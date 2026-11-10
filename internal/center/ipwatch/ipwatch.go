@@ -195,6 +195,10 @@ func (w *Watcher) resolveUnlocated(ctx context.Context, tx pgx.Tx, node, resultI
 	resolver := geo.NewResolver(boundCache{Cache: geo.NewPostgresCache(tx), ip: ip}, w.Offline, w.Fallbacks...).
 		WithPurpose(budget.Background).WithHighValue(true).WithConsensus(w.Consensus, w.Logger)
 	if _, err := resolver.Lookup(ctx, ip); err != nil {
+		if errors.Is(err, geo.ErrBudgetExhausted) {
+			w.logger().InfoContext(ctx, "public IP location lookup deferred until provider quota is available", "node_id", node, "result_id", resultID)
+			return nil
+		}
 		if !errors.Is(err, geo.ErrNotFound) {
 			return err
 		}

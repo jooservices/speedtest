@@ -155,9 +155,6 @@ func (r *Resolver) offlineCandidate(ctx context.Context, ip string, best Locatio
 
 func (r *Resolver) lookupProviders(ctx context.Context, ip string, best Location, bestSource string, bestScore int) (Location, error) {
 	providers := r.fallbacks
-	if !r.highValue && len(providers) > 1 {
-		providers = providers[:1]
-	}
 	if r.consensus && r.highValue && len(providers) > 1 {
 		if bestScore > 0 {
 			if _, err := r.store(ctx, ip, best, bestSource); err != nil {
@@ -303,13 +300,25 @@ func (c *PostgresCache) Merge(ctx context.Context, ip string, location Location,
 		}
 		existing.AgeDays = max(0, int(time.Since(lookedUpAt).Hours()/24))
 	}
+	baseline, baselineSource := MergeLocations(Location{}, "", existing, oldSource)
 	merged, mergedSource := MergeLocations(existing, oldSource, location, source)
-	merged.QualityScore = QualityScore(merged, mergedSource, 0)
+	refreshed := (!lookedUp && !emptyLocation(merged)) || !sameLocationData(baseline, merged) || baselineSource != mergedSource
+	var lastObserved any
+	if lookedUp {
+		lastObserved = lookedUpAt
+	}
+	if refreshed {
+		lastObserved = time.Now().UTC()
+		merged.AgeDays = 0
+	} else if lookedUp {
+		merged.AgeDays = max(0, int(time.Since(lookedUpAt).Hours()/24))
+	}
+	merged.QualityScore = QualityScore(merged, mergedSource, merged.AgeDays)
 	data, err := json.Marshal(merged)
 	if err != nil {
 		return Location{}, "", errors.New("cannot encode geolocation")
 	}
-	_, err = tx.Exec(ctx, `UPDATE ip_addresses SET geo=$2::jsonb,source=$3,looked_up_at=$4 WHERE ip=$1::inet`, ip, data, mergedSource, time.Now().UTC())
+	_, err = tx.Exec(ctx, `UPDATE ip_addresses SET geo=$2::jsonb,source=$3,looked_up_at=$4 WHERE ip=$1::inet`, ip, data, mergedSource, lastObserved)
 	if err != nil {
 		return Location{}, "", errors.New("cannot persist geolocation")
 	}
@@ -317,4 +326,10 @@ func (c *PostgresCache) Merge(ctx context.Context, ip string, location Location,
 		return Location{}, "", errors.New("cannot commit geolocation cache")
 	}
 	return merged, mergedSource, nil
+}
+
+func sameLocationData(a, b Location) bool {
+	a.AgeDays, b.AgeDays = 0, 0
+	a.QualityScore, b.QualityScore = 0, 0
+	return a == b
 }

@@ -39,14 +39,15 @@ func QualityScore(location Location, source string, ageDays int) int {
 // MergeLocations fills gaps and replaces a field only when its incoming source ranks higher.
 func MergeLocations(existing Location, existingSource string, incoming Location, incomingSource string) (Location, string) {
 	sources := mapsForMerge(existing, existingSource)
-	mergeText(&existing.City, incoming.City, "city", sources, incomingSource)
-	mergeText(&existing.Region, incoming.Region, "region", sources, incomingSource)
-	mergeText(&existing.Country, incoming.Country, "country", sources, incomingSource)
-	mergeText(&existing.TimeZone, incoming.TimeZone, "time_zone", sources, incomingSource)
-	mergeText(&existing.Organisation, incoming.Organisation, "organisation", sources, incomingSource)
-	mergeCoordinates(&existing, incoming, sources, incomingSource)
-	mergeASN(&existing.ASN, incoming.ASN, sources, incomingSource)
-	mergeRadius(&existing.AccuracyRadius, incoming.AccuracyRadius, sources, incomingSource)
+	incomingSources := mapsForMerge(incoming, incomingSource)
+	mergeText(&existing.City, incoming.City, "city", sources, incomingSources["city"])
+	mergeText(&existing.Region, incoming.Region, "region", sources, incomingSources["region"])
+	mergeText(&existing.Country, incoming.Country, "country", sources, incomingSources["country"])
+	mergeText(&existing.TimeZone, incoming.TimeZone, "time_zone", sources, incomingSources["time_zone"])
+	mergeText(&existing.Organisation, incoming.Organisation, "organisation", sources, incomingSources["organisation"])
+	mergeCoordinates(&existing, incoming, sources, incomingSources["coordinates"])
+	mergeASN(&existing.ASN, incoming.ASN, sources, incomingSources["asn"])
+	mergeRadius(&existing.AccuracyRadius, incoming.AccuracyRadius, sources, incomingSources["accuracy_radius"])
 	existing.FieldSources = fieldSources(sources)
 	source := mergedSource(sources, existingSource, incomingSource)
 	existing.QualityScore = QualityScore(existing, source, existing.AgeDays)
@@ -133,6 +134,9 @@ func sourceRank(source string) int {
 }
 
 func mergedSource(sources map[string]string, existing, incoming string) string {
+	if existing == "" && strings.HasPrefix(incoming, "consensus:") {
+		return incoming
+	}
 	if len(sources) == 0 {
 		return firstSource(existing, incoming)
 	}

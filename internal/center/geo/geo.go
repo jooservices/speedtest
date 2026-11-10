@@ -205,19 +205,33 @@ func (r *Reader) Lookup(ctx context.Context, address string) (Location, error) {
 	if r.info != nil {
 		var record struct {
 			CountryCode string `maxminddb:"country_code"`
-			ASN         uint   `maxminddb:"asn"`
+			ASN         string `maxminddb:"asn"`
 			ASName      string `maxminddb:"as_name"`
 		}
 		if err := r.info.Lookup(ip, &record); err != nil {
-			return Location{}, errors.New("IPinfo Lite database lookup failed")
+			if emptyLocation(result) {
+				return Location{}, errors.New("IPinfo Lite database lookup failed")
+			}
+		} else if info, err := parseIPInfoLiteRecord(record.CountryCode, record.ASN, record.ASName); err == nil {
+			result, _ = MergeLocations(result, GeoLiteSource, info, "ipinfo-lite-mmdb")
 		}
-		info := Location{Country: record.CountryCode, ASN: record.ASN, Organisation: record.ASName}
-		result, _ = MergeLocations(result, GeoLiteSource, info, "ipinfo-lite-mmdb")
 	}
 	if emptyLocation(result) {
 		return Location{}, ErrNotFound
 	}
 	return result, nil
+}
+
+func parseIPInfoLiteRecord(countryCode, rawASN, asName string) (Location, error) {
+	location := Location{Country: strings.ToUpper(strings.TrimSpace(countryCode)), Organisation: strings.TrimSpace(asName)}
+	if asn, _ := parseAS(strings.TrimSpace(rawASN), ""); asn > 0 {
+		location.ASN = asn
+	}
+	if err := validateLocation(location); err != nil || emptyLocation(location) {
+		return Location{}, ErrNotFound
+	}
+	location.FieldSources = sourcesFor(location, "ipinfo-lite-mmdb")
+	return location, nil
 }
 
 // Close releases readers and is safe to call repeatedly. The lifecycle owner

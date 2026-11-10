@@ -1,3 +1,43 @@
+import { join } from 'node:path';
+
+async function checkLocationSettingsLayout(page, assert) {
+	const originalTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme') || 'dark');
+	const originalViewport = page.viewportSize();
+	if (process.env.E2E_SHOTS) {
+		await page.waitForFunction(() => document.querySelectorAll('.toast').length === 0, null, { timeout: 10000 });
+	}
+	try {
+		for (const theme of ['dark', 'light']) {
+			for (const width of [390, 768, 1440]) {
+				await page.setViewportSize({ width, height: 900 });
+				await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
+				await page.waitForTimeout(220);
+				await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+				const overflow = await page.evaluate(() => {
+					const sidebar = document.getElementById('sidebar').getBoundingClientRect();
+					const sidebarStyle = getComputedStyle(document.getElementById('sidebar'));
+					const wide = [...document.querySelectorAll('.content *')].filter(el => {
+						const box = el.getBoundingClientRect();
+						return box.width && box.right > document.documentElement.clientWidth + 1 && !el.closest('.tabs, .seg, pre');
+					}).slice(0, 3).map(el => el.tagName + '.' + el.className);
+					return { page: document.documentElement.scrollWidth - document.documentElement.clientWidth, sidebarRight: sidebar.right,
+						sidebarClass: document.getElementById('sidebar').className, transform: sidebarStyle.transform, innerWidth, clientWidth: document.documentElement.clientWidth,
+						mobile: matchMedia('(max-width: 900px)').matches, wide };
+				});
+				assert.ok(overflow.page <= 1, `Location settings overflow by ${overflow.page}px at ${width}px (${theme})`);
+				assert.ok(width > 900 || overflow.sidebarRight <= 1, `Location settings menu covers the page at ${width}px (${theme}): ${JSON.stringify(overflow)}`);
+				assert.deepEqual(overflow.wide, [], `Location settings elements overflow at ${width}px (${theme}): ${overflow.wide.join(', ')}`);
+				if (process.env.E2E_SHOTS) {
+					await page.screenshot({ path: join(process.env.E2E_SHOTS, `${theme}-${width}-settings-location.png`), fullPage: true });
+				}
+			}
+		}
+	} finally {
+		await page.setViewportSize(originalViewport);
+		await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), originalTheme);
+	}
+}
+
 export function settingsSuite(T, ctx) {
   const { page, assert } = T;
   const { receiver } = ctx;
@@ -46,6 +86,7 @@ export function settingsSuite(T, ctx) {
       await T.tab('Location');
       await T.see('Provider budgets');
       await setting('Provider budgets').getByText('IPinfo Lite', { exact: true }).waitFor();
+		await checkLocationSettingsLayout(page, assert);
       const providers = await T.api('/api/ip/providers');
       assert.ok(Array.isArray(providers.body.data) && providers.body.data.some(p => p.name === 'ipwho' && Number.isInteger(p.requestsToday)), 'provider switches and persisted usage are visible');
       assert.ok(!providers.text.toLowerCase().includes('token'), 'provider status never returns a credential');

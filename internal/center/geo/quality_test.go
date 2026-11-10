@@ -50,3 +50,13 @@ func TestMergedSourceAndFieldSourceFallbacks(t *testing.T) {
 		t.Fatalf("empty merge = %+v source=%q", merged, source)
 	}
 }
+
+func TestMergeLocationsUsesIncomingFieldProvenance(t *testing.T) {
+	incoming := Location{City: "London", Country: "GB", ASN: 174,
+		FieldSources: FieldSources{City: "geolite2", Country: "ipinfo-lite-mmdb", ASN: "ipinfo-lite-mmdb"}}
+	merged, source := MergeLocations(Location{}, "", incoming, "geolite2")
+	if merged.FieldSources.City != "geolite2" || merged.FieldSources.Country != "ipinfo-lite-mmdb" ||
+		merged.FieldSources.ASN != "ipinfo-lite-mmdb" || source != "merged:geolite2+ipinfo-lite-mmdb" {
+		t.Fatalf("mixed offline provenance was collapsed: %+v source=%q", merged, source)
+	}
+}

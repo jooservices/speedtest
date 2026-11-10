@@ -34,6 +34,20 @@ func (l *locator) Lookup(context.Context, string) (geo.Location, error) {
 	l.calls.Add(1)
 	return geo.Location{City: "Fixture city", Country: "ZZ"}, nil
 }
+
+type unavailableGeo struct{}
+
+func (unavailableGeo) Lookup(context.Context, string) (geo.Location, error) {
+	return geo.Location{}, geo.ErrNotFound
+}
+
+type exhaustedProvider struct{}
+
+func (exhaustedProvider) Source() string { return "quota-provider" }
+func (exhaustedProvider) Lookup(context.Context, string) (geo.Location, error) {
+	return geo.Location{}, geo.ErrBudgetExhausted
+}
+
 func setup(t *testing.T) (*pgxpool.Pool, *agentapi.Postgres, *locator) {
 	t.Helper()
 	values, err := godotenv.Read("../../../.env")
@@ -207,6 +221,24 @@ func TestMeasurementTimelineIntegration(t *testing.T) {
 	}
 	t.Log("PASS: first/repeated/alternating IPs; late insert/split/merge; equal timestamps; known-IP and NULL-IP failures; replay/conflict; cached IPv4/IPv6; only newest changes signal")
 }
+
+func TestBudgetExhaustionDoesNotRollbackIngestionIntegration(t *testing.T) {
+	p, s, _ := setup(t)
+	s.Hook = &ipwatch.Watcher{Offline: unavailableGeo{}, Fallbacks: []geo.Fallback{exhaustedProvider{}}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	address := "203.0.113.88"
+	save(t, s, nodeA, result(880, 1, address))
+	if n := scalar(t, p, `SELECT count(*) FROM results WHERE id=$1 AND ip=$2::inet`, result(880, 1, address).ID, address); n != 1 {
+		t.Fatalf("measurement was rolled back after geolocation quota exhaustion: count=%d", n)
+	}
+	if n := scalar(t, p, `SELECT count(*) FROM node_ip_history WHERE to_ip=$1::inet`, address); n != 1 {
+		t.Fatalf("IP history was not committed after quota exhaustion: count=%d", n)
+	}
+	if n := scalar(t, p, `SELECT count(*) FROM ip_addresses WHERE ip=$1::inet AND looked_up_at IS NULL`, address); n != 1 {
+		t.Fatalf("deferred address placeholder missing: count=%d", n)
+	}
+	t.Log("PASS: all exhausted providers defer geolocation; measurement, IP history and unlooked cache row commit for scheduled backfill")
+}
+
 func TestConcurrentIngestionIntegration(t *testing.T) {
 	p, s, l := setup(t)
 	var wg sync.WaitGroup

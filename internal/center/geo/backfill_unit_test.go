@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -15,27 +16,42 @@ import (
 )
 
 type backfillMemoryDB struct {
-	day       time.Time
-	cursor    string
-	addresses []string
-	queryErr  error
-	rowErr    error
-	execErr   error
-	scanErr   error
-	rowsErr   error
+	day                time.Time
+	cursor             string
+	cursorNodePriority bool
+	addresses          []string
+	nodeAddresses      map[string]bool
+	queryErr           error
+	rowErr             error
+	execErr            error
+	saveErr            error
+	scanErr            error
+	rowsErr            error
 }
 
 func (d *backfillMemoryDB) Query(_ context.Context, _ string, args ...any) (pgx.Rows, error) {
 	if d.queryErr != nil {
 		return nil, d.queryErr
 	}
+	cursorPriority, hasCursor := args[0].(bool)
 	cursor, _ := args[1].(string)
 	limit := args[2].(int)
 	rows := &backfillMemoryRows{scanErr: d.scanErr, rowsErr: d.rowsErr}
 	for _, address := range d.addresses {
-		if address > cursor && len(rows.values) < limit {
-			rows.values = append(rows.values, address)
+		nodePriority := d.nodeAddresses[address]
+		afterCursor := !hasCursor || (!nodePriority && cursorPriority) || (nodePriority == cursorPriority && address > cursor)
+		if afterCursor {
+			rows.values = append(rows.values, backfillCandidate{address: address, nodePriority: nodePriority})
 		}
+	}
+	sort.Slice(rows.values, func(i, j int) bool {
+		if rows.values[i].nodePriority != rows.values[j].nodePriority {
+			return rows.values[i].nodePriority
+		}
+		return rows.values[i].address < rows.values[j].address
+	})
+	if len(rows.values) > limit {
+		rows.values = rows.values[:limit]
 	}
 	return rows, nil
 }
@@ -47,27 +63,43 @@ func (d *backfillMemoryDB) QueryRow(context.Context, string, ...any) pgx.Row {
 	if d.day.IsZero() {
 		return backfillMemoryRow{err: pgx.ErrNoRows}
 	}
-	return backfillMemoryRow{day: d.day, cursor: d.cursor}
+	return backfillMemoryRow{day: d.day, cursor: d.cursor, cursorNodePriority: d.cursorNodePriority}
 }
 
 func (d *backfillMemoryDB) Exec(_ context.Context, query string, args ...any) (pgconn.CommandTag, error) {
 	if d.execErr != nil {
 		return pgconn.CommandTag{}, d.execErr
 	}
-	d.day = args[0].(time.Time)
+	if strings.Contains(query, "cursor_node_priority=EXCLUDED") && d.saveErr != nil {
+		return pgconn.CommandTag{}, d.saveErr
+	}
 	switch {
-	case strings.Contains(query, "cursor,updated_at"):
-		d.cursor = args[1].(string)
 	case strings.Contains(query, "cursor=NULL"):
+		d.day = args[0].(time.Time)
 		d.cursor = ""
+		d.cursorNodePriority = true
+	case strings.Contains(query, "cursor_node_priority=EXCLUDED"):
+		d.day = args[0].(time.Time)
+		d.cursorNodePriority = args[1].(bool)
+		if args[2] == nil {
+			d.cursor = ""
+		} else {
+			d.cursor = args[2].(string)
+		}
+	case strings.Contains(query, "SET run_day"):
+		d.day = args[0].(time.Time)
+	default:
+		d.day = args[0].(time.Time)
+		d.cursorNodePriority = true
 	}
 	return pgconn.NewCommandTag("INSERT 0 1"), nil
 }
 
 type backfillMemoryRow struct {
-	day    time.Time
-	cursor string
-	err    error
+	day                time.Time
+	cursor             string
+	cursorNodePriority bool
+	err                error
 }
 
 func (r backfillMemoryRow) Scan(dest ...any) error {
@@ -75,16 +107,17 @@ func (r backfillMemoryRow) Scan(dest ...any) error {
 		return r.err
 	}
 	*dest[0].(*time.Time) = r.day
+	*dest[1].(*bool) = r.cursorNodePriority
 	if r.cursor != "" {
 		value := r.cursor
-		*dest[1].(**string) = &value
+		*dest[2].(**string) = &value
 	}
 	return nil
 }
 
 type backfillMemoryRows struct {
 	pgx.Rows
-	values  []string
+	values  []backfillCandidate
 	index   int
 	scanErr error
 	rowsErr error
@@ -98,7 +131,8 @@ func (r *backfillMemoryRows) Scan(dest ...any) error {
 	if r.scanErr != nil {
 		return r.scanErr
 	}
-	*dest[0].(*string) = r.values[r.index]
+	*dest[0].(*string) = r.values[r.index].address
+	*dest[1].(*bool) = r.values[r.index].nodePriority
 	r.index++
 	return nil
 }
@@ -152,6 +186,20 @@ func (f backfillMemoryFallback) Lookup(context.Context, string) (Location, error
 	return Location{Country: "GB"}, f.err
 }
 
+type backfillSequenceFallback struct {
+	calls  int
+	failAt int
+}
+
+func (*backfillSequenceFallback) Source() string { return "ipwho" }
+func (f *backfillSequenceFallback) Lookup(context.Context, string) (Location, error) {
+	f.calls++
+	if f.calls == f.failAt {
+		return Location{}, ErrBudgetExhausted
+	}
+	return Location{Country: "GB"}, nil
+}
+
 func TestBackfillRunOncePersistsCursorAndStopsAtLimit(t *testing.T) {
 	db := &backfillMemoryDB{addresses: []string{"1.1.1.1", "8.8.8.8"}}
 	cache, batch := &backfillMemoryCache{}, &backfillMemoryBatch{}
@@ -163,7 +211,7 @@ func TestBackfillRunOncePersistsCursorAndStopsAtLimit(t *testing.T) {
 			t.Fatalf("RunOnce = (%d,%v), want (%d,nil)", processed, err, want)
 		}
 	}
-	if db.cursor != "8.8.8.8" || batch.calls != 2 || len(cache.merged) != 2 {
+	if db.cursor != "" || batch.calls != 2 || len(cache.merged) != 2 {
 		t.Fatalf("cursor=%q batches=%d merged=%v", db.cursor, batch.calls, cache.merged)
 	}
 }
@@ -244,6 +292,7 @@ func TestBackfillRunOnceValidatesDependenciesAndDatabaseFailures(t *testing.T) {
 		{name: "candidate scan", db: &backfillMemoryDB{day: now, addresses: []string{"1.1.1.1"}, scanErr: errors.New("scan candidate")}},
 		{name: "candidate iteration", db: &backfillMemoryDB{day: now, addresses: []string{"1.1.1.1"}, rowsErr: errors.New("iterate candidates")}},
 		{name: "cursor save", db: &backfillMemoryDB{day: now, addresses: []string{"1.1.1.1"}, execErr: errors.New("save cursor")}},
+		{name: "cursor reset", db: &backfillMemoryDB{day: now, cursor: "1.1.1.1", execErr: errors.New("reset cursor")}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			job := &Backfill{DB: tc.db, Cache: &backfillMemoryCache{}, Batch: &backfillMemoryBatch{}, Now: func() time.Time { return now }}
@@ -254,17 +303,43 @@ func TestBackfillRunOnceValidatesDependenciesAndDatabaseFailures(t *testing.T) {
 	}
 }
 
-func TestBackfillRunOnceResetsUTCDateAndUsesDefaults(t *testing.T) {
-	now := time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC)
-	db := &backfillMemoryDB{day: now.Add(-24 * time.Hour), cursor: "9.9.9.9", addresses: []string{"1.1.1.1"}}
-	job := &Backfill{DB: db, Cache: &backfillMemoryCache{}, Batch: &backfillMemoryBatch{}, BatchSize: 101, Now: func() time.Time { return now }}
-	if count, err := job.RunOnce(context.Background()); err != nil || count != 1 || db.cursor != "1.1.1.1" {
-		t.Fatalf("daily cursor reset = (%d,%v), cursor=%q", count, err, db.cursor)
+func TestBackfillRetainsCompletedPrefixOnMidBatchBudgetExhaustion(t *testing.T) {
+	addresses := []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"}
+	for _, saveErr := range []error{nil, errors.New("save partial cursor")} {
+		db := &backfillMemoryDB{addresses: addresses, saveErr: saveErr,
+			nodeAddresses: map[string]bool{"1.1.1.1": true, "8.8.8.8": true, "9.9.9.9": true}}
+		fallback := &backfillSequenceFallback{failAt: 2}
+		job := &Backfill{DB: db, Cache: &backfillMemoryCache{}, Batch: &backfillMemoryBatch{empty: true},
+			Resolver: NewResolver(nil, nil, fallback).WithPurpose(budget.Background), BatchSize: len(addresses), MaxPerRun: len(addresses),
+			Now: func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) }}
+		count, err := job.RunOnce(context.Background())
+		if saveErr == nil && (err != nil || count != 1 || db.cursor != addresses[0] || !db.cursorNodePriority || fallback.calls != 2) {
+			t.Fatalf("partial batch exhaustion = (%d,%v), cursor=%q priority=%v calls=%d", count, err, db.cursor, db.cursorNodePriority, fallback.calls)
+		}
+		if saveErr != nil && (count != 0 || !errors.Is(err, saveErr)) {
+			t.Fatalf("partial cursor save failure = (%d,%v)", count, err)
+		}
 	}
-	db.addresses = []string{"8.8.8.8"}
+}
+
+func TestBackfillRetainsPriorityCursorAcrossUTCDate(t *testing.T) {
+	now := time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC)
+	db := &backfillMemoryDB{day: now.Add(-24 * time.Hour), cursor: "1.1.1.1", cursorNodePriority: true,
+		addresses: []string{"1.1.1.1", "8.8.8.8"}, nodeAddresses: map[string]bool{"1.1.1.1": true}}
+	job := &Backfill{DB: db, Cache: &backfillMemoryCache{}, Batch: &backfillMemoryBatch{}, BatchSize: 1, MaxPerRun: 1, Now: func() time.Time { return now }}
+	if count, err := job.RunOnce(context.Background()); err != nil || count != 1 || db.cursor != "8.8.8.8" || db.cursorNodePriority {
+		t.Fatalf("cross-day cursor was not retained: (%d,%v), cursor=%q node=%v", count, err, db.cursor, db.cursorNodePriority)
+	}
+	if count, err := job.RunOnce(context.Background()); err != nil || count != 0 || db.cursor != "" {
+		t.Fatalf("completed keyspace did not start a fresh pass: (%d,%v), cursor=%q", count, err, db.cursor)
+	}
+}
+
+func TestBackfillUsesDefaultsAfterCompletedPass(t *testing.T) {
+	db := &backfillMemoryDB{addresses: []string{"8.8.8.8"}}
+	job := &Backfill{DB: db, Cache: &backfillMemoryCache{}, Batch: &backfillMemoryBatch{}}
 	job.MaxPerRun, job.BatchSize = 0, 0
-	db.day = time.Now().UTC()
-	job.Now = nil
+	job.Now = func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) }
 	if count, err := job.RunOnce(context.Background()); err != nil || count != 1 {
 		t.Fatalf("default limits and clock = (%d,%v)", count, err)
 	}
