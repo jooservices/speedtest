@@ -120,12 +120,14 @@ export function settingsSuite(T, ctx) {
       await T.tab('Data');
       await T.choose(setting('Keep results for').locator('select'), '90');
       await T.settled();
+      await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '90', 'the retention period is saved');
       assert.equal(T.db("select value #>> '{}' from settings where key='retentionDays'"), '90');
       const csv = await T.download(() => T.press('CSV', setting('Export all results')));
       assert.ok(csv.startsWith('time,node,status,download_mbps'), 'the CSV export has its header');
       const json = await T.download(() => T.press('JSON', setting('Export all results')));
       assert.ok(Array.isArray(JSON.parse(json)) || JSON.parse(json).data, 'the JSON export parses');
       await T.choose(setting('Keep results for').locator('select'), '365'); await T.settled();
+      await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '365', 'the default retention period is restored');
     },
 
     // The activity log lists the changes made earlier in the run, filters by kind and never shows secrets.

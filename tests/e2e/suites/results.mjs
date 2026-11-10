@@ -48,14 +48,49 @@ export function resultsSuite(T) {
 
     // Failed rows show a short failure-class reason chip next to Failed.
     async failureClassChip() {
-      await T.open('#/history', 'Results');
-      await T.settled();
+      const fixtures = [
+        ['73000000-0000-4000-8000-000000000101', 'rate_limited', 'Rate limited'],
+        ['73000000-0000-4000-8000-000000000102', 'no_network', 'No network'],
+        ['73000000-0000-4000-8000-000000000103', 'server_unreachable', 'Server unreachable'],
+        ['73000000-0000-4000-8000-000000000104', 'engine_missing', 'Engine missing'],
+        ['73000000-0000-4000-8000-000000000105', 'timeout', 'Timeout'],
+        ['73000000-0000-4000-8000-000000000106', 'other', 'Other'],
+      ];
+      const ids = fixtures.map(([id]) => `'${id}'`).join(',');
       const status = T.selectWith('Any status');
-      await status.selectOption('failed');
-      await T.settled();
-      const reason = page.locator('.chip', { hasText: /Rate limited|No network|Timeout|Other|Server unreachable|Engine missing/ }).first();
-      await reason.waitFor({ timeout: 10000 });
-      assert.ok(await reason.isVisible(), 'failed rows show a failure-class chip');
+      const search = page.getByRole('searchbox', { name: 'Search results' });
+      try {
+        T.db(`DELETE FROM results WHERE id IN (${ids});
+          INSERT INTO results(id,node_id,ts,status,threads,error,engine,failure_class,bytes_down,bytes_up,duration_seconds)
+          SELECT fixture.id,n.id,now()-fixture.age,'failed',4,'JOOST-73 failure class fixture '||fixture.failure_class,
+            'ookla',fixture.failure_class,0,0,0
+          FROM nodes n CROSS JOIN (VALUES
+            ('${fixtures[0][0]}'::uuid,interval '1 minute','${fixtures[0][1]}'),
+            ('${fixtures[1][0]}'::uuid,interval '2 minutes','${fixtures[1][1]}'),
+            ('${fixtures[2][0]}'::uuid,interval '3 minutes','${fixtures[2][1]}'),
+            ('${fixtures[3][0]}'::uuid,interval '4 minutes','${fixtures[3][1]}'),
+            ('${fixtures[4][0]}'::uuid,interval '5 minutes','${fixtures[4][1]}'),
+            ('${fixtures[5][0]}'::uuid,interval '6 minutes','${fixtures[5][1]}')
+          ) fixture(id,age,failure_class) WHERE n.name='VM1'`);
+        await T.eventually(() => T.db(`SELECT count(*) FROM results WHERE id IN (${ids})`) === String(fixtures.length), 'all failure-class fixtures are stored');
+        await page.reload();
+        await T.open('#/history', 'Results');
+        await T.settled();
+        await status.selectOption('failed');
+        await search.fill('JOOST-73 failure class fixture');
+        await T.settled();
+        const rows = page.locator('table.data tbody tr');
+        assert.equal(await rows.count(), fixtures.length, 'the Results filter shows only the deterministic class fixtures');
+        for (let index = 0; index < fixtures.length; index++) {
+          const chips = rows.nth(index).locator('.chip');
+          const labels = (await chips.allTextContents()).map(label => label.trim());
+          assert.deepEqual(labels, ['Failed', fixtures[index][2]], `failureClass ${fixtures[index][1]} maps to the exact Results chip`);
+        }
+      } finally {
+        T.db(`DELETE FROM results WHERE id IN (${ids})`);
+        await search.fill('').catch(() => {});
+        await status.selectOption('all').catch(() => {});
+      }
     },
   };
 }

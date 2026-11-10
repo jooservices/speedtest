@@ -4059,6 +4059,8 @@ components:
                 $ref: "#/components/schemas/Server"
               error:
                 type: "null"
+              failureClass:
+                const: other
     Result:
       type: object
       additionalProperties: false
@@ -4227,6 +4229,8 @@ components:
                 $ref: "#/components/schemas/Server"
               error:
                 type: "null"
+              failureClass:
+                const: other
     Node:
       type: object
       additionalProperties: false

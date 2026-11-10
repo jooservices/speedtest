@@ -8,6 +8,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-DASH-02', area: 'dashboard', title: 'the comparison chart offers every metric, table view and node toggle', covers: 'dashboard compare card', run: S.dashboard.compareConnections },
     { id: 'SC-DASH-03', area: 'dashboard', title: 'dashboard shortcuts lead to the right pages and dialogs', covers: 'navigation links, add node, run all', run: S.dashboard.shortcuts },
     { id: 'SC-DASH-04', area: 'dashboard', title: 'the time range in the top bar drives the pages', covers: 'time range', run: S.dashboard.timeRange },
+    { id: 'SC-DASH-05', area: 'dashboard', title: 'rate-limited tests stay visible when no success-rate sample is eligible', covers: 'dashboard rate-limited count, keyboard and touch navigation, all-rate-limited range in both themes at 390, 768 and 1440 px', run: S.dashboard.rateLimitedCount },
 
     { id: 'SC-QA-01', area: 'quality', title: 'every page draws real data without console errors', covers: 'all routes', run: S.quality.everyPageDraws },
     { id: 'SC-QA-02', area: 'quality', title: 'every page holds its layout at 390, 768 and 1440 px in both themes', covers: 'responsive layout, themes', run: S.quality.layoutHolds },
@@ -51,7 +52,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-SET-06', area: 'settings', title: 'the enrolment key is shown once', covers: 'enrolment key rotation', run: S.settings.enrolmentKeyShownOnce },
 
     // Adds a real agent and a node; the removal scenario below deletes it again.
-    { id: 'SC-NODE-05', area: 'nodes', title: 'a node is added with the install command and reports', covers: 'wizard, real agent enrolment, first result, run test', run: S.nodes.addWithCommandAndRunTest },
+    { id: 'SC-NODE-05', area: 'nodes', title: 'an enrolled agent recovers from Ookla rate limits across restart', covers: 'wizard, real agent enrolment, engine classification, result ingestion, restart persistence, repeated deferred manual commands, alert suppression and post-deadline recovery', run: S.nodes.addWithCommandAndRunTest },
     { id: 'SC-NODE-06', area: 'nodes', title: 'a node can be removed from the dashboard', covers: 'node removal', run: () => S.nodes.removeFromDashboard('E2E-1') },
 
     { id: 'SC-SET-08', area: 'settings', title: 'the activity log lists owner changes without secrets', covers: 'audit log, filter, no secrets', run: S.settings.activityLog },
