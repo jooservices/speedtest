@@ -1,3 +1,61 @@
+const UPLOAD_NODE_ID = '82000000-0000-4000-8000-000000000091';
+const UPLOAD_IP = '203.0.113.91';
+const SPARSE_IP = '203.0.113.92';
+
+function refuseManualRun(route) {
+  return route.fulfill({ status: 409, contentType: 'application/problem+json', body: JSON.stringify({
+    type: '/problems/conflict', title: 'State, unique name or idempotency conflict', status: 409, detail: 'A test is already queued.'
+  }) });
+}
+
+function seedUploadFixture(T) {
+  T.db(`INSERT INTO ip_addresses(ip) VALUES ('${UPLOAD_IP}') ON CONFLICT DO NOTHING;
+    INSERT INTO nodes(id,name,label,expected_down_mbps,expected_up_mbps,color_slot,host,agent) VALUES
+      ('${UPLOAD_NODE_ID}','Upload fixture','Known expected speeds',400,75,8,'upload-fixture','test');
+    INSERT INTO schedules(node_id) VALUES ('${UPLOAD_NODE_ID}');
+    INSERT INTO engine_schedules(node_id,engine) VALUES ('${UPLOAD_NODE_ID}','ookla');
+    INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,bytes_down,bytes_up,duration_seconds,engine) VALUES
+      ('82000000-0000-4000-8000-000000000092','${UPLOAD_NODE_ID}',now()-interval '1 hour','ok',120,30,8,9,
+       '{"id":9,"name":"Upload fixture server"}'::jsonb,'${UPLOAD_IP}',4,1000,500,1,'ookla');`);
+}
+
+function cleanupUploadFixture(T) {
+  T.db(`DELETE FROM nodes WHERE id='${UPLOAD_NODE_ID}'; DELETE FROM ip_addresses WHERE ip='${UPLOAD_IP}' AND NOT EXISTS (SELECT 1 FROM results WHERE ip='${UPLOAD_IP}');`);
+}
+
+function seedSparseTrendFixture(T) {
+  T.db(`INSERT INTO ip_addresses(ip) VALUES ('${SPARSE_IP}') ON CONFLICT DO NOTHING;
+    INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,bytes_down,bytes_up,duration_seconds,error,engine)
+    SELECT gen_random_uuid(), n.id, now()-make_interval(hours=>v.hours), v.status,
+      CASE WHEN v.status='failed' THEN NULL ELSE n.expected_down_mbps*(0.4+v.seq/100.0) END,
+      CASE WHEN v.status='failed' THEN NULL ELSE n.expected_up_mbps*(0.4+v.seq/100.0) END,
+      CASE WHEN v.status='failed' THEN NULL ELSE 8+v.seq END,
+      CASE WHEN v.status='failed' THEN NULL ELSE 9 END,
+      CASE WHEN v.status='failed' THEN NULL ELSE '{"id":9,"name":"Sparse trend fixture"}'::jsonb END,
+      '${SPARSE_IP}',4,1000,500,1,CASE WHEN v.status='failed' THEN 'Synthetic sparse-series failure' ELSE NULL END,'librespeed'
+    FROM nodes n JOIN (VALUES
+      ('VM1',1,'failed',1),('VM2',2,'ok',1),('VM3',3,'ok',1),('VM3',4,'ok',2),
+      ('VM4',5,'ok',1),('VM4',6,'ok',2),('VM4',7,'ok',3),
+      ('VM5',2,'ok',1),('VM5',3,'ok',2),('VM5',4,'ok',3),('VM5',5,'ok',4)
+    ) AS v(name,hours,status,seq) ON n.name=v.name;`);
+}
+
+function cleanupSparseTrendFixture(T) {
+  T.db(`DELETE FROM results WHERE ip='${SPARSE_IP}' AND engine='librespeed'; DELETE FROM ip_addresses WHERE ip='${SPARSE_IP}' AND NOT EXISTS (SELECT 1 FROM results WHERE ip='${SPARSE_IP}');`);
+}
+
+async function checkNodeChartReferences(T, id, name, sparse) {
+  await T.open('#/nodes/' + id, new RegExp(name));
+  const card = T.page.locator('.card').filter({ hasText: 'Speed over time' }).first(), svg = card.locator('.chart svg').first();
+  const refs = svg.locator('line[stroke-dasharray="5 4"]');
+  const lines = await svg.locator('line').evaluateAll(items => items.map(line => ({ dash: line.getAttribute('stroke-dasharray'), y: line.getAttribute('y1') })));
+  T.assert.equal(await refs.count(), 2, `${name} shows separate expected download and upload lines; rendered lines: ${JSON.stringify(lines)}`);
+  const y = await refs.evaluateAll(lines => lines.map(line => Number(line.getAttribute('y1'))));
+  T.assert.ok(y.every(value => Number.isFinite(value) && value >= 24 && value <= 254), `${name} reference lines stay within the chart plot: ${y}`);
+  if (sparse) await T.see('Not enough data yet', card);
+  else T.assert.equal(await card.getByText(/Not enough data yet/).count(), 0, `${name} has enough data for a trend`);
+}
+
 export function nodesSuite(T, ctx) {
   const { page, assert } = T;
   const { stack, startAgent } = ctx;
@@ -26,15 +84,84 @@ export function nodesSuite(T, ctx) {
       await T.row('VM2').focus();
       await page.keyboard.press('Enter');
       await page.getByRole('heading', { name: /VM2/, level: 1 }).waitFor();
+      await T.open('#/nodes', 'Nodes');
+      const run = T.row('VM1').getByRole('button', { name: 'Run a test on VM1' });
+      await page.route('**/api/nodes/*/run', refuseManualRun);
+      try {
+        await run.focus();
+        await page.keyboard.press('Enter');
+        const dialog = page.getByRole('dialog');
+        await dialog.waitFor();
+        await T.see('Not started: the node is paused or already has a test waiting', dialog);
+        assert.equal(new URL(page.url()).hash, '#/nodes', 'Enter on a row action opens its dialog without opening the row');
+        T.expectRefusal(409);
+        await T.dismiss();
+      } finally {
+        await page.unroute('**/api/nodes/*/run', refuseManualRun);
+      }
     },
     async listShowsUpload() {
-      await T.open('#/nodes', 'Nodes');
-      await T.row('VM1').waitFor();
-      await T.expectCount(page.getByRole('columnheader', { name: /^Upload / }), 1, 'the list has one upload column');
-      const text = await T.row('VM1').innerText();
-      const matches = text.match(new RegExp('\\d+(\\.\\d+)? [KMG]?bps \\(\\d+%\\)', 'g')) || [];
-      assert.ok(matches.length >= 2, 'the VM1 row shows download and upload against the expected speed: ' + text);
-      await T.expectNoLoadError();
+      seedUploadFixture(T);
+      try {
+        assert.equal(T.db(`SELECT count(*) FROM nodes WHERE id='${UPLOAD_NODE_ID}'`), '1', 'the known-value node fixture was inserted');
+        const response = await T.api('/api/nodes'), apiNames = response.body && response.body.data ? response.body.data.map(node => node.name) : [];
+        assert.ok(apiNames.includes('Upload fixture'), `the authenticated nodes API includes the fixture: ${apiNames.join(', ')}`);
+        await T.open('#/nodes', 'Nodes');
+        await page.evaluate(() => window.ST.load());
+        await T.settled();
+        const names = await page.evaluate(() => window.ST.nodes().map(node => node.name));
+        assert.ok(names.includes('Upload fixture'), `the center snapshot includes the seeded upload fixture: ${names.join(', ')}`);
+        const row = T.row('Upload fixture');
+        await row.waitFor();
+        await T.expectCount(page.getByRole('columnheader', { name: /^Upload / }), 1, 'the list has one upload column');
+        assert.equal((await row.locator('td').nth(2).innerText()).trim(), '400 Mbps / 75 Mbps', 'the row shows the distinct expected download and upload values');
+        assert.equal((await row.locator('td').nth(3).innerText()).trim(), '120 Mbps (30%)', 'download is 120/400 Mbps = 30%');
+        assert.equal((await row.locator('td').nth(4).innerText()).trim(), '30 Mbps (40%)', 'upload is 30/75 Mbps = 40%');
+        await T.expectNoLoadError();
+      } finally {
+        cleanupUploadFixture(T);
+      }
+    },
+
+    async sparseTrendsExplainThreshold() {
+      seedSparseTrendFixture(T);
+      try {
+        await T.open('#/', 'Dashboard');
+        await T.choose(page.getByLabel('Engine'), 'librespeed');
+        await T.settled();
+        const dashboard = page.locator('.card').filter({ hasText: 'Compare connections' }).first();
+        const dashboardNote = dashboard.locator('.callout').filter({ hasText: 'Not enough data yet' });
+        const noteText = await dashboardNote.innerText();
+        for (const expected of ['A download trend', 'VM1 · Viettel Fast 50: 0', 'VM2 · Viettel Pro 600: 1', 'VM3 · VNPT Home 5 Super: 2']) assert.ok(noteText.includes(expected), `dashboard sparse state includes ${expected}: ${noteText}`);
+        assert.ok(!noteText.includes('VM4 · VNPT Home 2'), 'three valid measurements do not show a sparse warning');
+        for (const name of ['VM1', 'VM2', 'VM3']) await dashboard.locator('.legend button').filter({ hasText: name }).click();
+        assert.equal(await dashboard.locator('.callout').filter({ hasText: 'Not enough data yet' }).count(), 0, 'hidden sparse dashboard series do not keep the warning visible');
+        await T.choose(page.getByLabel('Engine'), '');
+        await T.settled();
+        assert.equal(await dashboard.locator('.callout').filter({ hasText: 'Not enough data yet' }).count(), 0, 'the primary-engine filter excludes sparse LibreSpeed measurements');
+
+        await T.open('#/stats', 'Statistics');
+        await T.choose(page.getByLabel('Engine'), 'librespeed');
+        await T.settled();
+        const trend = page.locator('.card').filter({ hasText: 'Trend' }).first();
+        const statsNote = trend.locator('.callout').filter({ hasText: 'Not enough data yet' });
+        const statsText = await statsNote.innerText();
+        for (const expected of ['A download trend', 'VM1: 0', 'VM2: 1', 'VM3: 2']) assert.ok(statsText.includes(expected), `Statistics sparse state includes ${expected}: ${statsText}`);
+        assert.ok(!statsText.includes('VM4:'), 'three valid measurements do not show a Statistics warning');
+        for (const name of ['VM1', 'VM2', 'VM3']) {
+          await page.locator('.legend.mb button').filter({ hasText: name }).click();
+          await T.settled();
+        }
+        assert.equal(await trend.locator('.callout').filter({ hasText: 'Not enough data yet' }).count(), 0, 'unselected Statistics nodes do not keep the warning visible');
+        await checkNodeChartReferences(T, '10000000-0000-4000-8000-000000000001', 'VM1', true);
+        await checkNodeChartReferences(T, '10000000-0000-4000-8000-000000000003', 'VM3', true);
+        await checkNodeChartReferences(T, '10000000-0000-4000-8000-000000000004', 'VM4', false);
+      } finally {
+        cleanupSparseTrendFixture(T);
+        await page.goto(T.url('#/'));
+        await page.reload();
+        await T.heading('Dashboard').waitFor();
+      }
     },
     async sparseChartShowsReference() {
       const node = '82000000-0000-4000-8000-000000000082';

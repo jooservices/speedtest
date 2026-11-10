@@ -77,7 +77,10 @@
       });
       drawn.forEach(function (d) { d.pts.forEach(function (p) { if (p[1] < ymin) ymin = p[1]; if (p[1] > ymax) ymax = p[1]; }); });
       (o.refLines || []).forEach(function (r) { if (r.v > ymax) ymax = r.v; });
-      if (!isFinite(ymin)) { ymin = 0; ymax = 1; }
+      if (!isFinite(ymin)) {
+        ymin = (o.refLines || []).reduce(function (min, r) { return isFinite(r.v) ? Math.min(min, r.v) : min; }, 0);
+        ymax = (o.refLines || []).reduce(function (max, r) { return isFinite(r.v) ? Math.max(max, r.v) : max; }, 1);
+      }
       if (o.y.min != null) ymin = o.y.min; else ymin = Math.min(0, ymin);
       if (o.y.max != null) ymax = o.y.max; else ymax = ymax * 1.08;
       var yt = niceTicks(ymin, ymax, Math.max(3, Math.floor(plotH / 48)));
