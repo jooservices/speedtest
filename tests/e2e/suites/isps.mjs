@@ -11,7 +11,7 @@ export function ispsSuite(T) {
         const first = list.body.data[0];
         T.assert(first.asn && first.name, 'ISP row has asn and name');
         const uiTrend = T.page.waitForResponse(response => response.url().includes(`/api/isps/${first.id}/trend`));
-        await T.row(first.name).click();
+        await T.page.getByRole('button', { name: `Show trend for ${first.name} (AS${first.asn})` }).click();
         T.assert((await uiTrend).status() === 200, 'selecting an ISP loads its trend through the UI');
         await T.settled();
         await T.page.locator(`#view svg[aria-label="${first.name} download trend"]`).waitFor();
@@ -21,8 +21,9 @@ export function ispsSuite(T) {
         if (list.body.data.length > 1) {
           const second = list.body.data[1];
           await T.page.getByRole('checkbox', { name: `Compare ${second.name}` }).check();
-          await T.page.getByText(`${first.name} (AS${first.asn})`).waitFor();
-          await T.page.getByText(`${second.name} (AS${second.asn})`).waitFor();
+          const comparison = T.page.getByRole('table').last();
+          await comparison.getByRole('cell', { name: `${first.name} (AS${first.asn})`, exact: true }).waitFor();
+          await comparison.getByRole('cell', { name: `${second.name} (AS${second.asn})`, exact: true }).waitFor();
           const ids = list.body.data.slice(0, 2).map((r) => r.id).join(',');
           const cmp = await T.api(`/api/isps/compare?range=30d&isps=${ids}`);
           T.assert(cmp.status === 200 && cmp.body.data.length >= 1, 'ISP compare returns rows');
