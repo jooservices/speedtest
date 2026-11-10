@@ -90,8 +90,9 @@ primary-engine/all-ISP query and a selective Ookla/Carrier A query. Five samples
 are logged per operation; the empirical p50 and p95 (the maximum of five
 samples for p95) must both stay below 300 ms. The test logs
 `EXPLAIN (ANALYZE, BUFFERS)` plans for summary and events in both filter cases.
-Run it on the disposable worktree/test database only. A rollback is a code
-rollback; no database migration is involved.
+The timing test skips when Go coverage instrumentation is enabled because that
+changes query latency; run it without coverage on the disposable worktree/test
+database. A rollback is a code rollback; no database migration is involved.
 
 ## Capacity
 
