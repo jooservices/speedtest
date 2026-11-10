@@ -60,12 +60,64 @@ func TestAPITokenScopeAuthenticationAndCSRFBypass(t *testing.T) {
 	}
 }
 
+func TestAPITokenMiddlewareSkipsNodeAgentRoutes(t *testing.T) {
+	store := &tokenAuthStore{principal: apitoken.Principal{TokenID: "token-1", UserID: "owner-1", Scope: apitoken.Full}}
+	auth := &serverAuth{tokens: store, tokenLimiter: newNodeRateLimiter(120, 20)}
+	routes := routeTable{{
+		matches:    onPath(func(path string) bool { return path == "/api/agent/results" }),
+		tokenScope: func(*http.Request) (apitoken.Scope, bool) { return apitoken.Full, true },
+	}}
+	handler := withAPITokenAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), routes, auth)
+	request := httptest.NewRequest(http.MethodPost, "/api/agent/results", nil)
+	request.Header.Set("Authorization", "Bearer valid-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || store.calls != 0 {
+		t.Fatalf("agent route status=%d token authentications=%d", response.Code, store.calls)
+	}
+}
+
+func TestAPITokenMiddlewarePassesUnregisteredRoutesToNext(t *testing.T) {
+	store := &tokenAuthStore{}
+	auth := &serverAuth{tokens: store, tokenLimiter: newNodeRateLimiter(120, 20)}
+	called := false
+	handler := withAPITokenAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}), routeTable{}, auth)
+	request := httptest.NewRequest(http.MethodGet, "/api/not-registered", nil)
+	request.Header.Set("Authorization", "Bearer valid-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || !called || store.calls != 0 {
+		t.Fatalf("unregistered route status=%d called=%t token authentications=%d", response.Code, called, store.calls)
+	}
+}
+
+func TestAPITokenMiddlewareRequiresHTTPSOutsideLocalEnvironments(t *testing.T) {
+	store := &tokenAuthStore{principal: apitoken.Principal{TokenID: "token-1", Scope: apitoken.ReadOnly}}
+	auth := &serverAuth{tokens: store, tokenLimiter: newNodeRateLimiter(120, 20), requireHTTPS: true}
+	routes := routeTable{{matches: onPath(func(path string) bool { return path == "/api/nodes" }), tokenScope: operationScope}}
+	handler := withAPITokenAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}), routes, auth)
+	request := httptest.NewRequest(http.MethodGet, "http://center.test/api/nodes", nil)
+	request.Header.Set("Authorization", "Bearer valid-token")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusForbidden || store.calls != 0 {
+		t.Fatalf("insecure bearer request status=%d token authentications=%d", response.Code, store.calls)
+	}
+}
+
 func TestAPITokenRejectsInvalidScopeAndMalformedBearer(t *testing.T) {
 	store := &tokenAuthStore{principal: apitoken.Principal{TokenID: "token-1", UserID: "owner-1", Scope: apitoken.ReadOnly}}
 	auth := &serverAuth{tokens: store, tokenLimiter: newNodeRateLimiter(120, 20)}
 	routes := routeTable{{matches: onPath(func(path string) bool { return strings.HasSuffix(path, "/run") }), tokenScope: operationScope}}
 	handler := withAPITokenAuth(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }), routes, auth)
-	for _, authorization := range []string{"Bearer valid-token", "Bearer", "Basic valid-token"} {
+	for _, authorization := range []string{"Bearer valid-token", "Bearer bad-token", "Bearer", "Basic valid-token"} {
 		request := httptest.NewRequest(http.MethodPost, "https://center.test/api/nodes/123e4567-e89b-12d3-a456-426614174000/run", nil)
 		request.Header.Set("Authorization", authorization)
 		response := httptest.NewRecorder()
@@ -80,10 +132,18 @@ func TestAPITokenRejectsInvalidScopeAndMalformedBearer(t *testing.T) {
 			t.Errorf("response disclosed Authorization value %q", authorization)
 		}
 	}
-	store.err = errors.New("database detail")
 	request := httptest.NewRequest(http.MethodPost, "https://center.test/api/nodes/123e4567-e89b-12d3-a456-426614174000/run", nil)
-	request.Header.Set("Authorization", "Bearer valid-token")
+	request.Header.Add("Authorization", "Bearer valid-token")
+	request.Header.Add("Authorization", "Bearer valid-token")
 	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusUnauthorized {
+		t.Fatalf("duplicate Authorization headers status = %d", response.Code)
+	}
+	store.err = errors.New("database detail")
+	request = httptest.NewRequest(http.MethodPost, "https://center.test/api/nodes/123e4567-e89b-12d3-a456-426614174000/run", nil)
+	request.Header.Set("Authorization", "Bearer valid-token")
+	response = httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusInternalServerError || strings.Contains(response.Body.String(), "database detail") {
 		t.Fatalf("store failure response = %d %s", response.Code, response.Body.String())
