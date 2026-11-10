@@ -8,6 +8,12 @@
   function fmtM(m, v) { return v == null ? '—' : F.metric(m, v); }
   function axisFmt(m) { return ST.metrics[m].unit === 'speed' ? F.axisSpeed : function (v) { return F.num(v, m === 'loss' ? 1 : 0); }; }
   function axisUnit(m) { return ST.metrics[m].unit === 'speed' ? F.axisUnit() : ST.metrics[m].unit === 'ms' ? 'ms' : '%'; }
+  function sparseTrendNotice(metric, nodes, data) {
+    var sparse = nodes.map(function (n) { return { name: n.name, count: data.dist[n.id] ? data.dist[n.id].n : 0 }; }).filter(function (x) { return x.count < 3; });
+    if (!sparse.length) return null;
+    return U.callout('Not enough data yet. A ' + ST.metrics[metric].label.toLowerCase() + ' trend needs at least three valid measurements. ' +
+      sparse.map(function (x) { return x.name + ': ' + x.count; }).join('; ') + '.', 'info', 'info');
+  }
 
 
   /* ---- data: computed in the browser for the demo, fetched from /api/stats/* for the real center ---- */
@@ -167,7 +173,10 @@
         })), rows: ts.slice(0, 60) }));
         return;
       }
-      ST.charts.line(trendHost, { series: trendSeries, x: { type: 'time', min: from, max: now }, y: { min: 0, format: axisFmt(m), unit: axisUnit(m) }, height: 300, label: ST.metrics[m].label + ' trend', tipValue: function (s, v) { return fmtM(m, v); } });
+      var notice = sparseTrendNotice(m, sel, data), chartHost = h('div');
+      if (notice) trendHost.appendChild(notice);
+      trendHost.appendChild(chartHost);
+      ST.charts.line(chartHost, { series: trendSeries, x: { type: 'time', min: from, max: now }, y: { min: 0, format: axisFmt(m), unit: axisUnit(m) }, height: 300, label: ST.metrics[m].label + ' trend', tipValue: function (s, v) { return fmtM(m, v); } });
     }
     root.appendChild(h('div', { class: 'mt' }, U.card('Trend', (hourly ? 'Hourly' : 'Daily') + ' average of ' + ST.metrics[m].label.toLowerCase(), trendHost, trendCtl)));
     drawTrend();

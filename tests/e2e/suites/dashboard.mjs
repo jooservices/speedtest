@@ -1,3 +1,41 @@
+const KPI_IP = '203.0.113.82';
+
+function refuseManualRun(route) {
+  return route.fulfill({ status: 409, contentType: 'application/problem+json', body: JSON.stringify({
+    type: '/problems/conflict', title: 'State, unique name or idempotency conflict', status: 409, detail: 'A test is already queued.'
+  }) });
+}
+
+function seedKpiFixture(T) {
+  T.db(`INSERT INTO ip_addresses(ip) VALUES ('203.0.113.81'),('${KPI_IP}') ON CONFLICT DO NOTHING;
+    INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,bytes_down,bytes_up,duration_seconds,engine)
+    SELECT gen_random_uuid(), n.id, now()-make_interval(hours=>v.hours), 'ok', n.expected_down_mbps*v.down_pct/100.0, n.expected_up_mbps*v.up_pct/100.0,
+      v.ping, 9, '{"id":9,"name":"JOOST-82 KPI fixture"}'::jsonb, '${KPI_IP}', 4, 1000, 500, 1, 'librespeed'
+    FROM nodes n JOIN (VALUES
+      ('VM1',60,60,10,1),('VM2',70,65,20,1),('VM3',80,70,30,1),('VM4',90,75,40,1),('VM5',100,80,50,1),
+      ('VM1',50,40,20,25),('VM2',55,45,30,25),('VM3',60,50,40,25),('VM4',65,55,50,25),('VM5',70,60,60,25)
+    ) AS v(name,down_pct,up_pct,ping,hours) ON n.name=v.name;
+    INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,ip,threads,bytes_down,bytes_up,duration_seconds,error,engine)
+    SELECT gen_random_uuid(), n.id, now()-make_interval(hours=>v.hours), 'failed', NULL, NULL, NULL, '${KPI_IP}', 4, 0, 0, 1, 'Synthetic KPI failure', 'librespeed'
+    FROM nodes n JOIN (VALUES ('VM1',1),('VM2',25),('VM3',26),('VM4',27)) AS v(name,hours) ON n.name=v.name;
+    INSERT INTO node_ip_history(id,node_id,ts,from_ip,to_ip)
+    SELECT gen_random_uuid(), n.id, now()-make_interval(hours=>v.hours), '203.0.113.81', '${KPI_IP}'
+    FROM nodes n CROSS JOIN (VALUES (1),(2),(25),(26),(27),(28)) AS v(hours) WHERE n.name='VM1';`);
+}
+
+function cleanupKpiFixture(T) {
+  T.db(`DELETE FROM node_ip_history WHERE to_ip='${KPI_IP}'; DELETE FROM results WHERE ip='${KPI_IP}' AND engine='librespeed';
+    DELETE FROM ip_addresses WHERE ip IN ('203.0.113.81','${KPI_IP}') AND NOT EXISTS (SELECT 1 FROM results WHERE ip IN ('203.0.113.81','${KPI_IP}'));`);
+}
+
+async function assertKpi(T, label, value, delta) {
+  const card = T.page.locator('.stat').filter({ hasText: label }).first();
+  T.assert.equal((await card.locator('.stat-value').innerText()).replace(/\s/g, ''), value.replace(/\s/g, ''), `${label} current value`);
+  const change = card.locator('.delta');
+  T.assert.equal((await change.innerText()).trim(), delta, `${label} period delta`);
+  T.assert.ok((await change.getAttribute('class')).split(/\s+/).includes('up'), `${label} delta uses the good direction`);
+}
+
 export function dashboardSuite(T) {
   const { page, assert } = T;
   return {
@@ -18,6 +56,69 @@ export function dashboardSuite(T) {
       await T.choose(page.locator('#topbar select').first(), '7d');
       await T.see('last 7 days', page.locator('#view'));
       await T.expectNoLoadError();
+    },
+
+    async comparesExactKpis() {
+      seedKpiFixture(T);
+      try {
+        await T.open('#/', 'Dashboard');
+        await T.choose(page.locator('#topbar select').first(), '24h');
+        await T.settled();
+        await T.choose(page.getByLabel('Engine'), 'librespeed');
+        await T.settled();
+        await T.see('Download vs. expected', page.locator('#view'));
+        await T.eventually(async () => {
+          const cards = page.locator('.stat'), values = await cards.locator('.delta').allInnerTexts();
+          return await cards.count() === 5 && values.length === 5 && values.every(value => value !== 'Loading comparison…');
+        }, 'the dashboard comparison has loaded');
+        await assertKpi(T, 'Download vs. expected', '80%', '▲ 33.3%');
+        await assertKpi(T, 'Upload vs. expected', '70%', '▲ 40.0%');
+        await assertKpi(T, 'Median latency', '30.0 ms', '▼ 25.0%');
+        await assertKpi(T, 'Tests succeeded', '83.3%', '▲ 33.3%');
+        await assertKpi(T, 'IP changes', '2 changes', '▼ 50.0%');
+
+        const zeroBaseline = await T.api('/api/dashboard?range=6h&engine=librespeed');
+        assert.equal(zeroBaseline.status, 200, 'the fresh dashboard snapshot is available');
+        assert.equal(zeroBaseline.body.data.previous.ips, 0, 'the fresh dashboard snapshot sees zero previous IP changes');
+        assert.equal(zeroBaseline.body.data.current.ips, 2, 'the fresh dashboard snapshot sees two current IP changes');
+        await T.choose(page.locator('#topbar select').first(), '6h');
+        await page.reload();
+        await T.heading('Dashboard').waitFor();
+        await T.settled();
+        const ipCard = page.locator('.stat').filter({ hasText: 'IP changes' }).first();
+        assert.equal((await ipCard.locator('.stat-value').innerText()).replace(/\s/g, ''), '2changes');
+        assert.equal((await ipCard.locator('.delta').innerText()).trim(), 'New this period', 'zero baseline is explained');
+      } finally {
+        cleanupKpiFixture(T);
+        await page.goto(T.url('#/'));
+        await T.heading('Dashboard').waitFor();
+        await T.choose(page.getByLabel('Engine'), '');
+        await T.settled();
+        await T.choose(page.locator('#topbar select').first(), '7d');
+      }
+    },
+
+    async keyboardCardDoesNotCatchRunEnter() {
+      await T.open('#/', 'Dashboard');
+      const card = page.locator('.node-card').filter({ hasText: 'VM1' }).first();
+      await card.focus();
+      await page.keyboard.press('Enter');
+      await page.getByRole('heading', { name: /VM1/, level: 1 }).waitFor();
+      await T.open('#/', 'Dashboard');
+      const run = page.locator('.node-card').filter({ hasText: 'VM1' }).first().getByRole('button', { name: 'Run a test on VM1' });
+      await page.route('**/api/nodes/*/run', refuseManualRun);
+      try {
+        await run.focus();
+        await page.keyboard.press('Enter');
+        const dialog = page.getByRole('dialog');
+        await dialog.waitFor();
+        await T.see('Not started: the node is paused or already has a test waiting', dialog);
+        assert.equal(new URL(page.url()).hash, '#/', 'Enter on Run opens its test dialog without activating the card');
+        T.expectRefusal(409);
+        await T.dismiss();
+      } finally {
+        await page.unroute('**/api/nodes/*/run', refuseManualRun);
+      }
     },
 
     // The comparison chart: every metric, speed versus % of expected, chart versus table, hiding a node.

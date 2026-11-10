@@ -186,7 +186,7 @@
     var tb = h('tbody');
     o.rows.forEach(function (r) {
       var row = h('tr', { class: o.onRow ? 'clickable' : '', tabindex: o.onRow ? 0 : null, onClick: o.onRow ? function () { o.onRow(r); } : null,
-        onKeydown: o.onRow ? function (e) { if (e.key === 'Enter') o.onRow(r); } : null });
+        onKeydown: o.onRow ? function (e) { if (e.key === 'Enter' && e.target === e.currentTarget) o.onRow(r); } : null });
       o.columns.forEach(function (c) { row.appendChild(h('td', { class: c.num ? 'num' : '', 'data-label': o.cards && c.label ? c.label : null }, c.render ? c.render(r) : r[c.key])); });
       tb.appendChild(row);
     });

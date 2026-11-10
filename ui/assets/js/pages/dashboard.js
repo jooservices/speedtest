@@ -70,7 +70,8 @@
     tiles.appendChild(tile('Upload vs. expected', 'up', cur.up == null ? '—' : F.num(cur.up, 0), '%', delta(cur.up, prev.up, true), 'Average of each node’s upload compared with the speed you expect from it'));
     tiles.appendChild(tile('Median latency', 'activity', cur.ping == null ? '—' : F.num(cur.ping, 1), 'ms', delta(cur.ping, prev.ping, false)));
     tiles.appendChild(tile('Tests succeeded', 'check', cur.success == null ? '—' : F.num(cur.success, 1), '%', delta(cur.success, prev.success, true), F.num(cur.count) + ' tests in this range'));
-    tiles.appendChild(tile('IP changes', 'swap', String(cur.ips), cur.ips === 1 ? 'change' : 'changes', h('a', { href: '#/network', class: 'delta flat' }, 'See history')));
+    tiles.appendChild(tile('IP changes', 'swap', String(cur.ips), cur.ips === 1 ? 'change' : 'changes',
+      h('span', { class: 'row wrap', style: 'gap:8px' }, delta(cur.ips, prev.ips, false), h('a', { href: '#/network', class: 'hint' }, 'See history'))));
     root.appendChild(tiles);
 
     /* ---- node cards ---- */
@@ -83,7 +84,7 @@
       var pct = ok ? ok.down / n.expectedDown * 100 : null;
       var statusChip = !n.enabled ? U.chip('Paused', '', 'pause') : failedNow ? U.chip('Last test failed', 'crit', 'x') : (last && last.status === 'degraded') ? U.chip('Degraded', 'warn', 'alert') : U.chip('Online', 'good', 'check');
       var card = h('article', { class: 'card node-card', tabindex: 0, role: 'link', onClick: function (e) { if (e.target.closest('button')) return; location.hash = '#/nodes/' + n.id; },
-        onKeydown: function (e) { if (e.key === 'Enter') location.hash = '#/nodes/' + n.id; } },
+        onKeydown: function (e) { if (e.key === 'Enter' && e.target === e.currentTarget) location.hash = '#/nodes/' + n.id; } },
         h('div', { class: 'node-top' },
           h('div', null, h('div', { class: 'node-name' }, U.dot(color), n.name, h('span', { style: 'font-weight:500' }, n.label)), h('div', { class: 'node-meta' }, 'Expected ' + F.speed(n.expectedDown) + ' down · ' + F.speed(n.expectedUp) + ' up')),
           statusChip),
@@ -106,7 +107,7 @@
     root.appendChild(cards);
 
     /* ---- comparison chart ---- */
-    var chartHost = h('div'), legendHost = h('div'), tableMode = false;
+    var chartHost = h('div'), sparseHost = h('div'), legendHost = h('div'), tableMode = false;
     var metricSeg = U.seg([{ value: 'down', label: 'Download' }, { value: 'up', label: 'Upload' }, { value: 'ping', label: 'Latency' }, { value: 'jitter', label: 'Jitter' }, { value: 'loss', label: 'Loss' }], state.metric, function (v) { state.metric = v; drawChart(); modeHost.style.display = (v === 'down' || v === 'up') ? '' : 'none'; });
     var modeHost = h('div', { style: (state.metric === 'down' || state.metric === 'up') ? '' : 'display:none' }, U.seg([{ value: 'abs', label: 'Speed' }, { value: 'pct', label: '% of expected' }], state.mode, function (v) { state.mode = v; drawChart(); }));
     var viewSeg = U.seg([{ value: 'chart', label: 'Chart' }, { value: 'table', label: 'Table' }], 'chart', function (v) { tableMode = v === 'table'; drawChart(); });
@@ -120,6 +121,7 @@
         return { id: n.id, name: n.name + ' · ' + n.label, color: ST.nodeColor(n), points: pts, hidden: !!state.hidden[n.id] };
       });
       U.clear(legendHost); legendHost.appendChild(U.legend(series, state.hidden, function (id) { state.hidden[id] = !state.hidden[id]; drawChart(); }));
+      U.clear(sparseHost);
       U.clear(chartHost);
       if (tableMode) {
         var rows = series.filter(function (x) { return !x.hidden; }).map(function (x) {
@@ -135,6 +137,11 @@
           { key: 'max', label: 'Highest', num: true, render: function (r) { return fmt(r.sm.max); } }], rows: rows }));
         return;
       }
+      var sparse = series.filter(function (x) { return !x.hidden; }).map(function (x) {
+        return { name: x.name, count: x.points.filter(function (p) { return p[1] != null; }).length };
+      }).filter(function (x) { return x.count < 3; });
+      if (sparse.length) sparseHost.appendChild(U.callout('Not enough data yet. A ' + ST.metrics[m].label.toLowerCase() + ' trend needs at least three valid measurements. ' +
+        sparse.map(function (x) { return x.name + ': ' + x.count; }).join('; ') + '.', 'info', 'info'));
       var host = h('div'); chartHost.appendChild(host);
       var yfmt = pctMode ? function (v) { return F.num(v, 0) + '%'; } : (ST.metrics[m].unit === 'speed' ? F.axisSpeed : function (v) { return F.num(v, m === 'loss' ? 1 : 0); });
       ST.charts.line(host, {
@@ -143,7 +150,7 @@
         tipValue: function (sr, v) { return pctMode ? F.num(v, 1) + '% of expected' : F.metric(m, v); }
       });
     }
-    var chartCard = U.card('Compare connections', 'Hover for exact values. Click a node to hide or show it. Use “% of expected” to compare nodes with different plans fairly.', h('div', null, h('div', { class: 'row wrap between mb' }, legendHost), chartHost),
+    var chartCard = U.card('Compare connections', 'Hover for exact values. Click a node to hide or show it. Use “% of expected” to compare nodes with different plans fairly.', h('div', null, h('div', { class: 'row wrap between mb' }, legendHost), sparseHost, chartHost),
       [metricSeg, modeHost, viewSeg]);
     root.appendChild(chartCard);
     drawChart();

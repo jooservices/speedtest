@@ -14,14 +14,14 @@ Operations: 70. Without a test: 0.
 | startTwoFactorSetup | POST | `/api/auth/2fa/setup` | `internal/center/server/auth_twofactor_test.go` |
 | enableTwoFactor | POST | `/api/auth/2fa/enable` | `internal/center/server/auth_twofactor_test.go` |
 | disableTwoFactor | POST | `/api/auth/2fa/disable` | `internal/center/server/auth_twofactor_test.go` |
-| listNodes | GET | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/errtrack_test.go`<br>+13 more |
-| createNode | POST | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/nodes_test.go`<br>+8 more |
+| listNodes | GET | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/errtrack_test.go`<br>+14 more |
+| createNode | POST | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/nodes_test.go`<br>+9 more |
 | createEnrollmentToken | POST | `/api/agent/tokens` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go` |
 | enroll | POST | `/api/agent/enroll` | `cmd/center/main_integration_test.go`<br>`internal/agent/enroll/enroll_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/server/installer_integration_test.go`<br>+3 more |
 | getNode | GET | `/api/nodes/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/errtrack_test.go`<br>`internal/center/server/httpx_test.go`<br>+8 more |
 | updateNode | PATCH | `/api/nodes/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>+2 more |
 | deleteNode | DELETE | `/api/nodes/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/installer_test.go`<br>`internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>+2 more |
-| runNode | POST | `/api/nodes/{id}/run` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>`internal/center/telemetry/telemetry_test.go` |
+| runNode | POST | `/api/nodes/{id}/run` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>`internal/center/telemetry/telemetry_test.go`<br>+1 more |
 | createCommand | POST | `/api/nodes/{id}/commands` | `internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go` |
 | getCommand | GET | `/api/nodes/{id}/commands/{commandId}` | `internal/center/server/ownernodes_test.go` |
 | rotateCredential | POST | `/api/nodes/{id}/credential` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_test.go` |
