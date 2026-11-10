@@ -4,7 +4,13 @@
   var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt;
   var tab = 'general';
 
-  function row(title, desc, ctl) { return h('div', { class: 'setting' }, h('div', null, h('div', { style: 'font-weight:600' }, title), desc ? h('div', { class: 'hint' }, desc) : null), h('div', { class: 's-ctl' }, ctl)); }
+  function row(title, desc, ctl) {
+    var control = h('div', { class: 's-ctl' }, ctl);
+    Array.prototype.forEach.call(control.querySelectorAll('select'), function (select, index) {
+      select.setAttribute('aria-label', index ? title + ' ' + (index + 1) : title);
+    });
+    return h('div', { class: 'setting' }, h('div', null, h('div', { style: 'font-weight:600' }, title), desc ? h('div', { class: 'hint' }, desc) : null), control);
+  }
   var real = !ST.demo, pending = {};
   function saved() { if (!real) U.toast('Saved'); }
   function fail(error) {

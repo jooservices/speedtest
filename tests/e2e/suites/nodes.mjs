@@ -23,7 +23,8 @@ export function nodesSuite(T, ctx) {
       const header = page.getByRole('columnheader', { name: 'Node' });
       await header.click();
       await T.expectNoLoadError();
-      await T.row('VM2').click();
+      await T.row('VM2').focus();
+      await page.keyboard.press('Enter');
       await page.getByRole('heading', { name: /VM2/, level: 1 }).waitFor();
     },
     async listShowsUpload() {
@@ -34,6 +35,26 @@ export function nodesSuite(T, ctx) {
       const matches = text.match(new RegExp('\\d+(\\.\\d+)? [KMG]?bps \\(\\d+%\\)', 'g')) || [];
       assert.ok(matches.length >= 2, 'the VM1 row shows download and upload against the expected speed: ' + text);
       await T.expectNoLoadError();
+    },
+    async sparseChartShowsReference() {
+      const node = '82000000-0000-4000-8000-000000000082';
+      T.db(`INSERT INTO nodes(id,name,label,expected_down_mbps,expected_up_mbps,color_slot,host,agent) VALUES ('${node}','Sparse E2E','Two measurements',100,50,7,'sparse-e2e','test')`);
+      T.db(`INSERT INTO engine_schedules(node_id,engine) VALUES ('${node}','ookla')`);
+      T.db("INSERT INTO ip_addresses(ip) VALUES ('203.0.113.82') ON CONFLICT DO NOTHING");
+      T.db(`INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,bytes_down,bytes_up,duration_seconds,engine) VALUES
+        ('82000000-0000-4000-8000-000000000083','${node}',now()-interval '1 hour','ok',80,40,8,9,'{"id":9,"name":"Test server"}'::jsonb,'203.0.113.82',4,1000,500,1,'ookla'),
+        ('82000000-0000-4000-8000-000000000084','${node}',now()-interval '2 hours','ok',82,42,8,9,'{"id":9,"name":"Test server"}'::jsonb,'203.0.113.82',4,1000,500,1,'ookla')`);
+      try {
+        await page.evaluate(() => window.ST.load());
+        await page.goto(T.url('#/nodes/' + node));
+        await page.getByRole('heading', { name: /Sparse E2E/ }).waitFor();
+        await T.see('Not enough data yet');
+        await T.see('Expected download');
+        await T.see('Expected upload');
+        await T.expectNoLoadError();
+      } finally {
+        T.db(`DELETE FROM nodes WHERE id='${node}'`);
+      }
     },
 
     // The wizard with the one-line command, a real agent that enrols with the shown key, the first result, a manual run.

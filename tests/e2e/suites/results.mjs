@@ -6,6 +6,10 @@ export function resultsSuite(T) {
       await T.see('1,680 results');
       const status = T.selectWith('Any status');
       await status.selectOption('failed');
+      const reason = page.locator('.result-reason').first();
+      await reason.waitFor();
+      const reasonText = await reason.innerText();
+      assert.ok(reasonText.length <= 32 && reasonText.startsWith('The test server'), 'failed rows show a short reason chip: ' + reasonText);
       const failed = await page.locator('text=/\\d[\\d,]* results?/').first().innerText();
       assert.ok(/^(\d+) results?$/.test(failed.replace(/,/g, '')) && Number.parseInt(failed, 10) < 1680, `status filter: ${failed}`);
       await status.selectOption('all');

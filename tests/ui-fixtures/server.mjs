@@ -14,6 +14,11 @@ export function fixture() {
     jitter: null, loss: null, dLat: null, uLat: null, bytesDown: 1000, bytesUp: 500, duration: 1,
     manual: false, raw: {}, server: { id: 1, name: 'Fixture server', city: '', sponsor: '' }, geo: null };
   node.latest = result; node.latestGood = result;
+  const metric = (value, n = 1) => ({ n, mean: value, median: value, min: value, max: value, p5: value, p95: value, std: 0 });
+  const summary = { count: 1, ok: 1, failed: 0, successRate: 100, down: metric(90), up: metric(40), ping: metric(0),
+    jitter: metric(null, 0), loss: metric(null, 0), ipCount: 1, downPct: 90, upPct: 80, stability: 100 };
+  const fleet = { down: 90, up: 80, ping: 0, success: 100, ips: 0, count: 1 };
+  const dashboard = { current: fleet, previous: fleet, nodes: [{ node, summary, sparkline: [] }], latestResults: [result], openAlerts: [], openAlertCount: 0 };
   const notify = Object.fromEntries(['email', 'telegram', 'slack', 'webhook'].map(key => [key, { on: false, to: '', configured: false }]));
   const settings = { theme: 'dark', range: '7d', units: 'auto', timezone: 'browser', hour12: false, decimals: 1,
     retentionDays: 365, geoProvider: 'geolite2', geoFallback: 'ip-api', geoAutoUpdate: true, engine: 'ookla',
@@ -26,7 +31,7 @@ export function fixture() {
   const schedules = { rules: { stagger: true, maxConcurrent: 1, quiet: { quietStart: '', quietEnd: '', timezone: 'UTC' } },
     nodes: [{ nodeId: node.id, config: { interval: 30, offset: 0, enabled: true }, nextRun: ts, upcoming: [ts], bytesPerDay: 72000, bytesPerMonth: 2160000 }],
     clashes: [] };
-  return { node, result, settings, rule, event, schedules };
+  return { node, result, settings, rule, event, schedules, dashboard };
 }
 const ts0 = () => new Date().toISOString();
 export const envelope = (data, meta = {}, code = 200) => ({ success: true, code, message: 'OK', data, meta, errors: null });
@@ -132,6 +137,7 @@ export async function startServer() {
           : [{ nodeId: id, metric: 'down', count: 1, bins: [{ from: 90, to: 91, count: 1, percent: 100 }] }];
         send(200, envelope(body)); return;
       }
+      if (req.method === 'GET' && url.pathname === '/api/dashboard') { send(200, envelope(data.dashboard)); return; }
       if (url.pathname === '/api/settings') { send(200, envelope(data.settings)); return; }
       if (url.pathname === '/api/schedules') { send(200, envelope(data.schedules)); return; }
       if (url.pathname.startsWith('/api/schedules/')) { send(200, envelope(data.schedules.nodes[0])); return; }

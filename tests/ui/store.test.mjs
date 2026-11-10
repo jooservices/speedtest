@@ -147,6 +147,10 @@ test('demo public queries, statistics, formatting and mutations retain their beh
   assert.equal(ST.node(node.id).name, 'Extra'); assert.ok(ST.nodeColor(node).startsWith('var('));
   assert.ok(ST.nodeTitle(node).startsWith('Extra')); ST.removeNode(node.id); assert.equal(ST.node(node.id), undefined);
   const F = ST.fmt;
+  assert.equal(F.failureReason('  Network   timeout  '), 'Network timeout');
+  assert.equal(F.failureReason('The test server did not answer in time'), 'The test server did not answer…');
+  assert.equal(F.failureReason(''), 'Reason unavailable');
+  assert.equal(F.failureReason(null), 'Reason unavailable');
   for (const kind of ['day', 'time', 'full', 'dayfull', undefined]) assert.equal(typeof F.date(Date.now(), kind), 'string');
   assert.equal(F.date(null), '—'); assert.equal(F.parts(Date.parse('2026-11-02T00:00:00Z')).wd, 0);
   assert.equal(F.rel(null), '—');
@@ -182,6 +186,7 @@ test('remote schedules, rules, stagger, key rotation, agent update, manual tests
   await ST.load();
   assert.equal(ST.scheduleInfo().rules.maxConcurrent, 1);
   assert.equal(ST.scheduleInfo().nodes[0].nodeId, data.node.id);
+  assert.deepEqual(JSON.parse(JSON.stringify(ST.engineSchedules(data.node))), [{ engine: 'ookla', interval: 30, offset: 0, enabled: true }]);
   await ST.saveSchedule(data.node.id, { interval: 60, offset: 5, enabled: true });
   const put = control.requests.find(r => r.method === 'PUT' && r.path === '/api/schedules/' + data.node.id);
   assert.deepEqual(put.body, { interval: 60, offset: 5, enabled: true }); assert.equal(put.headers['if-match'], '"fixture-v1"');

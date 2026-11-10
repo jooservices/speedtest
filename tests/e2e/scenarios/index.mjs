@@ -8,6 +8,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-DASH-02', area: 'dashboard', title: 'the comparison chart offers every metric, table view and node toggle', covers: 'dashboard compare card', run: S.dashboard.compareConnections },
     { id: 'SC-DASH-03', area: 'dashboard', title: 'dashboard shortcuts lead to the right pages and dialogs', covers: 'navigation links, add node, run all', run: S.dashboard.shortcuts },
     { id: 'SC-DASH-04', area: 'dashboard', title: 'the time range in the top bar drives the pages', covers: 'time range', run: S.dashboard.timeRange },
+    { id: 'SC-DASH-05', area: 'dashboard', title: 'the period comparison recovers after a temporary failure', covers: 'comparison error state and refresh retry', run: S.dashboard.comparisonRecoversFromFailure },
 
     { id: 'SC-QA-01', area: 'quality', title: 'every page draws real data without console errors', covers: 'all routes', run: S.quality.everyPageDraws },
     { id: 'SC-QA-02', area: 'quality', title: 'every page holds its layout at 390, 768 and 1440 px in both themes', covers: 'responsive layout, themes', run: S.quality.layoutHolds },
@@ -15,8 +16,9 @@ export function scenarios({ T, S }) {
     { id: 'SC-QA-04', area: 'quality', title: 'the theme switch persists', covers: 'theme preference stored on the center', run: S.quality.themeSwitch },
     { id: 'SC-QA-05', area: 'quality', title: 'on a phone the top bar fits one row and download buttons show a download icon', covers: 'top bar layout at 390 px, download icon', run: S.quality.phoneTopBar },
 
-    { id: 'SC-NODE-01', area: 'nodes', title: 'the node list sorts and opens a node', covers: 'nodes list, detail', run: S.nodes.listSortsAndOpens },
+    { id: 'SC-NODE-01', area: 'nodes', title: 'the node list sorts and opens a node by keyboard', covers: 'nodes list, detail, keyboard navigation', run: S.nodes.listSortsAndOpens },
     { id: 'SC-NODE-09', area: 'nodes', title: 'the node list shows download and upload against the expected speed', covers: 'nodes list upload column', run: S.nodes.listShowsUpload },
+    { id: 'SC-NODE-10', area: 'nodes', title: 'a sparse speed chart explains the data limit and expected speeds', covers: 'sparse chart note and expected download/upload references', run: S.nodes.sparseChartShowsReference },
     { id: 'SC-NODE-07', area: 'nodes', title: 'the node list is a list of cards on a phone', covers: 'mobile layout without sideways scrolling', run: S.nodes.cardsOnPhone },
     { id: 'SC-NODE-02', area: 'nodes', title: 'the add-node wizard refuses incomplete and duplicate input', covers: 'wizard validation', run: S.nodes.wizardValidation },
     { id: 'SC-NODE-03', area: 'nodes', title: 'node settings validate, save and refuse a duplicate name', covers: 'node edit', run: S.nodes.detailAndSettings },

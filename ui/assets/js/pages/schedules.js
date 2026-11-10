@@ -25,7 +25,11 @@
     if (!nodes.length) { root.appendChild(U.card(null, null, U.empty('No nodes yet', 'Add a node to schedule tests.'))); return; }
 
     /* ---- global rules ---- */
-    function settingRow(title, desc, ctl) { return h('div', { class: 'setting' }, h('div', null, h('div', { style: 'font-weight:600' }, title), h('div', { class: 'hint' }, desc)), h('div', { class: 's-ctl' }, ctl)); }
+    function settingRow(title, desc, ctl) {
+      var select = ctl && ctl.matches && ctl.matches('select') ? ctl : ctl && ctl.querySelector && ctl.querySelector('select');
+      if (select && !select.getAttribute('aria-label')) select.setAttribute('aria-label', title);
+      return h('div', { class: 'setting' }, h('div', null, h('div', { style: 'font-weight:600' }, title), h('div', { class: 'hint' }, desc)), h('div', { class: 's-ctl' }, ctl));
+    }
     root.appendChild(U.card('Rules for all nodes', null, h('div', null,
       settingRow('Keep tests from overlapping', 'Shifts each node by a few minutes so two tests never compete for the same bandwidth. Recommended when one node measures a combination of the others.', U.toggle(s.stagger, function (v) {
         if (real) { ST.saveScheduleRules({ stagger: v }).then(function () { U.toast(v ? 'Tests are now spread out' : 'Tests may overlap'); }, failed); return; }
@@ -57,10 +61,18 @@
     /* ---- per node ---- */
     var countdowns = [];
     var rows = nodes.map(function (n) { return { n: n }; });
+    function intervalSelect(r) {
+      var select = U.select(INTERVALS.map(function (m) { return { value: m, label: ivLabel(m) }; }), r.n.interval, function (v) {
+        if (real) { ST.saveSchedule(r.n.id, { interval: +v, offset: Math.min(r.n.offset || 0, +v - 1), enabled: byNode[r.n.id] ? byNode[r.n.id].config.enabled : true }).then(function () { U.toast(r.n.name + ': ' + ivLabel(+v).toLowerCase()); }, failed); return; }
+        ST.updateNode(r.n.id, { interval: +v, offset: Math.min(r.n.offset || 0, +v - 1) }); U.toast(r.n.name + ': ' + ivLabel(+v).toLowerCase());
+      }, 'auto');
+      select.setAttribute('aria-label', 'How often for ' + r.n.name);
+      return select;
+    }
     var table = U.table({
       columns: [
         { key: 'n', label: 'Node', render: function (r) { return h('div', null, h('div', { class: 'row', style: 'font-weight:650' }, U.dot(ST.nodeColor(r.n)), r.n.name), h('div', { class: 'muted' }, r.n.label)); } },
-        { key: 'iv', label: 'How often', render: function (r) { return U.select(INTERVALS.map(function (m) { return { value: m, label: ivLabel(m) }; }), r.n.interval, function (v) { if (real) { ST.saveSchedule(r.n.id, { interval: +v, offset: Math.min(r.n.offset || 0, +v - 1), enabled: byNode[r.n.id] ? byNode[r.n.id].config.enabled : true }).then(function () { U.toast(r.n.name + ': ' + ivLabel(+v).toLowerCase()); }, failed); return; } ST.updateNode(r.n.id, { interval: +v, offset: Math.min(r.n.offset || 0, +v - 1) }); U.toast(r.n.name + ': ' + ivLabel(+v).toLowerCase()); }, 'auto'); } },
+        { key: 'iv', label: 'How often', render: intervalSelect },
         { key: 'off', label: 'Starts at minute', render: function (r) { return h('div', { style: 'width:90px' }, U.input(r.n.offset || 0, function (v) { var x = Math.max(0, Math.min(r.n.interval - 1, Math.round(+v) || 0)); if (!real) { r.n.offset = x; ST.persist(); } }, { type: 'number', min: 0, max: r.n.interval - 1, 'aria-label': 'Offset in minutes for ' + r.n.name, onChange: function (e) {
           if (!real) { ST.emit('data'); return; }
           var x = Math.max(0, Math.min(r.n.interval - 1, Math.round(+e.target.value) || 0));

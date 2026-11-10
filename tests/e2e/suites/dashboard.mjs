@@ -6,8 +6,17 @@ export function dashboardSuite(T) {
       await T.see('5 of 5 nodes active');
       for (const label of ['Download vs. expected', 'Upload vs. expected', 'Median latency', 'Tests succeeded', 'IP changes']) await T.see(label);
       for (const name of ['VM1', 'VM2', 'VM3', 'VM4', 'VM5']) await page.locator('.node-card').filter({ hasText: name }).first().waitFor();
+      const emptyBaseline = await page.locator('.stat .delta').allInnerTexts();
+      assert.ok(emptyBaseline.includes('No previous period'), 'missing history is explained without an empty dash: ' + emptyBaseline.join(', '));
+      await T.choose(page.locator('#topbar select').first(), '24h');
+      await T.see('last 24 hours', page.locator('#view'));
+      await T.settled();
+      await T.eventually(async () => (await page.locator('.stat .delta').allInnerTexts()).some(value => /▲|▼|≈ same/.test(value)), 'KPI cards compare this period with the previous period');
       const changes = await page.locator('.stat').filter({ hasText: 'IP changes' }).locator('.stat-value').innerText();
-      assert.match(changes, /^[1-9]\d*\s*change/, 'the seeded address changes must be counted, got ' + JSON.stringify(changes));
+      const expectedChanges = Number(T.db("select count(*) from node_ip_history where ts >= now()-interval '24 hours' and ts < now() and from_ip is not null"));
+      assert.equal(Number(changes.match(/^\d+/)?.[0]), expectedChanges, 'the current-period IP change count matches the stored history');
+      await T.choose(page.locator('#topbar select').first(), '7d');
+      await T.see('last 7 days', page.locator('#view'));
       await T.expectNoLoadError();
     },
 
@@ -63,6 +72,25 @@ export function dashboardSuite(T) {
       await T.choose(page.locator('#topbar select').first(), '30d');
       await T.see('last 30 days', page.locator('#view'));
       await T.choose(page.locator('#topbar select').first(), '7d');
+    },
+
+    async comparisonRecoversFromFailure() {
+      const failSnapshot = route => route.fulfill({ status: 500, contentType: 'application/json', body: JSON.stringify({ type: 'about:blank', title: 'Internal Server Error', status: 500, detail: 'Temporary failure.' }) });
+      await page.route('**/api/dashboard**', failSnapshot);
+      try {
+        await page.goto(T.url('#/'));
+        await page.reload();
+        await T.heading('Dashboard').waitFor();
+        await T.see('5 of 5 nodes active');
+        await T.see('Comparison unavailable');
+        T.expectRefusal(500);
+      } finally {
+        await page.unroute('**/api/dashboard**', failSnapshot);
+      }
+      await page.reload();
+      await T.see('5 of 5 nodes active');
+      await T.eventually(async () => (await page.locator('.stat .delta').allInnerTexts()).every(value => value !== 'Comparison unavailable' && value !== 'Loading comparison…'), 'the comparison recovers after refresh');
+      await T.expectNoLoadError();
     },
   };
 }

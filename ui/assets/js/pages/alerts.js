@@ -72,6 +72,7 @@
       var filt = h('div', { class: 'row wrap mb' },
         U.seg([{ value: 'open', label: 'Open' }, { value: 'all', label: 'All' }], q.show, function (v) { q.show = v; ST.refresh(); }),
         U.select([{ value: 'all', label: 'Any importance' }].concat(SEV), q.sev, function (v) { q.sev = v; ST.refresh(); }, 'auto'));
+      filt.querySelector('select').setAttribute('aria-label', 'Filter by importance');
       root.appendChild(filt);
       var list = events.filter(function (e) { return (q.show === 'all' || !e.acked) && (q.sev === 'all' || e.severity === q.sev); });
       var card = h('div', { class: 'card card-pad' });

@@ -55,13 +55,15 @@
           { key: 'loss', label: 'Loss', sort: true, num: true, render: function (r) { return r.loss == null ? '—' : F.num(r.loss, 1) + '%'; } },
           { key: 'server', label: 'Server', sort: true, render: function (r) { if (r.serverId == null && !r.server) return '—'; var s = r.server || ST.server(r.serverId); return s.name + (s.city ? ', ' + s.city : ''); } },
           { key: 'ip', label: 'Public IP', sort: true, render: function (r) { return h('span', { class: 'mono' }, r.ip); } },
-          { key: 'status', label: 'Status', sort: true, render: function (r) { return U.statusChip(r.status); } }],
+          { key: 'status', label: 'Status', sort: true, render: U.resultStatus }],
         rows: slice, sortKey: q.sort, sortDir: q.dir, onSort: function (k) { if (q.sort === k) q.dir = q.dir === 'asc' ? 'desc' : 'asc'; else { q.sort = k; q.dir = k === 'ts' ? 'desc' : 'asc'; } draw(); },
         onRow: function (r) { ST.openResult(r); },
         empty: U.empty('No results match', 'Try a wider time range or clear some filters.', U.btn('Clear filters', { onClick: function () { q.nodes = nodes.map(function (n) { return n.id; }); q.status = 'all'; q.text = ''; q.minDown = ''; q.maxDown = ''; q.page = 1; ST.refresh(); } }))
       }));
+      var pageSize = U.select([10, 25, 50, 100], q.size, function (v) { q.size = +v; q.page = 1; draw(); }, 'auto');
+      pageSize.setAttribute('aria-label', 'Rows per page');
       var pager = h('div', { class: 'pager' },
-        h('span', { class: 'row' }, 'Rows per page', U.select([10, 25, 50, 100], q.size, function (v) { q.size = +v; q.page = 1; draw(); }, 'auto')),
+        h('span', { class: 'row' }, 'Rows per page', pageSize),
         h('span', { class: 'muted tabnum' }, rows.length ? ((q.page - 1) * q.size + 1) + '–' + Math.min(rows.length, q.page * q.size) + ' of ' + F.num(rows.length) : '0 of 0'),
         h('span', { class: 'row' },
           U.btn('', { icon: 'chevron', size: 'sm', title: 'Previous page', disabled: q.page <= 1, onClick: function () { q.page--; draw(); } }),
@@ -86,11 +88,13 @@
       } }, U.dot(ST.nodeColor(n)), n.name);
       nodeBox.appendChild(b);
     });
+    var statusFilter = U.select([{ value: 'all', label: 'Any status' }, { value: 'ok', label: 'OK' }, { value: 'degraded', label: 'Degraded' }, { value: 'failed', label: 'Failed' }], q.status, function (v) { q.status = v; q.page = 1; draw(); }, 'auto');
+    statusFilter.setAttribute('aria-label', 'Result status');
     var filters = h('div', { class: 'card card-pad mb stack' },
       h('div', { class: 'row wrap between' },
         h('div', { class: 'row wrap' },
           U.rangeSelect(rangeKey, function (v) { q.range = v; q.page = 1; draw(); }),
-          U.select([{ value: 'all', label: 'Any status' }, { value: 'ok', label: 'OK' }, { value: 'degraded', label: 'Degraded' }, { value: 'failed', label: 'Failed' }], q.status, function (v) { q.status = v; q.page = 1; draw(); }, 'auto'),
+          statusFilter,
           h('div', { style: 'width:190px' }, U.suffix(U.input(q.minDown, function (v) { q.minDown = v; q.page = 1; draw(); }, { type: 'number', min: 0, placeholder: 'Min download', 'aria-label': 'Minimum download' }), 'Mbps')),
           h('div', { style: 'width:190px' }, U.suffix(U.input(q.maxDown, function (v) { q.maxDown = v; q.page = 1; draw(); }, { type: 'number', min: 0, placeholder: 'Max download', 'aria-label': 'Maximum download' }), 'Mbps')),
           h('div', { style: 'width:280px;position:relative' }, U.input(q.text, function (v) { q.text = v; q.page = 1; draw(); }, { type: 'search', placeholder: 'Search IP, server, city, error', 'aria-label': 'Search results' }))),
