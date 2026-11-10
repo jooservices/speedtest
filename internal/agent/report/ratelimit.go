@@ -20,6 +20,20 @@ type RateLimitBackoffConfig struct {
 	Jitter  float64
 }
 
+// RateLimitState is the durable, per-engine backoff state stored with results.
+type RateLimitState struct {
+	Deadline time.Time
+	Attempt  int
+	Recorded bool
+}
+
+// RateLimitStateUpdate is committed in the same spool transaction as a result.
+// A nil State deletes that engine's stored state.
+type RateLimitStateUpdate struct {
+	Engine string
+	State  *RateLimitState
+}
+
 // DefaultRateLimitBackoff is 1m doubling to 1h with 20% jitter.
 func DefaultRateLimitBackoff() RateLimitBackoffConfig {
 	return RateLimitBackoffConfig{Initial: time.Minute, Max: time.Hour, Factor: 2, Jitter: 0.2}
@@ -56,6 +70,9 @@ func RateLimitBackoffConfigFromEnv() (RateLimitBackoffConfig, error) {
 		}
 		cfg.Jitter = v
 	}
+	if cfg.Max < cfg.Initial {
+		return RateLimitBackoffConfig{}, fmt.Errorf("SPEEDTEST_RATE_LIMIT_BACKOFF_MAX must be a duration >= initial")
+	}
 	return cfg, nil
 }
 
@@ -66,13 +83,7 @@ type RateLimitGate struct {
 	now func() time.Time
 	rng *rand.Rand
 	mu  sync.Mutex
-	by  map[string]*rateLimitState
-}
-
-type rateLimitState struct {
-	until    time.Time
-	attempt  int
-	recorded bool
+	by  map[string]RateLimitState
 }
 
 // NewRateLimitGate builds a gate. A nil now uses the wall clock.
@@ -81,7 +92,7 @@ func NewRateLimitGate(cfg RateLimitBackoffConfig, now func() time.Time) *RateLim
 		cfg.Initial = time.Minute
 	}
 	if cfg.Max < cfg.Initial {
-		cfg.Max = time.Hour
+		cfg.Max = cfg.Initial
 	}
 	if cfg.Factor < 1 {
 		cfg.Factor = 2
@@ -96,7 +107,7 @@ func NewRateLimitGate(cfg RateLimitBackoffConfig, now func() time.Time) *RateLim
 		cfg: cfg,
 		now: now,
 		rng: rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64())),
-		by:  map[string]*rateLimitState{},
+		by:  map[string]RateLimitState{},
 	}
 }
 
@@ -104,8 +115,54 @@ func NewRateLimitGate(cfg RateLimitBackoffConfig, now func() time.Time) *RateLim
 func (g *RateLimitGate) Blocked(engine string) bool {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	state := g.by[engineKey(engine)]
-	return state != nil && g.now().Before(state.until)
+	state, ok := g.by[engineKey(engine)]
+	return ok && g.now().Before(state.Deadline)
+}
+
+// Deadline returns the active engine deadline, if one has been recorded.
+func (g *RateLimitGate) Deadline(engine string) (time.Time, bool) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	state, ok := g.by[engineKey(engine)]
+	return state.Deadline, ok
+}
+
+// Restore replaces the in-memory state with records loaded from the durable spool.
+func (g *RateLimitGate) Restore(states map[string]RateLimitState) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.by = make(map[string]RateLimitState, len(states))
+	for engine, state := range states {
+		g.by[engineKey(engine)] = state
+	}
+}
+
+// PlanFailure computes a rate-limit transition without mutating the gate.
+func (g *RateLimitGate) PlanFailure(engine, class string) (bool, *RateLimitState) {
+	if class != failureclass.RateLimited {
+		return true, nil
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	key := engineKey(engine)
+	state, ok := g.by[key]
+	now := g.now()
+	if ok && now.Before(state.Deadline) && state.Recorded {
+		return false, nil
+	}
+	attempt := 0
+	if ok {
+		attempt = state.Attempt
+	}
+	next := RateLimitState{Deadline: now.Add(g.delay(attempt)), Attempt: min(attempt+1, 1024), Recorded: true}
+	return true, &next
+}
+
+// CommitFailure applies a transition only after its result and state were spooled atomically.
+func (g *RateLimitGate) CommitFailure(engine string, state RateLimitState) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	g.by[engineKey(engine)] = state
 }
 
 // ObserveSuccess clears backoff for engine after a successful measurement.
@@ -121,28 +178,11 @@ func (g *RateLimitGate) ObserveFailure(engine, class string) bool {
 	if class != failureclass.RateLimited {
 		return true
 	}
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	key := engineKey(engine)
-	state := g.by[key]
-	now := g.now()
-	if state != nil && now.Before(state.until) {
-		if state.recorded {
-			return false
-		}
-		state.recorded = true
-		return true
+	record, state := g.PlanFailure(engine, class)
+	if !record || state == nil {
+		return record
 	}
-	if state == nil {
-		state = &rateLimitState{}
-		g.by[key] = state
-	}
-	delay := g.delay(state.attempt)
-	if state.attempt < 1024 {
-		state.attempt++
-	}
-	state.until = now.Add(delay)
-	state.recorded = true
+	g.CommitFailure(engine, *state)
 	return true
 }
 

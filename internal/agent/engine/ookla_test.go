@@ -183,6 +183,7 @@ func TestRunnerFailureClassification(t *testing.T) {
 		{"No route to host", NoRoute}, {"Network is unreachable", NoRoute}, {"Network unreachable", NoRoute},
 		{"Cannot resolve host", NoRoute}, {"Could not resolve hostname", NoRoute},
 		{"Unable to connect to server", ServerUnavailable}, {"Connection refused", ServerUnavailable},
+		{"connection refused by server 1429", ServerUnavailable}, {"HTTP/2 429 from provider", RateLimited},
 		{"Timeout", Timeout}, {"Operation timed out", Timeout}, {"unexpected exit", Execution},
 	} {
 		t.Run(tc.message, func(t *testing.T) {

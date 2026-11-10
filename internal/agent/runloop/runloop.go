@@ -57,6 +57,7 @@ type Loop struct {
 	center        string
 	credential    string
 	mu            sync.Mutex
+	measurementMu sync.Mutex
 	cfg           measurementConfig
 	engineConfigs map[string]measurementConfig
 	commands      map[string]commandState
@@ -83,15 +84,7 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 	if _, err = netpath.NewRunner(runner, center.String(), credential, binding); err != nil {
 		return nil, err
 	}
-	sc, err := report.SpoolConfigFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	spool, err := report.Open(sc, logger)
-	if err != nil {
-		return nil, err
-	}
-	backoffCfg, err := report.RateLimitBackoffConfigFromEnv()
+	spool, rateLimits, err := openRateLimitSpool(logger)
 	if err != nil {
 		return nil, err
 	}
@@ -103,7 +96,7 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 			threads = ec.Concurrent
 		}
 	}
-	l := &Loop{spool: spool, rateLimits: report.NewRateLimitGate(backoffCfg, nil), logger: logger, center: center.String(), credential: credential,
+	l := &Loop{spool: spool, rateLimits: rateLimits, logger: logger, center: center.String(), credential: credential,
 		cfg: measurementConfig{runner, binding, cfg.ServerID, threads, cfg.Engine}, commands: make(map[string]commandState), notify: make(chan struct{}, 1), fatal: make(chan error, 1)}
 	if err := l.restoreCommands(); err != nil {
 		return nil, err
@@ -121,6 +114,29 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 	l.Controller.OfferUpdate = func(c control.AgentConfig) { l.Updater.Offer(c.AutoUpdate, c.Release) }
 	l.Controller.UpdateAgent = l.updateAgent
 	return l, nil
+}
+
+func openRateLimitSpool(logger *slog.Logger) (*report.Spool, *report.RateLimitGate, error) {
+	sc, err := report.SpoolConfigFromEnv()
+	if err != nil {
+		return nil, nil, err
+	}
+	backoff, err := report.RateLimitBackoffConfigFromEnv()
+	if err != nil {
+		return nil, nil, err
+	}
+	spool, err := report.Open(sc, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	states, err := spool.RateLimitStates()
+	if err != nil {
+		_ = spool.Close()
+		return nil, nil, err
+	}
+	gate := report.NewRateLimitGate(backoff, nil)
+	gate.Restore(states)
+	return spool, gate, nil
 }
 
 // Close releases the spool after all workers have joined.
@@ -241,6 +257,12 @@ func (l *Loop) RunEngine(ctx context.Context, name string) error {
 }
 
 func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
+	l.measurementMu.Lock()
+	defer l.measurementMu.Unlock()
+	return l.measureEngineLocked(ctx, id, name)
+}
+
+func (l *Loop) measureEngineLocked(ctx context.Context, id, name string) error {
 	l.mu.Lock()
 	cfg := l.cfg
 	if name != "" {
@@ -255,10 +277,15 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 	if engineName == "" {
 		engineName = name
 	}
-	// Scheduled slots stay quiet during a provider backoff window; manual run_now still attempts.
-	if id == "" && l.rateLimits != nil && l.rateLimits.Blocked(engineName) {
+	if l.rateLimits != nil && l.rateLimits.Blocked(engineName) {
+		deadline, _ := l.rateLimits.Deadline(engineName)
 		l.mu.Unlock()
-		l.logger.Info("skipping scheduled test during rate-limit backoff", "engine", engineName)
+		if id != "" {
+			message := fmt.Sprintf("Test deferred: %s provider rate-limit backoff is active until %s UTC", engineName, deadline.UTC().Format(time.RFC3339))
+			l.failCommand(id, &message)
+		} else {
+			l.logger.Info("skipping scheduled test during rate-limit backoff", "engine", engineName)
+		}
 		return nil
 	}
 	l.progress(id, "testing", 20)
@@ -283,33 +310,43 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 	}
 	res.Engine = engineName
 	res.Warnings = out.Warnings
-	if !l.acceptResult(engineName, id, res) {
-		return runErr
-	}
-	if err := l.spoolResult(id, res); err != nil {
+	if _, err := l.spoolMeasurementResult(engineName, id, res); err != nil {
 		return err
 	}
 	return runErr
 }
 
-func (l *Loop) acceptResult(engineName, id string, res report.Result) bool {
-	if res.Status != report.StatusFailed {
-		if l.rateLimits != nil {
-			l.rateLimits.ObserveSuccess(engineName)
+func (l *Loop) spoolMeasurementResult(engineName, id string, res report.Result) (bool, error) {
+	var update *report.RateLimitStateUpdate
+	var next *report.RateLimitState
+	if res.Status == report.StatusFailed && l.rateLimits != nil {
+		record, state := l.rateLimits.PlanFailure(engineName, res.FailureClass)
+		if !record {
+			l.logger.Info("rate-limited failure already recorded in backoff window", "engine", engineName, "class", failureclass.RateLimited)
+			if id != "" {
+				l.failCommand(id, res.Error)
+			}
+			return false, nil
 		}
-		return true
-	}
-	if l.rateLimits != nil && !l.rateLimits.ObserveFailure(engineName, res.FailureClass) {
-		l.logger.Info("rate-limited failure already recorded in backoff window", "engine", engineName, "class", failureclass.RateLimited)
-		if id != "" {
-			l.failCommand(id, res.Error)
+		if state != nil {
+			next = state
+			update = &report.RateLimitStateUpdate{Engine: engineName, State: state}
 		}
-		return false
+	} else if res.Status != report.StatusFailed && l.rateLimits != nil {
+		update = &report.RateLimitStateUpdate{Engine: engineName}
 	}
-	return true
+	if err := l.spoolResult(id, res, update); err != nil {
+		return false, err
+	}
+	if next != nil {
+		l.rateLimits.CommitFailure(engineName, *next)
+	} else if res.Status != report.StatusFailed && l.rateLimits != nil {
+		l.rateLimits.ObserveSuccess(engineName)
+	}
+	return true, nil
 }
 
-func (l *Loop) spoolResult(id string, res report.Result) error {
+func (l *Loop) spoolResult(id string, res report.Result, update *report.RateLimitStateUpdate) error {
 	// Enqueue is independent of cancellation: an interrupted test is still durable.
 	l.mu.Lock()
 	var state commandState
@@ -319,7 +356,7 @@ func (l *Loop) spoolResult(id string, res report.Result) error {
 		state.Ack = control.CommandAck{Status: "running", Phase: "reporting", Pct: 80}
 	}
 	data, _ := json.Marshal(state)
-	err := l.spool.AppendWithState(res, id, data)
+	err := l.spool.AppendWithMetadata(res, id, data, update)
 	if err != nil {
 		l.mu.Unlock()
 		l.fail(errors.New("result spool write failed"))

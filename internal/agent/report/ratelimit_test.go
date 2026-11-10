@@ -40,6 +40,16 @@ func TestRateLimitGateRecordsOncePerWindow(t *testing.T) {
 	}
 }
 
+func TestRateLimitPlanLeavesOrdinaryFailuresUnchanged(t *testing.T) {
+	gate := report.NewRateLimitGate(report.DefaultRateLimitBackoff(), nil)
+	if record, state := gate.PlanFailure("ookla", failureclass.Timeout); !record || state != nil {
+		t.Fatalf("ordinary failure plan = record %t, state %+v", record, state)
+	}
+	if blocked := gate.Blocked("ookla"); blocked {
+		t.Fatal("ordinary failure opened a provider backoff")
+	}
+}
+
 func TestRateLimitBackoffConfigFromEnv(t *testing.T) {
 	t.Setenv("SPEEDTEST_RATE_LIMIT_BACKOFF_INITIAL", "30s")
 	t.Setenv("SPEEDTEST_RATE_LIMIT_BACKOFF_MAX", "10m")
@@ -68,6 +78,16 @@ func TestRateLimitBackoffConfigFromEnv(t *testing.T) {
 	if _, err := report.RateLimitBackoffConfigFromEnv(); err == nil {
 		t.Fatal("invalid jitter accepted")
 	}
+	t.Setenv("SPEEDTEST_RATE_LIMIT_BACKOFF_JITTER", "0.2")
+	t.Setenv("SPEEDTEST_RATE_LIMIT_BACKOFF_MAX", "")
+	t.Setenv("SPEEDTEST_RATE_LIMIT_BACKOFF_INITIAL", "2h")
+	if _, err := report.RateLimitBackoffConfigFromEnv(); err == nil {
+		t.Fatal("initial above default max accepted")
+	}
+	t.Setenv("SPEEDTEST_RATE_LIMIT_BACKOFF_MAX", "2h")
+	if cfg, err := report.RateLimitBackoffConfigFromEnv(); err != nil || cfg.Initial != cfg.Max {
+		t.Fatalf("equal configured bounds rejected: %+v %v", cfg, err)
+	}
 }
 
 func TestRateLimitGateDefaultsAndCap(t *testing.T) {
@@ -91,5 +111,44 @@ func TestRateLimitGateDefaultsAndCap(t *testing.T) {
 	for i := 0; i < 20; i++ {
 		now = now.Add(2 * time.Hour)
 		_ = gate.ObserveFailure("ookla", failureclass.RateLimited)
+	}
+}
+
+func TestRateLimitGatePlansJitterGrowthCapAndRestore(t *testing.T) {
+	now := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	gate := report.NewRateLimitGate(report.RateLimitBackoffConfig{Initial: time.Second, Max: 4 * time.Second, Factor: 2, Jitter: 0.2}, func() time.Time { return now })
+	for attempt, base := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 4 * time.Second} {
+		record, state := gate.PlanFailure("ookla", failureclass.RateLimited)
+		if !record || state == nil {
+			t.Fatalf("attempt %d was not planned", attempt)
+		}
+		delay := state.Deadline.Sub(now)
+		if delay < base*4/5 || delay > base || state.Attempt != attempt+1 || !state.Recorded {
+			t.Fatalf("attempt %d state = %+v, delay %s, base %s", attempt, state, delay, base)
+		}
+		gate.CommitFailure("ookla", *state)
+		deadline, exists := gate.Deadline("ookla")
+		if !exists || !deadline.Equal(state.Deadline) {
+			t.Fatalf("deadline = %s, exists = %t; want %s", deadline, exists, state.Deadline)
+		}
+		if record, next := gate.PlanFailure("ookla", failureclass.RateLimited); record || next != nil {
+			t.Fatal("active window planned a second recorded failure")
+		}
+		now = state.Deadline
+	}
+	stateMap := map[string]report.RateLimitState{}
+	_, saved := gate.PlanFailure("ookla", failureclass.RateLimited)
+	if saved == nil {
+		t.Fatal("expired window did not plan its next attempt")
+	}
+	stateMap["ookla"] = *saved
+	restarted := report.NewRateLimitGate(report.RateLimitBackoffConfig{Initial: time.Second, Max: 4 * time.Second, Factor: 2}, func() time.Time { return now })
+	restarted.Restore(stateMap)
+	if !restarted.Blocked("ookla") {
+		t.Fatal("restored engine deadline was not enforced")
+	}
+	restarted.ObserveSuccess("ookla")
+	if restarted.Blocked("ookla") {
+		t.Fatal("success did not clear restored state")
 	}
 }
