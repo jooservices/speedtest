@@ -38,7 +38,7 @@ func ipapiIntegrationPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	}
 	t.Cleanup(pool.Close)
 	var name, marker string
-	if err := pool.QueryRow(ctx, "SELECT current_database(),shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()").Scan(&name, &marker); err != nil || name != "speedtest_wt88" || marker != "workspaces-project:speedtest" {
+	if err := pool.QueryRow(ctx, "SELECT current_database(),shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()").Scan(&name, &marker); err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
 		t.Fatal("test database identity/ownership verification failed")
 	}
 	dbtest.Reset(t, pool)
