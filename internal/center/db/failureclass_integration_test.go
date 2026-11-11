@@ -14,10 +14,9 @@ func TestFailureClassMigrationDefaultAndRollback(t *testing.T) {
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	dbtest.MigrateUp(t, pool)
-	for range 3 { // Roll back 00020, 00019 and 00016 to create the pre-class fixture.
-		if err := db.Migrate(ctx, pool, "down"); err != nil {
-			t.Fatal(err)
-		}
+	// Back to the schema before the failure-class migration (00016): 00015 stays applied.
+	if err := db.MigrateDownTo(ctx, pool, 15); err != nil {
+		t.Fatal(err)
 	}
 	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES ('00000000-0000-4000-8000-000000000081','fc',300,100);
  INSERT INTO engine_schedules(node_id,engine) SELECT id,'ookla' FROM nodes;
@@ -37,10 +36,9 @@ func TestFailureClassMigrationDefaultAndRollback(t *testing.T) {
  SELECT '00000000-0000-4000-8000-000000000084',id,now(),'failed',4,'x','ookla','not_a_class' FROM nodes`); err == nil {
 		t.Fatal("invalid failure_class accepted")
 	}
-	for range 3 { // Roll back 00020, 00019 and 00016 to verify the class column is removed.
-		if err := db.Migrate(ctx, pool, "down"); err != nil {
-			t.Fatal(err)
-		}
+	// Back to the schema before the failure-class migration (00016): 00015 stays applied.
+	if err := db.MigrateDownTo(ctx, pool, 15); err != nil {
+		t.Fatal(err)
 	}
 	var hasColumn bool
 	if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name='results' AND column_name='failure_class')`).Scan(&hasColumn); err != nil || hasColumn {
