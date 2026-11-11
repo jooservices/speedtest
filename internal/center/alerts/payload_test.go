@@ -49,4 +49,17 @@ func TestBuildPayloadQualityAndLimits(t *testing.T) {
 	if string(PayloadJSON(map[string]string{"a": "b"})) == "" {
 		t.Fatal("payload json")
 	}
+	fractional := DefaultQualityLimits()
+	fractional.DownloadPct = 65.5
+	data = BuildPayload("quality.download_low", "Fiber", "", "warn", result, 300, 100, fractional, nil)
+	if data["download_limit"] != "65.5% of expected" || metricThreshold(Rule{Metric: "down_pct", Value: 65.25}) != "65.25% of expected" {
+		t.Fatalf("fractional configured threshold was rounded: limit=%q trigger=%q", data["download_limit"], metricThreshold(Rule{Metric: "down_pct", Value: 65.25}))
+	}
+	value, expected, pct := metricValue(Rule{Metric: "down_pct", Value: 65.25}, result, 300, 100)
+	if value != "180 Mbps" || expected != "300 Mbps" || pct != "60" {
+		t.Fatalf("quality trigger context = %q/%q/%q", value, expected, pct)
+	}
+	if failureReason(agentapi.Result{Status: "failed", FailureClass: "timeout"}) != "Timeout" {
+		t.Fatal("classified failure reason was not normalized for event templates")
+	}
 }

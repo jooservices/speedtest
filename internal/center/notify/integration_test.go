@@ -292,7 +292,7 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	}
 	// Roll back later migrations until the delivery table is gone.
 	var exists bool
-	for step := 0; step < 15; step++ {
+	for step := 0; step < 30; step++ {
 		if err := db.Migrate(ctx, p, "down"); err != nil {
 			t.Fatal("rollback step", step, err)
 		}
@@ -461,7 +461,11 @@ func TestQuietHoursHoldAlertDeliveries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	test, err := worker.Test(ctx, "webhook")
+	channels := []string{"webhook"}
+	if _, err := (&EventStore{DB: p}).UpdateEvent(ctx, "test.success", EventPatch{Channels: channels}); err != nil {
+		t.Fatal("route template test to webhook", err)
+	}
+	test, err := worker.TestNotificationEvent(ctx, "test.success", "webhook")
 	if err != nil {
 		t.Fatal(err)
 	}

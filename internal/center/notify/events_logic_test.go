@@ -38,3 +38,31 @@ func TestMergeAndValidateEventWrite(t *testing.T) {
 		}
 	}
 }
+
+func TestQualityThresholdsIncludeIntegerConsecutiveCount(t *testing.T) {
+	base, _ := catalog.LookupEvent("quality.ping_high")
+	for _, value := range []float64{1, 2, 100} {
+		if err := validateRuntimePatch(base, EventPatch{Thresholds: map[string]float64{"for_tests": value}}); err != nil {
+			t.Errorf("valid consecutive count %v rejected: %v", value, err)
+		}
+	}
+	for _, value := range []float64{0, 1.5, 101} {
+		if err := validateRuntimePatch(base, EventPatch{Thresholds: map[string]float64{"for_tests": value}}); err == nil {
+			t.Errorf("invalid consecutive count %v accepted", value)
+		}
+	}
+	if err := validateRuntimePatch(base, EventPatch{Thresholds: map[string]float64{"unknown": 1}}); err == nil {
+		t.Fatal("unknown quality threshold accepted")
+	}
+	loginBurst, _ := catalog.LookupEvent("security.login_burst")
+	for _, value := range []float64{1, 5, 100} {
+		if err := validateRuntimePatch(loginBurst, EventPatch{Thresholds: map[string]float64{"attempts": value}}); err != nil {
+			t.Errorf("valid attempt threshold %v rejected: %v", value, err)
+		}
+	}
+	for _, value := range []float64{0, 5.5, 101} {
+		if err := validateRuntimePatch(loginBurst, EventPatch{Thresholds: map[string]float64{"attempts": value}}); err == nil {
+			t.Errorf("invalid attempt threshold %v accepted", value)
+		}
+	}
+}

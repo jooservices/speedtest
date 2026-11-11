@@ -34,6 +34,13 @@ type Pinger interface {
 	PingContext(context.Context) error
 }
 
+// NotificationEvents publishes owner security events without affecting request outcomes.
+type NotificationEvents interface {
+	PublishEvent(context.Context, string, string, map[string]string) error
+	RecordSignIn(context.Context, string, string) error
+	RecordLoginFailure(context.Context, string) error
+}
+
 // Options configures the HTTP handlers.
 type Options struct {
 	Pinger Pinger
@@ -63,6 +70,7 @@ type Options struct {
 	// OwnerIP optionally serves the IP history, address, lookup and map views.
 	OwnerIP            OwnerIPStore
 	OwnerNotifications OwnerNotificationsStore
+	NotificationEvents NotificationEvents
 	// Settings optionally serves the settings API and enrolment-key rotation.
 	Settings settings.Store
 	// OwnerResults optionally serves the dashboard result API (list, detail, CSV export).
@@ -97,9 +105,9 @@ func NewHandler(options Options) http.Handler {
 		readinessTimeout = defaultReadinessTimeout
 	}
 	auth := &serverAuth{service: options.Auth, requireHTTPS: options.RequireHTTPS, trustedProxyCIDRs: options.TrustedProxyCIDRs,
-		tokens: options.AccessTokens, tokenLimiter: newNodeRateLimiter(options.AccessTokenRateLimit, options.AccessTokenBurst)}
+		tokens: options.AccessTokens, tokenLimiter: newNodeRateLimiter(options.AccessTokenRateLimit, options.AccessTokenBurst), events: options.NotificationEvents}
 	owners := ownerAreas(options, auth)
-	internalOwner := withAudit(dispatcher(owners, http.NotFoundHandler()), options.Audit, auth, logger)
+	internalOwner := withAudit(dispatcher(owners, http.NotFoundHandler()), options.Audit, auth, options.NotificationEvents, logger)
 	if options.AccessTokens != nil {
 		owners.addToken(newMCPHandler(internalOwner), onPath(func(path string) bool { return path == "/mcp" }), func(*http.Request) (apitoken.Scope, bool) { return "", true })
 	}
@@ -108,7 +116,7 @@ func NewHandler(options Options) http.Handler {
 	areas = append(areas, owners...)
 	areas = append(areas, platform...)
 
-	handler := withAudit(dispatcher(areas, uiHandler(options.UI)), options.Audit, auth, logger)
+	handler := withAudit(dispatcher(areas, uiHandler(options.UI)), options.Audit, auth, options.NotificationEvents, logger)
 	handler = withAPITokenAuth(handler, owners, auth)
 	handler = withSecurityHeaders(handler)
 	handler = recoverPanics(handler, logger)

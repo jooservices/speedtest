@@ -19,6 +19,7 @@ type notificationStub struct {
 	nodeID     string
 	nodeOn     bool
 	page, size int
+	thresholds map[string]float64
 }
 
 func (f *notificationStub) Test(context.Context, string) (notify.Delivery, error) {
@@ -40,7 +41,11 @@ func (f *notificationStub) GetNotificationEvent(_ context.Context, key string) (
 	}
 	return notify.EventView{Key: key, Title: "Test success", Enabled: true, Severity: "info", Channels: []string{"telegram"}}, f.err
 }
-func (f *notificationStub) UpdateNotificationEvent(_ context.Context, key string, _ notify.EventPatch) (notify.EventView, error) {
+func (f *notificationStub) UpdateNotificationEvent(_ context.Context, key string, patch notify.EventPatch) (notify.EventView, error) {
+	f.thresholds = patch.Thresholds
+	if value, ok := patch.Thresholds["for_tests"]; ok && value != float64(int(value)) {
+		return notify.EventView{}, notify.ErrInvalidEvent
+	}
 	return notify.EventView{Key: key, Enabled: false, Severity: "warn", Channels: []string{"email"}, Customized: true}, f.err
 }
 func (f *notificationStub) SetNotificationNodeEnabled(_ context.Context, event, node string, enabled bool) error {
@@ -126,6 +131,12 @@ func TestNotificationAPI(t *testing.T) {
 	}
 	if rec := do(h, "PATCH", "/api/notifications/events/test.success", `{"enabled":false}`, ownerWriteWith(nil)); rec.Code != 200 {
 		t.Fatal("patch event", rec.Code, rec.Body.String())
+	}
+	if rec := do(h, "PATCH", "/api/notifications/events/quality.ping_high", `{"thresholds":{"for_tests":3}}`, ownerWriteWith(nil)); rec.Code != 200 || f.thresholds["for_tests"] != 3 {
+		t.Fatal("quality streak threshold patch", rec.Code, rec.Body.String())
+	}
+	if rec := do(h, "PATCH", "/api/notifications/events/quality.ping_high", `{"thresholds":{"for_tests":2.5}}`, ownerWriteWith(nil)); rec.Code != 422 {
+		t.Fatal("fractional quality streak threshold", rec.Code, rec.Body.String())
 	}
 	nodeSetting := "/api/notifications/events/test.success/nodes/" + nodeID
 	f.nodeOn = true

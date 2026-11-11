@@ -41,6 +41,17 @@ func TestValidateForChannel(t *testing.T) {
 	}
 }
 
+func TestValidateRejectsMalformedAndCaseVariantPlaceholders(t *testing.T) {
+	for _, body := range []string{"{Node}", "{unknown-name}", "{bad name}", "{{node}}", "{node"} {
+		if err := Validate("test.success", body); err == nil {
+			t.Errorf("malformed/unknown placeholder %q was accepted", body)
+		}
+	}
+	if err := ValidateForChannel("test.success", "webhook", `{"event":"{event}","node":"{node}"}`); err != nil {
+		t.Fatalf("valid webhook object structure rejected: %v", err)
+	}
+}
+
 func TestRenderChannels(t *testing.T) {
 	data := Data{"node": "A <B>", "event": "Warn", "severity": "warn", "severity_icon": SeverityIcon("warn"), "since": "t", "link": "https://x"}
 	body := "{severity_icon} {event} — {node}\n{link}"

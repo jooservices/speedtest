@@ -15,6 +15,30 @@ import (
 	"github.com/jooservices/speedtest/internal/center/notify/template"
 )
 
+type eventPolicyQuerier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+// PolicyAllows applies event cooldown/repeat settings to a new notification
+// intent, using the outbox as the durable timestamp of the last queued send.
+func PolicyAllows(ctx context.Context, q eventPolicyQuerier, key, nodeID string, ts time.Time, cooldown, repeat int) (bool, error) {
+	interval := cooldown
+	if repeat > interval {
+		interval = repeat
+	}
+	if interval <= 0 {
+		return true, nil
+	}
+	var last *time.Time
+	err := q.QueryRow(ctx, `SELECT max(e.ts) FROM alert_events e
+		WHERE e.event_key=$1 AND e.node_id IS NOT DISTINCT FROM NULLIF($2,'')::uuid AND e.ts<=$3
+		AND EXISTS (SELECT 1 FROM alert_notification_outbox o WHERE o.event_id=e.id)`, key, nodeID, ts).Scan(&last)
+	if err != nil {
+		return false, err
+	}
+	return last == nil || ts.Sub(*last) >= time.Duration(interval)*time.Second, nil
+}
+
 // PublishEvent records a catalog event and hands its configured channels to the durable outbox.
 func (s *Store) PublishEvent(ctx context.Context, key, nodeID string, payload map[string]string) error {
 	tx, err := s.DB.Begin(ctx)
@@ -62,14 +86,10 @@ func (s *Store) publishEventTx(ctx context.Context, tx pgx.Tx, key, nodeID strin
 	if err != nil {
 		return false, err
 	}
-	channels := event.Channels
-	if exclude != "" {
-		channels, err = s.escalationChannel(ctx, tx, event, exclude)
-		if err != nil {
-			return false, err
-		}
+	channels, send, err := s.eventDelivery(ctx, tx, event, key, nodeID, data, ts, exclude)
+	if err != nil {
+		return false, err
 	}
-	send := event.Enabled && len(channels) > 0 && eventWindowAllows(event, event.Severity, data, ts)
 	if exclude != "" && !send {
 		return false, nil
 	}
@@ -88,6 +108,22 @@ func (s *Store) publishEventTx(ctx context.Context, tx pgx.Tx, key, nodeID strin
 		}
 	}
 	return send, nil
+}
+
+func (s *Store) eventDelivery(ctx context.Context, tx pgx.Tx, event EventView, key, nodeID string, data map[string]string, ts time.Time, exclude string) ([]string, bool, error) {
+	channels := event.Channels
+	var err error
+	if exclude != "" {
+		channels, err = s.escalationChannel(ctx, tx, event, exclude)
+		if err != nil {
+			return nil, false, err
+		}
+	}
+	send := event.Enabled && len(channels) > 0 && eventWindowAllows(event, event.Severity, data, ts)
+	if send {
+		send, err = PolicyAllows(ctx, tx, key, nodeID, ts, event.CooldownSeconds, event.RepeatSeconds)
+	}
+	return channels, send, err
 }
 
 func releaseAlreadyNotified(ctx context.Context, tx pgx.Tx, key, nodeID string, payload map[string]string) (bool, error) {

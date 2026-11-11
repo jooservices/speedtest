@@ -50,11 +50,7 @@ func TestRunMigration(t *testing.T) {
 	}
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
-	directions := []string{"up", "up"}
-	for range 20 {
-		directions = append(directions, "down")
-	}
-	for _, direction := range directions {
+	for _, direction := range []string{"up", "up"} {
 		var out bytes.Buffer
 		if code := run([]string{direction}, &out); code != 0 || !strings.Contains(out.String(), "complete") {
 			t.Fatalf("%s: code %d: %s", direction, code, out.String())

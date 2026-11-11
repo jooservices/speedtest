@@ -5,14 +5,10 @@ package dbtest
 
 import (
 	"context"
-	"io/fs"
-	"regexp"
-	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jooservices/speedtest/internal/center/db"
-	"github.com/jooservices/speedtest/migrations"
 )
 
 type testReporter interface {
@@ -41,10 +37,11 @@ func Reset(t testReporter, pool *pgxpool.Pool) {
 	verify(t, ctx, pool)
 	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS
 	 public.api_access_tokens, public.user_two_factor, public.audit_log, public.installer_idempotency, public.installer_events, public.installer_jobs, public.installer_probe_idempotency, public.installer_probes,
-	 public.notification_event_node_settings, public.notification_templates, public.notification_event_settings,
+		 public.notification_signin_locations, public.notification_login_failures,
+		 public.notification_event_node_settings, public.notification_templates, public.notification_event_settings,
  public.notification_deliveries, public.ip_change_signals, public.alert_notification_outbox, public.maintenance_jobs, public.node_ip_addresses, public.agent_commands, public.alert_state, public.alert_events, public.alert_rules,
  public.engine_schedules, public.schedules, public.node_ip_history, public.results, public.node_credentials,
- public.sessions, public.users, public.nodes, public.ip_addresses, public.settings,
+		 public.sessions, public.users, public.nodes, public.isp_plans, public.ip_addresses, public.isps, public.settings,
  public.api_idempotency, public.goose_db_version`); err != nil {
 		t.Fatal("could not reset test database")
 	}
@@ -64,25 +61,4 @@ func MigrateUp(t testReporter, pool *pgxpool.Pool) {
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal(err)
 	}
-}
-
-var createTable = regexp.MustCompile(`(?im)^\s*CREATE TABLE (?:IF NOT EXISTS )?(?:public\.)?([a-z_][a-z0-9_]*)`)
-
-// speedtestTables lists every table the embedded migrations create, plus the goose journal.
-func speedtestTables() map[string]bool {
-	known := map[string]bool{"goose_db_version": true}
-	files, err := fs.Glob(migrations.Files, "*.sql")
-	if err != nil {
-		return known
-	}
-	for _, name := range files {
-		data, err := fs.ReadFile(migrations.Files, name)
-		if err != nil {
-			continue
-		}
-		for _, m := range createTable.FindAllStringSubmatch(string(data), -1) {
-			known[m[1]] = true
-		}
-	}
-	return known
 }

@@ -354,10 +354,8 @@ func TestISPMigrationBackfillsASNAndSurvivesRollbackIntegration(t *testing.T) {
 
 func rollbackThroughISPEntities(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	for _, name := range []string{"audit authentication source", "API access tokens", "ISP plan provenance", "ISP entities"} {
-		if err := db.Migrate(ctx, pool, "down"); err != nil {
-			t.Fatalf("down %s: %v", name, err)
-		}
+	if err := db.MigrateDownTo(ctx, pool, 20); err != nil {
+		t.Fatalf("roll back to pre-ISP schema: %v", err)
 	}
 }
 

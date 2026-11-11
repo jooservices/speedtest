@@ -90,6 +90,8 @@ export function nodesSuite(T, ctx) {
 
     // The wizard with the one-line command, a real agent that enrols with the shown key, the first result, a manual run.
     async addWithCommandAndRunTest() {
+      // Keep this delivery scenario independent of the migration's quiet-hour default.
+      T.db(`UPDATE settings SET value='""' WHERE key IN ('notifyQuietStart','notifyQuietEnd')`);
       T.db(`insert into notification_event_settings(event_key,enabled,severity,channels)
         values ('test.success',true,'info',ARRAY['webhook']),('test.manual_finished',true,'info',ARRAY['webhook'])
         on conflict (event_key) do update set enabled=excluded.enabled,severity=excluded.severity,channels=excluded.channels`);
@@ -155,11 +157,8 @@ export function nodesSuite(T, ctx) {
       await T.eventually(() => receiver.bodies.slice(receivedBefore).some(message => /Manual test finished/.test(message.text || '')), 'manual completion notification reaches the configured webhook', 75000);
 
       const nodeID = T.db("select id::text from nodes where name='E2E-1'");
-      // Reuse the global failed-test rule seeded for the suite instead of adding a duplicate rule.
+      // Reuse the suite's global failed-test and offline rules instead of creating duplicate alerts.
       const recoveryRule = '20000000-0000-4000-8000-000000000002';
-      const offlineRule = '70000000-0000-4000-8000-000000000002';
-      T.db(`INSERT INTO alert_rules(id,name,metric,op,value,for_tests,severity,channels,enabled)
-        VALUES('${offlineRule}','E2E node offline','offline','=',1,1,'crit',ARRAY['webhook'],true)`);
       T.db(`INSERT INTO notification_event_settings(event_key,enabled,severity,channels)
         VALUES ('test.failed',true,'warn',ARRAY['webhook']),('test.recovered',true,'info',ARRAY['webhook']),
           ('node.offline',true,'crit',ARRAY['webhook']),('node.online',true,'info',ARRAY['webhook'])
@@ -170,11 +169,12 @@ export function nodesSuite(T, ctx) {
       await T.eventually(() => Number(T.db(`select count(*) from alert_events where rule_id='${recoveryRule}' and event_key='test.failed'`)) === 1, 'two failed tests open one failed-test alert');
       await T.eventually(() => receiver.bodies.slice(recoveryBefore).some(message => /Test failed/.test(message.text || '')), 'failed-test notification reaches the webhook', 75000);
       await submitScheduledResult(stack, { name: 'E2E-1' });
+      const recoveryResultID = T.db(`select id::text from results where node_id='${nodeID}' and status='ok' order by ts desc limit 1`);
       await T.eventually(() => {
-        const count = Number(T.db(`select count(*) from alert_events where node_id='${nodeID}' and event_key='test.recovered'`));
-        return count === 1 || JSON.stringify({ count, state: T.db(`select consecutive_count||':'||active||':'||COALESCE(active_event_id::text,'')||':'||COALESCE(last_evaluated_at::text,'') from alert_state where rule_id='${recoveryRule}' and node_id='${nodeID}'`), results: T.db(`select status||':'||ts::text from results where node_id='${nodeID}' order by ts desc limit 4`) });
+        const count = Number(T.db(`select count(*) from alert_events where node_id='${nodeID}' and trigger_result_id='${recoveryResultID}' and event_key='test.recovered'`));
+        return count > 0 || JSON.stringify({ count, state: T.db(`select consecutive_count||':'||active||':'||COALESCE(active_event_id::text,'')||':'||COALESCE(last_evaluated_at::text,'') from alert_state where rule_id='${recoveryRule}' and node_id='${nodeID}'`), results: T.db(`select status||':'||ts::text from results where node_id='${nodeID}' order by ts desc limit 4`) });
       }, 'the next successful test creates a recovery event');
-      const recovered = JSON.parse(T.db(`select payload::text from alert_events where node_id='${nodeID}' and event_key='test.recovered' order by ts desc limit 1`));
+      const recovered = JSON.parse(T.db(`select payload::text from alert_events where node_id='${nodeID}' and trigger_result_id='${recoveryResultID}' and event_key='test.recovered' order by ts desc limit 1`));
       assert.ok(recovered.duration, 'the test recovery includes the failed streak duration');
       await T.eventually(() => receiver.bodies.slice(recoveryBefore).some(message => /Tests recovered/.test(message.text || '')), 'test recovery notification reaches the webhook', 75000);
 
