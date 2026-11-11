@@ -164,6 +164,10 @@ export function settingsSuite(T, ctx) {
     async notificationQuietHours() {
       await T.open('#/settings', 'Settings');
       await T.tab('Notifications');
+      // Migrations seed the normal quiet window, so clear it before testing an incomplete edit.
+      await T.fillAndLeave('Hold messages from', '');
+      await T.fillAndLeave('Hold messages until', '');
+      await T.settled();
       await T.fillAndLeave('Hold messages from', '22:00');
       await T.settled();
       assert.notEqual(T.db("select value #>> '{}' from settings where key='notifyQuietStart'"), '22:00', 'a half-typed window is not saved');
@@ -177,8 +181,9 @@ export function settingsSuite(T, ctx) {
       await page.reload();
       await T.tab('Notifications');
       assert.equal(await page.getByLabel('Hold messages from').inputValue(), '22:00', 'the window survives a reload');
-      // Put the defaults back: no quiet window, critical alerts delivered.
-      await T.fillAndLeave('Hold messages from', ''); await T.fillAndLeave('Hold messages until', ''); await T.settled();
+      // Put the migration defaults back: quiet hours enabled, critical alerts delivered.
+      await T.fillAndLeave('Hold messages from', '23:00'); await T.settled();
+      await T.fillAndLeave('Hold messages until', '07:00'); await T.settled();
       await page.getByLabel('Critical alerts are still delivered').check(); await T.settled();
     },
 

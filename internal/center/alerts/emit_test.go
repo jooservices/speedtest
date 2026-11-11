@@ -16,13 +16,17 @@ import (
 )
 
 type fakeTx struct {
-	settings map[string]bool
-	channels map[string][]string
-	nodes    map[string]bool
-	nodeName string
-	limits   [][2]any
-	fail     string
-	inserted int
+	settings          map[string]bool
+	channels          map[string][]string
+	nodes             map[string]bool
+	nodeName          string
+	limits            [][2]any
+	medianScans       int
+	medianConfigReads int
+	serverReads       int
+	ispReads          int
+	fail              string
+	inserted          int
 }
 
 func (f *fakeTx) Begin(context.Context) (pgx.Tx, error) { return f, nil }
@@ -59,6 +63,18 @@ func (f *fakeTx) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error
 }
 
 func (f *fakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	if strings.Contains(sql, "percentile_cont") {
+		f.medianScans++
+	}
+	if strings.Contains(sql, "engine_isp FROM results") {
+		f.ispReads++
+	}
+	if strings.Contains(sql, "SELECT server_id FROM nodes") {
+		f.serverReads++
+	}
+	if strings.Contains(sql, "SELECT enabled,severity,channels,thresholds") && len(args) > 0 && args[0] == "quality.drop_vs_median" {
+		f.medianConfigReads++
+	}
 	switch {
 	case strings.Contains(sql, "test_outcome_config"):
 		if f.fail == "node" || f.fail == "settings" {
@@ -133,6 +149,9 @@ func (f *fakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 			return alertRow{err: errors.New("node")}
 		}
 		return alertRow{vals: []any{f.nodeName, 300.0, 100.0}}
+	case strings.Contains(sql, "SELECT server_id FROM nodes"):
+		pinned := 7
+		return alertRow{vals: []any{&pinned}}
 	case strings.Contains(sql, "FROM nodes"):
 		if f.fail == "node" {
 			return alertRow{err: errors.New("node")}
@@ -171,6 +190,8 @@ func (r alertRow) Scan(dest ...any) error {
 			*d = r.vals[i].(*float64)
 		case **string:
 			*d = r.vals[i].(*string)
+		case **int:
+			*d = r.vals[i].(*int)
 		case *[]byte:
 			*d = r.vals[i].([]byte)
 		case *[]string:
@@ -402,6 +423,105 @@ func TestEmitHelpersAndOutcomes(t *testing.T) {
 		t.Fatal("expected node failure on recovery")
 	}
 	tx.fail = ""
+}
+
+func TestDisabledMedianDropSkipsHistoryScan(t *testing.T) {
+	store, tx, ctx := newEmitFixture()
+	down, up := 100.0, 50.0
+	result := agentapi.Result{Status: "ok", Down: &down, Up: &up}
+	if err := store.emitMedianDrop(ctx, tx, "n1", result, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if tx.medianScans != 0 {
+		t.Fatalf("disabled median event scanned history %d times", tx.medianScans)
+	}
+}
+
+func TestPrepareObservedBatchCachesStableSettings(t *testing.T) {
+	store, tx, ctx := newEmitFixture()
+	store.DB = tx
+	down, up, serverID := 100.0, 50.0, 7
+	isp := "Example ISP"
+	result := agentapi.Result{ID: "00000000-0000-4000-8000-000000000001", Status: "ok", Down: &down, Up: &up, ServerID: &serverID, EngineISP: &isp}
+	prepared, err := store.PrepareResultBatch(ctx, "n1", []agentapi.Result{result, result})
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, ok := prepared.Value(observedBatchContextKey{}).(*observedBatchState)
+	if !ok {
+		t.Fatalf("observed batch state was not prepared: %#v", prepared.Value(observedBatchContextKey{}))
+	}
+	median, hasMedian := state.medianSettings["ookla"]
+	if !state.pinnedLoaded || state.pinnedServerID == nil || *state.pinnedServerID != serverID || !hasMedian || median.Enabled {
+		t.Fatalf("observed batch settings = %+v", state)
+	}
+	if tx.serverReads != 1 || tx.medianConfigReads != 1 {
+		t.Fatalf("stable event settings read counts: server=%d median=%d", tx.serverReads, tx.medianConfigReads)
+	}
+}
+
+func TestObservedBatchCachesOrderedISPAndPinnedServer(t *testing.T) {
+	store, tx, ctx := newEmitFixture()
+	first := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
+	state := &observedBatchState{
+		lastISP:      map[string]observedISP{"ookla": {ts: first, id: "a", value: "Example ISP"}},
+		pinnedLoaded: true, pinnedServerID: intPointer(7),
+		medianSettings: map[string]effectiveEventSettings{"ookla": {Enabled: false}},
+	}
+	ctx = context.WithValue(ctx, observedBatchContextKey{}, state)
+	isp, serverID := "Example ISP", 7
+	result := agentapi.Result{ID: "b", Status: "ok", Down: floatPointer(100), Up: floatPointer(50), EngineISP: &isp, ServerID: &serverID}
+	if err := store.emitISPChange(ctx, tx, "n1", result, first.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.emitServerMismatch(ctx, tx, "n1", result, first.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.emitMedianDrop(ctx, tx, "n1", result, first.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	if tx.ispReads != 0 || tx.serverReads != 0 || tx.medianConfigReads != 0 || tx.medianScans != 0 {
+		t.Fatalf("cached event paths repeated reads: isp=%d server=%d medianConfig=%d median=%d", tx.ispReads, tx.serverReads, tx.medianConfigReads, tx.medianScans)
+	}
+}
+
+func intPointer(value int) *int { return &value }
+
+func floatPointer(value float64) *float64 { return &value }
+
+func TestResultBefore(t *testing.T) {
+	base := time.Date(2026, 11, 10, 10, 0, 0, 0, time.UTC)
+	tests := []struct {
+		leftTS, rightTS time.Time
+		leftID, rightID string
+		want            bool
+	}{
+		{leftTS: base, rightTS: base.Add(time.Second), leftID: "b", rightID: "a", want: true},
+		{leftTS: base, rightTS: base, leftID: "a", rightID: "b", want: true},
+		{leftTS: base, rightTS: base, leftID: "b", rightID: "a"},
+		{leftTS: base.Add(time.Second), rightTS: base, leftID: "a", rightID: "b"},
+	}
+	for _, tc := range tests {
+		if got := resultBefore(tc.leftTS, tc.leftID, tc.rightTS, tc.rightID); got != tc.want {
+			t.Fatalf("resultBefore() = %t, want %t", got, tc.want)
+		}
+	}
+}
+
+func TestRememberISPKeepsNewestResult(t *testing.T) {
+	state := &observedBatchState{lastISP: make(map[string]observedISP)}
+	newer := time.Date(2026, 11, 10, 11, 0, 0, 0, time.UTC)
+	older := newer.Add(-time.Minute)
+	rememberISP(state, "ookla", newer, "b", "New ISP")
+	rememberISP(state, "ookla", older, "a", "Old ISP")
+	if got := state.lastISP["ookla"]; got.value != "New ISP" || got.id != "b" {
+		t.Fatalf("older ISP replaced the latest result: %+v", got)
+	}
+	rememberISP(state, "ookla", newer.Add(time.Minute), "c", "Newest ISP")
+	if got := state.lastISP["ookla"]; got.value != "Newest ISP" || got.id != "c" {
+		t.Fatalf("newest ISP was not kept: %+v", got)
+	}
+	rememberISP(nil, "ookla", newer, "d", "No batch")
 }
 
 func TestPrepareTestOutcomeBatch(t *testing.T) {

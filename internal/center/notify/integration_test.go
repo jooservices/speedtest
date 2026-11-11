@@ -294,7 +294,7 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	}
 	// Later migrations (including the schedule default and SSH installer) sit above this one; roll back until the delivery table is gone.
 	var exists bool
-	for step := 0; step < 6; step++ {
+	for step := 0; step < 12; step++ {
 		if err := db.Migrate(ctx, p, "down"); err != nil {
 			t.Fatal("rollback step", step, err)
 		}
@@ -453,7 +453,8 @@ func TestQuietHoursHoldAlertDeliveries(t *testing.T) {
 		execute(t, p, `INSERT INTO alert_events(id,node_id,severity,ts,title) VALUES($1,'10000000-0000-4000-8000-000000000001',$2,now(),'Alert')`, id, sev)
 		execute(t, p, `INSERT INTO alert_notification_outbox(event_id,channels) VALUES($1,ARRAY['webhook'])`, id)
 	}
-	execute(t, p, `INSERT INTO settings(key,value) VALUES ('notifyQuietStart','"22:00"'),('notifyQuietEnd','"07:00"'),('notifyQuietTimezone','"Asia/Ho_Chi_Minh"'),('notifyQuietCritical','true')`)
+	execute(t, p, `INSERT INTO settings(key,value) VALUES ('notifyQuietStart','"22:00"'),('notifyQuietEnd','"07:00"'),('notifyQuietTimezone','"Asia/Ho_Chi_Minh"'),('notifyQuietCritical','true')
+		ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`)
 	night := time.Date(2026, 11, 3, 18, 0, 0, 0, time.UTC) // 01:00 in Ho Chi Minh City
 	now := night
 	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: func() time.Time { return now }}
