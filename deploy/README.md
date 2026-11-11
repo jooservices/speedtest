@@ -31,5 +31,3 @@ Deployment artifacts for the node agent and the command center live here.
   its mode-0600 `.env`.
 - The agent and the center are deployed independently, matching the rule that
   nodes know only their own configuration.
-- Docker staging defaults to a 60-minute schedule; `STAGING_INTERVAL_MINUTES`
-  and `NODE_INTERVAL` remain available for explicit overrides.
