@@ -112,6 +112,9 @@ func ownerAreas(o Options, auth *serverAuth) routeTable {
 	if o.OwnerStats != nil {
 		t.addToken(newOwnerStatsHandler(o.OwnerStats, auth), onPath(ownerStatsRoute), operationScope)
 	}
+	if o.OwnerReport != nil {
+		t.add(newOwnerReportHandler(o.OwnerReport, auth), onPath(ownerReportRoute))
+	}
 	if o.OwnerISP != nil {
 		t.addToken(newOwnerISPHandler(o.OwnerISP, auth), onPath(ownerISPRoute), operationScope)
 	}
