@@ -4,7 +4,7 @@ Monitor the real speed of every internet connection you own, around the clock.
 
 Small agents on your machines run a speed test on a schedule and report to one dashboard. The dashboard stores every result, remembers which public IP each machine used and where it is, and shows averages, trends and the best and worst hours.
 
-**Status: interface preview and backend foundation.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. In demo mode, everything you change is kept in the browser's local storage. The UI now includes a contract-backed API client and remote data store; product endpoints that do not exist yet are verified with a local fake API until backend integration in JOOST-48. The command center serves the UI, checks database readiness, provides owner authentication and session endpoints, and supports node enrollment, credential lifecycle and authenticated agent ingestion endpoints (results, configuration, heartbeat, commands and observed IP). The agent can enroll, run scheduled speed tests, heartbeat every 30 s, sync its schedule with ETags, and handle `run_now`, `pause`, `resume` and `update_config`; results are committed to a private SQLite spool before background delivery. Other product API areas are still being implemented. PostgreSQL migrations, a connection pool, and geolocation modules are available.
+**Status: interface preview and backend foundation.** `ui/` is a complete, clickable website (plain HTML, CSS and JavaScript) running on generated sample data. In demo mode, everything you change is kept in the browser's local storage. The UI now includes a contract-backed API client and remote data store; product endpoints that do not yet exist are verified with a local fake API until their backend integration. The command center serves the UI, checks database readiness, provides owner authentication, access tokens and session endpoints, and supports node enrollment, credential lifecycle, authenticated agent ingestion, and the dashboard APIs. Owner tokens can call scoped REST operations or the OpenAPI-backed Streamable HTTP MCP endpoint; `speedtest-mcp` bridges the same MCP tools to stdio clients. The agent can enroll, run scheduled speed tests, heartbeat every 30 s, sync its schedule with ETags, and handle `run_now`, `pause`, `resume` and `update_config`; results are committed to a private SQLite spool before background delivery. PostgreSQL migrations, a connection pool, and geolocation modules are available.
 
 ## View the preview
 
@@ -26,7 +26,7 @@ Opening `ui/index.html?demo=1` directly also works. Without `?demo=1`, the UI re
 | IP & location | Map of current locations, address-change timeline, every address seen with geolocation, lookup tool |
 | Schedules | Interval and start minute per node, keep tests from overlapping, upcoming runs, data-usage estimate |
 | Alerts | Activity with acknowledge, rule editor (download, upload, latency, jitter, loss, failed tests, IP change) |
-| Settings | Theme, units, time zone, test engine, location service, notifications, retention, export, enrolment key |
+| Settings | Theme, units, time zone, test engine, location service, notifications, retention, export, enrolment key, API access tokens |
 
 Manual "Run test" shows live progress and adds a real entry to the data, so every chart updates.
 
@@ -55,6 +55,7 @@ and UI.
 ```
 cmd/agent/              node agent entry point
 cmd/center/             command center entry point
+cmd/speedtest-mcp/      stdio MCP client bridge for the command center
 internal/agent/         node agent implementation
 internal/agent/config/  loads the node's own config.yaml
 internal/agent/enroll/  exchanges an enrollment token for a 0600 credential
@@ -93,6 +94,7 @@ make test-db      # migration/constraint integration tests on a verified test DB
 make run-center   # start the command center
 go run ./cmd/center seed-admin # create the default administrator in local/test only
 make run-agent    # start a node agent
+go build -o "$HOME/.local/bin/speedtest-mcp" ./cmd/speedtest-mcp
 ```
 
 Configuration is read from environment variables (documented in `.env.example`; see
@@ -112,7 +114,8 @@ database before any migration or database test. `make test-db` verifies the
 database name and ownership marker, resets its application tables and migration
 journal, and runs self-contained suites serially.
 Use only a disposable test/worktree database; never run integration suites
-concurrently against the same database.
+concurrently against the same database. For API tokens and MCP clients, see
+[`docs/mcp.md`](docs/mcp.md).
 
 ### Agent commands
 
@@ -139,11 +142,15 @@ engine: ookla
 name: node
 expected_download_mbps: 0
 expected_upload_mbps: 0
-interval: 30m
+interval: 60m
 # Optional: choose one local path; omit both to use the default route.
 # network_interface: enp1s0
 # source_ip: 192.0.2.10
 ```
+
+A missing or partial node YAML uses the 60-minute interval default. An explicit
+interval remains a node setting; after enrollment, the center's saved schedule
+is authoritative and is synchronized through the agent configuration ETag.
 
 `network_interface` and `source_ip` are mutually exclusive. The selected
 interface must exist, be up, and have an IP address; the selected source IP

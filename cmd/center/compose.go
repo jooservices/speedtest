@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/alerts"
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 	"github.com/jooservices/speedtest/internal/center/audit"
 	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/dashboard"
@@ -54,6 +55,7 @@ type services struct {
 	OwnerAlerts        server.OwnerAlertsStore
 	OwnerJobs          server.OwnerJobsStore
 	Audit              server.AuditStore
+	AccessTokens       server.AccessTokenStore
 	Installer          *installer.Service
 	// Background runs until the context ends, for example the daily retention job.
 	Background func(context.Context)
@@ -66,6 +68,44 @@ func newAuthService(store auth.Store, cfg config.CenterConfig) (*auth.Service, e
 		LoginWindow:      cfg.LoginWindow,
 		AppKey:           cfg.AppKey,
 	})
+}
+
+func newOperationalStores(pool *pgxpool.Pool, cfg config.CenterConfig, logger *slog.Logger, notifications *notify.Store, operational *telemetry.Telemetry) (*telemetry.Telemetry, *alerts.Store, *jobs.Retention) {
+	operational.RegisterDatabase(pool)
+	if notifications != nil {
+		notifications.ObserveRun = func(ok bool) { operational.Job("notification", ok) }
+	}
+	alertStore := &alerts.Store{DB: pool, AppKey: cfg.AppKey, Logger: logger, ObserveRun: func(ok bool) { operational.Job("alerts", ok) }}
+	retention := &jobs.Retention{DB: pool, Logger: logger, ObserveRun: func(ok bool) { operational.Job("retention", ok) }}
+	return operational, alertStore, retention
+}
+
+func backgroundServices(notifications *notify.Store, retention *jobs.Retention, backfill *geo.Backfill, watcher *ipwatch.Watcher, dbip geo.DBIPConfig, alertStore *alerts.Store) func(context.Context) {
+	return func(ctx context.Context) {
+		if notifications != nil {
+			go notifications.Loop(ctx)
+		}
+		go retention.Loop(ctx)
+		go backfill.Loop(ctx)
+		if watcher.Reader != nil {
+			// GeoLite2 (weekly, needs a licence key) or DB-IP Lite (monthly, free): the first one configured wins.
+			if os.Getenv("SPEEDTEST_GEOLITE2_LICENSE_KEY") != "" {
+				go watcher.Reader.Run(ctx, geo.EnvironmentSettings{})
+			}
+			go watcher.Reader.RunDBIP(ctx, dbip)
+			if os.Getenv("SPEEDTEST_GEO_IPINFO_TOKEN") != "" {
+				go watcher.Reader.RunIPInfo(ctx)
+			}
+		}
+		alertStore.Loop(ctx)
+	}
+}
+
+func ownerNotifications(notifications *notify.Store) server.OwnerNotificationsStore {
+	if notifications == nil {
+		return nil
+	}
+	return notifications
 }
 
 // buildServices wires every store and background job of the center. The returned function releases what was
@@ -94,52 +134,25 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		cleanup()
 		return services{}, nil, err
 	}
-	operational.RegisterDatabase(pool)
-	if notifications != nil {
-		notifications.ObserveRun = func(ok bool) { operational.Job("notification", ok) }
-	}
-	alertStore := &alerts.Store{DB: pool, AppKey: cfg.AppKey, Logger: logger, ObserveRun: func(ok bool) { operational.Job("alerts", ok) }}
+	_, alertStore, retention := newOperationalStores(pool, cfg, logger, notifications, operational)
 	dbip, err := geo.DBIPConfigFromEnv()
 	if err != nil {
 		cleanup()
 		return services{}, nil, err
 	}
-	retention := &jobs.Retention{DB: pool, Logger: logger, ObserveRun: func(ok bool) { operational.Job("retention", ok) }}
-	backfillConfig, err := geo.BackfillConfigFromEnv()
+	backfill, err := buildGeoBackfill(pool, watcher, operational, logger)
 	if err != nil {
 		cleanup()
 		return services{}, nil, err
 	}
-	var batch geo.BatchLookup
-	if watcher.Providers.IPAPIEnabled {
-		batch, err = geo.NewIPAPIProvider(watcher.Providers)
-		if err != nil {
-			cleanup()
-			return services{}, nil, err
-		}
-	}
-	backfillFallbacks := make([]geo.Fallback, 0, len(watcher.Fallbacks))
-	for _, provider := range watcher.Fallbacks {
-		if provider.Source() != "ip-api" {
-			backfillFallbacks = append(backfillFallbacks, provider)
-		}
-	}
-	backfill := &geo.Backfill{DB: pool, Cache: geo.NewPostgresCache(pool),
-		Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, backfillFallbacks...).WithPurpose(budget.Background),
-		Batch:    batch, MaxPerRun: backfillConfig.MaxPerRun, BatchSize: backfillConfig.BatchSize, Pause: backfillConfig.Pause,
-		HourUTC: backfillConfig.HourUTC, Logger: logger, ObserveRun: func(ok bool) { operational.Job("geo_backfill", ok) }}
 	installerService, err := buildInstaller(ctx, pool, cfg, nodeService, logger)
 	if err != nil {
 		cleanup()
 		return services{}, nil, err
 	}
-	var notificationAPI server.OwnerNotificationsStore
-	if notifications != nil {
-		notificationAPI = notifications
-	}
 	return services{
 		Telemetry:          operational,
-		OwnerNotifications: notificationAPI,
+		OwnerNotifications: ownerNotifications(notifications),
 		Auth:               authService,
 		NodeCredential:     nodeService,
 		Pinger:             poolPinger{pool: pool},
@@ -155,25 +168,9 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		OwnerAlerts:        alertStore,
 		OwnerJobs:          &jobs.Registry{DB: pool},
 		Audit:              &audit.Store{DB: pool},
+		AccessTokens:       &apitoken.Store{DB: pool},
 		Installer:          installerService,
-		Background: func(ctx context.Context) {
-			if notifications != nil {
-				go notifications.Loop(ctx)
-			}
-			go retention.Loop(ctx)
-			go backfill.Loop(ctx)
-			if watcher.Reader != nil {
-				// GeoLite2 (weekly, needs a licence key) or DB-IP Lite (monthly, free): the first one configured wins.
-				if os.Getenv("SPEEDTEST_GEOLITE2_LICENSE_KEY") != "" {
-					go watcher.Reader.Run(ctx, geo.EnvironmentSettings{})
-				}
-				go watcher.Reader.RunDBIP(ctx, dbip)
-				if os.Getenv("SPEEDTEST_GEO_IPINFO_TOKEN") != "" {
-					go watcher.Reader.RunIPInfo(ctx)
-				}
-			}
-			alertStore.Loop(ctx)
-		},
+		Background:         backgroundServices(notifications, retention, backfill, watcher, dbip, alertStore),
 	}, cleanup, nil
 }
 
@@ -199,4 +196,30 @@ func buildInstaller(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCo
 		return nil, nil
 	}
 	return installer.NewService(ctx, installer.ServiceOptions{Database: pool, Enrollment: enrollment, CenterURL: cfg.PublicURL, AppKey: cfg.AppKey, Logger: logger})
+}
+
+// buildGeoBackfill wires the slow nightly location refresh. ip-api is used only through its batch endpoint, so it is left out of
+// the one-by-one fallbacks of the background resolver.
+func buildGeoBackfill(pool *pgxpool.Pool, watcher *ipwatch.Watcher, operational *telemetry.Telemetry, logger *slog.Logger) (*geo.Backfill, error) {
+	backfillConfig, err := geo.BackfillConfigFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	var batch geo.BatchLookup
+	if watcher.Providers.IPAPIEnabled {
+		batch, err = geo.NewIPAPIProvider(watcher.Providers)
+		if err != nil {
+			return nil, err
+		}
+	}
+	fallbacks := make([]geo.Fallback, 0, len(watcher.Fallbacks))
+	for _, provider := range watcher.Fallbacks {
+		if provider.Source() != "ip-api" {
+			fallbacks = append(fallbacks, provider)
+		}
+	}
+	return &geo.Backfill{DB: pool, Cache: geo.NewPostgresCache(pool),
+		Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, fallbacks...).WithPurpose(budget.Background),
+		Batch:    batch, MaxPerRun: backfillConfig.MaxPerRun, BatchSize: backfillConfig.BatchSize, Pause: backfillConfig.Pause,
+		HourUTC: backfillConfig.HourUTC, Logger: logger, ObserveRun: func(ok bool) { operational.Job("geo_backfill", ok) }}, nil
 }

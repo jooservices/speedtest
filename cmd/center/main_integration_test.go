@@ -22,6 +22,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/shared/config"
+	"github.com/jooservices/speedtest/internal/shared/testenv"
 )
 
 func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
@@ -29,9 +30,7 @@ func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("a configured worktree .env is required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
@@ -144,9 +143,7 @@ func TestSeedAndStartupGuardsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("worktree configuration required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
@@ -280,9 +277,7 @@ func TestCreateOwnerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("worktree configuration required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
@@ -325,9 +320,7 @@ func TestResetOwnerPasswordIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("worktree configuration required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
@@ -386,9 +379,7 @@ func TestDisableTwoFactorIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("worktree configuration required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")

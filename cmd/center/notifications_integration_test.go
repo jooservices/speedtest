@@ -21,6 +21,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/shared/config"
+	"github.com/jooservices/speedtest/internal/shared/testenv"
 )
 
 // This cross-component scenario runs the real center with real session middleware,
@@ -30,9 +31,7 @@ func TestNotificationCenterEndToEndIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("worktree .env required")
 	}
-	for k, v := range values {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, values)
 	t.Setenv("APP_ENV", "test")
 	t.Setenv("SPEEDTEST_AGENT_REQUESTS_PER_MINUTE", "6000")
 	t.Setenv("APP_KEY", "base64:"+base64.StdEncoding.EncodeToString([]byte(strings.Repeat("n", 32))))
