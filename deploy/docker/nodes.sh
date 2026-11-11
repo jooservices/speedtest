@@ -69,6 +69,10 @@ read_attempt() {
   ATTEMPT_TOKEN="$(jq -r '.token // empty' "$file")"
 }
 new_idempotency_key() { printf 'docker-node-%s' "$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"; }
+container_running() { [ "$(docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null || true)" = true ]; }
+container_enrolled() {
+  docker cp "$1:/var/lib/speedtest/enrolled" - 2>/dev/null | tar -tf - 2>/dev/null | grep -E '(^|/)enrolled$' >/dev/null
+}
 find_node_id() {
   local name="$1" response
   response="$(api GET '/api/nodes?size=100')" || { echo 'could not list center nodes' >&2; return 1; }
@@ -103,13 +107,26 @@ up)
     attempt="$(attempt_path "$name")"
     node_id="$(find_node_id "$name")" || exit 1
     if docker ps -a --format '{{.Names}}' | grep -qx "speedtest-node-$name"; then
-      if [ -n "$node_id" ]; then
+      container="speedtest-node-$name"
+      if container_enrolled "$container"; then
         remove_attempt "$name"
-        echo "node $name already has a container"
-        continue
+        if container_running "$container"; then
+          echo "node $name already has an enrolled container"
+          continue
+        fi
+        docker rm -f "$container" >/dev/null
+      elif [ -f "$attempt" ]; then
+        read_attempt "$attempt" || { echo "node $name has invalid creation state; remove it only after checking the center" >&2; exit 1; }
+        if container_running "$container"; then
+          echo "node $name is still enrolling; saved retry state retained" >&2
+          exit 1
+        fi
+        # The container stopped before enrollment. Keep its volume and retry token.
+        docker rm -f "$container" >/dev/null
+      else
+        echo "node $name has an unconfirmed enrollment and no saved retry token; refusing to restart it" >&2
+        exit 1
       fi
-      remove_attempt "$name"
-      remove_local_node "$name"
     fi
     token=""; creation_pending=0
     if [ -f "$attempt" ]; then
@@ -167,7 +184,15 @@ up)
       -e EXPECTED_DOWN="${EXPECTED_DOWN:-500}" -e EXPECTED_UP="${EXPECTED_UP:-500}" -v "speedtest-node-$name":/var/lib/speedtest \
       --entrypoint /usr/bin/tini "$IMAGE" -- /usr/local/bin/node-entrypoint.sh)
     docker "${run_args[@]}" >/dev/null
+    if ! container_enrolled "speedtest-node-$name"; then
+      echo "node $name enrollment is not confirmed; the saved retry state is retained; retry up after stopping the container" >&2
+      exit 1
+    fi
     remove_attempt "$name"
+    if ! container_running "speedtest-node-$name"; then
+      echo "node $name enrolled but its container exited; inspect its logs before retrying" >&2
+      exit 1
+    fi
     echo "started node $name (network $net)"
   done
   if (( new_node_started )); then

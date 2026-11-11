@@ -169,6 +169,7 @@ case "$1 ${2:-}" in
     volume="$3"
     touch "$state/volumes"
     grep -qx "$volume" "$state/volumes" || printf '%s\n' "$volume" >> "$state/volumes"
+    mkdir -p "$state/volume-data/$volume"
     printf 'create %s\n' "$volume" >> "$state/volume-events"
     ;;
   'volume rm')
@@ -177,6 +178,7 @@ case "$1 ${2:-}" in
       awk -v name="$volume" '$0 != name' "$state/volumes" > "$state/volumes.tmp"
       mv "$state/volumes.tmp" "$state/volumes"
     fi
+    rm -rf "$state/volume-data/$volume"
     printf 'remove %s\n' "$volume" >> "$state/volume-events"
     ;;
   'network rm') ;;
@@ -186,13 +188,41 @@ case "$1 ${2:-}" in
       awk -v name="$container" '$0 != name' "$state/containers" > "$state/containers.tmp"
       mv "$state/containers.tmp" "$state/containers"
     fi
+    rm -f "$state/running.$container"
     ;;
   'run -d')
-    name=''
+    name='' token='' volume=''
     while (($#)); do
-      if [[ "$1" == --name ]]; then name="$2"; shift 2; else shift; fi
+      case "$1" in
+        --name) name="$2"; shift 2 ;;
+        -e) [[ "$2" == ENROLL_TOKEN=* ]] && token="${2#ENROLL_TOKEN=}"; shift 2 ;;
+        -v) volume="${2%%:*}"; shift 2 ;;
+        *) shift ;;
+      esac
     done
     printf '%s\n' "$name" >> "$state/containers"
+    printf '%s\t%s\n' "$name" "$token" >> "$state/run-tokens"
+    mkdir -p "$state/volume-data/$volume"
+    if [[ "${MOCK_DOCKER_ENROLL_ON_RUN:-1}" == 1 ]]; then
+      : > "$state/volume-data/$volume/enrolled"
+      printf 'true\n' > "$state/running.$name"
+    else
+      printf 'false\n' > "$state/running.$name"
+    fi
+    ;;
+  'inspect '*)
+    container="${@: -1}"
+    cat "$state/running.$container" 2>/dev/null || printf 'false\n'
+    ;;
+  'cp '*)
+    source_path="$2"
+    container="${source_path%%:*}"
+    volume="${container#speedtest-node-}"
+    if [[ -f "$state/volume-data/speedtest-node-$volume/enrolled" ]]; then
+      tar -cf - -C "$state/volume-data/speedtest-node-$volume" enrolled
+    else
+      exit 1
+    fi
     ;;
   *) ;;
 esac
@@ -416,6 +446,66 @@ assert not os.path.exists(attempt), "completed create attempt key was not retire
 assert state["schedules"][nodes[1]["id"]]["interval"] == 30, state["schedules"]
 PY
 
+before_enrollment_staggers="$(python3 - "$tmp/http-nodes.json" <<'PY'
+import json, sys
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+print(len([r for r in state["requests"] if r["method"] == "POST" and r["path"] == "/api/schedules/stagger"]))
+PY
+)"
+if run_nodes dock-enrollment-retry NODE_INTERVAL=45 MOCK_DOCKER_ENROLL_ON_RUN=0 >"$tmp/node-enrollment-interrupted.log" 2>&1; then
+  echo 'FAIL: nodes.sh reported success before enrollment was confirmed' >&2
+  exit 1
+fi
+grep -Fq 'enrollment is not confirmed' "$tmp/node-enrollment-interrupted.log" || { echo 'FAIL: enrollment interruption did not explain the pending retry' >&2; exit 1; }
+python3 - "$tmp/http-nodes.json" "$tmp/state/speedtest/node-attempts" "$tmp/docker" <<'PY'
+import hashlib, json, os, sys
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+node = next(node for node in state["nodes"] if node["name"] == "dock-enrollment-retry")
+attempt = os.path.join(sys.argv[2], hashlib.sha256(b"dock-enrollment-retry").hexdigest() + ".json")
+saved = json.load(open(attempt, encoding="utf-8"))
+assert saved["stage"] == "scheduled" and saved["nodeId"] == node["id"] and saved["token"], saved
+assert state["schedules"][node["id"]] == {"interval": 45, "offset": 0, "enabled": True}, state["schedules"]
+assert "speedtest-node-dock-enrollment-retry" in open(os.path.join(sys.argv[3], "containers"), encoding="utf-8").read().splitlines()
+assert open(os.path.join(sys.argv[3], "running.speedtest-node-dock-enrollment-retry"), encoding="utf-8").read().strip() == "false"
+run_token = next(line.rstrip("\n").split("\t", 1)[1] for line in open(os.path.join(sys.argv[3], "run-tokens"), encoding="utf-8") if line.startswith("speedtest-node-dock-enrollment-retry\t"))
+assert run_token == saved["token"], "first container did not receive the saved enrollment token"
+assert os.path.exists(os.path.join(sys.argv[3], "volume-data", "speedtest-node-dock-enrollment-retry")), "retry volume was not retained"
+PY
+python3 - "$tmp/http-nodes.json" <<'PY'
+import json, sys
+path = sys.argv[1]
+state = json.load(open(path, encoding="utf-8"))
+node = next(node for node in state["nodes"] if node["name"] == "dock-enrollment-retry")
+state["schedules"][node["id"]] = {"interval": 25, "offset": 4, "enabled": True}
+with open(path, "w", encoding="utf-8") as stream:
+    json.dump(state, stream)
+PY
+run_nodes_command down dock-enrollment-retry
+python3 - "$tmp/state/speedtest/node-attempts" "$tmp/docker" <<'PY'
+import hashlib, os, sys
+attempt = os.path.join(sys.argv[1], hashlib.sha256(b"dock-enrollment-retry").hexdigest() + ".json")
+assert os.path.exists(attempt), "down discarded the enrollment retry token"
+assert "speedtest-node-dock-enrollment-retry" in open(os.path.join(sys.argv[2], "volumes"), encoding="utf-8").read().splitlines()
+assert "speedtest-node-dock-enrollment-retry" not in open(os.path.join(sys.argv[2], "containers"), encoding="utf-8").read().splitlines()
+PY
+run_nodes dock-enrollment-retry NODE_INTERVAL=30 >"$tmp/node-enrollment-retry.log" 2>&1
+python3 - "$tmp/http-nodes.json" "$tmp/state/speedtest/node-attempts" "$tmp/docker" "$before_enrollment_staggers" <<'PY'
+import hashlib, json, os, sys
+state = json.load(open(sys.argv[1], encoding="utf-8"))
+node = next(node for node in state["nodes"] if node["name"] == "dock-enrollment-retry")
+attempt = os.path.join(sys.argv[2], hashlib.sha256(b"dock-enrollment-retry").hexdigest() + ".json")
+posts = [r for r in state["requests"] if r["method"] == "POST" and r["path"] == "/api/nodes" and json.loads(r["body"])["name"] == "dock-enrollment-retry"]
+updates = [r for r in state["requests"] if r["method"] == "PUT" and r["path"] == "/api/schedules/" + node["id"]]
+run_tokens = [line.split("\t", 1) for line in open(os.path.join(sys.argv[3], "run-tokens"), encoding="utf-8") if line.startswith("speedtest-node-dock-enrollment-retry\t")]
+staggers = [r for r in state["requests"] if r["method"] == "POST" and r["path"] == "/api/schedules/stagger"]
+assert len(posts) == 1, posts
+assert len(updates) == 1 and state["schedules"][node["id"]] == {"interval": 25, "offset": 4, "enabled": True}, updates
+assert len(run_tokens) == 2 and run_tokens[0][1] == run_tokens[1][1] != "", run_tokens
+assert not os.path.exists(attempt), "retry token was not retired after confirmed enrollment"
+assert os.path.exists(os.path.join(sys.argv[3], "volume-data", "speedtest-node-dock-enrollment-retry", "enrolled"))
+assert len(staggers) == int(sys.argv[4]) + 1, staggers
+PY
+
 run_stage() {
   local state="$1" dbstate="$2" httpstate="$3" agentlog="$4" logfile="$5"
   shift 5
@@ -538,6 +628,14 @@ if env PATH="$fakebin:$PATH" MOCK_AGENT_LOG="$tmp/node-agent.log" SPEEDTEST_STAT
   echo 'FAIL: node-entrypoint accepted an invalid interval' >&2
   exit 1
 fi
+missing_token_state="$tmp/node-entry-missing-token"
+mkdir -p "$missing_token_state"
+if env PATH="$fakebin:$PATH" MOCK_AGENT_LOG="$tmp/node-agent.log" SPEEDTEST_STATE_DIR="$missing_token_state" NODE_INTERVAL=5 \
+  NODE_NAME=VM4 CENTER_URL=http://127.0.0.1:18090 bash deploy/docker/node-entrypoint.sh >"$tmp/node-entry-missing-token.log" 2>&1; then
+  echo 'FAIL: node-entrypoint accepted an empty-volume start without an enrollment token' >&2
+  exit 1
+fi
+grep -Fq 'ENROLL_TOKEN' "$tmp/node-entry-missing-token.log" || { echo 'FAIL: missing-token error was not actionable' >&2; exit 1; }
 env PATH="$fakebin:$PATH" MOCK_AGENT_LOG="$tmp/node-agent.log" SPEEDTEST_STATE_DIR="$node_state" NODE_INTERVAL=5 \
   NODE_NAME=VM3 CENTER_URL=http://127.0.0.1:18090 ENROLL_TOKEN=test-only bash deploy/docker/node-entrypoint.sh >"$tmp/node-entry-first.log" 2>&1
 env PATH="$fakebin:$PATH" MOCK_AGENT_LOG="$tmp/node-agent.log" SPEEDTEST_STATE_DIR="$node_state" NODE_INTERVAL=30 \
@@ -547,4 +645,4 @@ assert_eq "$(grep -c '^run$' "$tmp/node-agent.log")" 2 'extra-node run count'
 grep -Fq 'interval: 5m' "$node_state/config.yaml" || { echo 'FAIL: extra-node interval override not persisted' >&2; exit 1; }
 ! grep -Fq 'interval: 30m' "$node_state/config.yaml" || { echo 'FAIL: restart rewrote extra-node interval' >&2; exit 1; }
 
-echo 'PASS: staging and extra-node defaults, overrides, validation, transaction failures, retry idempotency, and restart preservation'
+echo 'PASS: staging and extra-node defaults, overrides, validation, transaction failures, enrollment retry, idempotency, and schedule preservation'
