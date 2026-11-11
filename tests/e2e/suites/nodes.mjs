@@ -50,7 +50,7 @@ async function verifyRateLimitedAgent(T, agent, name) {
 
 export function nodesSuite(T, ctx) {
   const { page, assert } = T;
-  const { stack, startAgent } = ctx;
+  const { stack, startAgent, fetchAgentConfig } = ctx;
   return {
     async publishedUpdate() {
       T.db("update nodes set agent='speedtest-agent/1.0.0 (linux/amd64)' where name='VM3'");
@@ -96,6 +96,11 @@ export function nodesSuite(T, ctx) {
       const agent = await startAgent(stack, { name: 'E2E-1', token, backoffInitial: '30s', backoffMax: '30s' });
       await T.see('E2E-1 is online', dialog, 90000);
       await dialog.getByText(/First result: .* down, .* up, .* ping\./).waitFor({ timeout: 90000 });
+      const schedules = T.db("select s.interval_minutes||':'||s.offset_minutes||':'||e.interval_minutes||':'||e.offset_minutes from schedules s join nodes n on n.id=s.node_id join engine_schedules e on e.node_id=n.id and e.engine='ookla' where n.name='E2E-1'");
+      assert.equal(schedules, '60:0:60:0', 'both center schedule tables start at 60 minutes and offset 0');
+      const agentConfig = await fetchAgentConfig(stack, 'E2E-1');
+      assert.equal(agentConfig.schedule.interval, 60, 'the enrolled agent receives the 60-minute schedule');
+      assert.equal(agentConfig.schedule.offset, 0, 'the enrolled agent receives offset 0');
       await T.press('Open node', dialog);
       await page.getByRole('heading', { name: /E2E-1/, level: 1 }).waitFor();
 
@@ -114,6 +119,31 @@ export function nodesSuite(T, ctx) {
       const again = await page.request.post(stack.origin + '/api/agent/enroll', { data: { token, name: 'E2E-copy', agent: 'x' } });
       assert.ok(again.status() >= 400, 'an enrolment key works once, got ' + again.status());
       await verifyRateLimitedAgent(T, agent, 'E2E-1');
+    },
+
+    async demoNodeDefault() {
+      await page.goto(stack.origin + '/?demo=1#/nodes');
+      await page.getByRole('heading', { name: 'Nodes' }).waitFor();
+      await T.press('Add a node');
+      const dialog = T.dialog('Add a node');
+      await T.fill('Node name', 'Demo default');
+      await T.fill('What it measures', 'Demo default schedule');
+      await T.fill('Expected download', '100');
+      await T.fill('Expected upload', '50');
+      await T.press('Continue', dialog);
+      await T.press(/I will run a command/, dialog);
+      await T.press('I ran the command', dialog);
+      await dialog.getByRole('heading', { name: 'Demo default is online' }).waitFor({ timeout: 20000 });
+      assert.ok(await dialog.getByText('It will now test every 60 minutes.').isVisible());
+      const schedule = await page.evaluate(() => {
+        const node = ST.nodes().find(value => value.name === 'Demo default');
+        return node && { interval: node.interval, offset: node.offset };
+      });
+      assert.deepEqual(schedule, { interval: 60, offset: 0 });
+      await page.goto(stack.origin + '/?demo=1#/schedules');
+      await T.heading('Schedules').waitFor();
+      assert.equal(await T.row('Demo default').locator('select').inputValue(), '60');
+      assert.equal(await T.row('Demo default').getByRole('spinbutton').inputValue(), '0');
     },
 
     // Wizard validation: nothing is created from an incomplete or duplicate form.
