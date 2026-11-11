@@ -16,6 +16,19 @@ type AuditStore interface {
 	List(ctx context.Context, f audit.Filter, page, size int) ([]audit.Entry, int, error)
 }
 
+type auditMetadataContextKey struct{}
+
+type auditMetadata struct {
+	targetID string
+}
+
+func setAuditTargetID(ctx context.Context, targetID string) {
+	metadata, _ := ctx.Value(auditMetadataContextKey{}).(*auditMetadata)
+	if metadata != nil {
+		metadata.targetID = targetID
+	}
+}
+
 // withAudit records every successful owner write (see audit.Classify). The actor is read from the session before
 // the request runs, so a password change or a sign-out is attributed to the session that made it. Recording is
 // best effort: a failure is logged and never changes the response.
@@ -31,6 +44,8 @@ func withAudit(next http.Handler, store AuditStore, auth *serverAuth, logger *sl
 			return
 		}
 		actor := auth.actor(r)
+		metadata := &auditMetadata{}
+		r = r.WithContext(context.WithValue(r.Context(), auditMetadataContextKey{}, metadata))
 		response := &statusWriter{ResponseWriter: w}
 		next.ServeHTTP(response, r)
 		status := response.status
@@ -41,6 +56,14 @@ func withAudit(next http.Handler, store AuditStore, auth *serverAuth, logger *sl
 			return
 		}
 		entry.Actor = actor
+		entry.AuthMethod = audit.AuthMethodSession
+		if principal, ok := apitoken.PrincipalFromContext(r.Context()); ok {
+			entry.AuthMethod = audit.AuthMethodBearer
+			entry.CredentialID = principal.TokenID
+		}
+		if metadata.targetID != "" {
+			entry.TargetID = metadata.targetID
+		}
 		entry.Remote = remoteIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), auth.trustedProxyCIDRs)
 		if err := store.Record(context.WithoutCancel(r.Context()), entry); err != nil && logger != nil {
 			logger.ErrorContext(r.Context(), "audit entry not recorded", slog.String("action", entry.Action), slog.String("request_id", requestIDFromContext(r.Context())))

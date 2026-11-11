@@ -25,6 +25,8 @@ func closeSession(t *testing.T, session *mcp.ClientSession) {
 func TestValidateConfigRejectsUnsafeOrMissingValues(t *testing.T) {
 	valid := []struct{ endpoint, token string }{
 		{"http://127.0.0.1:8080/mcp", "st_at_example"},
+		{"http://[::1]:8080/mcp", "st_at_example"},
+		{"http://localhost:8080/mcp", "st_at_example"},
 		{"https://speedtest.example.test/mcp", "token"},
 	}
 	for _, test := range valid {
@@ -34,6 +36,7 @@ func TestValidateConfigRejectsUnsafeOrMissingValues(t *testing.T) {
 	}
 	invalid := []struct{ endpoint, token string }{
 		{"", "token"}, {"ftp://center.test/mcp", "token"}, {"https://user:pass@center.test/mcp", "token"},
+		{"http://speedtest.example.test/mcp", "token"}, {"http://192.0.2.10/mcp", "token"},
 		{"https://center.test/mcp#fragment", "token"}, {"https://center.test/mcp", "  "},
 		{"https://center.test/mcp", strings.Repeat("x", 8193)},
 	}

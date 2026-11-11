@@ -32,7 +32,7 @@ func TestLoadDefaultsNoFile(t *testing.T) {
 		Name:                 "node",
 		ExpectedDownloadMbps: 0,
 		ExpectedUploadMbps:   0,
-		Interval:             30 * time.Minute,
+		Interval:             60 * time.Minute,
 	}
 	if cfg != want {
 		t.Fatalf("Load() = %+v, want %+v", cfg, want)
@@ -46,7 +46,7 @@ func TestLoadEmptyFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error = %v, want nil", err)
 	}
-	if cfg.Name != "node" || cfg.Interval != 30*time.Minute {
+	if cfg.Name != "node" || cfg.Interval != 60*time.Minute {
 		t.Fatalf("Load() = %+v, want defaults", cfg)
 	}
 }
@@ -90,8 +90,23 @@ func TestLoadPartialFileKeepsDefaults(t *testing.T) {
 	if cfg.Name != "only-name" {
 		t.Fatalf("Name = %q, want only-name", cfg.Name)
 	}
-	if cfg.Engine != "ookla" || cfg.ExpectedDownloadMbps != 0 || cfg.ExpectedUploadMbps != 0 || cfg.Interval != 30*time.Minute {
+	if cfg.Engine != "ookla" || cfg.ExpectedDownloadMbps != 0 || cfg.ExpectedUploadMbps != 0 || cfg.Interval != 60*time.Minute {
 		t.Fatalf("Load() = %+v, want file name with default speeds/interval", cfg)
+	}
+}
+
+func TestLoadExplicitFiveAndThirtyMinuteIntervals(t *testing.T) {
+	for _, interval := range []time.Duration{5 * time.Minute, 30 * time.Minute} {
+		t.Run(interval.String(), func(t *testing.T) {
+			path := writeFile(t, t.TempDir(), "config.yaml", "interval: "+interval.String()+"\n")
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v, want nil", err)
+			}
+			if cfg.Interval != interval {
+				t.Fatalf("interval = %s, want explicit %s", cfg.Interval, interval)
+			}
+		})
 	}
 }
 

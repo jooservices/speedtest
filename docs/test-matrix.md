@@ -14,8 +14,8 @@ Operations: 73. Without a test: 0.
 | startTwoFactorSetup | POST | `/api/auth/2fa/setup` | `internal/center/server/auth_twofactor_test.go` |
 | enableTwoFactor | POST | `/api/auth/2fa/enable` | `internal/center/server/auth_twofactor_test.go` |
 | disableTwoFactor | POST | `/api/auth/2fa/disable` | `internal/center/server/auth_twofactor_test.go` |
-| listAccessTokens | GET | `/api/access-tokens` | `internal/center/apicontract/contract_test.go`<br>`internal/center/server/access_tokens_integration_test.go`<br>`internal/center/server/access_tokens_test.go`<br>`internal/center/server/routes_test.go`<br>+2 more |
-| createAccessToken | POST | `/api/access-tokens` | `internal/center/server/access_tokens_integration_test.go`<br>`internal/center/server/access_tokens_test.go`<br>`internal/center/server/routes_test.go`<br>`internal/center/telemetry/telemetry_test.go`<br>+1 more |
+| listAccessTokens | GET | `/api/access-tokens` | `internal/center/apicontract/contract_test.go`<br>`internal/center/server/access_tokens_integration_test.go`<br>`internal/center/server/access_tokens_test.go`<br>`internal/center/server/audit_test.go`<br>+3 more |
+| createAccessToken | POST | `/api/access-tokens` | `internal/center/server/access_tokens_integration_test.go`<br>`internal/center/server/access_tokens_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/routes_test.go`<br>+2 more |
 | revokeAccessToken | DELETE | `/api/access-tokens/{id}` | `internal/center/server/access_tokens_integration_test.go`<br>`internal/center/server/access_tokens_test.go` |
 | listNodes | GET | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/mcpserver/server_test.go`<br>`internal/center/server/access_token_auth_test.go`<br>`internal/center/server/access_tokens_integration_test.go`<br>+17 more |
 | createNode | POST | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/mcpserver/server_test.go`<br>`internal/center/server/access_token_auth_test.go`<br>`internal/center/server/access_tokens_integration_test.go`<br>+12 more |
@@ -30,7 +30,7 @@ Operations: 73. Without a test: 0.
 | rotateCredential | POST | `/api/nodes/{id}/credential` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_test.go` |
 | revokeCredential | DELETE | `/api/nodes/{id}/credential` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_test.go` |
 | ingestResults | POST | `/api/agent/results` | `cmd/center/main_integration_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>`internal/center/audit/audit_test.go`<br>+7 more |
-| getAgentConfig | GET | `/api/agent/config` | `cmd/agent/main_test.go`<br>`cmd/agent/update_test.go`<br>`internal/agent/control/regression_test.go`<br>`internal/agent/control/update_test.go`<br>+6 more |
+| getAgentConfig | GET | `/api/agent/config` | `cmd/agent/main_test.go`<br>`cmd/agent/update_test.go`<br>`internal/agent/control/regression_test.go`<br>`internal/agent/control/update_test.go`<br>+7 more |
 | heartbeat | POST | `/api/agent/heartbeat` | `internal/agent/control/control_test.go`<br>`internal/agent/control/regression_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>+5 more |
 | pollCommands | GET | `/api/agent/commands` | `internal/agent/control/update_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>`internal/center/server/agentapi_integration_test.go`<br>+2 more |
 | ackCommand | POST | `/api/agent/commands/{id}/ack` | `internal/agent/control/control_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>`internal/center/server/agentapi_integration_test.go`<br>+1 more |

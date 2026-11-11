@@ -34,10 +34,11 @@ func TestAccessTokenMCPHTTPFlowIntegration(t *testing.T) {
 	fixture.verifyReadREST(t, readToken)
 	fixture.verifyReadMCP(t, readToken, readID)
 	writeToken, writeID := fixture.issue(t, "integration-write", apitoken.ReadWrite)
-	fixture.verifyMCPReadAndWrites(t, writeToken)
-	fixture.verifyWriteAuditAndSafeLogs(t, readToken, writeToken)
+	mcpWriteToken, mcpWriteID := fixture.issue(t, "integration-mcp-write", apitoken.ReadWrite)
+	fixture.verifyMCPReadAndWrites(t, mcpWriteToken, mcpWriteID)
+	fixture.verifyWriteAuditAndSafeLogs(t, readToken, writeToken, mcpWriteToken, writeID)
 	fixture.verifyExpiryAndRevoke(t, readToken, readID, writeToken, writeID)
-	fixture.verifyTokenAudit(t, "access_token.create", 2)
+	fixture.verifyTokenAudit(t, "access_token.create", 3)
 }
 
 type accessTokenFixture struct {
@@ -76,7 +77,8 @@ func newAccessTokenFixture(t *testing.T) *accessTokenFixture {
 	alertStore := &alerts.Store{DB: pool, AppKey: appKey}
 	nodeID, alertID := seedAccessTokenMCPData(t, pool, ctx)
 	handler := NewHandler(Options{Auth: authService, NodeCredentials: nodes.NewService(pool, appKey), OwnerNodes: owner, OwnerSchedules: owner,
-		OwnerResults: owner, OwnerAlerts: alertStore, Audit: &audit.Store{DB: pool}, AccessTokens: &apitoken.Store{DB: pool}, Logger: slog.New(slog.NewJSONHandler(logs, nil))})
+		OwnerResults: owner, OwnerAlerts: alertStore, Audit: &audit.Store{DB: pool}, AccessTokens: &apitoken.Store{DB: pool},
+		TrustedProxyCIDRs: "127.0.0.1/32", Logger: slog.New(slog.NewJSONHandler(logs, nil))})
 	session, csrf := loginIntegrationOwner(t, handler)
 	return &accessTokenFixture{pool: pool, ctx: ctx, handler: handler, session: session, csrf: csrf, logs: logs, nodeID: nodeID, alertID: alertID}
 }
@@ -129,7 +131,12 @@ func (f *accessTokenFixture) issue(t *testing.T, name string, scope apitoken.Sco
 	if response.Code != http.StatusCreated {
 		t.Fatalf("create %s token status = %d", scope, response.Code)
 	}
-	return responseString(t, response.Body.Bytes(), "data", "token"), responseString(t, response.Body.Bytes(), "data", "id")
+	raw, id := responseString(t, response.Body.Bytes(), "data", "token"), responseString(t, response.Body.Bytes(), "data", "id")
+	var audited int
+	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM audit_log WHERE action='access_token.create' AND target_id=$1 AND auth_method='session' AND credential_id IS NULL`, id).Scan(&audited); err != nil || audited != 1 {
+		t.Fatalf("created token ID %s is missing from its session audit entry: count=%d err=%v", id, audited, err)
+	}
+	return raw, id
 }
 
 func (f *accessTokenFixture) verifyStoredDigest(t *testing.T, raw, id string) {
@@ -190,9 +197,13 @@ func (f *accessTokenFixture) verifyReadMCP(t *testing.T, raw, id string) {
 	}
 }
 
-func (f *accessTokenFixture) verifyMCPReadAndWrites(t *testing.T, token string) {
+func (f *accessTokenFixture) verifyMCPReadAndWrites(t *testing.T, token, credentialID string) {
 	t.Helper()
-	endpoint := httptest.NewServer(f.handler)
+	endpoint := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = "127.0.0.1:443"
+		r.Header.Set("X-Forwarded-For", "198.51.100.202")
+		f.handler.ServeHTTP(w, r)
+	}))
 	defer endpoint.Close()
 	client := mcp.NewClient(&mcp.Implementation{Name: "integration-write-client", Version: "1"}, nil)
 	remote, err := client.Connect(f.ctx, &mcp.StreamableClientTransport{Endpoint: endpoint.URL + "/mcp", HTTPClient: bearerClient(endpoint.Client(), token)}, nil)
@@ -203,6 +214,7 @@ func (f *accessTokenFixture) verifyMCPReadAndWrites(t *testing.T, token string) 
 	f.verifyMCPResultPagination(t, remote)
 	f.verifyMCPScheduleWrite(t, remote)
 	f.verifyMCPAlertWrite(t, remote)
+	f.verifyAuditIdentity(t, "schedule.update", f.nodeID, credentialID, "198.51.100.202")
 }
 
 func (f *accessTokenFixture) verifyMCPResultPagination(t *testing.T, remote *mcp.ClientSession) {
@@ -304,7 +316,7 @@ func integrationETag(t *testing.T, result *mcp.CallToolResult) string {
 	return etag
 }
 
-func (f *accessTokenFixture) verifyWriteAuditAndSafeLogs(t *testing.T, readToken, writeToken string) {
+func (f *accessTokenFixture) verifyWriteAuditAndSafeLogs(t *testing.T, readToken, writeToken, mcpWriteToken, credentialID string) {
 	t.Helper()
 	response := f.request(http.MethodPost, "/api/nodes", writeToken, `{"name":"token-created-node","expectedDown":100,"expectedUp":50}`)
 	if response.Code != http.StatusCreated {
@@ -314,8 +326,20 @@ func (f *accessTokenFixture) verifyWriteAuditAndSafeLogs(t *testing.T, readToken
 	if err := f.pool.QueryRow(f.ctx, `SELECT count(*) FROM audit_log WHERE action='node.create' AND actor='owner@example.test'`).Scan(&count); err != nil || count != 1 {
 		t.Fatalf("bearer write audit count = %d", count)
 	}
-	if !strings.Contains(f.logs.String(), "/api/nodes") || strings.Contains(f.logs.String(), readToken) || strings.Contains(f.logs.String(), writeToken) {
+	f.verifyAuditIdentity(t, "node.create", "", credentialID, "198.51.100.101")
+	if !strings.Contains(f.logs.String(), "/api/nodes") || strings.Contains(f.logs.String(), readToken) || strings.Contains(f.logs.String(), writeToken) || strings.Contains(f.logs.String(), mcpWriteToken) {
 		t.Fatal("request log omitted an operation or disclosed a bearer token")
+	}
+}
+
+func (f *accessTokenFixture) verifyAuditIdentity(t *testing.T, action, targetID, credentialID, remote string) {
+	t.Helper()
+	var method, recordedCredential, recordedRemote string
+	err := f.pool.QueryRow(f.ctx, `SELECT auth_method,coalesce(credential_id::text,''),remote FROM audit_log
+		WHERE action=$1 AND credential_id=$2 AND ($3='' OR target_id=$3) ORDER BY ts DESC,id DESC LIMIT 1`, action, credentialID, targetID).
+		Scan(&method, &recordedCredential, &recordedRemote)
+	if err != nil || method != audit.AuthMethodBearer || recordedCredential != credentialID || recordedRemote != remote {
+		t.Fatalf("%s audit identity = method %q credential %q remote %q, error %v", action, method, recordedCredential, recordedRemote, err)
 	}
 }
 
@@ -355,7 +379,9 @@ func (f *accessTokenFixture) verifyTokenAudit(t *testing.T, action string, want 
 
 func (f *accessTokenFixture) request(method, path, token, body string) *httptest.ResponseRecorder {
 	request := httptest.NewRequest(method, "http://center.test"+path, strings.NewReader(body))
+	request.RemoteAddr = "127.0.0.1:443"
 	request.Header.Set("Authorization", "Bearer "+token)
+	request.Header.Set("X-Forwarded-For", "198.51.100.101")
 	request.Header.Set("Idempotency-Key", "token-created-node")
 	response := httptest.NewRecorder()
 	f.handler.ServeHTTP(response, request)

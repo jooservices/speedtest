@@ -105,6 +105,7 @@ func (h *accessTokens) create(w http.ResponseWriter, r *http.Request) {
 		writeAPIProblem(w, r, http.StatusInternalServerError, "Internal failure", "The API token could not be created.")
 		return
 	}
+	setAuditTargetID(r.Context(), item.ID)
 	w.Header().Set("Location", "/api/access-tokens/"+item.ID)
 	writeSuccess(w, r, http.StatusCreated, "API token created. Copy it now; it will not be shown again.", issuedAccessToken{Token: item, Bearer: raw})
 }

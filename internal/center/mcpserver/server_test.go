@@ -29,12 +29,17 @@ func TestStreamableHTTPExposesToolsByTokenScopeAndDispatchesAPI(t *testing.T) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/nodes" {
 			t.Errorf("tool request = %s %s", r.Method, r.URL.Path)
 		}
+		if r.RemoteAddr != "127.0.0.1:443" || r.Header.Get("X-Forwarded-For") != "198.51.100.44" {
+			t.Errorf("tool request lost incoming client address: remote=%q forwarded=%q", r.RemoteAddr, r.Header.Get("X-Forwarded-For"))
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"success":true,"data":[{"id":"node-1"}]}`))
 	})
 	principal := apitoken.Principal{TokenID: "token-1", UserID: "user-1", Scope: apitoken.ReadOnly}
 	handler := NewHandler(api)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r.RemoteAddr = "127.0.0.1:443"
+		r.Header.Set("X-Forwarded-For", "198.51.100.44")
 		handler.ServeHTTP(w, r.WithContext(apitoken.WithPrincipal(r.Context(), principal)))
 	}))
 	defer server.Close()
@@ -124,7 +129,7 @@ func TestRequestBodyRejectsInvalidFormatsAndNonJSONValues(t *testing.T) {
 func TestCallOperationRejectsMalformedAndNonObjectArguments(t *testing.T) {
 	api := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Error("invalid arguments reached API") })
 	for _, raw := range []json.RawMessage{[]byte("{"), []byte("null"), []byte("[]")} {
-		result, err := callOperation(context.Background(), api, apitoken.Principal{}, apicontract.Operation{}, raw)
+		result, err := callOperation(context.Background(), api, apitoken.Principal{}, apicontract.Operation{}, raw, requestSource{})
 		if err != nil || !result.IsError {
 			t.Errorf("callOperation(%q) = %+v, error=%v; want tool error", raw, result, err)
 		}
@@ -335,13 +340,13 @@ func TestCallOperationRejectsUnknownAndMissingArguments(t *testing.T) {
 	operation := structOperation()
 	api := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { t.Fatal("invalid arguments reached API") })
 	for _, args := range []string{`{"unexpected":true}`, `{}`} {
-		result, err := callOperation(context.Background(), api, apitoken.Principal{}, operation, json.RawMessage(args))
+		result, err := callOperation(context.Background(), api, apitoken.Principal{}, operation, json.RawMessage(args), requestSource{})
 		if err != nil || result == nil || !result.IsError {
 			t.Errorf("callOperation(%s) = (%+v, %v), want tool error", args, result, err)
 		}
 	}
 	for _, raw := range []json.RawMessage{json.RawMessage(`{`), json.RawMessage(`null`)} {
-		result, err := callOperation(context.Background(), api, apitoken.Principal{}, operation, raw)
+		result, err := callOperation(context.Background(), api, apitoken.Principal{}, operation, raw, requestSource{})
 		if err != nil || result == nil || !result.IsError {
 			t.Errorf("callOperation(%s) = (%+v, %v), want JSON object error", raw, result, err)
 		}
@@ -435,7 +440,7 @@ func TestAddToolSkipsUnserializableInputSchema(t *testing.T) {
 	server := mcp.NewServer(&mcp.Implementation{Name: "test", Version: "1"}, nil)
 	addTool(server, http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), apitoken.Principal{}, apicontract.Operation{
 		Tool: "bad_schema", BodySchema: map[string]any{"properties": map[string]any{"bad": make(chan int)}},
-	})
+	}, requestSource{})
 }
 
 func structOperation() apicontract.Operation {

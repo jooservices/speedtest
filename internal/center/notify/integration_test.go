@@ -290,9 +290,9 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	if _, err := worker.Consume(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Roll back later engine, audit, installer and API-token migrations before checking version 6.
+	// Roll back later migrations until the delivery table is gone.
 	var exists bool
-	for step := 0; step < 6; step++ {
+	for step := 0; step < 8; step++ {
 		if err := db.Migrate(ctx, p, "down"); err != nil {
 			t.Fatal("rollback step", step, err)
 		}

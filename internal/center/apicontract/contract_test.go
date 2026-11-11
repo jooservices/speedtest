@@ -234,10 +234,22 @@ paths:
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(operations) != 2 || len(operations[0].Parameters) != 2 || !contains(operations[0].ResponseHeaders, "ETag") {
+	if len(operations) != 2 {
 		t.Fatalf("resolved operations = %+v", operations)
 	}
-	input, err := operations[1].InputSchema()
+	var read, update *Operation
+	for i := range operations {
+		switch operations[i].ID {
+		case "readNode":
+			read = &operations[i]
+		case "updateNode":
+			update = &operations[i]
+		}
+	}
+	if read == nil || update == nil || len(read.Parameters) != 2 || !contains(read.ResponseHeaders, "ETag") {
+		t.Fatalf("resolved operations = %+v", operations)
+	}
+	input, err := update.InputSchema()
 	if err != nil || !strings.Contains(string(input), `"interval"`) || !strings.Contains(string(input), `"engines"`) || !strings.Contains(string(input), `"oneOf"`) {
 		t.Fatalf("resolved oneOf input = %s, error = %v", input, err)
 	}

@@ -47,8 +47,12 @@ changes). Every operation declares its required scope in
 `docs/openapi.yaml` using `x-access-token-scope`; a token must meet that
 operation's scope before its handler runs. Agent credentials and auth/session
 endpoints are not API-token operations. Creating and revoking a token creates a
-safe audit entry; owner writes made with bearer credentials are audited against
-the token owner's account. Access logs omit request headers and query data.
+safe audit entry. Audit rows retain the authentication method, the non-secret
+credential ID for bearer writes, and the created token ID as the creation
+target, so operators can distinguish tokens owned by the same account. MCP
+tool writes retain the incoming client address using the same trusted-proxy
+rules as REST writes. Access logs omit request headers and query data; bearer
+values are never written to the audit log or application logs.
 
 The Streamable HTTP MCP endpoint is `/mcp`. Its tools are generated from the
 OpenAPI operations marked with `x-mcp-tool`, including their input schemas and
@@ -303,9 +307,13 @@ Settings defaults match the preview: dark, 7d, auto units, browser timezone,
 24-hour clock, one decimal, 365-day retention (0=forever), GeoLite2 + ip-api fallback,
 weekly updates, Ookla/auto server/4 threads, stagger on/maxConcurrent=1, empty
 quiet hours, email enabled to `ops@example.com`, other channels off/empty.
-Public center URL comes from deployment `.env`, not the demo URL. New nodes
-start at interval=30/offset=0, enabled, threads=4, server=auto. Schedule PUT clamps
-offset after interval changes; effective quiet timezone is explicit. Usage uses
+Public center URL comes from deployment `.env`, not the demo URL. `POST /api/nodes`
+does not accept an interval; its response and the new node's Ookla schedule use
+interval=60/offset=0, enabled, threads=4, server=auto. Newly enabled engine
+schedules also default to 60 when interval is omitted or zero. Legacy schedule
+PUT fields remain required. The 60-minute migration changes only the schedules
+column default, never existing rows; rollback restores that default to 30.
+Schedule PUT clamps offset after interval changes; effective quiet timezone is explicit. Usage uses
 up to 200 recent nonfailed results × tests/day, month=30 days; paused/no history=0.
 The UI should display null measurements/location as unavailable, not zero.
 

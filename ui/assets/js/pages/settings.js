@@ -231,7 +231,9 @@
         U.clear(list);
         if (!tokens.length) { list.appendChild(U.empty('No API tokens', 'Create a named token for a script or MCP client.')); return; }
         list.appendChild(U.table({ columns: [
-          { key: 'name', label: 'Name' }, { key: 'scope', label: 'Access' },
+          { key: 'name', label: 'Name', render: function (token) { return h('div', null,
+            h('div', null, token.name), h('span', { class: 'hint mono access-token-id', 'aria-label': 'Token ID ' + token.id }, token.id.slice(0, 8))); } },
+          { key: 'scope', label: 'Access' },
           { key: 'createdAt', label: 'Created', render: function (token) { return F.date(Date.parse(token.createdAt), 'full'); } },
           { key: 'expiresAt', label: 'Expires', render: function (token) { return token.expiresAt ? F.date(Date.parse(token.expiresAt), 'full') : 'Never'; } },
           { key: 'lastUsedAt', label: 'Last used', render: function (token) { return token.lastUsedAt ? F.date(Date.parse(token.lastUsedAt), 'full') : 'Never'; } },
@@ -329,9 +331,14 @@
         U.clear(host); U.clear(more);
         host.appendChild(U.table({ columns: [
           { key: 'ts', label: 'When', render: function (r) { return F.date(Date.parse(r.ts), 'full'); } },
-          { key: 'actor', label: 'Who', render: function (r) { return r.actor; } },
+          { key: 'actor', label: 'Who', render: function (r) {
+            var identity = h('div', null, h('div', null, r.actor));
+            var source = h('span', { class: 'hint audit-auth', 'aria-label': (r.authMethod === 'bearer' ? 'Bearer token' : 'Session') + (r.credentialId ? ' ' + r.credentialId : '') }, r.authMethod === 'bearer' ? 'Bearer token' : 'Session');
+            if (r.credentialId) source.appendChild(h('span', { class: 'mono', 'aria-hidden': 'true' }, ' · ' + r.credentialId.slice(0, 8)));
+            identity.appendChild(source); return identity;
+          } },
           { key: 'summary', label: 'What', render: function (r) { return r.summary; } },
-          { key: 'target', label: 'Item', render: function (r) { return h('span', { class: 'mono' }, r.targetId ? r.targetId.slice(0, 8) : '—'); } },
+          { key: 'target', label: 'Item', render: function (r) { return h('span', { class: 'mono', title: r.targetId || '' }, r.targetId ? r.targetId.slice(0, 8) : '—'); } },
           { key: 'remote', label: 'From', render: function (r) { return h('span', { class: 'mono' }, r.remote || '—'); } }],
           rows: rows, empty: U.empty('No changes recorded yet', 'Changes you make from now on appear here.') }));
         if (rows.length < total) more.appendChild(U.btn('Show more', { size: 'sm', onClick: function () { load(); } }));

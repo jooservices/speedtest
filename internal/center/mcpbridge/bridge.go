@@ -4,6 +4,7 @@ package mcpbridge
 import (
 	"context"
 	"errors"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -45,10 +46,21 @@ func ValidateConfig(endpoint, token string) error {
 	if err != nil || parsed.Host == "" || parsed.Scheme != "http" && parsed.Scheme != "https" || parsed.User != nil || parsed.Fragment != "" {
 		return errors.New("SPEEDTEST_MCP_ENDPOINT must be an HTTP(S) URL without user info or a fragment")
 	}
+	if parsed.Scheme == "http" && !loopbackHost(parsed.Hostname()) {
+		return errors.New("SPEEDTEST_MCP_ENDPOINT must use HTTPS unless its host is loopback")
+	}
 	if strings.TrimSpace(token) == "" || len(token) > 8192 {
 		return errors.New("SPEEDTEST_API_TOKEN must contain a bearer token")
 	}
 	return nil
+}
+
+func loopbackHost(host string) bool {
+	if strings.EqualFold(strings.TrimSuffix(host, "."), "localhost") {
+		return true
+	}
+	address := net.ParseIP(host)
+	return address != nil && address.IsLoopback()
 }
 
 func proxyServer(ctx context.Context, remote *mcp.ClientSession) (*mcp.Server, error) {
