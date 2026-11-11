@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 	"github.com/jooservices/speedtest/internal/center/isp"
 )
 
@@ -52,6 +53,29 @@ func TestOwnerISPRoutesRequireSession(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/isps?range=7d", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("code=%d", rec.Code)
+	}
+}
+
+func TestOwnerISPRoutesHonorAccessTokenScopes(t *testing.T) {
+	tokens := &tokenAuthStore{principal: apitoken.Principal{TokenID: "isp-token", UserID: "owner-1", Scope: apitoken.ReadOnly}}
+	auth := &serverAuth{tokens: tokens, tokenLimiter: newNodeRateLimiter(120, 20)}
+	routes := ownerAreas(Options{OwnerISP: &fakeOwnerISP{list: []map[string]any{}}}, auth)
+	handler := withAPITokenAuth(dispatcher(routes, http.NotFoundHandler()), routes, auth)
+
+	for _, test := range []struct {
+		method, path, body string
+		want               int
+	}{
+		{http.MethodGet, "/api/isps?range=7d", "", http.StatusOK},
+		{http.MethodPost, "/api/isps/00000000-0000-4000-8000-000000000001/plans", `{"name":"Fiber","advertisedDown":300,"advertisedUp":100}`, http.StatusForbidden},
+	} {
+		request := httptest.NewRequest(test.method, "https://center.test"+test.path, strings.NewReader(test.body))
+		request.Header.Set("Authorization", "Bearer valid-token")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != test.want {
+			t.Errorf("%s %s status = %d, want %d: %s", test.method, test.path, response.Code, test.want, response.Body.String())
+		}
 	}
 }
 

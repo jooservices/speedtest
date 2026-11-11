@@ -1442,12 +1442,14 @@ paths:
   /api/isps:
     get:
       operationId: listISPs
+      x-access-token-scope: read
       tags:
         - ISPs
       summary: List ISPs with aggregate speed metrics
       description: ISPs are derived from ASN/organisation geolocation data. Aggregates honour engine isolation.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       parameters:
         - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Range"
@@ -1473,11 +1475,13 @@ paths:
   /api/isps/compare:
     get:
       operationId: compareISPs
+      x-access-token-scope: read
       tags:
         - ISPs
       summary: Compare selected ISPs in the same period
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       parameters:
         - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Range"
@@ -1509,11 +1513,13 @@ paths:
   /api/isps/{id}:
     get:
       operationId: getISP
+      x-access-token-scope: read
       tags:
         - ISPs
       summary: Read one ISP with aggregate metrics
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       parameters:
         - name: id
           in: path
@@ -1546,12 +1552,14 @@ paths:
   /api/isps/{id}/trend:
     get:
       operationId: getISPTrend
+      x-access-token-scope: read
       tags:
         - ISPs
       summary: Download trend for one ISP
       description: Uses hourly buckets for windows up to 24 hours and daily buckets for longer windows. Each bucket timestamp is the average sample time, so points remain within the requested window.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       parameters:
         - name: id
           in: path
@@ -1584,11 +1592,13 @@ paths:
   /api/isps/{id}/plans:
     get:
       operationId: listISPPlans
+      x-access-token-scope: read
       tags:
         - ISPs
       summary: List optional advertised plans for an ISP
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       parameters:
         - name: id
           in: path
@@ -1612,11 +1622,13 @@ paths:
           $ref: "#/components/responses/ServerError"
     post:
       operationId: createISPPlan
+      x-access-token-scope: read-write
       tags:
         - ISPs
       summary: Create an advertised ISP plan
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       parameters:
         - name: id
           in: path
@@ -1653,11 +1665,13 @@ paths:
   /api/isps/{id}/plans/{planId}:
     put:
       operationId: updateISPPlan
+      x-access-token-scope: read-write
       tags:
         - ISPs
       summary: Replace an ISP plan
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       parameters:
         - name: id
           in: path
@@ -1698,11 +1712,13 @@ paths:
           $ref: "#/components/responses/ServerError"
     delete:
       operationId: deleteISPPlan
+      x-access-token-scope: full
       tags:
         - ISPs
       summary: Delete an ISP plan
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       parameters:
         - name: id
           in: path
