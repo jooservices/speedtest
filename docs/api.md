@@ -35,9 +35,11 @@ Owner API access tokens are separate named credentials created and revoked at
 `/api/access-tokens` from an authenticated session. A token is returned only in
 its creation response; PostgreSQL stores its SHA-256 digest, and token metadata
 never includes the bearer value or digest. Tokens can expire and successful
-uses update `lastUsedAt`. Revocation takes effect immediately. Keep the bearer
-value in a secret store and send it as `Authorization: Bearer <token>` over
-HTTPS. Bearer requests do not need the session cookie, Origin or CSRF header.
+uses update `lastUsedAt`. Revocation blocks new requests immediately; an open
+installation event stream closes at its next 10-second credential check. Keep
+the bearer value in a secret store and send it as
+`Authorization: Bearer <token>` over HTTPS. Bearer requests do not need the
+session cookie, Origin or CSRF header.
 The per-token request bucket defaults to 120 requests per minute with a burst
 of 20, configured by `SPEEDTEST_API_TOKEN_REQUESTS_PER_MINUTE`.
 

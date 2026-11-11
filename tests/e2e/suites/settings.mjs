@@ -5,6 +5,49 @@ export function settingsSuite(T, ctx) {
   const { page, assert } = T;
   const { receiver } = ctx;
   const setting = title => page.locator('.setting').filter({ hasText: title });
+  async function startBearerInstallationStream(raw, tokenID) {
+    const jobID = '10000000-0000-4000-8000-000000000087';
+    const eventID = '10000000-0000-4000-8000-000000000088';
+    const nodeID = T.db("select id::text from nodes where name='VM5'");
+    assert.ok(nodeID, 'the installation stream fixture has a seeded node');
+    T.db(`insert into installer_jobs(id,node_id,principal,status,step) values ('${jobID}','${nodeID}','e2e-owner','running','connecting')`);
+    T.db(`insert into installer_events(id,installation_id,step,message,pct,status) values ('${eventID}','${jobID}','connecting','Waiting for the confirmed SSH connection.',10,'running')`);
+    const controller = new AbortController();
+    let reader;
+    try {
+      const response = await fetch(`${ctx.stack.origin}/api/installations/${jobID}/events`, { headers: { Authorization: `Bearer ${raw}` }, signal: controller.signal });
+      assert.equal(response.status, 200, 'a bearer-only request opens the installation event stream');
+      reader = response.body.getReader();
+      const first = await reader.read();
+      assert.equal(first.done, false, 'the stream sends the current installation event');
+      assert.match(new TextDecoder().decode(first.value), /event: progress/);
+      const lastUsed = T.db(`select last_used_at::text from api_access_tokens where id='${tokenID}'`);
+      let closed = false;
+      const watch = (async () => {
+        try {
+          while (true) {
+            if ((await reader.read()).done) { closed = true; return; }
+          }
+        } catch { closed = true; }
+      })();
+      void watch;
+      await T.eventually(() => T.db(`select last_used_at::text from api_access_tokens where id='${tokenID}'`) !== lastUsed, 'the open stream revalidates its bearer token', 15000);
+      assert.equal(closed, false, 'the stream remains open after successful bearer revalidation');
+      return {
+        async waitForRevocation() { await T.eventually(() => closed, 'the stream closes after token revocation', 15000); },
+        async cleanup() {
+          controller.abort();
+          if (reader) await reader.cancel().catch(() => {});
+          T.db(`delete from installer_jobs where id='${jobID}'`);
+        },
+      };
+    } catch (error) {
+      controller.abort();
+      if (reader) await reader.cancel().catch(() => {});
+      T.db(`delete from installer_jobs where id='${jobID}'`);
+      throw error;
+    }
+  }
   return {
     // General: every preference is saved on the center and survives a reload.
     async preferences() {
@@ -253,10 +296,16 @@ export function settingsSuite(T, ctx) {
       await T.see('API token revoked');
       await T.eventually(async () => await T.row('e2e-expiring-token').getByText('Revoked').count() === 1, 'revoked takes precedence over expired');
       const item = T.row('e2e-read-token');
-      await T.press('Revoke', item);
-      await T.press('Revoke', page.getByRole('dialog'));
-      await T.see('API token revoked');
-      await T.eventually(() => T.db("select revoked_at is not null from api_access_tokens where name='e2e-read-token'") === 't', 'the second revoke request is committed');
+      const installationStream = await startBearerInstallationStream(raw, tokenID);
+      try {
+        await T.press('Revoke', item);
+        await T.press('Revoke', page.getByRole('dialog'));
+        await T.see('API token revoked');
+        await T.eventually(() => T.db("select revoked_at is not null from api_access_tokens where name='e2e-read-token'") === 't', 'the second revoke request is committed');
+        await installationStream.waitForRevocation();
+      } finally {
+        await installationStream.cleanup();
+      }
       const clientAfterRevoke = await apiRequest.newContext();
       try {
         const response = await clientAfterRevoke.get(ctx.stack.origin + '/api/nodes', { headers: { Authorization: `Bearer ${raw}` } });
