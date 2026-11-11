@@ -150,6 +150,69 @@
     if (state.selected) selectedStatus.textContent = 'Selected ISP: ' + state.selected.name + ' (AS' + state.selected.asn + ')';
     drawTrend(trendHost, state.selected);
     redrawCompare();
+    if (!ST.demo) root.appendChild(reportCard());
+  }
+
+
+  /* ---------- Monthly report (JOOST-79) ---------- */
+  function lastMonths(count) {
+    var out = [], d = new Date(), y = d.getUTCFullYear(), m = d.getUTCMonth();
+    for (var i = 0; i < count; i++) {
+      out.push(y + '-' + (m + 1 < 10 ? '0' : '') + (m + 1));
+      m -= 1;
+      if (m < 0) { m = 11; y -= 1; }
+    }
+    return out;
+  }
+
+  function reportColumns() {
+    return [
+      { key: 'isp', label: 'ISP', render: function (r) { return h('span', null, r.isp, h('span', { class: 'muted' }, ' AS' + r.asn)); } },
+      { key: 'node', label: 'Node' },
+      { key: 'plan', label: 'Plan', render: function (r) { return r.plan || '—'; } },
+      { key: 'avgDownMbps', label: 'Avg down', num: true, render: function (r) { return F.speed(r.avgDownMbps); } },
+      { key: 'p95DownMbps', label: 'p95', num: true, render: function (r) { return F.speed(r.p95DownMbps); } },
+      { key: 'deliveredPercent', label: 'Delivered', num: true, render: function (r) { return r.deliveredPercent == null ? '—' : F.num(r.deliveredPercent, 0) + '%'; } },
+      { key: 'worstHoursUtc', label: 'Worst hours (UTC)', render: function (r) { return r.worstHoursUtc.length ? r.worstHoursUtc.join(', ') : '—'; } },
+      { key: 'failures', label: 'Failures', num: true },
+      { key: 'downtimeMinutes', label: 'Downtime (min)', num: true },
+      { key: 'ipChanges', label: 'IP changes', num: true }
+    ];
+  }
+
+  function reportCard() {
+    var months = lastMonths(12), month = months[1], host = h('div', { 'data-report-preview': '' });
+    var csv = h('a', { class: 'btn', download: '', 'data-report-download': 'csv' }, 'Download CSV');
+    var pdf = h('a', { class: 'btn', download: '', 'data-report-download': 'pdf' }, 'Download PDF');
+    var requestGeneration = 0, controller = null;
+    function path(format) { return '/api/reports/monthly?month=' + encodeURIComponent(month) + '&format=' + format + ST.engineQuery(); }
+    function load() {
+      var generation = ++requestGeneration;
+      if (controller) controller.abort();
+      controller = new AbortController();
+      csv.setAttribute('href', path('csv'));
+      pdf.setAttribute('href', path('pdf'));
+      U.clear(host);
+      host.appendChild(h('div', { class: 'muted' }, 'Loading report…'));
+      ST.api.request(path('json'), { signal: controller.signal }).then(function (res) {
+        if (generation !== requestGeneration) return;
+        var data = res.data || { rows: [] };
+        U.clear(host);
+        if (data.partial) host.appendChild(h('p', { class: 'muted' }, 'This month is not over yet; figures cover the days so far.'));
+        host.appendChild(U.table({ columns: reportColumns(), rows: data.rows, empty: U.empty('No data for this month', 'Pick another month, or wait until tests with a known ISP have run.') }));
+      }).catch(function (err) {
+        if (generation !== requestGeneration || err.name === 'AbortError') return;
+        U.clear(host);
+        host.appendChild(U.empty('Could not load the report', err.message || 'Retry later.', U.btn('Retry', { onClick: load })));
+      });
+    }
+    var picker = U.select(months, month, function (v) { month = v; load(); }, 'report-month');
+    load();
+    return h('div', { class: 'card', style: 'margin-top:16px' },
+      h('h2', { class: 'section-title' }, 'Monthly report'),
+      h('p', { class: 'muted' }, 'Delivered against advertised speed, p95, worst hours, failures, downtime and IP changes per ISP and node. Set SPEEDTEST_MONTHLY_REPORT_EMAIL=true to e-mail the previous month on the first of each month.'),
+      h('div', { class: 'row', style: 'gap:8px;align-items:center;margin-bottom:12px' }, U.field('Month', picker), csv, pdf),
+      host);
   }
 
   ST.pages.isps = function (root) {

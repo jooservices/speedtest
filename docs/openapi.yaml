@@ -15,6 +15,8 @@ servers:
   - url: /
     description: Same configured command-center origin; no machine address embedded.
 tags:
+  - name: Reports
+    description: Monthly ISP and plan report
   - name: Auth
     description: UI session lifecycle
   - name: Access tokens
@@ -1433,6 +1435,67 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/reports/monthly:
+    get:
+      operationId: getMonthlyReport
+      x-access-token-scope: read
+      tags:
+        - Reports
+      summary: Monthly ISP and plan report
+      description: >-
+        Per ISP and node for one UTC month: delivered against advertised speed, p95, worst hours, failures, downtime
+        minutes and IP changes. `format=csv` and `format=pdf` return a download. Engines are never blended.
+        An unlinked result follows the latest IP-history event; a latest event without an ISP stays in `Unknown ISP`.
+        When no IP-history event exists, the result can inherit an earlier ISP-linked result. IP changes belong to the
+        destination ISP; an unresolved destination uses `Unknown ISP` and can create a row with zero tests. Omitting
+        `month` uses the previous month.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: month
+          in: query
+          required: false
+          description: Month as YYYY-MM (UTC); a future month is refused.
+          schema:
+            type: string
+            pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$"
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [json, csv, pdf]
+            default: json
+        - name: isp
+          in: query
+          required: false
+          description: Limit the report to one ISP ID.
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/Engine"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getMonthlyReportResponse"
+            text/csv:
+              schema:
+                type: string
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -7048,6 +7111,51 @@ components:
         - name
         - advertisedDown
         - advertisedUp
+    MonthlyReportRow:
+      type: object
+      required: [ispId, isp, asn, nodeId, node, plan, advertisedDownMbps, advertisedUpMbps, tests, failures, avgDownMbps, p95DownMbps, avgUpMbps, p95UpMbps, deliveredPercent, worstHoursUtc, downtimeMinutes, ipChanges]
+      properties:
+        ispId: {type: [string, "null"], format: uuid, description: Null when no ISP can be attributed at the measurement time.}
+        isp: {type: string, description: Unknown ISP when no attribution is available.}
+        asn: {type: integer, description: 0 when the ISP is unknown.}
+        nodeId: {type: string, format: uuid}
+        node: {type: string}
+        plan: {type: [string, "null"]}
+        advertisedDownMbps: {type: [number, "null"]}
+        advertisedUpMbps: {type: [number, "null"]}
+        tests: {type: integer}
+        failures: {type: integer}
+        avgDownMbps: {type: [number, "null"]}
+        p95DownMbps: {type: [number, "null"]}
+        avgUpMbps: {type: [number, "null"]}
+        p95UpMbps: {type: [number, "null"]}
+        deliveredPercent: {type: [number, "null"], description: Average download as a percentage of the advertised plan speed.}
+        worstHoursUtc: {type: array, items: {type: integer, minimum: 0, maximum: 23}, description: The three UTC hours with the lowest average download for this ISP and node.}
+        downtimeMinutes: {type: integer, description: Minutes from each failed test to the next test or report boundary, at most a day per failure.}
+        ipChanges: {type: integer, description: Actual transitions only; attributed to the destination ISP.}
+    MonthlyReport:
+      type: object
+      required: [month, from, to, partial, engine, generatedAt, rows]
+      properties:
+        month: {type: string}
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        partial: {type: boolean, description: True while the month is not over.}
+        engine: {type: string}
+        generatedAt: {type: string, format: date-time}
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/MonthlyReportRow"
+    getMonthlyReportResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/MonthlyReport"
     listISPsResponse:
       allOf:
         - $ref: "#/components/schemas/Success"

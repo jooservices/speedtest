@@ -25,6 +25,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/notify"
 	"github.com/jooservices/speedtest/internal/center/ownerapi"
 	"github.com/jooservices/speedtest/internal/center/release"
+	"github.com/jooservices/speedtest/internal/center/report"
 	"github.com/jooservices/speedtest/internal/center/server"
 	"github.com/jooservices/speedtest/internal/center/settings"
 	"github.com/jooservices/speedtest/internal/center/stats"
@@ -49,6 +50,7 @@ type services struct {
 	OwnerSchedules     server.OwnerSchedulesStore
 	OwnerStats         server.OwnerStatsStore
 	OwnerISP           server.OwnerISPStore
+	OwnerReport        server.OwnerReportStore
 	Settings           settings.Store
 	OwnerIP            server.OwnerIPStore
 	OwnerNotifications server.OwnerNotificationsStore
@@ -82,12 +84,15 @@ func newOperationalStores(pool *pgxpool.Pool, cfg config.CenterConfig, logger *s
 	return operational, alertStore, retention
 }
 
-func backgroundServices(notifications *notify.Store, retention *jobs.Retention, watcher *ipwatch.Watcher, dbip geo.DBIPConfig, alertStore *alerts.Store) func(context.Context) {
+func backgroundServices(notifications *notify.Store, retention *jobs.Retention, mailer *report.Mailer, watcher *ipwatch.Watcher, dbip geo.DBIPConfig, alertStore *alerts.Store) func(context.Context) {
 	return func(ctx context.Context) {
 		if notifications != nil {
 			go notifications.Loop(ctx)
 		}
 		go retention.Loop(ctx)
+		if mailer != nil {
+			go mailer.Loop(ctx)
+		}
 		if watcher.Reader != nil {
 			// GeoLite2 (weekly, needs a licence key) or DB-IP Lite (monthly, free): the first one configured wins.
 			if os.Getenv("SPEEDTEST_GEOLITE2_LICENSE_KEY") != "" {
@@ -132,6 +137,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		return services{}, nil, err
 	}
 	operational, alertStore, retention := newOperationalStores(pool, cfg, logger, notifications)
+	mailer := buildReportMailer(pool, notifications, logger)
 	dbip, err := geo.DBIPConfigFromEnv()
 	if err != nil {
 		cleanup()
@@ -155,6 +161,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		OwnerSchedules:     owner,
 		OwnerStats:         statsStore,
 		OwnerISP:           &isp.Store{DB: pool},
+		OwnerReport:        &report.Store{DB: pool},
 		Settings:           preferences,
 		OwnerIP:            &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...).WithConsensus(watcher.Consensus, logger)},
 		OwnerDashboard:     &dashboard.Cached{Source: &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore}, TTL: 5 * time.Second},
@@ -163,7 +170,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		Audit:              &audit.Store{DB: pool},
 		AccessTokens:       &apitoken.Store{DB: pool},
 		Installer:          installerService,
-		Background:         backgroundServices(notifications, retention, watcher, dbip, alertStore),
+		Background:         backgroundServices(notifications, retention, mailer, watcher, dbip, alertStore),
 	}, cleanup, nil
 }
 
@@ -189,4 +196,20 @@ func buildInstaller(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCo
 		return nil, nil
 	}
 	return installer.NewService(ctx, installer.ServiceOptions{Database: pool, Enrollment: enrollment, CenterURL: cfg.PublicURL, AppKey: cfg.AppKey, Logger: logger})
+}
+
+// buildReportMailer returns the scheduled monthly report e-mail, or nil unless the owner turned it on with
+// SPEEDTEST_MONTHLY_REPORT_EMAIL=true (it needs the e-mail channel to be configured in the settings).
+func buildReportMailer(pool *pgxpool.Pool, notifications *notify.Store, logger *slog.Logger) *report.Mailer {
+	if notifications == nil || os.Getenv("SPEEDTEST_MONTHLY_REPORT_EMAIL") != "true" {
+		return nil
+	}
+	return &report.Mailer{
+		Reports: &report.Store{DB: pool},
+		DB:      pool,
+		Log:     logger,
+		Send: func(ctx context.Context, build func(string) string) error {
+			return notifications.SendText(ctx, "email", build)
+		},
+	}
 }
