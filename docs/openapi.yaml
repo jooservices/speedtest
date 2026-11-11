@@ -821,6 +821,7 @@ paths:
   /api/nodes/{id}/servers:
     get:
       operationId: getNodeServerCatalog
+      x-access-token-scope: read
       tags:
         - Nodes
       summary: Read a node's server catalog for one engine
@@ -864,6 +865,7 @@ paths:
           $ref: "#/components/responses/ServerError"
     post:
       operationId: refreshNodeServerCatalog
+      x-access-token-scope: read-write
       tags:
         - Nodes
       summary: Queue server discovery on a node
@@ -911,6 +913,7 @@ paths:
   /api/nodes/{id}/server-selection:
     put:
       operationId: setNodeServerSelection
+      x-access-token-scope: read-write
       tags:
         - Nodes
       summary: Pin a discovered server or select automatically
