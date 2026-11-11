@@ -13,6 +13,7 @@ export function coreSteps(ctx) {
     assert,
     url: hash => `${stack.origin}/${hash}`,
     heading: name => page.getByRole('heading', { name, level: 1 }),
+    bandwidthCard: () => page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Bandwidth', exact: true }) }),
     toast: text => page.locator('#toasts').getByText(text).first(),
 
     // ---- navigation and session ----

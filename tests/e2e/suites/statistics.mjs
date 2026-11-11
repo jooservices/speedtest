@@ -44,8 +44,12 @@ export function statisticsSuite(T) {
       await page.getByRole('heading', { name: 'Bandwidth' }).waitFor();
       await page.getByRole('img', { name: 'Daily bandwidth usage by node and engine' }).waitFor();
       await page.getByRole('columnheader', { name: 'Month to date' }).waitFor();
-      const bandwidth = page.locator('.card').filter({ hasText: 'Measured download and upload bytes remain separate by node and engine.' });
-      assert.ok(await bandwidth.locator('table').last().locator('tbody tr').count() > 0, 'Statistics shows complete daily bandwidth buckets');
+      const bandwidth = T.bandwidthCard();
+      assert.equal(await bandwidth.count(), 1, 'Statistics has one Bandwidth section');
+      const usage = (await T.api('/api/usage?group=day')).body.data;
+      const expectedBuckets = new Set(usage.series.map(bucket => [bucket.start, bucket.nodeId, bucket.engine, bucket.ispId || ''].join('|'))).size;
+      const dailyRows = bandwidth.locator('table').last().locator('tbody tr');
+      assert.equal(await dailyRows.count(), expectedBuckets, 'Statistics shows every available daily bandwidth bucket');
       await T.expectNoLoadError();
     },
 

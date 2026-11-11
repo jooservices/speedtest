@@ -12,8 +12,12 @@ export function dashboardSuite(T, ctx) {
       for (const label of ['Bandwidth', 'Month to date', 'Projected month end', 'Previous month']) await T.see(label);
       await page.getByRole('columnheader', { name: 'Engine' }).last().waitFor();
       await page.getByRole('img', { name: 'Daily bandwidth usage by node and engine' }).waitFor();
-      const bandwidth = page.locator('.card').filter({ hasText: 'Measured download and upload bytes remain separate by node and engine.' });
-      assert.ok(await bandwidth.locator('table').last().locator('tbody tr').count() > 0, 'the daily bandwidth table shows numeric buckets');
+      const bandwidth = T.bandwidthCard();
+      assert.equal(await bandwidth.count(), 1, 'the dashboard has one Bandwidth section');
+      const usage = (await T.api('/api/usage?group=day')).body.data;
+      const expectedBuckets = new Set(usage.series.map(bucket => [bucket.start, bucket.nodeId, bucket.engine, bucket.ispId || ''].join('|'))).size;
+      const dailyRows = bandwidth.locator('table').last().locator('tbody tr');
+      assert.equal(await dailyRows.count(), expectedBuckets, 'the daily bandwidth table shows every available numeric bucket');
       for (const name of ['VM1', 'VM2', 'VM3', 'VM4', 'VM5']) await page.locator('.node-card').filter({ hasText: name }).first().waitFor();
       const changes = await page.locator('.stat').filter({ hasText: 'IP changes' }).locator('.stat-value').innerText();
       assert.match(changes, /^[1-9]\d*\s*change/, 'the seeded address changes must be counted, got ' + JSON.stringify(changes));
