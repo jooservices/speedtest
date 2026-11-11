@@ -54,6 +54,8 @@ type CenterConfig struct {
 	AppKey []byte
 	// AgentRequestsPerMinute is the per-node sustained agent API rate.
 	AgentRequestsPerMinute int
+	// APITokenRequestsPerMinute is the sustained rate for each owner bearer token.
+	APITokenRequestsPerMinute int
 	// PublicURL is the address agents use to reach the center; it is written into
 	// the served installer script. ReleaseDir holds the files built by `make release`.
 	// Both must be set to enable GET /install.sh and GET /download/<artifact>.
@@ -103,6 +105,10 @@ func LoadCenter() (CenterConfig, error) {
 	if err != nil {
 		return CenterConfig{}, err
 	}
+	apiTokenRateLimit, err := getInt("SPEEDTEST_API_TOKEN_REQUESTS_PER_MINUTE", 120)
+	if err != nil {
+		return CenterConfig{}, err
+	}
 	appKey, err := decodeAppKey(os.Getenv("APP_KEY"))
 	if err != nil {
 		return CenterConfig{}, err
@@ -121,22 +127,23 @@ func LoadCenter() (CenterConfig, error) {
 	}
 
 	cfg := CenterConfig{
-		HTTPAddr:               getString("SPEEDTEST_HTTP_ADDR", "127.0.0.1:8080"),
-		AppEnv:                 strings.ToLower(strings.TrimSpace(getString("APP_ENV", "local"))),
-		UIDir:                  getString("SPEEDTEST_UI_DIR", ""),
-		SessionTTL:             sessionTTL,
-		LoginMaxAttempts:       loginMaxAttempts,
-		LoginWindow:            loginWindow,
-		TrustedProxyCIDRs:      getString("SPEEDTEST_TRUSTED_PROXY_CIDRS", ""),
-		Database:               centerDatabase(port, maxConns),
-		AppKey:                 appKey,
-		AgentRequestsPerMinute: rateLimit,
-		SMTPAddr:               getString("SPEEDTEST_SMTP_ADDR", "127.0.0.1:11025"),
-		SMTPFrom:               getString("SPEEDTEST_SMTP_FROM", "speedtest@example.com"),
-		SMTPUser:               getString("SPEEDTEST_SMTP_USER", ""),
-		TelegramURL:            getString("SPEEDTEST_TELEGRAM_URL", "https://api.telegram.org"),
-		PublicURL:              strings.TrimSpace(getString("SPEEDTEST_PUBLIC_URL", "")),
-		ReleaseDir:             strings.TrimSpace(getString("SPEEDTEST_RELEASE_DIR", "")),
+		HTTPAddr:                  getString("SPEEDTEST_HTTP_ADDR", "127.0.0.1:8080"),
+		AppEnv:                    strings.ToLower(strings.TrimSpace(getString("APP_ENV", "local"))),
+		UIDir:                     getString("SPEEDTEST_UI_DIR", ""),
+		SessionTTL:                sessionTTL,
+		LoginMaxAttempts:          loginMaxAttempts,
+		LoginWindow:               loginWindow,
+		TrustedProxyCIDRs:         getString("SPEEDTEST_TRUSTED_PROXY_CIDRS", ""),
+		Database:                  centerDatabase(port, maxConns),
+		AppKey:                    appKey,
+		AgentRequestsPerMinute:    rateLimit,
+		APITokenRequestsPerMinute: apiTokenRateLimit,
+		SMTPAddr:                  getString("SPEEDTEST_SMTP_ADDR", "127.0.0.1:11025"),
+		SMTPFrom:                  getString("SPEEDTEST_SMTP_FROM", "speedtest@example.com"),
+		SMTPUser:                  getString("SPEEDTEST_SMTP_USER", ""),
+		TelegramURL:               getString("SPEEDTEST_TELEGRAM_URL", "https://api.telegram.org"),
+		PublicURL:                 strings.TrimSpace(getString("SPEEDTEST_PUBLIC_URL", "")),
+		ReleaseDir:                strings.TrimSpace(getString("SPEEDTEST_RELEASE_DIR", "")),
 	}
 	if err := cfg.validate(); err != nil {
 		return CenterConfig{}, err
@@ -162,6 +169,9 @@ func (c CenterConfig) validate() error {
 	}
 	if c.AgentRequestsPerMinute < 1 || c.AgentRequestsPerMinute > 60000 {
 		return fmt.Errorf("SPEEDTEST_AGENT_REQUESTS_PER_MINUTE must be between 1 and 60000, got %d", c.AgentRequestsPerMinute)
+	}
+	if c.APITokenRequestsPerMinute < 1 || c.APITokenRequestsPerMinute > 60000 {
+		return fmt.Errorf("SPEEDTEST_API_TOKEN_REQUESTS_PER_MINUTE must be between 1 and 60000, got %d", c.APITokenRequestsPerMinute)
 	}
 	if c.AppEnv != "local" && c.AppEnv != "test" && c.AppEnv != "staging" && c.AppEnv != "production" {
 		return fmt.Errorf("APP_ENV must be local, test, staging or production, got %q", c.AppEnv)
