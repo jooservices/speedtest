@@ -299,16 +299,6 @@ containers reach the host's center port; on the dev VM that path is closed, so t
 `scripts/test-netpath-namespace.sh` can run in a throwaway container with `--cap-add NET_ADMIN --cap-add SYS_ADMIN`
 and unconfined seccomp/AppArmor (it passed that way on 2026-11-04).
 
-The script finds an existing center node by name before creating one. After
-`down`, a later `up` reuses its volume and leaves its schedule untouched. `forget`
-deletes the center node and removes its local container and volume; `purge`
-removes only the local volume while keeping the center node. For an incomplete
-new-node attempt, an idempotency key and the one-time enrollment token are held in a mode-0600 file below
-`${XDG_STATE_HOME:-$HOME/.local/state}/speedtest/node-attempts` (directory mode
-0700). The file is removed after the container starts or the node is forgotten.
-Keep the host state directory persistent until the attempt completes so a retry
-can safely resume the same create request.
-
 ## APP_KEY rotation maintenance
 
 Changing APP_KEY alone makes stored integration secrets and idempotency responses

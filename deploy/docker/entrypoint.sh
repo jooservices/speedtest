@@ -4,19 +4,10 @@
 # exits so Docker's restart policy brings everything back (state lives in the volume).
 set -euo pipefail
 
-STATE="${SPEEDTEST_STATE_DIR:-/var/lib/speedtest}"
+STATE=/var/lib/speedtest
 PORT="${STAGING_PORT:-18090}"
-# shellcheck source=deploy/docker/schedule-defaults.sh
-source "$(dirname "$0")/schedule-defaults.sh"
-INTERVAL="$(staging_interval)"
-DEFAULT_NODES='VM1:0 VM2:10 VM3:20'
-if [ -n "${STAGING_NODES:-}" ]; then
-  NODES="$STAGING_NODES"                              # name:startMinuteOffset ...
-  USE_DEFAULT_NODES=0
-else
-  NODES="$DEFAULT_NODES"
-  USE_DEFAULT_NODES=1
-fi
+INTERVAL="${STAGING_INTERVAL_MINUTES:-60}"
+NODES="${STAGING_NODES:-VM1:0 VM2:10 VM3:20}"          # name:startMinuteOffset ...
 EXPECTED_DOWN="${STAGING_EXPECTED_DOWN_MBPS:-500}"
 EXPECTED_UP="${STAGING_EXPECTED_UP_MBPS:-500}"
 CENTER="http://127.0.0.1:${PORT}"
@@ -25,38 +16,6 @@ export APP_ENV="${APP_ENV:-local}" SPEEDTEST_HTTP_ADDR="${BIND}:${PORT}"
 
 log() { printf '%s entrypoint: %s\n' "$(date -u +%FT%TZ)" "$*"; }
 die() { log "ERROR: $*"; exit 1; }
-validate_staging_nodes() {
-  local spec name offset candidate prior used
-  local -a nodes=() used_offsets=()
-  for spec in $NODES; do
-    [[ "$spec" == *:* && "${spec#*:}" != *:* ]] || die "invalid staging node specification: $spec"
-    name="${spec%%:*}"
-    offset="${spec#*:}"
-    [[ -n "$name" && "$offset" =~ ^[0-9]{1,2}$ ]] || die "node ${name:-<empty>} offset must be a minute from 0 through 59"
-    offset=$((10#$offset))
-    (( offset < 60 )) || die "node ${name} offset must be a minute from 0 through 59"
-    if (( offset >= INTERVAL )); then
-      (( USE_DEFAULT_NODES == 1 )) || die "node ${name} offset ${offset} must be less than interval ${INTERVAL}"
-      candidate=0
-      while (( candidate < INTERVAL )); do
-        used=0
-        for prior in "${used_offsets[@]}"; do
-          if (( prior == candidate )); then used=1; break; fi
-        done
-        (( used == 0 )) && break
-        candidate=$((candidate + 1))
-      done
-      (( candidate < INTERVAL )) || die "no valid start-minute offset remains for node ${name}"
-      offset="$candidate"
-    fi
-    nodes+=("${name}:${offset}")
-    used_offsets+=("$offset")
-  done
-  (( ${#nodes[@]} > 0 )) || die "STAGING_NODES must contain at least one node"
-  NODES="${nodes[*]}"
-}
-require_schedule_interval STAGING_INTERVAL_MINUTES "$INTERVAL" || exit 1
-validate_staging_nodes
 : "${SPEEDTEST_DB_HOST:?}" "${SPEEDTEST_DB_PORT:?}" "${SPEEDTEST_DB_NAME:?}" "${SPEEDTEST_DB_USER:?}" "${SPEEDTEST_DB_PASSWORD:?}"
 : "${STAGING_OWNER_EMAIL:?}" "${STAGING_OWNER_PASSWORD:?}" "${APP_KEY:?}"
 mkdir -p "$STATE/agents"
@@ -80,11 +39,11 @@ for _ in $(seq 1 60); do curl -fsS "${CENTER}/healthz" >/dev/null 2>&1 && break;
 curl -fsS "${CENTER}/healthz" >/dev/null 2>&1 || die "the command center did not become healthy"
 
 jar="$STATE/.jar"
-api() { # method path [json] [idempotency-key] -> body on stdout
-  local method="$1" path="$2" body="${3:-}" idem="${4:-}"
+api() { # method path [json] -> body on stdout; uses jar, csrf, same-origin header
+  local method="$1" path="$2" body="${3:-}"
   local args=(-sS -b "$jar" -c "$jar" -X "$method" "${CENTER}${path}" -H "Origin: ${CENTER}" -H "X-CSRF-Token: ${csrf:-}")
   if [ -n "$body" ]; then args+=(-H 'Content-Type: application/json' -d "$body"); fi
-  if [ "$method" = POST ]; then args+=(-H "Idempotency-Key: ${idem:-stg-$(date +%s%N)}"); fi
+  if [ "$method" = POST ]; then args+=(-H "Idempotency-Key: stg-$(date +%s%N)"); fi
   curl "${args[@]}"
 }
 login() { # email password
@@ -115,23 +74,13 @@ for spec in $NODES; do
   dir="$STATE/agents/$name"; mkdir -p "$dir"; chmod 0700 "$dir"
   if [ ! -f "$dir/enrolled" ]; then
     log "creating and enrolling node ${name} (offset ${offset} min, every ${INTERVAL} min)"
-    if [[ ! "$offset" =~ ^[0-9]{1,2}$ ]]; then
-      die "node ${name} offset must be a minute from 0 through 59"
-    fi
-    if (( 10#$offset >= 60 )); then
-      die "node ${name} offset must be a minute from 0 through 59"
-    fi
-    creation_key="staging-node-$(printf '%s' "$name" | sha256sum | cut -c1-64)"
-    created="$(api POST /api/nodes "$(jq -nc --arg n "$name" --arg l "Staging ${name}" --argjson d "$EXPECTED_DOWN" --argjson u "$EXPECTED_UP" '{name:$n,label:$l,expectedDown:$d,expectedUp:$u}')" "$creation_key")"
+    created="$(api POST /api/nodes "$(jq -nc --arg n "$name" --arg l "Staging ${name}" --argjson d "$EXPECTED_DOWN" --argjson u "$EXPECTED_UP" '{name:$n,label:$l,expectedDown:$d,expectedUp:$u}')")"
     token="$(printf '%s' "$created" | jq -r '.data.token // empty')"; node_id="$(printf '%s' "$created" | jq -r '.data.node.id // empty')"
-    if [ -z "$token" ] || [ -z "$node_id" ]; then die "node ${name} creation returned no enrollment data"; fi
-    psql_run -c "BEGIN;
-UPDATE schedules SET interval_minutes=${INTERVAL}, offset_minutes=${offset}, revision=revision+1 WHERE node_id='${node_id}';
-UPDATE engine_schedules SET interval_minutes=${INTERVAL}, offset_minutes=${offset}, revision=revision+1 WHERE node_id='${node_id}' AND engine='ookla';
-UPDATE nodes SET config_revision=config_revision+1 WHERE id='${node_id}';
-COMMIT;"
+    if [ -z "$token" ] || [ -z "$node_id" ]; then die "node ${name} was not created: $(printf '%s' "$created" | head -c 300)"; fi
     SPEEDTEST_AGENT_CONFIG="$dir/config.yaml" SPEEDTEST_AGENT_CREDENTIAL="$dir/credential" \
       speedtest-agent enroll --center "$CENTER" --token "$token" --name "$name" --host "docker-staging"
+    psql_run -c "UPDATE schedules SET interval_minutes=${INTERVAL}, offset_minutes=${offset}, revision=revision+1 WHERE node_id='${node_id}'" \
+             -c "UPDATE nodes SET config_revision=config_revision+1 WHERE id='${node_id}'"
     printf 'name: %s\nengine: %s\ninterval: %sm\nexpected_download_mbps: %s\nexpected_upload_mbps: %s\n' "$name" "${STAGING_ENGINE:-ookla}" "$INTERVAL" "$EXPECTED_DOWN" "$EXPECTED_UP" > "$dir/config.yaml"
     touch "$dir/enrolled"
   fi
