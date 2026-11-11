@@ -243,7 +243,7 @@
       var path = '/api/usage/advice?node=' + encodeURIComponent(node.id) + '&engine=' + engine + '&interval=' + interval;
       if (budgetBytes > 0) path += '&budgetBytes=' + encodeURIComponent(budgetBytes);
       ST.api.request(path)
-        .then(function (response) { result.loading = false; result.data = response.data; ST.refresh(); }, function (error) { result.loading = false; result.error = error; ST.refresh(); });
+        .then(function (response) { result.loading = false; result.data = response.data; if (result.refresh) result.refresh(); }, function (error) { result.loading = false; result.error = error; if (result.refresh) result.refresh(); });
     }
     return result;
   };
@@ -265,16 +265,27 @@
   };
 
   function adviceRow(node, engine, draft) {
-    var interval = Math.max(5, Math.min(1440, Math.round(Number(draft.interval) || 60)));
-    var budget = Math.max(0, Math.round(Number(draft.budgetGiB) * 1024 * 1024 * 1024) || 0);
-    var state = ST.bandwidth.advice(node, engine, interval, budget);
-    var intervalInput = U.input(interval, function (value) { draft.interval = value; }, { type: 'number', min: 5, max: 1440, step: 1, 'aria-label': node.name + ' ' + engine + ' proposed interval in minutes', onChange: function () { ST.bandwidth.setDraftInterval(node.id, engine, intervalInput.value); ST.refresh(); } });
-    var budgetInput = U.input(draft.budgetGiB, function (value) { draft.budgetGiB = value; }, { type: 'number', min: 0.001, step: 0.001, 'aria-label': node.name + ' ' + engine + ' proposed monthly budget in GiB', onChange: function () { draft.budgetGiB = budgetInput.value; ST.refresh(); } });
+    var row = h('div', { class: 'card stack' }), detail = h('p', { class: 'hint' }), recommendation = h('div');
+    var intervalInput = U.input(draft.interval, function (value) { draft.interval = value; }, { type: 'number', min: 5, max: 1440, step: 1, 'aria-label': node.name + ' ' + engine + ' proposed interval in minutes', onBlur: function () { ST.bandwidth.setDraftInterval(node.id, engine, intervalInput.value); refreshEstimate(); } });
+    var budgetInput = U.input(draft.budgetGiB, function (value) { draft.budgetGiB = value; }, { type: 'number', min: 0.001, step: 0.001, 'aria-label': node.name + ' ' + engine + ' proposed monthly budget in GiB', onBlur: refreshEstimate });
     var controls = h('div', { class: 'row wrap' }, U.field('Interval (minutes)', intervalInput), U.field('Budget (GiB per month)', budgetInput));
-    var detail = state.loading ? 'Calculating estimate…' : state.error ? 'Advice is unavailable. Check the connection and try again.' : F.bytes(state.data.estimatedBytesPerDay) + ' per day · ' + F.bytes(state.data.estimatedBytesPerMonth) + ' per month';
-    var recommendation = adviceRecommendation(state);
-    return h('div', { class: 'card stack' }, h('div', { class: 'row gap-sm' }, U.dot(ST.nodeColor(node)), h('b', null, node.name + ' · ' + engine)), controls,
-      h('p', { class: 'hint' }, 'Estimate for every ' + interval + ' minutes: ' + detail), recommendation ? h('p', { class: 'hint', role: 'status' }, recommendation) : null);
+    function refreshEstimate() {
+      var interval = Math.max(5, Math.min(1440, Math.round(Number(draft.interval) || 60)));
+      var budget = Math.max(0, Math.round(Number(draft.budgetGiB) * 1024 * 1024 * 1024) || 0);
+      var state = ST.bandwidth.advice(node, engine, interval, budget);
+      var text = state.loading ? 'Calculating estimate…' : state.error ? 'Advice is unavailable. Check the connection and try again.' : F.bytes(state.data.estimatedBytesPerDay) + ' per day · ' + F.bytes(state.data.estimatedBytesPerMonth) + ' per month';
+      detail.textContent = 'Estimate for every ' + interval + ' minutes: ' + text;
+      U.clear(recommendation);
+      var message = adviceRecommendation(state);
+      if (message) recommendation.appendChild(h('p', { class: 'hint', role: 'status' }, message));
+      state.refresh = refreshEstimate;
+    }
+    row.appendChild(h('div', { class: 'row gap-sm' }, U.dot(ST.nodeColor(node)), h('b', null, node.name + ' · ' + engine)));
+    row.appendChild(controls);
+    row.appendChild(detail);
+    row.appendChild(recommendation);
+    refreshEstimate();
+    return row;
   }
 
   function adviceRecommendation(state) {

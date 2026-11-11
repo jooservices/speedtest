@@ -43,6 +43,7 @@ export function coreSteps(ctx) {
     async choose(select, value) { await select.selectOption(value); },
     selectWith: option => page.locator('select', { has: page.locator('option', { hasText: option }) }),
     row: text => page.getByRole('row').filter({ hasText: text }).first(),
+    summaryRow: text => page.locator('.card').filter({ hasText: 'Summary by node' }).getByRole('row').filter({ hasText: text }).first(),
     dialog: name => page.getByRole('dialog', { name }),
     async dismiss() { await page.keyboard.press('Escape'); },
     async see(text, scope = page, timeout) { await scope.getByText(text).first().waitFor(timeout ? { timeout } : undefined); },

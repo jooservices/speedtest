@@ -100,7 +100,7 @@ export function dashboardSuite(T, ctx) {
         await T.open('#/stats', 'Statistics');
         await T.choose(page.locator('#topbar select').first(), '6h');
         await T.settled();
-        assert.match(await T.row('VM1').innerText(), /3\s+—\s+3 rate-limited excluded/, 'all-rate-limited statistics show the excluded count');
+        assert.match(await T.summaryRow('VM1').innerText(), /3\s+—\s+3 rate-limited excluded/, 'all-rate-limited statistics show the excluded count');
         const nodeId = T.db("SELECT id::text FROM nodes WHERE name='VM1'");
         await T.open('#/nodes/' + nodeId, 'VM1');
         let nodeSuccess = page.locator('.stat').filter({ hasText: 'Success rate' });
@@ -119,7 +119,7 @@ export function dashboardSuite(T, ctx) {
         await T.open('#/stats', 'Statistics');
         await T.choose(page.locator('#topbar select').first(), '6h');
         await T.settled();
-        assert.match(await T.row('VM1').innerText(), /2\s+100\.0%\s+1 rate-limited excluded/, 'mixed statistics show one eligible success and the excluded rate limit');
+        assert.match(await T.summaryRow('VM1').innerText(), /2\s+100\.0%\s+1 rate-limited excluded/, 'mixed statistics show one eligible success and the excluded rate limit');
         await T.open('#/nodes/' + nodeId, 'VM1');
         nodeSuccess = page.locator('.stat').filter({ hasText: 'Success rate' });
         assert.match(await nodeSuccess.innerText(), /100\.0%[\s\S]*1 failed; 1 rate-limited excluded of 2/, 'node detail explains the mixed success rate');

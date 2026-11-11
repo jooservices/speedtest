@@ -421,6 +421,8 @@
       root.appendChild(U.card('Node settings', null, form));
       var available = n.engines || ['ookla', 'librespeed'], engineRows = engineScheduleDrafts[n.id] || (engineScheduleDrafts[n.id] = ST.engineSchedules(n).map(function (e) { return Object.assign({}, e); }));
       var engineForm = h('div', { class: 'stack', style: 'max-width:640px' });
+      var adviceHost = h('div');
+      var refreshAdvice = function () { U.clear(adviceHost); ST.bandwidth.advicePanel(adviceHost, n.id, engineRows); };
       ['ookla', 'librespeed'].forEach(function (name) {
         var current = engineRows.filter(function (e) { return e.engine === name; })[0];
         var installed = available.indexOf(name) !== -1;
@@ -430,7 +432,7 @@
         var label = name === 'ookla' ? 'Ookla' : 'LibreSpeed';
         engineForm.appendChild(h('div', { class: 'setting' },
           h('div', null, h('strong', null, label), h('p', { class: 'hint' }, installed ? 'Installed on this node' : 'Not installed. Repair the agent installation, then wait for its heartbeat.')),
-            installed ? h('div', { class: 'row wrap' }, U.field(label + ' interval', U.input(draft.interval, function (v) { draft.interval = +v; if (ST.bandwidth) ST.bandwidth.setDraftInterval(n.id, name, +v); }, { type: 'number', min: 5, max: 1440, 'aria-label': label + ' interval' }), 'minutes'),
+            installed ? h('div', { class: 'row wrap' }, U.field(label + ' interval', U.input(draft.interval, function (v) { draft.interval = +v; if (ST.bandwidth) ST.bandwidth.setDraftInterval(n.id, name, +v); }, { type: 'number', min: 5, max: 1440, 'aria-label': label + ' interval', onBlur: function () { if (ST.bandwidth) { ST.bandwidth.setDraftInterval(n.id, name, draft.interval); refreshAdvice(); } } }), 'minutes'),
             U.toggle(draft.enabled, function (v) { draft.enabled = v; }, label + ' enabled')) : null));
       });
       var saveEngines = U.btn('Save engine schedules', { variant: 'primary', onClick: function () {
@@ -441,7 +443,8 @@
       engineForm.appendChild(h('p', { class: 'hint' }, 'Engines run one at a time. When nodes share a public IP, use a longer Ookla interval to avoid its rate limit.'));
       engineForm.appendChild(saveEngines);
       root.appendChild(U.card('Test engines', 'Each engine has its own schedule. Results remain separate.', engineForm));
-      ST.bandwidth.advicePanel(root, n.id, engineRows);
+      refreshAdvice();
+      root.appendChild(adviceHost);
       root.appendChild(h('div', { class: 'mt' }, U.card('Remove this node', 'Stops testing and removes the program from the machine.', h('div', null,
         h('p', { class: 'text-2', style: 'margin-bottom:10px' }, 'The results already collected for this node are deleted from the dashboard.'),
         U.btn('Remove ' + n.name, { variant: 'danger', icon: 'trash', onClick: function () {
