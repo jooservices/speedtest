@@ -14,7 +14,7 @@ Operations: 70. Without a test: 0.
 | startTwoFactorSetup | POST | `/api/auth/2fa/setup` | `internal/center/server/auth_twofactor_test.go` |
 | enableTwoFactor | POST | `/api/auth/2fa/enable` | `internal/center/server/auth_twofactor_test.go` |
 | disableTwoFactor | POST | `/api/auth/2fa/disable` | `internal/center/server/auth_twofactor_test.go` |
-| listNodes | GET | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/errtrack_test.go`<br>+12 more |
+| listNodes | GET | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/errtrack_test.go`<br>+13 more |
 | createNode | POST | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/nodes_test.go`<br>+8 more |
 | createEnrollmentToken | POST | `/api/agent/tokens` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go` |
 | enroll | POST | `/api/agent/enroll` | `cmd/center/main_integration_test.go`<br>`internal/agent/enroll/enroll_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/server/installer_integration_test.go`<br>+3 more |
@@ -27,7 +27,7 @@ Operations: 70. Without a test: 0.
 | rotateCredential | POST | `/api/nodes/{id}/credential` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_test.go` |
 | revokeCredential | DELETE | `/api/nodes/{id}/credential` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_test.go` |
 | ingestResults | POST | `/api/agent/results` | `cmd/center/main_integration_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>`internal/center/audit/audit_test.go`<br>+6 more |
-| getAgentConfig | GET | `/api/agent/config` | `cmd/agent/main_test.go`<br>`cmd/agent/update_test.go`<br>`internal/agent/control/regression_test.go`<br>`internal/agent/control/update_test.go`<br>+6 more |
+| getAgentConfig | GET | `/api/agent/config` | `cmd/agent/main_test.go`<br>`cmd/agent/update_test.go`<br>`internal/agent/control/regression_test.go`<br>`internal/agent/control/update_test.go`<br>+7 more |
 | heartbeat | POST | `/api/agent/heartbeat` | `internal/agent/control/control_test.go`<br>`internal/agent/control/regression_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>+5 more |
 | pollCommands | GET | `/api/agent/commands` | `internal/agent/control/update_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>`internal/center/server/agentapi_integration_test.go`<br>+2 more |
 | ackCommand | POST | `/api/agent/commands/{id}/ack` | `internal/agent/control/control_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/agentapi/http_test.go`<br>`internal/center/server/agentapi_integration_test.go`<br>+1 more |
@@ -42,8 +42,8 @@ Operations: 70. Without a test: 0.
 | getHourOfDay | GET | `/api/stats/hour-of-day` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
 | getHeatmap | GET | `/api/stats/heatmap` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
 | getDistribution | GET | `/api/stats/distribution` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
-| getDashboard | GET | `/api/dashboard` | `internal/center/server/engine_test.go`<br>`internal/center/server/ownerdashboard_integration_test.go`<br>`internal/center/server/ownerdashboard_test.go`<br>`tests/perf/dashboard.mjs` |
-| getSeries | GET | `/api/series` | `internal/center/server/engine_test.go`<br>`internal/center/server/ownerdashboard_integration_test.go`<br>`internal/center/server/ownerdashboard_test.go` |
+| getDashboard | GET | `/api/dashboard` | `internal/center/server/engine_test.go`<br>`internal/center/server/engines_integration_test.go`<br>`internal/center/server/ownerdashboard_integration_test.go`<br>`internal/center/server/ownerdashboard_test.go`<br>+1 more |
+| getSeries | GET | `/api/series` | `internal/center/server/engine_test.go`<br>`internal/center/server/engines_integration_test.go`<br>`internal/center/server/ownerdashboard_integration_test.go`<br>`internal/center/server/ownerdashboard_test.go` |
 | getSchedules | GET | `/api/schedules` | `internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/perf/dashboard.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | getSchedule | GET | `/api/schedules/{node}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/httpx_test.go`<br>`internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>+3 more |
 | replaceSchedule | PUT | `/api/schedules/{node}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/ui/store.test.mjs`<br>+1 more |

@@ -50,6 +50,12 @@ test('demo mode seeds and persists locally without making API calls', () => {
   ST.updateNode('n1', { name: 'Local demo' });
   assert.equal(ST.node('n1').name, 'Local demo'); assert.ok(storage.has('st.demo.v1'));
 });
+test('new demo nodes use a 60-minute interval and zero offset', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  const node = ST.addNode({ name: 'New demo node', expectedDown: 100, expectedUp: 50 });
+  assert.equal(node.interval, 60);
+  assert.equal(node.offset, 0);
+});
 test('settings writes use CSRF and ETag and never echo configured flags or blank secrets', async t => {
   const { ST, control } = await setup(t);
   await ST.load();
@@ -200,6 +206,16 @@ test('remote schedules, rules, stagger, key rotation, agent update, manual tests
   assert.equal((await ST.testNotification('webhook')).status, 'sent');
   control.deliveryFails = true;
   assert.equal((await ST.testNotification('webhook')).status, 'failed');
+});
+
+test('remote engine schedule queries select the node and default legacy entries to Ookla', async t => {
+  const { ST, data } = await setup(t);
+  await ST.load();
+  const rows = ST.engineSchedules(ST.node(data.node.id));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].engine, 'ookla'); assert.equal(rows[0].interval, 30);
+  assert.equal(rows[0].offset, 0); assert.equal(rows[0].enabled, true);
+  assert.equal(ST.engineSchedules({ id: 'missing' }).length, 0);
 });
 
 test('a manual test follows the command to its result and reports a failed command plainly', async t => {

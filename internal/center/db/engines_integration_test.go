@@ -17,6 +17,9 @@ func TestEngineMigrationBackfillLegacyWritesAndRollback(t *testing.T) {
 	if err := db.Migrate(ctx, pool, "down"); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Migrate(ctx, pool, "down"); err != nil {
+		t.Fatal(err)
+	}
 	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES ('00000000-0000-4000-8000-000000000071','legacy',300,100);
  INSERT INTO schedules(node_id,interval_minutes,offset_minutes,enabled,revision) SELECT id,60,7,false,4 FROM nodes;
  INSERT INTO results(id,node_id,ts,status,threads,error) SELECT '00000000-0000-4000-8000-000000000072',id,now(),'failed',4,'legacy fixture' FROM nodes;`)
@@ -30,6 +33,9 @@ func TestEngineMigrationBackfillLegacyWritesAndRollback(t *testing.T) {
 	// A v1.0.0 result insert has no engine; legacy schedule queries still address exactly one row.
 	exec(t, ctx, pool, `INSERT INTO results(id,node_id,ts,status,threads,error) SELECT '00000000-0000-4000-8000-000000000073',id,now(),'failed',4,'old binary insert' FROM nodes;
  INSERT INTO engine_schedules(node_id,engine) SELECT id,'librespeed' FROM nodes;`)
+	if err := db.Migrate(ctx, pool, "down"); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Migrate(ctx, pool, "down"); err != nil {
 		t.Fatal(err)
 	}
