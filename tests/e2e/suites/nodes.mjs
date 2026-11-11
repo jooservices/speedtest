@@ -39,7 +39,9 @@ async function verifyRateLimitedAgent(T, agent, name) {
     await runManual(T, name, /Failed: Test deferred: ookla provider rate-limit backoff is active until/);
     assert.equal(T.db(`SELECT count(*) FROM results r JOIN nodes n ON n.id=r.node_id WHERE n.name='${name}' AND r.failure_class='rate_limited' AND r.manual`), '1', 'repeated manual requests remain deferred without another rate-limit result');
     const successfulManuals = Number(T.db(`SELECT count(*) FROM results r JOIN nodes n ON n.id=r.node_id WHERE n.name='${name}' AND r.status='ok' AND r.manual`));
-    await new Promise(resolve => setTimeout(resolve, 31_000));
+    // The deadline is 90 s +/- 20% jitter after the first rate-limited result (72-108 s); the steps above take up to about 60 s on a busy
+    // machine, so wait until the latest possible deadline has passed. (The old 30 s window was shorter than the steps on a loaded machine.)
+    await new Promise(resolve => setTimeout(resolve, 62_000));
     await agent.restart({ scenario: 'success' });
     await runManual(T, name, /Mbps ↓|Gbps ↓|kbps ↓/);
     assert.equal(Number(T.db(`SELECT count(*) FROM results r JOIN nodes n ON n.id=r.node_id WHERE n.name='${name}' AND r.status='ok' AND r.manual`)), successfulManuals + 1, 'the real agent resumes successful measurements after the deadline');
@@ -207,7 +209,7 @@ export function nodesSuite(T, ctx) {
       assert.ok(token && token.length > 20, 'the wizard shows a real one-time enrolment key: ' + command.slice(0, 80));
       assert.match(command, /install\.sh/);
       await T.press('I ran the command', dialog);
-      const agent = await startAgent(stack, { name: 'E2E-1', token, backoffInitial: '30s', backoffMax: '30s' });
+      const agent = await startAgent(stack, { name: 'E2E-1', token, backoffInitial: '90s', backoffMax: '90s' });
       await T.see('E2E-1 is online', dialog, 90000);
       await dialog.getByText(/First result: .* down, .* up, .* ping\./).waitFor({ timeout: 90000 });
       const schedules = T.db("select s.interval_minutes||':'||s.offset_minutes||':'||e.interval_minutes||':'||e.offset_minutes from schedules s join nodes n on n.id=s.node_id join engine_schedules e on e.node_id=n.id and e.engine='ookla' where n.name='E2E-1'");

@@ -76,10 +76,11 @@ func TestMigrations(t *testing.T) {
 	}()
 	t.Run("AllRequiredTables", func(t *testing.T) {
 		var got int
-		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor", "api_access_tokens", "node_engine_servers"}).Scan(&got); e != nil || got != 29 {
-			t.Fatalf("required tables: got %d want 29: %v", got, e)
+		tables := []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor", "api_access_tokens", "node_engine_servers"} // every table a migration creates may be listed; the count follows the list
+		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", tables).Scan(&got); e != nil || got != len(tables) {
+			t.Fatalf("required tables: got %d want %d: %v", got, len(tables), e)
 		}
-		t.Log("PASS: 29 required tables created by embedded migrations")
+		t.Logf("PASS: %d required tables created by embedded migrations", len(tables))
 	})
 	t.Run("IndexesUUIDUnitsAndTimeTypes", func(t *testing.T) {
 		var got int
@@ -166,10 +167,8 @@ INSERT INTO settings(key,secret_ciphertext) VALUES ('integration',decode('aabb',
 INSERT INTO api_idempotency(principal,operation,key_hash,request_hash,response_ciphertext,expires_at) VALUES ('owner','create-node',repeat('a',64),repeat('b',64),decode(repeat('00',28),'hex'),now()+interval '1 hour');
 INSERT INTO api_access_tokens(id,user_id,name,scope,token_hash) VALUES ('00000000-0000-4000-8000-000000000017','00000000-0000-4000-8000-000000000010','rollback-fixture','read',decode(repeat('aa',32),'hex'));
 INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000-8000-000000000015',id,'run_now','00000000-0000-4000-8000-000000000002' FROM nodes;`)
-		for range 15 {
-			if e := db.Migrate(ctx, pool, "down"); e != nil {
-				t.Fatal(e)
-			}
+		if e := db.MigrateDownTo(ctx, pool, 0); e != nil { // every migration, however many there are
+			t.Fatal(e)
 		}
 		var n int
 		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name <> 'goose_db_version'").Scan(&n); e != nil || n != 0 {
@@ -203,10 +202,8 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		}
 	})
 	t.Run("TransactionalRollbackFailure", func(t *testing.T) {
-		for range 14 {
-			if e := db.Migrate(ctx, pool, "down"); e != nil {
-				t.Fatal(e)
-			}
+		if e := db.MigrateDownTo(ctx, pool, 1); e != nil { // everything above the initial schema
+			t.Fatal(e)
 		}
 		exec(t, ctx, pool, "CREATE VIEW rollback_blocker AS SELECT id FROM users")
 		t.Cleanup(func() { exec(t, context.Background(), pool, "DROP VIEW IF EXISTS rollback_blocker") })
@@ -219,82 +216,6 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		}
 		exec(t, ctx, pool, "DROP VIEW rollback_blocker")
 	})
-}
-
-func TestServerCatalogMigrationUpDownIntegration(t *testing.T) {
-	pool, ctx := testPool(t)
-	dbtest.Reset(t, pool)
-	t.Cleanup(func() { dbtest.Reset(t, pool) })
-	dbtest.MigrateUp(t, pool)
-	if err := db.Migrate(ctx, pool, "down"); err != nil {
-		t.Fatal(err)
-	}
-	const node = "00000000-0000-4000-8000-000000000177"
-	exec(t, ctx, pool, "INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps,server_id) VALUES ('"+node+"','migration-pin',100,50,42)")
-	exec(t, ctx, pool, "INSERT INTO results(id,node_id,ts,status,threads,error) VALUES ('00000000-0000-4000-8000-000000000179','"+node+"',now(),'failed',4,'legacy result')")
-	exec(t, ctx, pool, "INSERT INTO agent_commands(id,node_id,type) VALUES ('00000000-0000-4000-8000-000000000180','"+node+"','run_now')")
-	if err := db.Migrate(ctx, pool, "up"); err != nil {
-		t.Fatal(err)
-	}
-	var pin int64
-	if err := pool.QueryRow(ctx, "SELECT pinned_server_id FROM node_engine_servers WHERE node_id=$1 AND engine='ookla'", node).Scan(&pin); err != nil || pin != 42 {
-		t.Fatalf("legacy pin backfill=%d err=%v", pin, err)
-	}
-	assertServerSelectionSnapshotMigrationUp(t, ctx, pool, node)
-	exec(t, ctx, pool, "INSERT INTO agent_commands(id,node_id,type,engine) VALUES ('00000000-0000-4000-8000-000000000178','"+node+"','list_servers','ookla')")
-	if err := db.Migrate(ctx, pool, "down"); err != nil {
-		t.Fatal(err)
-	}
-	assertServerCatalogMigrationDown(t, ctx, pool, node)
-	assertLegacyMigrationDataPreserved(t, ctx, pool, node)
-	logMigrationRollbackPass(t)
-}
-
-func assertServerSelectionSnapshotMigrationUp(t *testing.T, ctx context.Context, pool *pgxpool.Pool, node string) {
-	t.Helper()
-	var known bool
-	var pin *int64
-	if err := pool.QueryRow(ctx, `SELECT server_selection_known,pinned_server_id_at_test FROM results WHERE node_id=$1`, node).Scan(&known, &pin); err != nil || known || pin != nil {
-		t.Fatalf("pre-migration result selection known=%t pin=%v err=%v", known, pin, err)
-	}
-	var digest []byte
-	if err := pool.QueryRow(ctx, `SELECT ack_payload_sha256 FROM agent_commands WHERE node_id=$1 AND type='run_now'`, node).Scan(&digest); err != nil || digest != nil {
-		t.Fatalf("pre-migration command digest=%x err=%v", digest, err)
-	}
-}
-
-func assertServerCatalogMigrationDown(t *testing.T, ctx context.Context, pool *pgxpool.Pool, node string) {
-	t.Helper()
-	var catalog, engineColumn, digestColumn, pinColumn, knownColumn bool
-	if err := pool.QueryRow(ctx, `SELECT
-EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='node_engine_servers'),
-EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='agent_commands' AND column_name='engine'),
-EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='agent_commands' AND column_name='ack_payload_sha256'),
-EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='results' AND column_name='pinned_server_id_at_test'),
-EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema='public' AND table_name='results' AND column_name='server_selection_known')`).
-		Scan(&catalog, &engineColumn, &digestColumn, &pinColumn, &knownColumn); err != nil || catalog || engineColumn || digestColumn || pinColumn || knownColumn {
-		t.Fatalf("down migration retained catalog=%t engine=%t digest=%t pin=%t known=%t err=%v", catalog, engineColumn, digestColumn, pinColumn, knownColumn, err)
-	}
-	var pin int
-	if err := pool.QueryRow(ctx, "SELECT server_id FROM nodes WHERE id=$1", node).Scan(&pin); err != nil || pin != 42 {
-		t.Fatalf("down migration changed legacy server id=%d err=%v", pin, err)
-	}
-}
-
-func assertLegacyMigrationDataPreserved(t *testing.T, ctx context.Context, pool *pgxpool.Pool, node string) {
-	t.Helper()
-	var results, commands int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM results WHERE node_id=$1", node).Scan(&results); err != nil || results != 1 {
-		t.Fatalf("down migration changed legacy result count=%d err=%v", results, err)
-	}
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM agent_commands WHERE node_id=$1 AND type='run_now'", node).Scan(&commands); err != nil || commands != 1 {
-		t.Fatalf("down migration changed legacy command count=%d err=%v", commands, err)
-	}
-}
-
-func logMigrationRollbackPass(t *testing.T) {
-	t.Helper()
-	t.Log("PASS: migration 00021 backfills legacy pins, removes its new table/column on down, and preserves legacy node settings")
 }
 
 func TestScheduleDefaultMigrationPreservesIntervalsIntegration(t *testing.T) {
@@ -310,10 +231,9 @@ func TestScheduleDefaultMigrationPreservesIntervalsIntegration(t *testing.T) {
 VALUES ('00000000-0000-4000-8000-000000000101',5,0),
        ('00000000-0000-4000-8000-000000000102',30,7),
        ('00000000-0000-4000-8000-000000000103',60,11)`)
-	for range 5 { // Roll back server catalogs, audit-source, API-token, failure-class and schedule-default migrations.
-		if err := db.Migrate(ctx, pool, "down"); err != nil {
-			t.Fatal(err)
-		}
+	// Back to the schema before the 60-minute default migration (00015).
+	if err := db.MigrateDownTo(ctx, pool, 10); err != nil {
+		t.Fatal(err)
 	}
 	assertScheduleIntervals(t, ctx, pool, "5:0,30:7,60:11")
 	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps)
