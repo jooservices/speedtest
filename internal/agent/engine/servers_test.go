@@ -36,14 +36,14 @@ func TestParseOoklaServers(t *testing.T) {
 }
 
 func TestParseLibreSpeedServers(t *testing.T) {
-	servers, err := ParseLibreSpeedServers([]byte(`[{"id":2,"name":"Zurich, CH","server":"//z.example/backend","sponsorName":"ISP Z"},{"id":1,"name":"Singapore","server":"https://sg.example/","sponsorName":"ISP S"}]`))
+	servers, err := ParseLibreSpeedServers([]byte(`[{"id":2,"name":"Zurich, CH","server":"https://shared.example/backend-b","sponsorName":"ISP Z"},{"id":1,"name":"Singapore","server":"https://shared.example/backend-a?region=apac","sponsorName":"ISP S"}]`))
 	if err != nil || len(servers) != 2 {
 		t.Fatalf("ParseLibreSpeedServers() = %#v, %v", servers, err)
 	}
-	if servers[0].Name != "Singapore" || servers[0].Host != "sg.example" || servers[0].ISP != "ISP S" || servers[0].DistanceKM != nil {
+	if servers[0].Name != "Singapore" || servers[0].Host != "shared.example" || servers[0].Endpoint != "https://shared.example/backend-a" || servers[0].ISP != "ISP S" || servers[0].DistanceKM != nil {
 		t.Fatalf("sorted server = %#v", servers[0])
 	}
-	if servers[1].Host != "z.example" || servers[1].DistanceKM != nil {
+	if servers[1].Host != "shared.example" || servers[1].Endpoint != "https://shared.example/backend-b" || servers[1].DistanceKM != nil {
 		t.Fatalf("relative scheme server = %#v", servers[1])
 	}
 	if empty, err := ParseLibreSpeedServers([]byte("[]")); err != nil || len(empty) != 0 {
@@ -79,7 +79,7 @@ func TestParseLibreSpeedListRows(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, err = ParseLibreSpeedList(fixture)
-	if err != nil || len(got) != 2 || got[0].ID != 51 || got[0].Name != "Hanoi, Vietnam (Hanoi Speedtest)" || got[0].Host != "hn.example.test" || got[0].ISP != "Hanoi ISP" || got[0].DistanceKM != nil || got[1].ID != 52 || got[1].Host != "sg.example.test" || got[1].ISP != "Singapore ISP" {
+	if err != nil || len(got) != 2 || got[0].ID != 51 || got[0].Name != "Hanoi, Vietnam (Hanoi Speedtest)" || got[0].Host != "hn.example.test" || got[0].Endpoint != "https://hn.example.test/backend" || got[0].ISP != "Hanoi ISP" || got[0].DistanceKM != nil || got[1].ID != 52 || got[1].Host != "hn.example.test" || got[1].Endpoint != "https://hn.example.test/down" || got[1].ISP != "Singapore ISP" {
 		t.Fatalf("LibreSpeed CLI rows = %#v, %v", got, err)
 	}
 	if _, err := ParseLibreSpeedList([]byte("no servers")); err == nil {

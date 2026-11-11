@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-const validResult = `{"id":"00000000-0000-4000-8000-000000000001","ts":"2026-11-03T00:00:00Z","status":"ok","down":123.4,"up":56.7,"ping":3,"jitter":null,"dLat":null,"uLat":null,"loss":null,"serverId":1,"ip":"203.0.113.1","threads":4,"bytesDown":1024,"bytesUp":512,"duration":2.3,"error":null,"manual":false,"server":{"id":1,"name":"test","city":"","sponsor":""}}`
+const validResult = `{"id":"00000000-0000-4000-8000-000000000001","ts":"2026-11-03T00:00:00Z","status":"ok","down":123.4,"up":56.7,"ping":3,"jitter":null,"dLat":null,"uLat":null,"loss":null,"serverId":1,"ip":"203.0.113.1","threads":4,"bytesDown":1024,"bytesUp":512,"duration":2.3,"error":null,"manual":false,"server":{"id":1,"name":"test","city":"","sponsor":"","endpoint":"https://speed.example.test/backend"}}`
 
 func change(data, key string, value any) []byte {
 	var object map[string]any
@@ -205,7 +205,7 @@ func TestAckValidationAndTransitions(t *testing.T) {
 }
 
 func TestServerListAcknowledgementValidation(t *testing.T) {
-	valid := `{"status":"succeeded","pct":100,"servers":[{"id":12,"name":"Singapore","city":"Singapore","isp":"Fiber","host":"sg.example","distanceKm":4.5}]}`
+	valid := `{"status":"succeeded","pct":100,"servers":[{"id":12,"name":"Singapore","city":"Singapore","isp":"Fiber","host":"sg.example","endpoint":"https://sg.example/backend","distanceKm":4.5}]}`
 	ack, err := ParseAck([]byte(valid))
 	if err != nil || ack.Servers == nil || len(*ack.Servers) != 1 || (*ack.Servers)[0].ID != 12 {
 		t.Fatalf("server list ack=%+v err=%v", ack, err)
@@ -217,6 +217,7 @@ func TestServerListAcknowledgementValidation(t *testing.T) {
 		`{"status":"succeeded","servers":[{"id":12,"name":"A"},{"id":12,"name":"B"}]}`,
 		`{"status":"succeeded","servers":[{"id":12,"name":"A","distanceKm":-1}]}`,
 		`{"status":"succeeded","servers":[{"id":2147483648,"name":"A"}]}`,
+		`{"status":"succeeded","servers":[{"id":13,"name":"A","endpoint":"https://user:secret@sg.example/backend"}]}`,
 		`{"status":"running","servers":[]}`,
 	} {
 		if _, err := ParseAck([]byte(data)); err == nil {

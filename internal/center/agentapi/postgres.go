@@ -93,8 +93,11 @@ func resolveMissingServerID(ctx context.Context, tx pgx.Tx, node string, result 
 	err := tx.QueryRow(ctx, `SELECT CASE WHEN count(*)=1 THEN min(server_id) END FROM (
 		SELECT (entry->>'id')::bigint AS server_id FROM node_engine_servers
 		CROSS JOIN LATERAL jsonb_array_elements(servers) AS entry
-		WHERE node_id=$1 AND engine=$2 AND lower(entry->>'host')=lower($3)
-	) matches`, node, resultEngine(result.Engine), result.Server.Host).Scan(&id)
+		WHERE node_id=$1 AND engine=$2 AND (
+			($3<>'' AND entry->>'endpoint'=$3) OR
+			($3='' AND lower(entry->>'host')=lower($4))
+		)
+	) matches`, node, resultEngine(result.Engine), result.Server.Endpoint, result.Server.Host).Scan(&id)
 	if err != nil || id == nil {
 		return err
 	}
@@ -110,15 +113,16 @@ func alignServerIdentityWithStoredResult(ctx context.Context, tx pgx.Tx, node st
 	}
 	var owner string
 	var serverID *int
-	var host *string
-	err := tx.QueryRow(ctx, `SELECT node_id::text,server_id,server->>'host' FROM results WHERE id=$1`, result.ID).Scan(&owner, &serverID, &host)
+	var endpoint, host *string
+	err := tx.QueryRow(ctx, `SELECT node_id::text,server_id,server->>'endpoint',server->>'host' FROM results WHERE id=$1`, result.ID).Scan(&owner, &serverID, &endpoint, &host)
 	if errors.Is(err, pgx.ErrNoRows) || err == nil && owner != node {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if host != nil && strings.EqualFold(*host, result.Server.Host) {
+	if result.Server.Endpoint != "" && endpoint != nil && *endpoint == result.Server.Endpoint ||
+		result.Server.Endpoint == "" && host != nil && strings.EqualFold(*host, result.Server.Host) {
 		result.ServerID, result.Server.ID = serverID, serverID
 	}
 	return nil

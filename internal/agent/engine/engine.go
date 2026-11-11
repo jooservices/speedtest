@@ -36,6 +36,7 @@ type Server struct {
 	Name     string `json:"name"`
 	Location string `json:"location"`
 	Host     string `json:"host"`
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 // ServerOption is one engine server offered for selection. Distance is only
@@ -46,6 +47,7 @@ type ServerOption struct {
 	City       string   `json:"city"`
 	ISP        string   `json:"isp"`
 	Host       string   `json:"host"`
+	Endpoint   string   `json:"endpoint,omitempty"`
 	DistanceKM *float64 `json:"distanceKm,omitempty"`
 }
 

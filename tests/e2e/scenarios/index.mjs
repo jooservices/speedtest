@@ -55,7 +55,7 @@ export function scenarios({ T, S }) {
 
     // Adds a real agent and a node; the removal scenario below deletes it again.
     { id: 'SC-NODE-05', area: 'nodes', title: 'an enrolled agent recovers from Ookla rate limits across restart', covers: 'wizard, 60-minute default, real agent enrolment/sync, matching schedules, engine classification, result ingestion, restart persistence, repeated deferred manual commands, alert suppression and post-deadline recovery', run: S.nodes.addWithCommandAndRunTest },
-    { id: 'SC-NODE-09', area: 'nodes', title: 'server discovery, per-engine pinning and automatic fallback work', covers: 'captured LibreSpeed v1.0.14 list format, per-engine catalog persistence and pin, bounded automatic fallback warning, resolved result mismatch in history and detail', run: S.nodes.discoverPinAndFallback },
+    { id: 'SC-NODE-09', area: 'nodes', title: 'server discovery, per-engine pinning and automatic fallback work', covers: 'captured LibreSpeed v1.0.14 list format, successful JSON null for an unavailable pinned server, same-host endpoint identity, per-engine catalog pin, fallback warning and history/detail mismatch', run: S.nodes.discoverPinAndFallback },
     { id: 'SC-NODE-06', area: 'nodes', title: 'a node can be removed from the dashboard', covers: 'node removal', run: () => S.nodes.removeFromDashboard('E2E-1') },
 
     { id: 'SC-SET-08', area: 'settings', title: 'the activity log lists owner changes without secrets', covers: 'audit log, filter, no secrets', run: S.settings.activityLog },

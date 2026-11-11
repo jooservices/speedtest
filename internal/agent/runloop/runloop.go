@@ -233,19 +233,45 @@ func (l *Loop) listServers(ctx context.Context, name string) ([]engine.ServerOpt
 }
 
 func runWithServerFallback(ctx context.Context, runner *netpath.Runner, serverID int64) (netpath.RunResult, error) {
-	return runWithServerFallbackTimeout(ctx, runner, serverID, engine.DefaultTimeout)
+	return runWithServerFallbackForEngine(ctx, runner, serverID, engine.DefaultTimeout, true)
 }
 
 func runWithServerFallbackTimeout(ctx context.Context, runner *netpath.Runner, serverID int64, timeout time.Duration) (netpath.RunResult, error) {
+	return runWithServerFallbackForEngine(ctx, runner, serverID, timeout, false)
+}
+
+func runWithServerFallbackForEngine(ctx context.Context, runner *netpath.Runner, serverID int64, timeout time.Duration, resolveServerID bool) (netpath.RunResult, error) {
 	out, err := runner.Run(ctx, engine.Options{ServerID: serverID})
 	if !retryAutomaticServer(ctx, err, serverID) {
 		return out, err
 	}
+	var servers []engine.ServerOption
+	if resolveServerID {
+		servers, _ = runner.ListServers(ctx)
+	}
 	fallbackCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	out, err = runner.Run(fallbackCtx, engine.Options{})
+	identifyFallbackServer(&out, servers)
 	out.Warnings = append(out.Warnings, "Pinned server was unreachable; the engine selected a server automatically.")
 	return out, err
+}
+
+func identifyFallbackServer(result *netpath.RunResult, servers []engine.ServerOption) {
+	if result.Measurement.Server == nil || result.Measurement.Server.ID > 0 || result.Measurement.Server.Endpoint == "" {
+		return
+	}
+	var match int64
+	for _, server := range servers {
+		if server.Endpoint != result.Measurement.Server.Endpoint {
+			continue
+		}
+		if match != 0 {
+			return
+		}
+		match = server.ID
+	}
+	result.Measurement.Server.ID = match
 }
 
 func retryAutomaticServer(ctx context.Context, err error, serverID int64) bool {
@@ -358,7 +384,7 @@ func (l *Loop) measureEngineLocked(ctx context.Context, id, name string) error {
 		l.fail(errors.New("invalid measurement coordinator"))
 		return err
 	}
-	out, runErr := runWithServerFallback(ctx, runner, cfg.server)
+	out, runErr := runWithServerFallbackForEngine(ctx, runner, cfg.server, engine.DefaultTimeout, engineName == "librespeed")
 	if runErr != nil && out.Measurement.Error == "" {
 		out.Measurement.Error = "speedtest: network path unavailable"
 	}

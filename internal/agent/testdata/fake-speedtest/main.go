@@ -156,8 +156,8 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 
 func runLibreSpeed(args []string, stdout, stderr io.Writer) int {
 	if argumentValue(args, "--server") == "52" {
-		_, _ = fmt.Fprintln(stderr, "server unavailable")
-		return 2
+		_, _ = fmt.Fprintln(stdout, "null")
+		return 0
 	}
 	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
 	_, _ = fmt.Fprintf(stdout, `{"timestamp":%q,"server":{"name":"Hanoi, Vietnam (Hanoi Speedtest)","url":"https://hn.example.test/backend"},"client":{"ip":"203.0.113.10","isp":"Example ISP"},"bytes_sent":1000,"bytes_received":5000,"ping":3.5,"jitter":0.5,"upload":20,"download":100,"share":""}`+"\n", timestamp)

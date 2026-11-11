@@ -117,8 +117,8 @@ export function nodesSuite(T, ctx) {
     const run = T.dialog('Running speed test');
     await run.getByText(/Mbps ↓|Gbps ↓|kbps ↓/).waitFor({ timeout: 90000 });
     await T.press('Close', run.locator('.modal-foot'));
-    const saved = T.db("select r.server_id::text||':'||r.pinned_server_id_at_test::text||':'||coalesce(r.server->>'host','')||':'||r.server_selection_known::text||':'||r.warnings::text from results r join nodes n on n.id=r.node_id where n.name='E2E-1' and r.engine='librespeed' and r.manual order by r.ts desc limit 1");
-    assert.match(saved, /^51:52:hn\.example\.test:true:.*Pinned server was unreachable/);
+    const saved = T.db("select r.server_id::text||':'||r.pinned_server_id_at_test::text||':'||coalesce(r.server->>'host','')||':'||coalesce(r.server->>'endpoint','')||':'||r.server_selection_known::text||':'||r.warnings::text from results r join nodes n on n.id=r.node_id where n.name='E2E-1' and r.engine='librespeed' and r.manual order by r.ts desc limit 1");
+    assert.match(saved, /^51:52:hn\.example\.test:https:\/\/hn\.example\.test\/backend:true:.*Pinned server was unreachable/);
     await T.open('#/history', 'Results');
     await T.fill('Search results', 'E2E-1');
     const resultRow = page.getByRole('row').filter({ hasText: 'Different from pinned' }).first();
