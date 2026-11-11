@@ -72,10 +72,10 @@ Quiet hours, retries and test messages behave as before (see delivery worker in
 - `00010_engine_schedules.sql` (JOOST-71) — per-engine node schedules and result identity.
 - `00011_alert_event_payload.sql` — additive `event_key` / `payload` columns on `alert_events`.
 - `00012_notification_events.sql` — event, per-node enable and template overrides.
-- `00016_alert_streak_timestamps.sql` — alert streak timing, configurable event thresholds, cooldowns, repeat intervals and maintenance windows.
-- `00017_notification_defaults.sql` — preserves existing global rule settings and fills missing quiet-hour defaults.
-- `00018_system_notification_events.sql` — supports platform events that do not belong to a node.
-- `00019_notification_escalation.sql` — records when a delivery was escalated.
+- `00017_alert_streak_timestamps.sql` — alert streak timing, configurable event thresholds, cooldowns, repeat intervals and maintenance windows.
+- `00018_notification_defaults.sql` — preserves existing global rule settings and fills missing quiet-hour defaults.
+- `00019_system_notification_events.sql` — supports platform events that do not belong to a node.
+- `00022_notification_escalation.sql` — records when a delivery was escalated.
 
 The notification migrations add columns and tables. The running 1.0.0 binary can
 continue writing alerts and results because the new fields have defaults and

@@ -249,6 +249,7 @@ export function settingsSuite(T, ctx) {
       assert.ok(Array.isArray(JSON.parse(json)) || JSON.parse(json).data, 'the JSON export parses');
       await T.choose(setting('Keep results for').locator('select'), '365');
       await T.toast('Saved').waitFor();
+      await T.settled();
       await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '365', 'default retention period is restored');
     },
 

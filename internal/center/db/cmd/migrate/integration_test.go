@@ -51,7 +51,7 @@ func TestRunMigration(t *testing.T) {
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	directions := []string{"up", "up"}
-	for range 19 {
+	for range 20 {
 		directions = append(directions, "down")
 	}
 	for _, direction := range directions {

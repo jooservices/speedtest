@@ -12,6 +12,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/catalog"
 	"github.com/jooservices/speedtest/internal/shared/errtrack"
+	"github.com/jooservices/speedtest/internal/shared/failureclass"
 )
 
 const signalBatchSize = 100
@@ -35,6 +36,9 @@ type ruleForEvaluation struct {
 // change signal in the result's transaction. Duplicate result replays never
 // reach this hook because agentapi.Postgres rejects them before calling hooks.
 func (s *Store) AfterResultStored(ctx context.Context, tx pgx.Tx, node string, result agentapi.Result) error {
+	if result.Status == "failed" && result.FailureClass == failureclass.RateLimited {
+		return nil
+	}
 	// The result was validated at ingestion, so its timestamp parses; the stored value is only a fallback.
 	ts, err := time.Parse(time.RFC3339Nano, result.TS)
 	if err != nil {
@@ -110,6 +114,9 @@ func metricMatches(rule Rule, result agentapi.Result, expectedDown, expectedUp f
 
 func metricObservation(rule Rule, result agentapi.Result, expectedDown, expectedUp float64) (hit, observed bool) {
 	if rule.Metric == "failed" {
+		if result.Status == "failed" && result.FailureClass == "rate_limited" {
+			return false, false
+		}
 		switch result.Status {
 		case "failed":
 			return true, true

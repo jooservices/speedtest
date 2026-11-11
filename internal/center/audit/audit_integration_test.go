@@ -97,8 +97,11 @@ func TestStoreRecordsAndListsNewestFirst(t *testing.T) {
 
 func TestAuthenticationSourceMigrationRollsBackAndReapplies(t *testing.T) {
 	pool, ctx := openPool(t)
-	if err := db.Migrate(ctx, pool, "down"); err != nil {
-		t.Fatal("roll back audit authentication source migration:", err)
+	// Remove the later notification escalation migration before rolling back audit metadata.
+	for range 2 {
+		if err := db.Migrate(ctx, pool, "down"); err != nil {
+			t.Fatal("roll back audit authentication source migration:", err)
+		}
 	}
 	var columns int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_log' AND column_name IN ('auth_method','credential_id')`).Scan(&columns); err != nil || columns != 0 {

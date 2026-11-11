@@ -175,7 +175,7 @@ INSERT INTO settings(key,secret_ciphertext) VALUES ('integration',decode('aabb',
 INSERT INTO api_idempotency(principal,operation,key_hash,request_hash,response_ciphertext,expires_at) VALUES ('owner','create-node',repeat('a',64),repeat('b',64),decode(repeat('00',28),'hex'),now()+interval '1 hour');
 INSERT INTO api_access_tokens(id,user_id,name,scope,token_hash) VALUES ('00000000-0000-4000-8000-000000000017','00000000-0000-4000-8000-000000000010','rollback-fixture','read',decode(repeat('aa',32),'hex'));
 INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000-8000-000000000015',id,'run_now','00000000-0000-4000-8000-000000000002' FROM nodes;`)
-		for range 19 {
+		for range 20 {
 			version := currentMigrationVersion(t, ctx, pool)
 			if e := db.Migrate(ctx, pool, "down"); e != nil {
 				t.Fatalf("rollback from migration version %d: %v", version, e)
@@ -213,7 +213,7 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		}
 	})
 	t.Run("TransactionalRollbackFailure", func(t *testing.T) {
-		for range 18 {
+		for range 19 {
 			if e := db.Migrate(ctx, pool, "down"); e != nil {
 				t.Fatal(e)
 			}
@@ -244,7 +244,7 @@ func TestScheduleDefaultMigrationPreservesIntervalsIntegration(t *testing.T) {
 VALUES ('00000000-0000-4000-8000-000000000101',5,0),
        ('00000000-0000-4000-8000-000000000102',30,7),
        ('00000000-0000-4000-8000-000000000103',60,11)`)
-	for range 7 { // Roll back notification escalation, audit source, API tokens and settings defaults before checking the schedule default.
+	for range 8 { // Roll back migrations after and including the 60-minute schedule default before checking its legacy behavior.
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(err)
 		}
