@@ -206,7 +206,8 @@ const updateEventSettingsSQL = `INSERT INTO notification_event_settings(event_ke
 	COALESCE($13::text,'UTC'),COALESCE($14::text[],'{}'::text[]),now())
 	ON CONFLICT(event_key) DO UPDATE SET enabled=COALESCE($2::boolean,notification_event_settings.enabled),
 	severity=COALESCE($4::text,notification_event_settings.severity),channels=COALESCE($6::text[],notification_event_settings.channels),
-	thresholds=COALESCE($8::jsonb,notification_event_settings.thresholds),cooldown_seconds=COALESCE($9::integer,notification_event_settings.cooldown_seconds),
+	thresholds=COALESCE($8::jsonb,notification_event_settings.thresholds),
+	thresholds_updated_at=CASE WHEN $8::jsonb IS NULL THEN notification_event_settings.thresholds_updated_at ELSE now() END,cooldown_seconds=COALESCE($9::integer,notification_event_settings.cooldown_seconds),
 	repeat_seconds=COALESCE($10::integer,notification_event_settings.repeat_seconds),
 	maintenance_start=CASE WHEN $11::text IS NULL THEN notification_event_settings.maintenance_start ELSE NULLIF($11::text,'')::time END,
 	maintenance_end=CASE WHEN $12::text IS NULL THEN notification_event_settings.maintenance_end ELSE NULLIF($12::text,'')::time END,
