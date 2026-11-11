@@ -58,10 +58,13 @@ func (s *Store) History(ctx context.Context, node string, page, size int) ([]map
 	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM node_ip_history WHERE from_ip IS NOT NULL AND ($1::uuid IS NULL OR node_id = $1::uuid)`, nodeArg(node)).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.DB.Query(ctx, `SELECT h.id::text, h.node_id::text, h.ts, host(h.from_ip), host(h.to_ip), fi.source, fi.geo, ti.source, ti.geo
+	rows, err := s.DB.Query(ctx, `SELECT h.id::text, h.node_id::text, h.ts, host(h.from_ip), host(h.to_ip), fi.source, fi.geo, ti.source, ti.geo,
+		fo.id::text, fo.asn, fo.organisation, fo.name, ti_isp.id::text, ti_isp.asn, ti_isp.organisation, ti_isp.name
 		FROM node_ip_history h
 		JOIN ip_addresses ti ON ti.ip = h.to_ip
 		JOIN ip_addresses fi ON fi.ip = h.from_ip
+		LEFT JOIN isps fo ON fo.id = COALESCE(h.from_isp_id, fi.isp_id)
+		LEFT JOIN isps ti_isp ON ti_isp.id = COALESCE(h.to_isp_id, ti.isp_id)
 		WHERE h.from_ip IS NOT NULL AND ($1::uuid IS NULL OR h.node_id = $1::uuid)
 		ORDER BY h.ts DESC, h.id DESC LIMIT $2 OFFSET $3`, nodeArg(node), size, (page-1)*size)
 	if err != nil {
@@ -74,13 +77,24 @@ func (s *Store) History(ctx context.Context, node string, page, size int) ([]map
 		var ts time.Time
 		var fromSource, toSource *string
 		var fromGeo, toGeo []byte
-		if err := rows.Scan(&id, &nodeID, &ts, &from, &to, &fromSource, &fromGeo, &toSource, &toGeo); err != nil {
+		var fromISPID, fromOrg, fromName, toISPID, toOrg, toName *string
+		var fromASN, toASN *uint
+		if err := rows.Scan(&id, &nodeID, &ts, &from, &to, &fromSource, &fromGeo, &toSource, &toGeo,
+			&fromISPID, &fromASN, &fromOrg, &fromName, &toISPID, &toASN, &toOrg, &toName); err != nil {
 			return nil, 0, err
 		}
 		items = append(items, map[string]any{"id": id, "nodeId": nodeID, "ts": ts.UTC().Format(time.RFC3339Nano), "from": from, "to": to,
-			"fromGeo": geoOf(from, fromSource, fromGeo), "toGeo": geoOf(to, toSource, toGeo)})
+			"fromGeo": geoOf(from, fromSource, fromGeo), "toGeo": geoOf(to, toSource, toGeo),
+			"fromIsp": ispView(fromISPID, fromASN, fromOrg, fromName), "toIsp": ispView(toISPID, toASN, toOrg, toName)})
 	}
 	return items, total, rows.Err()
+}
+
+func ispView(id *string, asn *uint, org, name *string) any {
+	if id == nil || asn == nil || org == nil || name == nil {
+		return nil
+	}
+	return map[string]any{"id": *id, "asn": *asn, "organisation": *org, "name": *name}
 }
 
 // Addresses lists the distinct addresses each node has used, most recently seen first.

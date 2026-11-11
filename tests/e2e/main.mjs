@@ -13,6 +13,7 @@ import { nodesSuite } from './suites/nodes.mjs';
 import { resultsSuite } from './suites/results.mjs';
 import { statisticsSuite } from './suites/statistics.mjs';
 import { networkSuite } from './suites/network.mjs';
+import { ispsSuite } from './suites/isps.mjs';
 import { schedulesSuite } from './suites/schedules.mjs';
 import { alertsSuite } from './suites/alerts.mjs';
 import { settingsSuite } from './suites/settings.mjs';
@@ -45,7 +46,7 @@ receiver.url = `http://127.0.0.1:${receiverServer.address().port}/hook`;
 const ctx = { page, stack, startAgent, fetchAgentConfig, submitScheduledResult, submitFailedResult, sendAgentHeartbeat, query, problems, receiver, browser };
 const T = coreSteps(ctx);
 const S = { engines: enginesSuite(T, ctx), auth: authSuite(T, ctx), dashboard: dashboardSuite(T, ctx), nodes: nodesSuite(T, ctx), results: resultsSuite(T, ctx), statistics: statisticsSuite(T, ctx),
-  network: networkSuite(T, ctx), schedules: schedulesSuite(T, ctx), alerts: alertsSuite(T, ctx), settings: settingsSuite(T, ctx), quality: qualitySuite(T, ctx) };
+  network: networkSuite(T, ctx), isps: ispsSuite(T), schedules: schedulesSuite(T, ctx), alerts: alertsSuite(T, ctx), settings: settingsSuite(T, ctx), quality: qualitySuite(T, ctx) };
 const scenarios = buildScenarios({ T, S });
 if (process.env.E2E_TRACE) page.on('response', r => {  if (r.url().includes('/api/') && r.request().method() !== 'GET') console.log('  ', r.request().method(), r.url().replace(stack.origin, ''), r.status(), process.env.E2E_BODY ? (r.request().postData() || '') : ''); });
 let failed = 0;
