@@ -49,6 +49,9 @@ func Route(path string) string {
 }
 
 var apiRoutes = map[string]bool{
+	"/api/access-tokens":                              true,
+	"/api/access-tokens/{id}":                         true,
+	"/mcp":                                            true,
 	"/api/auth/me":                                    true,
 	"/api/auth/login":                                 true,
 	"/api/auth/logout":                                true,

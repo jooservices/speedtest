@@ -7,6 +7,7 @@ func TestRouteLabelNeverInventsGroups(t *testing.T) {
 	cases := map[string]string{
 		"/api/nodes/" + id + "/run":      "/api/nodes/{id}/run",
 		"/api/alerts/events/" + id:       "/api/alerts/events/{id}",
+		"/api/access-tokens/" + id:       "/api/access-tokens/{id}",
 		"/api/schedules/rules":           "/api/schedules/rules",
 		"/api/stats/summary":             "/api/stats/summary",
 		"/api/export/results.csv":        "/api/export/results.csv",

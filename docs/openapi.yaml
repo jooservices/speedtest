@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Speedtest agent and UI API
   version: 1.0.0
-  description: "Contract-first API for JOOST-9; no endpoints implemented by this document. See api.md
+  description: "Contract for the Speedtest command center and MCP operation registry. See api.md
     for authentication, limits, formulas, UI mapping and compatibility. All JSON successes share
     Success; errors use RFC 9457 Problem. Timestamps use Timestamp; units use Mbps, Milliseconds and
     Percent. All responses are private, Cache-Control: no-store except conditional agent config
@@ -17,6 +17,8 @@ servers:
 tags:
   - name: Auth
     description: UI session lifecycle
+  - name: Access tokens
+    description: Named bearer tokens owned by the signed-in user
   - name: Agent
     description: Node credential protocol
   - name: Nodes
@@ -346,9 +348,125 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/TwoFactorRequest"
+  /api/access-tokens:
+    get:
+      operationId: listAccessTokens
+      tags:
+        - Access tokens
+      summary: List access tokens
+      description: Returns token metadata only. Bearer credentials and token hashes are never returned.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+      responses:
+        "200":
+          description: Token metadata page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listAccessTokensResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    post:
+      operationId: createAccessToken
+      tags:
+        - Access tokens
+      summary: Create an access token
+      description: The bearer value is returned once. Store it securely before leaving the response; it cannot be recovered.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccessTokenInput"
+      responses:
+        "201":
+          description: Created; bearer token shown once
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/createAccessTokenResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/access-tokens/{id}:
+    delete:
+      operationId: revokeAccessToken
+      tags:
+        - Access tokens
+      summary: Revoke an access token
+      description: Revocation is immediate. Repeating the request returns 404 and creates no additional effect.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Token identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      responses:
+        "204":
+          description: Revoked
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/ServerError"
   /api/nodes:
     get:
       operationId: listNodes
+      x-access-token-scope: read
+      x-mcp-tool: list_nodes
       tags:
         - Nodes
       summary: List nodes
@@ -356,6 +474,7 @@ paths:
         credentials.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -380,6 +499,7 @@ paths:
         - $ref: "#/components/parameters/Size"
     post:
       operationId: createNode
+      x-access-token-scope: read-write
       tags:
         - Nodes
       summary: Create node and one-time enrollment token
@@ -387,6 +507,7 @@ paths:
         idempotency key replays the issuance securely for its retention period.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "201":
           description: Created
@@ -503,12 +624,15 @@ paths:
   /api/nodes/{id}:
     get:
       operationId: getNode
+      x-access-token-scope: read
+      x-mcp-tool: get_node
       tags:
         - Nodes
       summary: Read node details
       description: Read node details.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -542,6 +666,7 @@ paths:
             $ref: "#/components/schemas/ID"
     patch:
       operationId: updateNode
+      x-access-token-scope: read-write
       tags:
         - Nodes
       summary: Update allowed node configuration
@@ -549,6 +674,7 @@ paths:
         agent config ETag; node name must remain unique.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -596,6 +722,7 @@ paths:
               $ref: "#/components/schemas/NodePatch"
     delete:
       operationId: deleteNode
+      x-access-token-scope: full
       tags:
         - Nodes
       summary: Delete node and its data
@@ -604,6 +731,7 @@ paths:
         command.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "204":
           description: No content.
@@ -645,6 +773,8 @@ paths:
   /api/nodes/{id}/run:
     post:
       operationId: runNode
+      x-access-token-scope: read-write
+      x-mcp-tool: run_test
       tags:
         - Nodes
       summary: Queue manual run
@@ -652,6 +782,7 @@ paths:
         or already running. Never overlaps tests on this node.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "202":
           description: Accepted; poll Location
@@ -690,6 +821,7 @@ paths:
   /api/nodes/{id}/commands:
     post:
       operationId: createCommand
+      x-access-token-scope: read-write
       tags:
         - Nodes
       summary: Queue node control command
@@ -697,6 +829,7 @@ paths:
         effective revision; update_agent requires version.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "202":
           description: Accepted; poll Location
@@ -741,12 +874,14 @@ paths:
   /api/nodes/{id}/commands/{commandId}:
     get:
       operationId: getCommand
+      x-access-token-scope: read
       tags:
         - Nodes
       summary: Read command progress
       description: Read command progress.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -784,6 +919,7 @@ paths:
   /api/nodes/{id}/credential:
     post:
       operationId: rotateCredential
+      x-access-token-scope: full
       tags:
         - Nodes
       summary: Rotate node credential
@@ -791,6 +927,7 @@ paths:
         deliver securely to node; existing node data remains. Config contains only this node.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "201":
           description: Created
@@ -825,6 +962,7 @@ paths:
         - $ref: "#/components/parameters/Idempotency"
     delete:
       operationId: revokeCredential
+      x-access-token-scope: full
       tags:
         - Nodes
       summary: Revoke node credential
@@ -832,6 +970,7 @@ paths:
         no extra effect.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "204":
           description: No content; no response body.
@@ -1096,12 +1235,15 @@ paths:
   /api/results:
     get:
       operationId: listResults
+      x-access-token-scope: read
+      x-mcp-tool: list_results
       tags:
         - Results
       summary: Filter, sort and paginate results
       description: Filter, sort and paginate results.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1138,12 +1280,14 @@ paths:
   /api/results/{id}:
     get:
       operationId: getResult
+      x-access-token-scope: read
       tags:
         - Results
       summary: Read all stored result fields and geolocation
       description: Read all stored result fields and geolocation.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1175,6 +1319,7 @@ paths:
   /api/results/export.csv:
     get:
       operationId: exportFilteredCSV
+      x-access-token-scope: read
       tags:
         - Results
       summary: Stream results export
@@ -1182,6 +1327,7 @@ paths:
         CSV columns and escaping are defined in docs/api.md; formula-like cells are neutralized.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Streaming export; no JSON envelope.
@@ -1221,12 +1367,14 @@ paths:
   /api/export/results.csv:
     get:
       operationId: exportAllCSV
+      x-access-token-scope: read
       tags:
         - Results
       summary: Stream results export
       description: All stored results, ts,id ascending, streamed; CSV columns match filtered export.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Streaming export; no JSON envelope.
@@ -1254,6 +1402,7 @@ paths:
   /api/export/results.json:
     get:
       operationId: exportAllJSON
+      x-access-token-scope: read
       tags:
         - Results
       summary: Stream results export
@@ -1261,6 +1410,7 @@ paths:
         exception to envelope. Do not materialize entire history in memory.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Streaming export; no JSON envelope.
@@ -1290,6 +1440,8 @@ paths:
   /api/stats/summary:
     get:
       operationId: getSummary
+      x-access-token-scope: read
+      x-mcp-tool: get_statistics
       tags:
         - Statistics
       summary: Read per-node statistics with previous period
@@ -1297,6 +1449,7 @@ paths:
         and formula rules.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1325,6 +1478,7 @@ paths:
   /api/stats/trend:
     get:
       operationId: getTrend
+      x-access-token-scope: read
       tags:
         - Statistics
       summary: Read bucketed trend and optional display total
@@ -1334,6 +1488,7 @@ paths:
         values. Return 422 if requested fixed buckets exceed 300.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1381,6 +1536,7 @@ paths:
   /api/stats/hour-of-day:
     get:
       operationId: getHourOfDay
+      x-access-token-scope: read
       tags:
         - Statistics
       summary: Read per-node hour-of-day averages
@@ -1388,6 +1544,7 @@ paths:
         local hour.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1418,6 +1575,7 @@ paths:
   /api/stats/heatmap:
     get:
       operationId: getHeatmap
+      x-access-token-scope: read
       tags:
         - Statistics
       summary: Read weekday by hour heatmap
@@ -1425,6 +1583,7 @@ paths:
         Repeated DST hours contribute to the same cell.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1457,6 +1616,7 @@ paths:
   /api/stats/distribution:
     get:
       operationId: getDistribution
+      x-access-token-scope: read
       tags:
         - Statistics
       summary: Read metric histograms
@@ -1464,6 +1624,7 @@ paths:
         on its value; bins=[] on empty data; final upper edge inclusive. Values/counts support UI tooltips.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1503,6 +1664,8 @@ paths:
   /api/dashboard:
     get:
       operationId: getDashboard
+      x-access-token-scope: read
+      x-mcp-tool: get_dashboard
       tags:
         - Dashboard
       summary: Read fleet tiles, node cards, recent results and alerts
@@ -1511,6 +1674,7 @@ paths:
         returns empty arrays, zero counts and null aggregates."
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1536,6 +1700,7 @@ paths:
   /api/series:
     get:
       operationId: getSeries
+      x-access-token-scope: read
       tags:
         - Dashboard
       summary: Read bounded comparison series
@@ -1544,6 +1709,7 @@ paths:
         before aggregation. At most maxPoints per node.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1593,12 +1759,14 @@ paths:
   /api/schedules:
     get:
       operationId: getSchedules
+      x-access-token-scope: read
       tags:
         - Schedules
       summary: Read rules, per-node upcoming runs, usage and clashes
       description: Read rules, per-node upcoming runs, usage and clashes.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1624,12 +1792,15 @@ paths:
   /api/schedules/{node}:
     get:
       operationId: getSchedule
+      x-access-token-scope: read
+      x-mcp-tool: get_schedule
       tags:
         - Schedules
       summary: Read one node schedule and estimates
       description: Read one node schedule and estimates.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1663,12 +1834,15 @@ paths:
             $ref: "#/components/schemas/ID"
     put:
       operationId: replaceSchedule
+      x-access-token-scope: read-write
+      x-mcp-tool: update_schedule
       tags:
         - Schedules
       summary: Replace node schedule
       description: Replace node schedule.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1719,6 +1893,7 @@ paths:
   /api/schedules/rules:
     put:
       operationId: replaceScheduleRules
+      x-access-token-scope: read-write
       tags:
         - Schedules
       summary: Replace center coordination rules
@@ -1727,6 +1902,7 @@ paths:
         before applying.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1767,6 +1943,7 @@ paths:
   /api/schedules/stagger:
     post:
       operationId: staggerSchedules
+      x-access-token-scope: read-write
       tags:
         - Schedules
       summary: Spread offsets evenly
@@ -1774,6 +1951,7 @@ paths:
         remaining clashes; no node learns peer identity.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1805,12 +1983,14 @@ paths:
   /api/alerts/rules:
     get:
       operationId: listRules
+      x-access-token-scope: read
       tags:
         - Alerts
       summary: List alert rules
       description: List alert rules.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1835,12 +2015,14 @@ paths:
         - $ref: "#/components/parameters/Size"
     post:
       operationId: createRule
+      x-access-token-scope: read-write
       tags:
         - Alerts
       summary: Create alert rule
       description: Create alert rule.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "201":
           description: Created
@@ -1878,12 +2060,14 @@ paths:
   /api/alerts/rules/{id}:
     get:
       operationId: getRule
+      x-access-token-scope: read
       tags:
         - Alerts
       summary: Read alert rule
       description: Read alert rule.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1917,12 +2101,14 @@ paths:
             $ref: "#/components/schemas/ID"
     put:
       operationId: replaceRule
+      x-access-token-scope: read-write
       tags:
         - Alerts
       summary: Replace alert rule
       description: Replace alert rule.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1970,12 +2156,14 @@ paths:
               $ref: "#/components/schemas/AlertRuleInput"
     delete:
       operationId: deleteRule
+      x-access-token-scope: full
       tags:
         - Alerts
       summary: Delete alert rule
       description: Delete alert rule.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "204":
           description: No content; no response body.
@@ -2011,6 +2199,7 @@ paths:
   /api/audit:
     get:
       operationId: listAudit
+      x-access-token-scope: read
       tags:
         - Settings
       summary: List the log of owner changes
@@ -2018,6 +2207,7 @@ paths:
         never recorded. Entries older than the results retention period are removed nightly.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2050,6 +2240,8 @@ paths:
   /api/alerts/events:
     get:
       operationId: listEvents
+      x-access-token-scope: read
+      x-mcp-tool: list_alerts
       tags:
         - Alerts
       summary: List alert activity
@@ -2057,6 +2249,7 @@ paths:
         one-shot. Acknowledgement does not alter resolution; reopening sets acked=false.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2100,12 +2293,15 @@ paths:
   /api/alerts/events/{id}:
     get:
       operationId: getEvent
+      x-access-token-scope: read
+      x-mcp-tool: get_alert
       tags:
         - Alerts
       summary: Read event
       description: Read event.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2140,15 +2336,21 @@ paths:
   /api/alerts/events/{id}/ack:
     put:
       operationId: ackEvent
+      x-access-token-scope: read-write
+      x-mcp-tool: acknowledge_alert
       tags:
         - Alerts
       summary: Acknowledge or reopen alert attention
       description: Acknowledge or reopen alert attention.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -2191,12 +2393,14 @@ paths:
   /api/alerts/acknowledgements:
     post:
       operationId: ackAllEvents
+      x-access-token-scope: full
       tags:
         - Alerts
       summary: Acknowledge current unacknowledged alerts
       description: Snapshot bulk acknowledgement; newly arriving events are unaffected. Poll /api/jobs/{id}.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "202":
           description: Accepted; poll Location
@@ -2227,6 +2431,7 @@ paths:
   /api/notifications/test/{channel}:
     post:
       operationId: testNotification
+      x-access-token-scope: full
       tags:
         - Notifications
       summary: Queue test notification
@@ -2235,6 +2440,7 @@ paths:
         Requires same-origin Origin and the session CSRF token.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "202":
           description: Accepted; poll Location
@@ -2273,6 +2479,7 @@ paths:
   /api/notifications/deliveries:
     get:
       operationId: listDeliveries
+      x-access-token-scope: read
       tags:
         - Notifications
       summary: Read notification delivery log
@@ -2280,6 +2487,7 @@ paths:
         logical delivery per event/channel. Notification page is limited to 1000000.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2311,12 +2519,14 @@ paths:
   /api/notifications/deliveries/{id}:
     get:
       operationId: getDelivery
+      x-access-token-scope: read
       tags:
         - Notifications
       summary: Read delivery status
       description: Read delivery status.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2741,12 +2951,14 @@ paths:
   /api/settings:
     get:
       operationId: getSettings
+      x-access-token-scope: read
       tags:
         - Settings
       summary: Read public preferences and configured flags
       description: Read public preferences and configured flags.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2771,12 +2983,14 @@ paths:
           $ref: "#/components/responses/ServerError"
     put:
       operationId: replaceSettings
+      x-access-token-scope: full
       tags:
         - Settings
       summary: Replace preferences and optionally integration secrets
       description: Replace preferences and optionally integration secrets.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2817,6 +3031,7 @@ paths:
   /api/settings/enrolment-key:
     post:
       operationId: rotateEnrollmentKey
+      x-access-token-scope: full
       tags:
         - Settings
       summary: Rotate shared bootstrap enrollment key
@@ -2825,6 +3040,7 @@ paths:
         settings returns only configured flag.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "201":
           description: Created
@@ -2852,12 +3068,14 @@ paths:
   /api/ip/history:
     get:
       operationId: listIPChanges
+      x-access-token-scope: read
       tags:
         - IP
       summary: Read address-change timeline
       description: Newest ts,id first. Includes all independent nodes; no topology-based exclusion.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2884,6 +3102,7 @@ paths:
   /api/ip/addresses:
     get:
       operationId: listIPAddresses
+      x-access-token-scope: read
       tags:
         - IP
       summary: Read distinct node addresses and aggregates
@@ -2891,6 +3110,7 @@ paths:
         failed samples.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2917,6 +3137,7 @@ paths:
   /api/ip/lookup:
     get:
       operationId: lookupIP
+      x-access-token-scope: read
       tags:
         - IP
       summary: Look up literal IP location
@@ -2925,6 +3146,7 @@ paths:
         hostnames.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2954,6 +3176,7 @@ paths:
   /api/ip/map:
     get:
       operationId: getMap
+      x-access-token-scope: read
       tags:
         - IP
       summary: Read current location per node
@@ -2961,6 +3184,7 @@ paths:
         Join Node for label/color.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2985,12 +3209,14 @@ paths:
   /api/jobs/{id}:
     get:
       operationId: getJob
+      x-access-token-scope: read
       tags:
         - Jobs
       summary: Read asynchronous maintenance status
       description: Read asynchronous maintenance status.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -3022,6 +3248,7 @@ paths:
   /api/installer/probes:
     post:
       operationId: probeSSH
+      x-access-token-scope: full
       tags:
         - Installer
       summary: Probe SSH and return host fingerprint
@@ -3030,6 +3257,7 @@ paths:
         never credentials; it does not authenticate or install.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "201":
           description: Created
@@ -3063,6 +3291,7 @@ paths:
   /api/nodes/{id}/installations:
     post:
       operationId: installAgent
+      x-access-token-scope: full
       tags:
         - Installer
       summary: Install or repair node agent
@@ -3071,6 +3300,7 @@ paths:
         key aborts and failure cleans up.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "202":
           description: Accepted; poll Location
@@ -3115,12 +3345,14 @@ paths:
   /api/installations/{id}:
     get:
       operationId: getInstallation
+      x-access-token-scope: read
       tags:
         - Installer
       summary: Read installation state
       description: Read installation state.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -3152,15 +3384,18 @@ paths:
   /api/installations/{id}/events:
     get:
       operationId: streamInstallEvents
+      x-access-token-scope: read
       tags:
         - Installer
       summary: Stream safe installer progress
       description: "SSE data is one InstallEvent JSON object per event, event: progress. id matches
         InstallEvent.id. Replay retained events on reconnect; 409 if cursor expired. Terminal event
         closes stream. Errors before opening use Problem; after opening use failed InstallEvent.
-        Session authorization checked before stream and on expiry."
+        The session or bearer credential that opened the stream is revalidated every 10 seconds
+        while the installation is nonterminal; expiry or revocation closes the stream on that check."
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Server-sent events; no JSON envelope.
@@ -3207,6 +3442,7 @@ paths:
   /api/nodes/{id}/uninstallations:
     post:
       operationId: uninstallAgent
+      x-access-token-scope: full
       tags:
         - Installer
       summary: Uninstall agent before node deletion
@@ -3215,6 +3451,7 @@ paths:
         uninstall command; never claim remote cleanup succeeded.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "202":
           description: Accepted; poll Location
@@ -3287,6 +3524,10 @@ paths:
           $ref: "#/components/responses/ServerError"
 components:
   securitySchemes:
+    OwnerBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: API token
     SessionCookie:
       type: apiKey
       in: cookie
@@ -6595,6 +6836,101 @@ components:
                   $ref: "#/components/schemas/Pagination"
               required:
                 - pagination
+    AccessToken:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        scope:
+          type: string
+          enum: [read, read-write, full]
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+        lastUsedAt:
+          type: [string, "null"]
+          format: date-time
+        revokedAt:
+          type: [string, "null"]
+          format: date-time
+      required: [id, name, scope, createdAt, expiresAt, lastUsedAt, revokedAt]
+    AccessTokenInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        scope:
+          type: string
+          enum: [read, read-write, full]
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+      required: [name, scope]
+    IssuedAccessToken:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        scope:
+          type: string
+          enum: [read, read-write, full]
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+        lastUsedAt:
+          type: [string, "null"]
+          format: date-time
+        revokedAt:
+          type: [string, "null"]
+          format: date-time
+        token:
+          type: string
+          writeOnly: true
+      required: [id, name, scope, createdAt, expiresAt, lastUsedAt, revokedAt, token]
+    listAccessTokensResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/AccessToken"
+            meta:
+              type: object
+              additionalProperties: false
+              properties:
+                pagination:
+                  $ref: "#/components/schemas/Pagination"
+              required: [pagination]
+    createAccessTokenResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 201
+            data:
+              $ref: "#/components/schemas/IssuedAccessToken"
     createNodeResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
@@ -6956,6 +7292,13 @@ components:
           pattern: Z$
         actor:
           type: string
+        authMethod:
+          type: string
+          enum: [session, bearer]
+          description: Authentication method used for the change.
+        credentialId:
+          $ref: "#/components/schemas/ID"
+          description: Non-secret API token ID that authorized a bearer change; omitted for session changes.
         action:
           type: string
         targetType:
@@ -6971,6 +7314,7 @@ components:
         - id
         - ts
         - actor
+        - authMethod
         - action
         - targetType
         - targetId

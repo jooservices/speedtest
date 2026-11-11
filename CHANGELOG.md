@@ -16,6 +16,9 @@ All notable changes to Speedtest are recorded here. The format follows
 ### Changed
 - New nodes, missing agent intervals, and newly enabled engine schedules default to 60 minutes; existing schedules retain their configured values. Docker staging scripts keep their current default until JOOST-89.
 
+### Fixed
+- Installation event streams revalidate the bearer token that opened them, so expiry and revocation stop the stream at its next 10-second check.
+
 ## [1.0.0] - 2026-11-06
 
 First production release: command center, agents, web UI, alerts and notifications, audit log, Sentry error tracking,

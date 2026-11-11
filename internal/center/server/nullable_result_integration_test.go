@@ -55,8 +55,8 @@ func TestNullableResultIdentityIntegration(t *testing.T) {
 	if hook.calls != 2 {
 		t.Fatal("known IP hook not invoked")
 	}
-	// Roll back notification, schedule and engine migrations, then refuse to lose the nullable-IP contract.
-	for _, name := range []string{"notification delivery escalation", "system notification events", "notification defaults", "alert streak timestamps", "60-minute schedule default", "notification event settings", "alert event payload", "engine schedules", "two-factor", "audit log", "SSH installer", "notification deliveries", "alert engine", "history"} {
+	// Roll back later migrations, then refuse to lose the nullable-IP contract.
+	for _, name := range []string{"notification delivery escalation", "Audit authentication source", "API access tokens", "system notification events", "notification defaults", "alert streak timestamps", "60-minute schedule default", "notification event settings", "alert event payload", "engine schedules", "two-factor", "audit log", "SSH installer", "notification deliveries", "alert engine", "history"} {
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(name+" migration rollback failed", err)
 		}

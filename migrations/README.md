@@ -23,11 +23,14 @@ tracks consecutive-test timing and adds configurable event thresholds, cooldowns
 repeat intervals and maintenance windows. `00017_notification_defaults.sql`
 preserves existing global rule settings and fills missing quiet-hour defaults.
 `00018_system_notification_events.sql` permits platform events without a node;
-`00019_notification_escalation.sql` records delivery escalation time. These
+`00021_notification_escalation.sql` records delivery escalation time. These
 changes are additive; the 1.0.0 binary continues to use its existing tables and
 columns.
 
 `00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
+`00019_api_access_tokens.sql` adds owner-scoped API tokens with named permissions,
+optional expiry, last-use and revocation timestamps, and only a 32-byte token
+digest. Its down migration removes that table and its index.
 `00010_engine_schedules.sql` adds per-engine schedules with a 60-minute default;
 Ookla writes remain mirrored to the legacy `schedules` table.
 `00015_default_schedule_60.sql` changes only the `schedules.interval_minutes`
@@ -42,6 +45,9 @@ For rollback, stop all center writers, roll back 00015, restore the previous
 center binary, then start it. Do not run an older center binary against the
 new default: that version reports a hard-coded 30-minute response after 00015
 has changed the database default to 60.
+`00020_audit_authentication_source.sql` records whether each audited change used
+a session or bearer credential and stores only the non-secret bearer token ID.
+Token creation audit targets also retain the newly created token ID.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file
@@ -123,9 +129,11 @@ that a subsequent up can reapply version 1.
 | `installer_jobs` | Owner-scoped installation state; at most one active job per node |
 | `installer_events` | Safe, replayable plain-language progress events |
 | `installer_idempotency` | HMAC-protected install request digest and job link, expiring after 24 hours |
+| `audit_log` | Owner changes, authentication method, optional bearer credential ID, and resolved client address; never bearer values |
 | `notification_event_settings` | Owner overrides for event enabled state, severity and channels |
 | `notification_event_node_settings` | Per-node enable overrides for node-scoped events |
 | `notification_templates` | Per-event, per-channel owner template overrides |
+| `api_access_tokens` | Owner-scoped bearer token metadata, expiry and last-use timestamps, and unique SHA-256 digest |
 
 All IDs are UUIDs. A result ID has **no server default**, so retries cannot
 accidentally obtain another identity. The primary key rejects duplicate UUIDs;

@@ -113,6 +113,8 @@ type serverAuth struct {
 	service           AuthService
 	requireHTTPS      bool
 	trustedProxyCIDRs string
+	tokens            AccessTokenStore
+	tokenLimiter      *nodeRateLimiter
 }
 
 // AuthService is the session and owner authentication contract used by the server.
