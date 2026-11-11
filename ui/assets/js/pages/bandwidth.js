@@ -249,6 +249,23 @@
     var global = items.filter(function (b) { return b.scopeKey === 'global'; })[0];
     return global ? Number(global.monthlyBytes) || 0 : 0;
   }
+  // Demo mode: a node budget is shared by the engines of that node, the global budget by every node and engine. The advice for one engine gets the
+  // budget minus what the OTHER engines and nodes of the shared scope already consume at their current interval (as the center does).
+  function sharedReserve(node, engine) {
+    var items = demoBudgets, nodeBudget = items.filter(function (b) { return b.scopeKey === node.id; })[0];
+    var scope = nodeBudget ? [node] : ST.nodes(), since = Date.now() - 30 * 86400000, reserved = 0, complete = true;
+    scope.forEach(function (other) {
+      ['ookla', 'librespeed'].forEach(function (name) {
+        if (other.id === node.id && name === engine) return;
+        var values = ST.results({ nodeIds: [other.id], engine: name, from: since }).filter(function (r) {
+          return (r.status === 'ok' || r.status === 'degraded') && r.bytesDown != null && r.bytesUp != null;
+        }).map(function (r) { return r.bytesDown + r.bytesUp; });
+        if (!values.length) { if (other.primaryEngine === name) complete = false; return; }
+        reserved += ST.stats.mean(values) * 30 * 1440 / (other.interval || 60);
+      });
+    });
+    return { bytes: reserved, complete: complete };
+  }
   ST.bandwidth.advice = function (node, engine, interval, budgetBytes) {
     var key = [node.id, engine, interval, budgetBytes || 0].join('|');
     if (adviceCache[key]) return adviceCache[key];
@@ -257,11 +274,12 @@
       var since = Date.now() - 30 * 86400000, values = ST.results({ nodeIds: [node.id], engine: engine, from: since }).filter(function (r) {
         return (r.status === 'ok' || r.status === 'degraded') && r.bytesDown != null && r.bytesUp != null;
       }).map(function (r) { return r.bytesDown + r.bytesUp; });
-      var budget = budgetBytes || configuredBudget(node.id), available = values.length > 0, avg = available ? ST.stats.mean(values) : null;
+      var shared = sharedReserve(node, engine), total = budgetBytes || configuredBudget(node.id), budget = total > 0 ? Math.max(0, total - shared.bytes) : 0;
+      var available = values.length > 0, avg = available ? ST.stats.mean(values) : null;
       var perDay = available ? avg * 1440 / interval : null, perMonth = available ? perDay * 30 : null;
       var recommendation = available ? recommendInDemo(avg, budget) : { interval: null, status: 'unavailable' };
-      result.loading = false; result.data = { averageBytesPerTest: avg, estimatedBytesPerDay: perDay, estimatedBytesPerMonth: perMonth, budgetBytes: budget,
-        measurementAvailable: available, sharedMeasurementsAvailable: true, recommendedIntervalMinutes: recommendation.interval, recommendationStatus: recommendation.status };
+      result.loading = false; result.data = { averageBytesPerTest: avg, estimatedBytesPerDay: perDay, estimatedBytesPerMonth: perMonth, budgetBytes: total,
+        measurementAvailable: available, sharedMeasurementsAvailable: shared.complete, sharedReservedBytes: shared.bytes, recommendedIntervalMinutes: recommendation.interval, recommendationStatus: recommendation.status };
     } else {
       var path = '/api/usage/advice?node=' + encodeURIComponent(node.id) + '&engine=' + engine + '&interval=' + interval;
       if (budgetBytes > 0) path += '&budgetBytes=' + encodeURIComponent(budgetBytes);
