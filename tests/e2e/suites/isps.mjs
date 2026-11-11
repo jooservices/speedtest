@@ -34,7 +34,7 @@ export function ispsSuite(T) {
       await page.getByRole('checkbox', { name: `Compare ${first.name}` }).check();
       const second = list.body.data.find(row => row.id !== first.id);
       await page.getByRole('checkbox', { name: `Compare ${second.name}` }).check();
-      const comparison = page.getByRole('table').last();
+      const comparison = page.locator('#view .grid-2').getByRole('table');
       await comparison.getByRole('cell', { name: `${first.name} (AS${first.asn})`, exact: true }).waitFor();
       await comparison.getByRole('cell', { name: `${second.name} (AS${second.asn})`, exact: true }).waitFor();
       const ids = [first.id, second.id].join(',');
