@@ -98,6 +98,7 @@ var apiRoutes = map[string]bool{
 	"/api/ip/addresses":                  true,
 	"/api/ip/lookup":                     true,
 	"/api/ip/map":                        true,
+	"/api/reports/monthly":               true,
 	"/api/isps":                          true,
 	"/api/isps/compare":                  true,
 	"/api/isps/{id}":                     true,

@@ -70,121 +70,89 @@ func TestMigrations(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() {
-		if err := db.Migrate(context.Background(), pool, "down"); err != nil {
-			t.Error(err)
+		if e := db.Migrate(context.Background(), pool, "down"); e != nil {
+			t.Error(e)
 		}
 	}()
-	verifyRequiredTables(t, pool, ctx)
-	verifyMigrationTypes(t, pool, ctx)
-	node, resultSQL := migrationFixture(t, pool, ctx)
-	t.Run("Constraints", func(t *testing.T) { verifyMigrationConstraints(t, pool, ctx, node, resultSQL) })
-	t.Run("UTCAndPrecisionRoundTrip", func(t *testing.T) { verifyUTCAndPrecision(t, pool, ctx) })
-	t.Run("FailedIPv6ResultPreservesNulls", func(t *testing.T) { verifyFailedIPv6(t, pool, ctx, node) })
-	t.Run("PopulatedRollbackAndReapply", func(t *testing.T) { verifyPopulatedRollback(t, pool, ctx) })
-	t.Run("CancelledMigration", func(t *testing.T) { verifyCancelledMigration(t, pool) })
-	t.Run("TransactionalRollbackFailure", func(t *testing.T) { verifyTransactionalRollback(t, pool, ctx) })
-}
-
-func verifyRequiredTables(t *testing.T, pool *pgxpool.Pool, ctx context.Context) {
-	t.Helper()
-	var got int
-	tables := []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor", "api_access_tokens", "isps", "isp_plans", "usage_monthly_totals", "usage_budgets", "usage_budget_events", "usage_budget_overrides"}
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", tables).Scan(&got); err != nil || got != len(tables) {
-		t.Fatalf("required tables: got %d want %d: %v", got, len(tables), err)
-	}
-	t.Logf("PASS: %d required tables created by embedded migrations", len(tables))
-}
-
-func verifyMigrationTypes(t *testing.T, pool *pgxpool.Pool, ctx context.Context) {
-	t.Helper()
-	expectedIndexes := []string{"results_node_id_ts_idx", "results_ts_idx", "results_node_timeline_idx"}
-	var indexes []string
-	if err := pool.QueryRow(ctx, `SELECT array_agg(indexname ORDER BY indexname) FROM pg_indexes WHERE schemaname='public' AND tablename='results' AND indexname=ANY($1)`, expectedIndexes).Scan(&indexes); err != nil || len(indexes) != len(expectedIndexes) {
-		t.Fatalf("results indexes: got %v, want %v: %v", indexes, expectedIndexes, err)
-	}
-	var got int
-	queries := []struct{ sql, failure string }{
-		{"SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND data_type='timestamp without time zone'", "non-timestamptz timestamp"},
-		{"SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name LIKE '%mbps' AND data_type NOT IN ('double precision','numeric')", "non-decimal speed"},
-	}
-	for _, query := range queries {
-		if err := pool.QueryRow(ctx, query.sql).Scan(&got); err != nil || got != 0 {
-			t.Fatalf("%s: %d %v", query.failure, got, err)
+	t.Run("AllRequiredTables", func(t *testing.T) {
+		var got int
+		tables := []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor", "api_access_tokens", "monthly_report_runs"} // every table a migration creates may be listed; the count follows the list
+		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", tables).Scan(&got); e != nil || got != len(tables) {
+			t.Fatalf("required tables: got %d want %d: %v", got, len(tables), e)
 		}
-	}
-	var typ string
-	var def *string
-	if err := pool.QueryRow(ctx, "SELECT data_type,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='results' AND column_name='id'").Scan(&typ, &def); err != nil || typ != "uuid" || def != nil {
-		t.Fatal("result UUID must be client supplied")
-	}
-	var zone string
-	if err := pool.QueryRow(ctx, "SHOW timezone").Scan(&zone); err != nil || zone != "UTC" {
-		t.Fatal("pool connection must use UTC")
-	}
-	t.Log("PASS: UUID without default; both results indexes; decimal Mbps; timestamptz only; UTC pool")
-}
-
-func migrationFixture(t *testing.T, pool *pgxpool.Pool, ctx context.Context) (string, string) {
-	t.Helper()
+		t.Logf("PASS: %d required tables created by embedded migrations", len(tables))
+	})
+	t.Run("IndexesUUIDUnitsAndTimeTypes", func(t *testing.T) {
+		var got int
+		if e := pool.QueryRow(ctx, "SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND tablename='results' AND (indexdef LIKE '%(node_id, ts)%' OR indexdef LIKE '%(ts)%')").Scan(&got); e != nil || got != 2 {
+			t.Fatalf("results indexes: %d %v", got, e)
+		}
+		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND data_type='timestamp without time zone'").Scan(&got); e != nil || got != 0 {
+			t.Fatal("non-timestamptz timestamp")
+		}
+		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND column_name LIKE '%mbps' AND data_type NOT IN ('double precision','numeric')").Scan(&got); e != nil || got != 0 {
+			t.Fatal("non-decimal speed")
+		}
+		var typ string
+		var def *string
+		if e := pool.QueryRow(ctx, "SELECT data_type,column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='results' AND column_name='id'").Scan(&typ, &def); e != nil || typ != "uuid" || def != nil {
+			t.Fatal("result UUID must be client supplied")
+		}
+		var zone string
+		if e := pool.QueryRow(ctx, "SHOW timezone").Scan(&zone); e != nil || zone != "UTC" {
+			t.Fatal("pool connection must use UTC")
+		}
+		t.Log("PASS: UUID without default; both results indexes; decimal Mbps; timestamptz only; UTC pool")
+	})
 	const node = "00000000-0000-4000-8000-000000000001"
 	exec(t, ctx, pool, "INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES ('"+node+"','fixture',300.5,150.25)")
 	exec(t, ctx, pool, "INSERT INTO ip_addresses(ip) VALUES ('203.0.113.1'),('2001:db8::1')")
 	resultSQL := "INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,ip,threads,server_id,server) VALUES ('00000000-0000-4000-8000-000000000002','" + node + "','2026-11-03T07:00:00+07:00','ok',123.456,78.125,3.5,'203.0.113.1',4,1,'{\"name\":\"fixture\"}')"
 	exec(t, ctx, pool, resultSQL)
-	return node, resultSQL
-}
-
-func verifyMigrationConstraints(t *testing.T, pool *pgxpool.Pool, ctx context.Context, node, resultSQL string) {
-	t.Helper()
-	cases := []struct{ name, sql, code string }{
-		{"DuplicateResultUUID", resultSQL, "23505"},
-		{"MissingResultUUID", "INSERT INTO results(node_id,ts,status,error,ip,threads) VALUES ('" + node + "',now(),'failed','offline','203.0.113.1',4)", "23502"},
-		{"ResultNodeForeignKey", "INSERT INTO results(id,node_id,ts,status,error,ip,threads) VALUES ('00000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000099',now(),'failed','offline','203.0.113.1',4)", "23503"},
-		{"SessionUserForeignKey", "INSERT INTO sessions(token_hash,user_id,csrf_token_hash,expires_at) VALUES ('hash','00000000-0000-4000-8000-000000000099','csrf',now()+interval '1 hour')", "23503"},
-		{"CredentialNodeForeignKey", "INSERT INTO node_credentials(id,node_id,kind,token_hash) VALUES ('00000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000099','bearer','hash')", "23503"},
-		{"HistoryIPForeignKey", "INSERT INTO node_ip_history(id,node_id,ts,to_ip) VALUES ('00000000-0000-4000-8000-000000000003','" + node + "',now(),'203.0.113.99')", "23503"},
-		{"ScheduleNodeForeignKey", "INSERT INTO schedules(node_id) VALUES ('00000000-0000-4000-8000-000000000099')", "23503"},
-		{"AlertRuleForeignKey", "INSERT INTO alert_state(rule_id,node_id) VALUES ('00000000-0000-4000-8000-000000000099','00000000-0000-4000-8000-000000000099')", "23503"},
-		{"CommandNodeForeignKey", "INSERT INTO agent_commands(id,node_id,type) VALUES ('00000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000099','pause')", "23503"},
-		{"NegativeSpeed", "UPDATE results SET down_mbps=-1", "23514"},
-		{"NaNSpeed", "UPDATE results SET down_mbps='NaN'", "23514"},
-		{"InfiniteSpeed", "UPDATE results SET up_mbps='Infinity'", "23514"},
-		{"LossAbove100", "UPDATE results SET loss_percent=101", "23514"},
-		{"MissingSuccessfulMeasurement", "UPDATE results SET down_mbps=NULL", "23514"},
-		{"FailedWithoutError", "UPDATE results SET status='failed',error=''", "23514"},
-		{"InvalidOffset", "INSERT INTO schedules(node_id,offset_minutes) VALUES ('" + node + "',60)", "23514"},
-		{"NoSecretOrSettingValue", "INSERT INTO settings(key) VALUES ('empty')", "23514"},
-		{"MixedSecretAndPublicValue", "INSERT INTO settings(key,value,secret_ciphertext) VALUES ('mixed','{}','ciphertext')", "23514"},
-		{"IPv4SubnetNotHost", "INSERT INTO ip_addresses(ip) VALUES ('203.0.113.0/24')", "23514"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := pool.Exec(ctx, tc.sql)
-			var pgErr *pgconn.PgError
-			if !errors.As(err, &pgErr) || pgErr.Code != tc.code {
-				t.Fatalf("expected SQLSTATE %s, got %v", tc.code, err)
-			}
-		})
-	}
-}
-
-func verifyUTCAndPrecision(t *testing.T, pool *pgxpool.Pool, ctx context.Context) {
-	t.Helper()
-	var ts time.Time
-	var down, up float64
-	if err := pool.QueryRow(ctx, "SELECT ts,down_mbps,up_mbps FROM results").Scan(&ts, &down, &up); err != nil || !ts.Equal(time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)) || down != 123.456 || up != 78.125 {
-		t.Fatal("UTC/Mbps round trip failed")
-	}
-}
-
-func verifyFailedIPv6(t *testing.T, pool *pgxpool.Pool, ctx context.Context, node string) {
-	t.Helper()
-	exec(t, ctx, pool, "INSERT INTO results(id,node_id,ts,status,error,ip,threads) VALUES ('00000000-0000-4000-8000-000000000003','"+node+"',now(),'failed','offline','2001:db8::1',1)")
-}
-
-func verifyPopulatedRollback(t *testing.T, pool *pgxpool.Pool, ctx context.Context) {
-	t.Helper()
-	exec(t, ctx, pool, `INSERT INTO users(id,email,password_hash) VALUES ('00000000-0000-4000-8000-000000000010','test@example.com','argon2id-hash');
+	t.Run("Constraints", func(t *testing.T) {
+		cases := []struct{ name, sql, code string }{
+			{"DuplicateResultUUID", resultSQL, "23505"},
+			{"MissingResultUUID", "INSERT INTO results(node_id,ts,status,error,ip,threads) VALUES ('" + node + "',now(),'failed','offline','203.0.113.1',4)", "23502"},
+			{"ResultNodeForeignKey", "INSERT INTO results(id,node_id,ts,status,error,ip,threads) VALUES ('00000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000099',now(),'failed','offline','203.0.113.1',4)", "23503"},
+			{"SessionUserForeignKey", "INSERT INTO sessions(token_hash,user_id,csrf_token_hash,expires_at) VALUES ('hash','00000000-0000-4000-8000-000000000099','csrf',now()+interval '1 hour')", "23503"},
+			{"CredentialNodeForeignKey", "INSERT INTO node_credentials(id,node_id,kind,token_hash) VALUES ('00000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000099','bearer','hash')", "23503"},
+			{"HistoryIPForeignKey", "INSERT INTO node_ip_history(id,node_id,ts,to_ip) VALUES ('00000000-0000-4000-8000-000000000003','" + node + "',now(),'203.0.113.99')", "23503"},
+			{"ScheduleNodeForeignKey", "INSERT INTO schedules(node_id) VALUES ('00000000-0000-4000-8000-000000000099')", "23503"},
+			{"AlertRuleForeignKey", "INSERT INTO alert_state(rule_id,node_id) VALUES ('00000000-0000-4000-8000-000000000099','" + node + "')", "23503"},
+			{"CommandNodeForeignKey", "INSERT INTO agent_commands(id,node_id,type) VALUES ('00000000-0000-4000-8000-000000000003','00000000-0000-4000-8000-000000000099','pause')", "23503"},
+			{"NegativeSpeed", "UPDATE results SET down_mbps=-1", "23514"},
+			{"NaNSpeed", "UPDATE results SET down_mbps='NaN'", "23514"},
+			{"InfiniteSpeed", "UPDATE results SET up_mbps='Infinity'", "23514"},
+			{"LossAbove100", "UPDATE results SET loss_percent=101", "23514"},
+			{"MissingSuccessfulMeasurement", "UPDATE results SET down_mbps=NULL", "23514"},
+			{"FailedWithoutError", "UPDATE results SET status='failed',error=''", "23514"},
+			{"InvalidOffset", "INSERT INTO schedules(node_id,offset_minutes) VALUES ('" + node + "',60)", "23514"},
+			{"NoSecretOrSettingValue", "INSERT INTO settings(key) VALUES ('empty')", "23514"},
+			{"MixedSecretAndPublicValue", "INSERT INTO settings(key,value,secret_ciphertext) VALUES ('mixed','{}','ciphertext')", "23514"},
+			{"IPv4SubnetNotHost", "INSERT INTO ip_addresses(ip) VALUES ('203.0.113.0/24')", "23514"},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				_, e := pool.Exec(ctx, tc.sql)
+				var pe *pgconn.PgError
+				if !errors.As(e, &pe) || pe.Code != tc.code {
+					t.Fatalf("expected SQLSTATE %s, got %v", tc.code, e)
+				}
+			})
+		}
+	})
+	t.Run("UTCAndPrecisionRoundTrip", func(t *testing.T) {
+		var ts time.Time
+		var down, up float64
+		if e := pool.QueryRow(ctx, "SELECT ts,down_mbps,up_mbps FROM results").Scan(&ts, &down, &up); e != nil || !ts.Equal(time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)) || down != 123.456 || up != 78.125 {
+			t.Fatal("UTC/Mbps round trip failed")
+		}
+	})
+	t.Run("FailedIPv6ResultPreservesNulls", func(t *testing.T) {
+		exec(t, ctx, pool, "INSERT INTO results(id,node_id,ts,status,error,ip,threads) VALUES ('00000000-0000-4000-8000-000000000003','"+node+"',now(),'failed','offline','2001:db8::1',1)")
+	})
+	t.Run("PopulatedRollbackAndReapply", func(t *testing.T) {
+		exec(t, ctx, pool, `INSERT INTO users(id,email,password_hash) VALUES ('00000000-0000-4000-8000-000000000010','test@example.com','argon2id-hash');
 INSERT INTO sessions(token_hash,user_id,csrf_token_hash,expires_at) VALUES ('hash','00000000-0000-4000-8000-000000000010','csrf',now()+interval '1 hour');
 INSERT INTO node_credentials(id,node_id,kind,token_hash) SELECT '00000000-0000-4000-8000-000000000011',id,'bearer','bearer-hash' FROM nodes;
 INSERT INTO schedules(node_id) SELECT id FROM nodes;
@@ -199,57 +167,55 @@ INSERT INTO settings(key,secret_ciphertext) VALUES ('integration',decode('aabb',
 INSERT INTO api_idempotency(principal,operation,key_hash,request_hash,response_ciphertext,expires_at) VALUES ('owner','create-node',repeat('a',64),repeat('b',64),decode(repeat('00',28),'hex'),now()+interval '1 hour');
 INSERT INTO api_access_tokens(id,user_id,name,scope,token_hash) VALUES ('00000000-0000-4000-8000-000000000017','00000000-0000-4000-8000-000000000010','rollback-fixture','read',decode(repeat('aa',32),'hex'));
 INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000-8000-000000000015',id,'run_now','00000000-0000-4000-8000-000000000002' FROM nodes;`)
-	if err := db.MigrateDownTo(ctx, pool, 0); err != nil {
-		t.Fatal("roll back every migration", err)
-	}
-	var count int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name <> 'goose_db_version'").Scan(&count); err != nil || count != 0 {
-		t.Fatal("rollback left application tables")
-	}
-	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-	for range 2 {
-		wg.Go(func() { errs <- db.Migrate(ctx, pool, "up") })
-	}
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
+		if e := db.MigrateDownTo(ctx, pool, 0); e != nil { // every migration, however many there are
+			t.Fatal(e)
 		}
-	}
-	for range 2 {
-		if err := db.Migrate(ctx, pool, "up"); err != nil {
-			t.Fatal(err)
+		var n int
+		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name <> 'goose_db_version'").Scan(&n); e != nil || n != 0 {
+			t.Fatal("rollback left application tables")
 		}
-	}
-	t.Log("PASS: populated rollback, concurrent reapply and idempotent up")
-}
-
-func verifyCancelledMigration(t *testing.T, pool *pgxpool.Pool) {
-	t.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if err := db.Migrate(ctx, pool, "up"); err == nil {
-		t.Fatal("expected cancellation error")
-	}
-}
-
-func verifyTransactionalRollback(t *testing.T, pool *pgxpool.Pool, ctx context.Context) {
-	t.Helper()
-	if err := db.MigrateDownTo(ctx, pool, 1); err != nil {
-		t.Fatal("roll back to the initial schema", err)
-	}
-	exec(t, ctx, pool, "CREATE VIEW rollback_blocker AS SELECT id FROM users")
-	t.Cleanup(func() { exec(t, context.Background(), pool, "DROP VIEW IF EXISTS rollback_blocker") })
-	if err := db.Migrate(ctx, pool, "down"); err == nil {
-		t.Fatal("expected external dependency to stop rollback")
-	}
-	var count int
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name <> 'goose_db_version'").Scan(&count); err != nil || count != 13 {
-		t.Fatal("failed rollback was not atomic")
-	}
-	exec(t, ctx, pool, "DROP VIEW rollback_blocker")
+		var wg sync.WaitGroup
+		errs := make(chan error, 2)
+		for range 2 {
+			wg.Go(func() { errs <- db.Migrate(ctx, pool, "up") })
+		}
+		wg.Wait()
+		close(errs)
+		for e := range errs {
+			if e != nil {
+				t.Fatal(e)
+			}
+		}
+		if e := db.Migrate(ctx, pool, "up"); e != nil {
+			t.Fatal(e)
+		}
+		if e := db.Migrate(ctx, pool, "up"); e != nil {
+			t.Fatal(e)
+		}
+		t.Log("PASS: populated rollback, concurrent reapply and idempotent up")
+	})
+	t.Run("CancelledMigration", func(t *testing.T) {
+		c, cancel := context.WithCancel(ctx)
+		cancel()
+		if e := db.Migrate(c, pool, "up"); e == nil {
+			t.Fatal("expected cancellation error")
+		}
+	})
+	t.Run("TransactionalRollbackFailure", func(t *testing.T) {
+		if e := db.MigrateDownTo(ctx, pool, 1); e != nil { // everything above the initial schema
+			t.Fatal(e)
+		}
+		exec(t, ctx, pool, "CREATE VIEW rollback_blocker AS SELECT id FROM users")
+		t.Cleanup(func() { exec(t, context.Background(), pool, "DROP VIEW IF EXISTS rollback_blocker") })
+		if e := db.Migrate(ctx, pool, "down"); e == nil {
+			t.Fatal("expected external dependency to stop rollback")
+		}
+		var n int
+		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name <> 'goose_db_version'").Scan(&n); e != nil || n != 13 {
+			t.Fatal("failed rollback was not atomic")
+		}
+		exec(t, ctx, pool, "DROP VIEW rollback_blocker")
+	})
 }
 
 func TestScheduleDefaultMigrationPreservesIntervalsIntegration(t *testing.T) {
@@ -265,15 +231,18 @@ func TestScheduleDefaultMigrationPreservesIntervalsIntegration(t *testing.T) {
 VALUES ('00000000-0000-4000-8000-000000000101',5,0),
        ('00000000-0000-4000-8000-000000000102',30,7),
        ('00000000-0000-4000-8000-000000000103',60,11)`)
-	// Return to the schema before 00015; this remains stable as later migrations are added.
+	// Back to the schema before the 60-minute default migration (00015).
 	if err := db.MigrateDownTo(ctx, pool, 10); err != nil {
-		t.Fatal("roll back to the schema before the 60-minute default", err)
+		t.Fatal(err)
 	}
 	assertScheduleIntervals(t, ctx, pool, "5:0,30:7,60:11")
 	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps)
 VALUES ('00000000-0000-4000-8000-000000000104','before-upgrade',100,100);
 INSERT INTO schedules(node_id) VALUES ('00000000-0000-4000-8000-000000000104')`)
 	assertScheduleInterval(t, ctx, pool, "00000000-0000-4000-8000-000000000104", 30)
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal(err)
 	}

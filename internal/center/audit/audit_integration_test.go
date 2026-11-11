@@ -97,13 +97,16 @@ func TestStoreRecordsAndListsNewestFirst(t *testing.T) {
 
 func TestAuthenticationSourceMigrationRollsBackAndReapplies(t *testing.T) {
 	pool, ctx := openPool(t)
-	// Migration 20 owns these columns; versions 21-23 are rolled back with it.
-	if err := db.MigrateDownTo(ctx, pool, 19); err != nil {
-		t.Fatal("roll back to the schema before audit authentication source:", err)
-	}
+	// Migration 20 adds these columns; restore version 19 regardless of newer migrations.
 	var columns int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_log' AND column_name IN ('auth_method','credential_id')`).Scan(&columns); err != nil || columns != 0 {
-		t.Fatalf("rolled-back audit columns = %d, error = %v", columns, err)
+	if err := db.MigrateDownTo(ctx, pool, 19); err != nil {
+		t.Fatal("roll back through audit authentication source migration:", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_log' AND column_name IN ('auth_method','credential_id')`).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if columns != 0 {
+		t.Fatalf("rolled-back audit columns = %d", columns)
 	}
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal("reapply audit authentication source migration:", err)

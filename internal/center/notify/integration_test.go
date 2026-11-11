@@ -113,129 +113,95 @@ func TestOutboxExactlyOnceConcurrentRestartAndRollback(t *testing.T) {
 	t.Log("PASS: concurrent/restarted consumers create one delivery per event/channel; failed fanout rolls back")
 }
 
-type deliveryRetryFixture struct {
-	pool      *pgxpool.Pool
-	ctx       context.Context
-	worker    *Store
-	prefs     *settings.PostgresStore
-	count     atomic.Int32
-	fail      atomic.Bool
-	logs      bytes.Buffer
-	now       time.Time
-	remoteURL string
-}
-
-func newDeliveryRetryFixture(t *testing.T) *deliveryRetryFixture {
-	t.Helper()
-	pool, ctx := database(t)
-	fixture := &deliveryRetryFixture{pool: pool, ctx: ctx, now: time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)}
-	fixture.fail.Store(true)
+func TestDeliveryRetryLifecycle(t *testing.T) {
+	p, ctx := database(t)
+	var count atomic.Int32
+	var fail atomic.Bool
+	fail.Store(true)
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fixture.count.Add(1)
-		if fixture.fail.Load() {
+		count.Add(1)
+		if fail.Load() {
 			http.Error(w, "secret-token private URL", 500)
 			return
 		}
 		w.WriteHeader(204)
 	}))
-	t.Cleanup(remote.Close)
-	fixture.remoteURL = remote.URL
-	fixture.prefs = preferences(t, pool, remote.URL+"/secret-token")
-	fixture.worker = &Store{DB: pool, Settings: fixture.prefs, Sender: &Transport{}, Now: func() time.Time { return fixture.now },
-		Logger: slog.New(slog.NewTextHandler(&fixture.logs, nil))}
-	return fixture
-}
-
-func TestDeliveryRetryLifecycle(t *testing.T) {
-	fixture := newDeliveryRetryFixture(t)
-	delivery := verifyFirstDeliveryRetry(t, fixture)
-	verifySecondDeliveryAttempt(t, fixture, delivery.ID)
-	verifyExpiredDelivery(t, fixture)
-	verifyDeliverySecretsAndLogs(t, fixture)
-}
-
-func verifyFirstDeliveryRetry(t *testing.T, f *deliveryRetryFixture) Delivery {
-	t.Helper()
-	delivery, err := f.worker.Test(f.ctx, "webhook")
+	defer remote.Close()
+	prefs := preferences(t, p, remote.URL+"/secret-token")
+	now := time.Date(2026, 11, 3, 0, 0, 0, 0, time.UTC)
+	var logs bytes.Buffer
+	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: func() time.Time { return now }, Logger: slog.New(slog.NewTextHandler(&logs, nil))}
+	d, err := worker.Test(ctx, "webhook")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if delivery.Status != "pending" || delivery.EventID != nil || delivery.Attempts != 0 {
-		t.Fatalf("test delivery=%+v", delivery)
+	if d.Status != "pending" || d.EventID != nil || d.Attempts != 0 {
+		t.Fatalf("test delivery=%+v", d)
 	}
-	ok, err := f.worker.Dispatch(f.ctx)
+	ok, err := worker.Dispatch(ctx)
 	if !ok || err != nil {
 		t.Fatal("first attempt", err)
 	}
-	delivery, _ = f.worker.Delivery(f.ctx, delivery.ID)
-	if delivery.Attempts != 1 || delivery.Status != "pending" || delivery.Error == nil {
+	d, _ = worker.Delivery(ctx, d.ID)
+	if d.Attempts != 1 || d.Status != "pending" || d.Error == nil {
 		t.Fatal("retry metadata")
 	}
-	if ok, err = f.worker.Dispatch(f.ctx); ok || err != nil {
+	ok, err = worker.Dispatch(ctx)
+	if ok || err != nil {
 		t.Fatal("premature retry")
 	}
-	return delivery
-}
-
-func verifySecondDeliveryAttempt(t *testing.T, f *deliveryRetryFixture, id string) {
-	t.Helper()
-	f.now = f.now.Add(time.Minute)
-	f.fail.Store(false)
-	ok, err := f.worker.Dispatch(f.ctx)
+	now = now.Add(time.Minute)
+	fail.Store(false)
+	ok, err = worker.Dispatch(ctx)
 	if !ok || err != nil {
 		t.Fatal("retry", err)
 	}
-	delivery, _ := f.worker.Delivery(f.ctx, id)
-	if delivery.Status != "sent" || delivery.Attempts != 2 || delivery.Error != nil || f.count.Load() != 2 {
-		t.Fatal("sent metadata or send count")
+	d, _ = worker.Delivery(ctx, d.ID)
+	if d.Status != "sent" || d.Attempts != 2 || d.Error != nil {
+		t.Fatal("sent metadata")
 	}
-}
-
-func verifyExpiredDelivery(t *testing.T, f *deliveryRetryFixture) {
-	t.Helper()
-	expired, err := f.worker.Test(f.ctx, "webhook")
+	if count.Load() != 2 {
+		t.Fatal("send count")
+	}
+	expired, err := worker.Test(ctx, "webhook")
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.now = f.now.Add(24 * time.Hour)
-	if _, err = f.worker.Dispatch(f.ctx); err != nil {
+	now = now.Add(24 * time.Hour)
+	if _, err = worker.Dispatch(ctx); err != nil {
 		t.Fatal(err)
 	}
-	expired, _ = f.worker.Delivery(f.ctx, expired.ID)
+	expired, _ = worker.Delivery(ctx, expired.ID)
 	if expired.Status != "failed" || expired.Attempts != 0 {
 		t.Fatal("expiry must not send")
 	}
-	items, total, err := f.worker.Deliveries(f.ctx, "", 1, 1)
+	items, total, err := worker.Deliveries(ctx, "", 1, 1)
 	if err != nil || total != 2 || len(items) != 1 || items[0].ID != expired.ID {
 		t.Fatal("pagination/newest first")
 	}
-	empty, total, err := f.worker.Deliveries(f.ctx, "20000000-0000-4000-8000-000000000001", 1, 25)
+	empty, total, err := worker.Deliveries(ctx, "20000000-0000-4000-8000-000000000001", 1, 25)
 	if err != nil || total != 0 || len(empty) != 0 {
 		t.Fatal("event filter")
 	}
-	if _, err := f.worker.Delivery(f.ctx, "30000000-0000-4000-8000-000000000001"); !errors.Is(err, ErrNotFound) {
+	if _, err := worker.Delivery(ctx, "30000000-0000-4000-8000-000000000001"); !errors.Is(err, ErrNotFound) {
 		t.Fatal("missing delivery")
 	}
 	for _, page := range []int{0, 1000001} {
-		if _, _, err := f.worker.Deliveries(f.ctx, "", page, 25); err == nil {
+		if _, _, err := worker.Deliveries(ctx, "", page, 25); err == nil {
 			t.Fatal("invalid pagination")
 		}
 	}
-}
-
-func verifyDeliverySecretsAndLogs(t *testing.T, f *deliveryRetryFixture) {
-	t.Helper()
-	if strings.Contains(f.logs.String(), "secret-token") || strings.Contains(f.logs.String(), f.remoteURL) {
+	if strings.Contains(logs.String(), "secret-token") || strings.Contains(logs.String(), remote.URL) {
 		t.Fatal("secret in logs")
 	}
-	if _, err := f.prefs.NotificationSecret(f.ctx, "bad"); err == nil {
+	if _, err := prefs.NotificationSecret(ctx, "bad"); err == nil {
 		t.Fatal("unknown secret")
 	}
-	if secret, err := f.prefs.NotificationSecret(f.ctx, "email"); err != nil || secret != "" {
+	if secret, err := prefs.NotificationSecret(ctx, "email"); err != nil || secret != "" {
 		t.Fatal("absent credential")
 	}
-	execute(t, f.pool, `UPDATE settings SET secret_ciphertext='broken' WHERE key='notify.webhook.secret'`)
-	if _, err := f.prefs.NotificationSecret(f.ctx, "webhook"); err == nil {
+	execute(t, p, `UPDATE settings SET secret_ciphertext='broken' WHERE key='notify.webhook.secret'`)
+	if _, err := prefs.NotificationSecret(ctx, "webhook"); err == nil {
 		t.Fatal("corrupt ciphertext")
 	}
 }
@@ -324,18 +290,13 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	if _, err := worker.Consume(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Roll back later migrations and the notification migration that owns the delivery table.
+	// Roll back to the version immediately before notification deliveries.
 	var exists bool
-	for step := 0; step < 30; step++ {
-		if err := db.Migrate(ctx, p, "down"); err != nil {
-			t.Fatal("rollback step", step, err)
-		}
-		if err := p.QueryRow(ctx, `SELECT to_regclass('notification_deliveries') IS NOT NULL`).Scan(&exists); err != nil {
-			t.Fatal(err)
-		}
-		if !exists {
-			break
-		}
+	if err := db.MigrateDownTo(ctx, p, 5); err != nil {
+		t.Fatal("roll back through notification deliveries migration", err)
+	}
+	if err := p.QueryRow(ctx, `SELECT to_regclass('notification_deliveries') IS NOT NULL`).Scan(&exists); err != nil {
+		t.Fatal(err)
 	}
 	if exists {
 		t.Fatal("delivery table not dropped")
@@ -479,76 +440,61 @@ func TestQuietHoursHoldAlertDeliveries(t *testing.T) {
 	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { sent.Add(1); w.WriteHeader(204) }))
 	defer remote.Close()
 	prefs := preferences(t, p, remote.URL+"/hook")
-	seedQuietHourDeliveries(t, p)
-	night := time.Date(2026, 11, 3, 18, 0, 0, 0, time.UTC)
-	now := night
-	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: func() time.Time { return now }}
-	testDelivery := verifyQuietHoursAtNight(t, p, ctx, worker, &sent)
-	verifyQuietHoursRelease(t, p, ctx, worker, testDelivery, &sent, &now, night)
-	verifyCriticalQuietHours(t, p, ctx, night, now)
-}
-
-func seedQuietHourDeliveries(t *testing.T, p *pgxpool.Pool) {
-	t.Helper()
 	execute(t, p, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES('10000000-0000-4000-8000-000000000001','Fiber',100,50)`)
-	for i, severity := range []string{"warn", "crit"} {
+	for i, sev := range []string{"warn", "crit"} {
 		id := fmt.Sprintf("a0000000-0000-4000-8000-00000000000%d", i+1)
-		execute(t, p, `INSERT INTO alert_events(id,node_id,severity,ts,title) VALUES($1,'10000000-0000-4000-8000-000000000001',$2,now(),'Alert')`, id, severity)
+		execute(t, p, `INSERT INTO alert_events(id,node_id,severity,ts,title) VALUES($1,'10000000-0000-4000-8000-000000000001',$2,now(),'Alert')`, id, sev)
 		execute(t, p, `INSERT INTO alert_notification_outbox(event_id,channels) VALUES($1,ARRAY['webhook'])`, id)
 	}
 	execute(t, p, `INSERT INTO settings(key,value) VALUES ('notifyQuietStart','"22:00"'),('notifyQuietEnd','"07:00"'),('notifyQuietTimezone','"Asia/Ho_Chi_Minh"'),('notifyQuietCritical','true')`)
-}
-
-func verifyQuietHoursAtNight(t *testing.T, p *pgxpool.Pool, ctx context.Context, worker *Store, sent *atomic.Int32) Delivery {
-	t.Helper()
+	night := time.Date(2026, 11, 3, 18, 0, 0, 0, time.UTC) // 01:00 in Ho Chi Minh City
+	now := night
+	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: func() time.Time { return now }}
 	for range 2 {
 		if _, err := worker.Consume(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
-	testDelivery, err := worker.Test(ctx, "webhook")
+	test, err := worker.Test(ctx, "webhook")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range 3 {
+	for range 3 { // critical alert and the test message go out, the warning waits
 		if _, err := worker.Dispatch(ctx); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if deliveryStatus(t, p, ctx, "a0000000-0000-4000-8000-000000000002") != "sent" || sent.Load() != 2 {
+	status := func(event string) string {
+		var s string
+		if err := p.QueryRow(ctx, `SELECT status FROM notification_deliveries WHERE event_id=$1`, event).Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	if status("a0000000-0000-4000-8000-000000000002") != "sent" || sent.Load() != 2 {
 		t.Fatalf("critical alert and test message are delivered at night: sent=%d", sent.Load())
 	}
-	if delivery, _ := worker.Delivery(ctx, testDelivery.ID); delivery.Status != "sent" {
-		t.Fatalf("a test message is never held: %+v", delivery)
+	if d, _ := worker.Delivery(ctx, test.ID); d.Status != "sent" {
+		t.Fatalf("a test message is never held: %+v", d)
 	}
-	if deliveryStatus(t, p, ctx, "a0000000-0000-4000-8000-000000000001") != "pending" {
+	if status("a0000000-0000-4000-8000-000000000001") != "pending" {
 		t.Fatal("the warning waits for the quiet hours to end")
 	}
-	return testDelivery
-}
-
-func verifyQuietHoursRelease(t *testing.T, p *pgxpool.Pool, ctx context.Context, worker *Store, testDelivery Delivery, sent *atomic.Int32, now *time.Time, night time.Time) {
-	t.Helper()
-	*now = night.Add(time.Minute)
+	// Still night a minute later: still held, nothing sent. After the window it goes out.
+	now = night.Add(time.Minute)
 	_, _ = worker.Dispatch(ctx)
-	if deliveryStatus(t, p, ctx, "a0000000-0000-4000-8000-000000000001") != "pending" || sent.Load() != 2 {
+	if status("a0000000-0000-4000-8000-000000000001") != "pending" || sent.Load() != 2 {
 		t.Fatal("still held during the window")
 	}
-	*now = time.Date(2026, 11, 3, 0, 30, 0, 0, time.UTC)
+	now = time.Date(2026, 11, 3, 0, 30, 0, 0, time.UTC) // 07:30 local, window over (and within 24 h of creation)
 	execute(t, p, `UPDATE notification_deliveries SET created_at=$1, next_attempt_at=$1 WHERE status='pending'`, now.Add(-time.Hour))
 	if _, err := worker.Dispatch(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if deliveryStatus(t, p, ctx, "a0000000-0000-4000-8000-000000000001") != "sent" || sent.Load() != 3 {
+	if status("a0000000-0000-4000-8000-000000000001") != "sent" || sent.Load() != 3 {
 		t.Fatalf("released after the window: sent=%d", sent.Load())
 	}
-	if delivery, _ := worker.Delivery(ctx, testDelivery.ID); delivery.Status != "sent" {
-		t.Fatalf("test delivery changed while releasing alerts: %+v", delivery)
-	}
-}
-
-func verifyCriticalQuietHours(t *testing.T, p *pgxpool.Pool, ctx context.Context, night, now time.Time) {
-	t.Helper()
+	// With the critical exemption off, a critical alert waits as well.
 	execute(t, p, `UPDATE settings SET value='false' WHERE key='notifyQuietCritical'`)
 	held, err := heldByQuietHours(ctx, p, "a0000000-0000-4000-8000-000000000002", night)
 	if err != nil || !held {
@@ -557,15 +503,6 @@ func verifyCriticalQuietHours(t *testing.T, p *pgxpool.Pool, ctx context.Context
 	if held, _ := heldByQuietHours(ctx, p, "a0000000-0000-4000-8000-000000000002", now); held {
 		t.Fatal("nothing is held outside the window")
 	}
-}
-
-func deliveryStatus(t *testing.T, p *pgxpool.Pool, ctx context.Context, event string) string {
-	t.Helper()
-	var status string
-	if err := p.QueryRow(ctx, `SELECT status FROM notification_deliveries WHERE event_id=$1`, event).Scan(&status); err != nil {
-		t.Fatal(err)
-	}
-	return status
 }
 
 func TestNotificationLoopObserverIntegration(t *testing.T) {
