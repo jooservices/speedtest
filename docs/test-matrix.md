@@ -53,7 +53,7 @@ Operations: 86. Without a test: 0.
 | getHourOfDay | GET | `/api/stats/hour-of-day` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
 | getHeatmap | GET | `/api/stats/heatmap` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
 | getDistribution | GET | `/api/stats/distribution` | `internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>`tests/ui/contract.test.mjs` |
-| getUsage | GET | `/api/usage` | `internal/center/server/ownerusage_integration_test.go`<br>`internal/center/server/ownerusage_test.go`<br>`tests/e2e/suites/settings.mjs`<br>`tests/ui-fixtures/server.mjs` |
+| getUsage | GET | `/api/usage` | `internal/center/server/ownerusage_integration_test.go`<br>`internal/center/server/ownerusage_test.go`<br>`tests/e2e/suites/dashboard.mjs`<br>`tests/e2e/suites/settings.mjs`<br>+2 more |
 | getUsageAdvice | GET | `/api/usage/advice` | `internal/center/server/ownerusage_integration_test.go`<br>`internal/center/server/ownerusage_test.go`<br>`tests/ui-fixtures/server.mjs` |
 | getUsageBudgets | GET | `/api/usage/budgets` | `internal/center/server/ownerusage_integration_test.go`<br>`internal/center/server/ownerusage_test.go`<br>`tests/e2e/suites/settings.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | replaceUsageBudget | PUT | `/api/usage/budgets/{scope}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownerusage_integration_test.go`<br>`internal/center/server/ownerusage_test.go` |
