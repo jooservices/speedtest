@@ -292,9 +292,9 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	if _, err := worker.Consume(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Later migrations (including the schedule default and SSH installer) sit above this one; roll back until the delivery table is gone.
+	// Newer migrations sit above notification deliveries; roll back through them until the table is gone.
 	var exists bool
-	for step := 0; step < 6; step++ {
+	for step := 0; step < 7; step++ {
 		if err := db.Migrate(ctx, p, "down"); err != nil {
 			t.Fatal("rollback step", step, err)
 		}
