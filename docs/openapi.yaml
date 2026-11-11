@@ -2054,6 +2054,7 @@ paths:
   /api/stats/events:
     get:
       operationId: getStatisticsEvents
+      x-access-token-scope: read
       tags:
         - Statistics
       summary: Read bounded IP, ISP and alert marks for statistics
