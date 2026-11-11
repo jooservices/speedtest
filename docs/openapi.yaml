@@ -2783,6 +2783,7 @@ paths:
   /api/ip/providers:
     get:
       operationId: listGeoProviders
+      x-access-token-scope: read
       tags:
         - IP
       summary: Read configured geolocation providers and daily usage
