@@ -341,6 +341,10 @@ func TestIPSignalDeduplicationAndRestartDrainIntegration(t *testing.T) {
 	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE rule_id=$1`, ruleID) != 1 || scalar(t, ctx, pool, `SELECT count(*) FROM ip_change_signals WHERE consumed_at IS NULL`) != 0 {
 		t.Fatal("newest IP change was not turned into exactly one event and consumed signal")
 	}
+	var detail string
+	if err := pool.QueryRow(ctx, `SELECT detail FROM alert_events WHERE rule_id=$1`, ruleID).Scan(&detail); err != nil || detail != "Changed from 203.0.113.1 to 203.0.113.2 (Fixture city)" {
+		t.Fatalf("the IP change event must name the old and the new address: %q %v", detail, err)
+	}
 	latePath := &agentapi.Postgres{Pool: pool, Hook: watcher}
 	lateIP := "203.0.113.3"
 	late := testResult("31000000-0000-4000-8000-000000000004", timestamp.Add(90*time.Minute), "ok", &lateIP, 80)
@@ -356,6 +360,9 @@ func TestIPSignalDeduplicationAndRestartDrainIntegration(t *testing.T) {
 	}
 	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE rule_id=$1`, ruleID) != 2 || scalar(t, ctx, pool, `SELECT count(*) FROM alert_notification_outbox WHERE event_id IN (SELECT id FROM alert_events WHERE rule_id=$1)`, ruleID) != 2 {
 		t.Fatal("restart drain did not create exactly one event handoff for the new IP signal")
+	}
+	if err := pool.QueryRow(ctx, `SELECT detail FROM alert_events WHERE rule_id=$1 ORDER BY ts DESC LIMIT 1`, ruleID).Scan(&detail); err != nil || detail != "Changed from 203.0.113.2 to 203.0.113.3 (Fixture city)" {
+		t.Fatalf("the drained IP change event must name the old and the new address: %q %v", detail, err)
 	}
 	if _, err := restarted.DrainSignals(ctx); err != nil {
 		t.Fatal("empty repeated signal drain:", err)

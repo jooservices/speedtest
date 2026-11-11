@@ -10,6 +10,7 @@ All notable changes to Speedtest are recorded here. The format follows
 
 ### Added
 - Monthly ISP and plan report (JOOST-79): per-ISP/per-node metrics, destination-attributed IP changes, an explicit unknown-attribution row, a Unicode PDF and CSV export, a populated UI preview, and optional previous-month e-mail with a renewable lease and stale-claim recovery.
+- IP change notifications and alert events now say which address changed to which ("Changed from 203.0.113.1 to 203.0.113.2 (city)"), and every delivered notification carries the event detail line (JOOST-91).
 - Optional two-factor sign-in with an authenticator app (TOTP) and ten one-time recovery codes, in Settings > Access; the operator command `disable-2fa` is the recovery path.
 - Geolocation: ipwho.is, ipapi.co and ipgeolocation.io providers (off by default), consensus mode, and a built-in monthly DB-IP Lite database updater.
 - Fixed failure classes on test results; Ookla rate limits use capped exponential backoff, and rate-limited tests are counted separately from success rates and ignored by failure alerts.
