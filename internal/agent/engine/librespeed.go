@@ -116,8 +116,7 @@ func NewConfigured(name string, parallelConnections int) (Engine, error) {
 }
 
 func (e *LibreSpeed) Run(ctx context.Context, opts Options) (Result, error) {
-	// librespeed-cli can bind a source address (--source) but not an interface; refuse
-	// an interface binding instead of silently measuring the default route.
+	// Refuse interface binding; librespeed-cli supports only a source address.
 	if opts.ServerID < 0 || opts.Timeout < 0 || opts.InterfaceName != "" || !validNetworkOptions(opts) {
 		return failed(Result{}, InvalidOptions, nil)
 	}
