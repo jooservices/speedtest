@@ -128,6 +128,7 @@ func TestRunnerErrorsAndDeadlines(t *testing.T) {
 		{"missing", Config{Binary: filepath.Join(t.TempDir(), "absent")}, Options{}, BinaryMissing},
 		{"missing PATH", Config{Binary: "speedtest-nonexistent-joost15"}, Options{}, BinaryMissing},
 		{"crash", Config{Binary: fake, Args: []string{"--scenario", "crash"}}, Options{}, Execution},
+		{"rate limited", Config{Binary: fake, Args: []string{"--scenario", "rate_limited"}}, Options{}, RateLimited},
 		{"timeout", Config{Binary: fake, Args: []string{"--scenario", "timeout"}, Timeout: 20 * time.Millisecond}, Options{}, Timeout},
 		{"override timeout", Config{Binary: fake, Args: []string{"--scenario", "timeout"}}, Options{Timeout: 20 * time.Millisecond}, Timeout},
 		{"negative pin", Config{}, Options{ServerID: -1}, InvalidOptions},
@@ -182,6 +183,7 @@ func TestRunnerFailureClassification(t *testing.T) {
 		{"No route to host", NoRoute}, {"Network is unreachable", NoRoute}, {"Network unreachable", NoRoute},
 		{"Cannot resolve host", NoRoute}, {"Could not resolve hostname", NoRoute},
 		{"Unable to connect to server", ServerUnavailable}, {"Connection refused", ServerUnavailable},
+		{"connection refused by server 1429", ServerUnavailable}, {"HTTP/2 429 from provider", RateLimited},
 		{"Timeout", Timeout}, {"Operation timed out", Timeout}, {"unexpected exit", Execution},
 	} {
 		t.Run(tc.message, func(t *testing.T) {

@@ -151,6 +151,14 @@
     if (s === 'failed') return U.chip('Failed', 'crit', 'x');
     return U.chip(s);
   };
+  U.failureClassLabel = function (c) {
+    return ({ rate_limited: 'Rate limited', no_network: 'No network', server_unreachable: 'Server unreachable', engine_missing: 'Engine missing', timeout: 'Timeout', other: 'Other' })[c] || 'Other';
+  };
+  U.failureChip = function (r) {
+    if (!r || r.status !== 'failed') return null;
+    var cls = r.failureClass || 'other';
+    return U.chip(U.failureClassLabel(cls), cls === 'rate_limited' ? 'warn' : 'crit');
+  };
   U.dot = function (color) { return h('span', { class: 'dot', style: { background: color } }); };
   U.nodeTag = function (n) { return h('span', { class: 'row', style: 'gap:7px' }, U.dot(ST.nodeColor(n)), h('span', null, n.name), h('span', { class: 'muted' }, n.label)); };
   U.empty = function (title, text, action) { return h('div', { class: 'empty' }, h('h3', null, title), h('p', null, text), action ? h('div', { style: 'margin-top:12px' }, action) : null); };

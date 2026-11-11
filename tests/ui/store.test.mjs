@@ -218,15 +218,40 @@ test('demo manual test reports progress and inserts a result without network acc
   assert.equal(ST.latest('n1').id, result.id);
 });
 
+test('demo rate-limited results preserve failed and numeric alert streaks', async () => {
+  const { ST, context } = runtime('http://localhost', { demo: true });
+  const { default: vm } = await import('node:vm');
+  vm.runInContext('var testClock = Date.now(); Date.now = function () { return testClock; };', context);
+  context.setTimeout = fn => { context.testClock += 1000; fn(); };
+  ST.util.rng = () => () => 0.99;
+  const node = ST.addNode({ name: 'Rate-limit fixture', expectedDown: 100, expectedUp: 50 });
+  const failedRule = { id: 'demo-rate-failed', name: 'Failed streak', metric: 'failed', op: '>=', value: 1, forTests: 2, nodes: [node.id], severity: 'warn', enabled: true };
+  const pingRule = { id: 'demo-rate-ping', name: 'Ping streak', metric: 'ping', op: '>', value: 50, forTests: 2, nodes: [node.id], severity: 'warn', enabled: true };
+  ST.saveRule(failedRule); ST.saveRule(pingRule);
+  let nextSample;
+  ST.genSample = (selected, ts) => ({ ...nextSample, nodeId: selected.id, ts });
+  const run = async sample => { nextSample = sample; return ST.runTest(node.id); };
+  const ping = { status: 'ok', failureClass: 'other', serverId: ST.servers[0].id, ip: '203.0.113.73', down: 100, up: 50, ping: 100, jitter: 1, dLat: 5, uLat: 5, loss: 0, bytesDown: 100, bytesUp: 50, duration: 1 };
+  const limited = { status: 'failed', failureClass: 'rate_limited', error: 'Too many requests', serverId: ST.servers[0].id, ip: '', down: null, up: null, ping: null, jitter: null, dLat: null, uLat: null, loss: null, bytesDown: 0, bytesUp: 0, duration: 1 };
+  const failure = { ...limited, failureClass: 'other', error: 'fixture failure' };
+  await run(ping); await run(limited); await run(ping); await run(limited);
+  assert.ok(ST.events().some(event => event.ruleId === pingRule.id && !event.resolvedAt), 'rate limit between and after high ping results preserves the numeric alert');
+  await run(failure); await run(limited); await run(failure); await run(limited);
+  assert.ok(ST.events().some(event => event.ruleId === failedRule.id && !event.resolvedAt), 'rate limit between and after failures preserves the failed-test alert');
+});
+
 test('remote schedules, rules, stagger, key rotation, agent update, manual tests and notification tests use the API', async t => {
   const { ST, control, data } = await setup(t);
   await ST.load();
   assert.equal(ST.scheduleInfo().rules.maxConcurrent, 1);
   assert.equal(ST.scheduleInfo().nodes[0].nodeId, data.node.id);
   assert.deepEqual(JSON.parse(JSON.stringify(ST.engineSchedules(data.node))), [{ engine: 'ookla', interval: 30, offset: 0, enabled: true }]);
+  control.requests.length = 0;
   await ST.saveSchedule(data.node.id, { interval: 60, offset: 5, enabled: true });
   const put = control.requests.find(r => r.method === 'PUT' && r.path === '/api/schedules/' + data.node.id);
   assert.deepEqual(put.body, { interval: 60, offset: 5, enabled: true }); assert.equal(put.headers['if-match'], '"fixture-v1"');
+  assert.equal(control.requests.filter(r => r.path === '/api/schedules').length, 1, 'refreshes schedule data after save');
+  assert.equal(control.requests.some(r => r.path.startsWith('/api/results')), false, 'does not reload result history for a schedule edit');
   await ST.saveScheduleRules({ maxConcurrent: 3, quietStart: '23:00', quietEnd: '05:00' });
   const rules = control.requests.find(r => r.path === '/api/schedules/rules' && r.method === 'PUT').body;
   assert.equal(rules.maxConcurrent, 3); assert.equal(rules.stagger, true); assert.equal(rules.quiet.quietStart, '23:00');

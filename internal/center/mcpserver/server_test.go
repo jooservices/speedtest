@@ -54,13 +54,18 @@ func TestStreamableHTTPExposesToolsByTokenScopeAndDispatchesAPI(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(listed.Tools) != 8 {
-		t.Fatalf("read-only token sees %d tools, want 8", len(listed.Tools))
+	if len(listed.Tools) != 9 {
+		t.Fatalf("read-only token sees %d tools, want 9", len(listed.Tools))
 	}
+	usageTool := false
 	for _, tool := range listed.Tools {
+		usageTool = usageTool || tool.Name == "get_usage"
 		if tool.Name == "run_test" || tool.Name == "update_schedule" || tool.Name == "acknowledge_alert" {
 			t.Errorf("read-only token sees write tool %q", tool.Name)
 		}
+	}
+	if !usageTool {
+		t.Fatal("read-only token cannot see the get_usage tool")
 	}
 	result, err := session.CallTool(context.Background(), &mcp.CallToolParams{Name: "list_nodes", Arguments: map[string]any{}})
 	if err != nil {
@@ -410,8 +415,15 @@ func TestNewHandlerRequiresPrincipalAndFullScopeGetsWriteToolsAndDocs(t *testing
 	}
 	defer closeSession(t, session)
 	listed, err := session.ListTools(context.Background(), nil)
-	if err != nil || len(listed.Tools) != 11 {
+	if err != nil || len(listed.Tools) != 12 {
 		t.Fatalf("full-scope tool count = %d, error = %v", len(listed.Tools), err)
+	}
+	usageTool := false
+	for _, tool := range listed.Tools {
+		usageTool = usageTool || tool.Name == "get_usage"
+	}
+	if !usageTool {
+		t.Fatal("full-scope token cannot see the get_usage tool")
 	}
 	resource, err := session.ReadResource(context.Background(), &mcp.ReadResourceParams{URI: "speedtest://docs/metrics"})
 	if err != nil || len(resource.Contents) != 1 || !strings.Contains(resource.Contents[0].Text, "Mbps") {

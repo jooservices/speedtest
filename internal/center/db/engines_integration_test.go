@@ -14,6 +14,7 @@ func TestEngineMigrationBackfillLegacyWritesAndRollback(t *testing.T) {
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	dbtest.MigrateUp(t, pool)
+	// Roll back 00022, 00020, 00019, 00016 and 00015 before exercising the legacy schema.
 	for range 5 {
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(err)

@@ -56,7 +56,12 @@
           { key: 'loss', label: 'Loss', sort: true, num: true, render: function (r) { return r.loss == null ? '—' : F.num(r.loss, 1) + '%'; } },
           { key: 'server', label: 'Server', sort: true, render: function (r) { if (r.serverId == null && !r.server) return '—'; var s = r.server || ST.server(r.serverId); return s.name + (s.city ? ', ' + s.city : ''); } },
           { key: 'ip', label: 'Public IP', sort: true, render: function (r) { return h('span', { class: 'mono' }, r.ip); } },
-          { key: 'status', label: 'Status', sort: true, render: function (r) { return U.statusChip(r.status); } }],
+          { key: 'status', label: 'Status', sort: true, render: function (r) {
+            var chips = h('span', { class: 'row', style: 'gap:6px' }, U.statusChip(r.status));
+            var reason = U.failureChip(r);
+            if (reason) chips.appendChild(reason);
+            return chips;
+          } }],
         rows: slice, sortKey: q.sort, sortDir: q.dir, onSort: function (k) { if (q.sort === k) q.dir = q.dir === 'asc' ? 'desc' : 'asc'; else { q.sort = k; q.dir = k === 'ts' ? 'desc' : 'asc'; } draw(); },
         onRow: function (r) { ST.openResult(r); },
         empty: U.empty('No results match', 'Try a wider time range or clear some filters.', U.btn('Clear filters', { onClick: function () { q.nodes = nodes.map(function (n) { return n.id; }); q.status = 'all'; q.text = ''; q.minDown = ''; q.maxDown = ''; q.page = 1; ST.refresh(); } }))

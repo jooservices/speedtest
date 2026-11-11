@@ -22,6 +22,12 @@ the destination of the bearer credential.
    the engine address is retained separately as `engineIp`. Measurements preserve null versus zero. Server identity requires a name or
    host for successful tests; the numeric server ID can be absent. Array-shaped
    LibreSpeed raw JSON is preserved under `raw.reports` to keep raw an object.
+   Failed results carry `failureClass` from the fixed vocabulary in
+   `internal/shared/failureclass` (`rate_limited`, `no_network`,
+   `server_unreachable`, `engine_missing`, `timeout`, `other`). Ookla
+   "Too many requests" classifies as `rate_limited`; the run loop then backs off
+   exponentially with jitter (`SPEEDTEST_RATE_LIMIT_BACKOFF_*`) and records at
+   most one failed result per backoff window per engine.
 2. Call `Enqueue(result)` to commit without waiting for connectivity. Retain the
    result UUID on enqueue errors and retry that same result. Identical pending
    UUID/content is a no-op; conflicting content fails.

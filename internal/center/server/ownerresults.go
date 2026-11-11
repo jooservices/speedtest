@@ -27,7 +27,7 @@ var resultRanges = map[string]time.Duration{"6h": 6 * time.Hour, "24h": 24 * tim
 
 // csvHeader lists the export columns; they match the dashboard's own export.
 var csvHeader = []string{"time", "node", "status", "download_mbps", "upload_mbps", "ping_ms", "jitter_ms", "packet_loss_pct",
-	"bytes_down", "bytes_up", "bytes_total", "loaded_latency_down_ms", "loaded_latency_up_ms", "server", "public_ip", "error", "engine"}
+	"bytes_down", "bytes_up", "bytes_total", "loaded_latency_down_ms", "loaded_latency_up_ms", "server", "public_ip", "error", "failure_class", "engine"}
 
 type ownerResults struct {
 	store   OwnerResultsStore
@@ -209,9 +209,13 @@ func csvRecord(row ownerapi.ResultRow) []string {
 		city, _ := s["city"].(string)
 		server = strings.Trim(strings.TrimSpace(name)+" - "+strings.TrimSpace(city), " -")
 	}
+	class := text(res["failureClass"])
+	if class == "" {
+		class = "other"
+	}
 	return []string{text(res["ts"]), neutralise(node), text(res["status"]), num(res["down"]), num(res["up"]), num(res["ping"]),
 		num(res["jitter"]), num(res["loss"]), num(res["bytesDown"]), num(res["bytesUp"]), num(totalResultBytes(res)),
-		num(res["dLat"]), num(res["uLat"]), neutralise(server), text(res["ip"]), text(res["error"]), text(res["engine"])}
+		num(res["dLat"]), num(res["uLat"]), neutralise(server), text(res["ip"]), text(res["error"]), class, text(res["engine"])}
 }
 
 func totalResultBytes(result map[string]any) any {

@@ -184,8 +184,15 @@ func (f *accessTokenFixture) verifyReadMCP(t *testing.T, raw, id string) {
 		}
 	}()
 	tools, err := remote.ListTools(f.ctx, nil)
-	if err != nil || len(tools.Tools) != 8 {
+	if err != nil || len(tools.Tools) != 9 {
 		t.Fatalf("read token MCP tool count = %d, error = %v", len(tools.Tools), err)
+	}
+	usageTool := false
+	for _, tool := range tools.Tools {
+		usageTool = usageTool || tool.Name == "get_usage"
+	}
+	if !usageTool {
+		t.Fatal("read token cannot see the get_usage MCP tool")
 	}
 	result, err := remote.CallTool(f.ctx, &mcp.CallToolParams{Name: "list_nodes", Arguments: map[string]any{}})
 	if err != nil || result.IsError {

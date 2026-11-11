@@ -292,7 +292,7 @@ func verifyInstallerRollback(t *testing.T, f installerFailureFixture, store *Pos
 	}
 	f.exec(t, "INSERT INTO installer_events(id,installation_id,step,message,pct,status) VALUES($1,$2,'connect','Connecting',1,'running')", f.cursorID, f.jobID)
 	f.exec(t, "INSERT INTO installer_idempotency(principal,key_hash,request_hash,installation_id,expires_at) VALUES('owner',$1,$2,$3,now()+interval '1 hour')", digest("populated"), digest("fixture"), f.jobID)
-	for range 8 { // Usage, API tokens, audit-source, 60-minute default, engine schedules, two-factor and audit migrations precede installer rollback.
+	for range 9 { // Roll back the eight later migrations and the installer migration.
 		if err := db.Migrate(f.ctx, f.pool, "down"); err != nil {
 			t.Fatal(err)
 		}

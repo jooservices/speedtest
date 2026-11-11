@@ -374,7 +374,7 @@
       [['Average download', F.speed(sum.down.mean), U.deltaTag(sum.down.mean, prev.down.mean, true), F.num(sum.downPct, 0) + '% of expected'],
         ['Average upload', F.speed(sum.up.mean), U.deltaTag(sum.up.mean, prev.up.mean, true), F.num(sum.upPct, 0) + '% of expected'],
         ['Median latency', F.ms(sum.ping.median), U.deltaTag(sum.ping.median, prev.ping.median, false), 'Jitter ' + F.ms(sum.jitter.mean)],
-        ['Success rate', F.pct(sum.successRate, 1), U.deltaTag(sum.successRate, prev.successRate, true), sum.failed + ' failed of ' + sum.count],
+        ['Success rate', F.pct(sum.successRate, 1), U.deltaTag(sum.successRate, prev.successRate, true), sum.failed + ' failed; ' + sum.rateLimited + ' rate-limited excluded of ' + sum.count],
         ['Stability', sum.stability == null ? '—' : F.num(sum.stability, 0) + '/100', null, 'Steadiness of download speed']].forEach(function (t) {
         tiles.appendChild(h('div', { class: 'card stat' }, h('div', { class: 'stat-label' }, t[0]), h('div', { class: 'stat-value tabnum', style: 'font-size:22px' }, t[1]), h('div', { class: 'row', style: 'gap:6px' }, t[2], h('span', { class: 'hint' }, t[3]))));
       });
@@ -430,7 +430,7 @@
         var label = name === 'ookla' ? 'Ookla' : 'LibreSpeed';
         engineForm.appendChild(h('div', { class: 'setting' },
           h('div', null, h('strong', null, label), h('p', { class: 'hint' }, installed ? 'Installed on this node' : 'Not installed. Repair the agent installation, then wait for its heartbeat.')),
-          installed ? h('div', { class: 'row wrap' }, U.field(label + ' interval', U.input(draft.interval, function (v) { draft.interval = +v; if (ST.bandwidth) ST.bandwidth.setDraftInterval(n.id, name, +v); }, { type: 'number', min: 5, max: 1440, 'aria-label': label + ' interval', onChange: function () { ST.refresh(); } }), 'minutes'),
+            installed ? h('div', { class: 'row wrap' }, U.field(label + ' interval', U.input(draft.interval, function (v) { draft.interval = +v; if (ST.bandwidth) ST.bandwidth.setDraftInterval(n.id, name, +v); }, { type: 'number', min: 5, max: 1440, 'aria-label': label + ' interval' }), 'minutes'),
             U.toggle(draft.enabled, function (v) { draft.enabled = v; }, label + ' enabled')) : null));
       });
       var saveEngines = U.btn('Save engine schedules', { variant: 'primary', onClick: function () {
