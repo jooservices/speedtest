@@ -19,7 +19,9 @@ Numeric measurements are compared with the configured operator and threshold:
   expected Mbps, multiplied by 100. A zero expected value or missing measurement
   cannot match.
 - `ping`, `jitter` and `loss` use milliseconds or percent as stored.
-- `failed` matches a failed result; `forTests` is the required consecutive count.
+- `failed` matches a failed result whose `failureClass` is not `rate_limited`;
+  provider rate limits are backoff noise and do not advance the streak.
+  `forTests` is the required consecutive count.
 - `ip_changed` is a one-shot event for a new newest IP observation. Its required
   form is `op="="`, `value=1`, `forTests=1`.
 - `offline` is checked by a periodic job. A node is offline after three enabled

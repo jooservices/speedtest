@@ -2,10 +2,14 @@
 (function () {
   'use strict';
   var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
-  var q = { nodes: null, metric: 'down', heatNode: null, sum: false, table: false, isp: '', ispDraft: '' };
+  var q = { nodes: null, metric: 'down', heatNode: null, sum: false, table: false, isp: '', ispDraft: '', ispId: '' };
   var DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   function fmtM(m, v) { return v == null ? '—' : F.metric(m, v); }
+  function successCell(summary) {
+    var note = summary.rateLimited ? h('span', { class: 'hint' }, F.num(summary.rateLimited) + ' rate-limited excluded') : null;
+    return h('span', { class: 'stack' }, h('span', null, F.pct(summary.successRate, 1)), note);
+  }
   function axisFmt(m) { return ST.metrics[m].unit === 'speed' ? F.axisSpeed : function (v) { return F.num(v, m === 'loss' ? 1 : 0); }; }
   function axisUnit(m) { return ST.metrics[m].unit === 'speed' ? F.axisUnit() : ST.metrics[m].unit === 'ms' ? 'ms' : '%'; }
 
@@ -22,26 +26,26 @@
     return { n: values.length, bins: counts.map(function (c, i) { return { from: lo + i * w, to: lo + (i + 1) * w, count: c, percent: c / values.length * 100 }; }) };
   }
 
-  function ispMatches(result, isp) {
+  function ispMatches(result, isp, ispId) {
     var effective = S.effectiveISP(result);
-    return !isp || (effective && effective.toLowerCase() === isp.toLowerCase());
+    return (!isp || (effective && effective.toLowerCase() === isp.toLowerCase())) && (!ispId || ST.resultISP(result) === ispId);
   }
 
-  function localEvents(sel, from, to, isp) {
+  function localEvents(sel, from, to, isp, ispId) {
     var events = [], selected = {};
     sel.forEach(function (node) {
       selected[node.id] = node;
       var engine = ST.selectedEngine || node.primaryEngine || 'ookla';
       var rows = ST.results({ nodeIds: [node.id], engine: engine }).slice().sort(function (a, b) { return a.ts - b.ts || String(a.id).localeCompare(String(b.id)); });
       S.ipChanges(rows, engine, from, to).forEach(function (change) {
-        if (ispMatches(change.result, isp)) events.push({ id: 'ip-' + change.result.id, nodeId: node.id, nodeName: node.name,
+        if (ispMatches(change.result, isp, ispId)) events.push({ id: 'ip-' + change.result.id, nodeId: node.id, nodeName: node.name,
           ts: change.result.ts, type: 'ip_change', label: 'IP ' + change.from + ' → ' + change.result.ip });
       });
       var previousISP = null;
       rows.forEach(function (result) {
         var effective = S.effectiveISP(result);
         if (result.ts >= from && result.ts < to) {
-          if (previousISP && effective && previousISP.toLowerCase() !== effective.toLowerCase() && ispMatches(result, isp)) events.push({ id: 'isp-' + result.id, nodeId: node.id, nodeName: node.name, ts: result.ts, type: 'isp_change', label: 'ISP ' + previousISP + ' → ' + effective });
+          if (previousISP && effective && previousISP.toLowerCase() !== effective.toLowerCase() && ispMatches(result, isp, ispId)) events.push({ id: 'isp-' + result.id, nodeId: node.id, nodeName: node.name, ts: result.ts, type: 'isp_change', label: 'ISP ' + previousISP + ' → ' + effective });
         }
         if (effective) previousISP = effective;
       });
@@ -53,8 +57,8 @@
       if (linkedID) linked = (ST.state.results || []).filter(function (result) { return result.id === linkedID; })[0] || null;
       var engine = event.engine || (linked && linked.engine) || null;
       if (linked && engine && engine !== (ST.selectedEngine || node.primaryEngine || 'ookla')) return;
-      if (linked && !ispMatches(linked, isp)) return;
-      if (!linked && isp) return;
+      if (linked && !ispMatches(linked, isp, ispId)) return;
+      if (!linked && (isp || ispId)) return;
       events.push({ id: event.id, nodeId: node.id, nodeName: node.name, ts: event.ts, type: 'alert',
         label: event.title + (event.detail ? ': ' + event.detail : '') + (linked ? '' : ' (engine unknown)') });
     });
@@ -62,17 +66,17 @@
     return { items: events.slice(0, 500), truncated: events.length > 500 };
   }
 
-  function localData(sel, m, from, now, hourly, showSum, heatNode, isp) {
-    var out = { summary: {}, week: {}, hours: {}, trend: [], heat: null, dist: {}, events: localEvents(sel, from, now, isp) };
+  function localData(sel, m, from, now, hourly, showSum, heatNode, isp, ispId) {
+    var out = { summary: {}, week: {}, hours: {}, trend: [], heat: null, dist: {}, events: localEvents(sel, from, now, isp, ispId) };
     sel.forEach(function (n) {
-      out.summary[n.id] = S.nodeSummary(n.id, from, now, isp);
-      out.week[n.id] = { current: S.nodeSummary(n.id, now - 7 * ST.DAY, now, isp)[m].mean,
-        previous: S.nodeSummary(n.id, now - 14 * ST.DAY, now - 7 * ST.DAY, isp)[m].mean };
+      out.summary[n.id] = S.nodeSummary(n.id, from, now, isp, ispId);
+      out.week[n.id] = { current: S.nodeSummary(n.id, now - 7 * ST.DAY, now, isp, ispId)[m].mean,
+        previous: S.nodeSummary(n.id, now - 14 * ST.DAY, now - 7 * ST.DAY, isp, ispId)[m].mean };
       var buckets = []; for (var i = 0; i < 24; i++) buckets.push([]);
-      ST.results({ nodeIds: [n.id], from: from, status: 'ok', isp: isp }).forEach(function (r) { var v = S.metricValue(r, m); if (v != null) buckets[F.parts(r.ts).hour].push(v); });
+      ST.results({ nodeIds: [n.id], from: from, status: 'ok', isp: isp, ispId: ispId }).forEach(function (r) { var v = S.metricValue(r, m); if (v != null) buckets[F.parts(r.ts).hour].push(v); });
       out.hours[n.id] = buckets.map(function (b) { return b.length ? S.mean(b) : null; });
       var map = {}, order = [], values = [];
-      ST.results({ nodeIds: [n.id], from: from, status: 'ok', isp: isp }).forEach(function (r) {
+      ST.results({ nodeIds: [n.id], from: from, status: 'ok', isp: isp, ispId: ispId }).forEach(function (r) {
         var v = S.metricValue(r, m); if (v == null) return;
         values.push(v);
         var p = F.parts(r.ts), key = hourly ? p.key + 'T' + p.hour : p.key, e = map[key];
@@ -88,28 +92,29 @@
       out.trend.push({ id: 'sum', name: 'Combined total', color: 'var(--text)', dashed: true, points: Object.keys(sumMap).map(function (k) { return [sumMap[k].t, sumMap[k].v]; }).sort(function (a, b) { return a[0] - b[0]; }) });
     }
     var vals = [], counts = []; for (var d = 0; d < 7; d++) { vals.push([]); counts.push([]); for (var hr = 0; hr < 24; hr++) { vals[d].push([]); counts[d].push(0); } }
-    ST.results({ nodeIds: [heatNode.id], from: now - 30 * ST.DAY, status: 'ok', isp: isp }).forEach(function (r) { var p = F.parts(r.ts), v = S.metricValue(r, m); if (v != null) vals[p.wd][p.hour].push(v); });
+    ST.results({ nodeIds: [heatNode.id], from: now - 30 * ST.DAY, status: 'ok', isp: isp, ispId: ispId }).forEach(function (r) { var p = F.parts(r.ts), v = S.metricValue(r, m); if (v != null) vals[p.wd][p.hour].push(v); });
     out.heat = { matrix: vals.map(function (row, di) { return row.map(function (c, hi) { counts[di][hi] = c.length; return c.length ? S.mean(c) : null; }); }), counts: counts };
     return out;
   }
 
   // The center computes every figure; the browser only draws them. Results are cached per request so a redraw
   // (theme, resize, refresh) does not fetch again.
-  function remoteData(sel, m, range, hourly, showSum, heatNode, isp) {
+  function remoteData(sel, m, range, hourly, showSum, heatNode, isp, ispId) {
     var ids = sel.map(function (n) { return n.id; }).join(','), zone = ST.timezone();
-    var key = [ids, m, range, hourly, showSum, heatNode.id, zone, ST.selectedEngine, isp].join('|');
+    var key = [ids, m, range, hourly, showSum, heatNode.id, zone, ST.selectedEngine, isp, ispId].join('|');
     if (remote.key === key && Date.now() - remote.at < 60000) return remote.error ? { error: remote.error } : remote.data;
     if (remote.pending !== key || remote.key === key) {
       remote.pending = key;
       var ispQuery = isp ? '&isp=' + encodeURIComponent(isp) : '';
-      var base = 'range=' + encodeURIComponent(range) + '&metric=' + m + '&timezone=' + encodeURIComponent(zone) + '&nodes=' + encodeURIComponent(ids) + ST.engineQuery() + ispQuery;
+      var ispIDQuery = ispId ? '&isps=' + encodeURIComponent(ispId) : '';
+      var base = 'range=' + encodeURIComponent(range) + '&metric=' + m + '&timezone=' + encodeURIComponent(zone) + '&nodes=' + encodeURIComponent(ids) + ST.engineQuery() + ispQuery + ispIDQuery;
       Promise.all([
-        ST.api.request('/api/stats/summary?range=' + encodeURIComponent(range) + '&timezone=' + encodeURIComponent(zone) + '&nodes=' + encodeURIComponent(ids) + ST.engineQuery() + ispQuery),
+        ST.api.request('/api/stats/summary?range=' + encodeURIComponent(range) + '&timezone=' + encodeURIComponent(zone) + '&nodes=' + encodeURIComponent(ids) + ST.engineQuery() + ispQuery + ispIDQuery),
         ST.api.request('/api/stats/trend?' + base + '&bucket=' + (hourly ? 'hour' : 'day') + (showSum ? '&combined=true' : '')),
         ST.api.request('/api/stats/hour-of-day?' + base),
-        ST.api.request('/api/stats/heatmap?node=' + encodeURIComponent(heatNode.id) + '&metric=' + m + '&timezone=' + encodeURIComponent(zone) + ST.engineQuery() + ispQuery),
+        ST.api.request('/api/stats/heatmap?node=' + encodeURIComponent(heatNode.id) + '&metric=' + m + '&timezone=' + encodeURIComponent(zone) + ST.engineQuery() + ispQuery + ispIDQuery),
         ST.api.request('/api/stats/distribution?' + base),
-        ST.api.request('/api/stats/summary?range=7d&nodes=' + encodeURIComponent(ids) + ST.engineQuery() + ispQuery),
+        ST.api.request('/api/stats/summary?range=7d&nodes=' + encodeURIComponent(ids) + ST.engineQuery() + ispQuery + ispIDQuery),
         ST.api.request('/api/stats/events?range=' + encodeURIComponent(range) + '&nodes=' + encodeURIComponent(ids) + ST.engineQuery() + ispQuery)
       ]).then(function (r) {
         if (remote.pending !== key) return;
@@ -158,11 +163,12 @@
       } }, U.dot(ST.nodeColor(n)), ST.nodeTitle(n)));
     });
     root.appendChild(nodeBox);
+    root.appendChild(h('div', { class: 'mb', style: 'max-width:280px' }, U.field('ISP', U.select([{ value: '', label: 'Any ISP' }].concat(ST.ispOptions()), q.ispId, function (v) { q.ispId = v; remote.key = null; ST.refresh(); }))));
 
     /* ---- summary table ---- */
     var hourly = ST.ranges[range] <= ST.DAY, showSum = q.sum && ST.metrics[m].unit === 'speed' && sel.length > 1;
     var heatNode = ST.node(q.heatNode);
-    var data = ST.demo ? localData(sel, m, from, now, hourly, showSum, heatNode, q.isp) : remoteData(sel, m, range, hourly, showSum, heatNode, q.isp);
+    var data = ST.demo ? localData(sel, m, from, now, hourly, showSum, heatNode, q.isp, q.ispId) : remoteData(sel, m, range, hourly, showSum, heatNode, q.isp, q.ispId);
     if (!data) { root.appendChild(U.card(null, null, h('div', { role: 'status', class: 'empty' }, 'Loading statistics…'))); return; }
     if (data.error) {
       var retry = U.empty('Statistics are unavailable', data.error.message || 'The command center could not compute them.');
@@ -173,11 +179,11 @@
       U.btn('Apply', { variant: 'primary', onClick: function () { q.isp = q.ispDraft.trim(); remote.key = null; ST.refresh(); } }));
     if (q.isp) filter.appendChild(U.btn('Clear ISP filter', { onClick: function () { q.isp = ''; q.ispDraft = ''; remote.key = null; ST.refresh(); } }));
     root.appendChild(filter);
-    var sums = sel.map(function (n) { return { n: n, s: data.summary[n.id] || S.nodeSummary(n.id, from, now, q.isp) }; });
+    var sums = sel.map(function (n) { return { n: n, s: data.summary[n.id] || S.nodeSummary(n.id, from, now, q.isp, q.ispId) }; });
     var tableCols = [
       { key: 'n', label: 'Node', render: function (r) { return h('span', { class: 'row' }, U.dot(ST.nodeColor(r.n)), r.n.name, h('span', { class: 'muted' }, r.n.label)); } },
       { key: 'c', label: 'Tests', num: true, render: function (r) { return F.num(r.s.count); } },
-      { key: 'ok', label: 'Success', num: true, render: function (r) { return F.pct(r.s.successRate, 1); } },
+      { key: 'ok', label: 'Success', num: true, render: function (r) { return successCell(r.s); } },
       { key: 'avg', label: 'Average', num: true, render: function (r) { return fmtM(m, r.s[m].mean); } },
       { key: 'p50', label: 'P50 (' + axisUnit(m) + ')', num: true, render: function (r) { return fmtM(m, r.s[m].p50 == null ? r.s[m].median : r.s[m].p50); } },
       { key: 'p95', label: 'P95 (' + axisUnit(m) + ')', num: true, render: function (r) { return fmtM(m, r.s[m].p95); } },

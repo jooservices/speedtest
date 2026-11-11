@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jooservices/speedtest/internal/shared/failureclass"
 )
 
 // DefaultTimeout bounds a test when no per-run or environment timeout is supplied.
@@ -162,6 +164,8 @@ func validNetworkOptions(opts Options) bool {
 func classify(s string) ErrorClass {
 	s = strings.ToLower(s)
 	switch {
+	case failureclass.IsRateLimitedText(s):
+		return RateLimited
 	case strings.Contains(s, "license"), strings.Contains(s, "licence"), strings.Contains(s, "gdpr"):
 		return License
 	case strings.Contains(s, "timed out"), strings.Contains(s, "timeout"):

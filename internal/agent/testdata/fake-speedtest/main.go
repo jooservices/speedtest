@@ -10,6 +10,7 @@
 //	loss     a valid measurement with packet loss
 //	timeout  hangs until killed, emulating a speed test that never returns
 //	crash    exits non-zero with no valid JSON, emulating a crashed engine
+//	rate_limited exits non-zero with Ookla's "Too many requests" message
 //
 // Individual values can be overridden with flags. See docs/testing-harness.md.
 package main
@@ -123,6 +124,9 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 	case "crash":
 		_, _ = fmt.Fprintln(stderr, "speedtest: fatal: simulated engine crash")
 		return 2
+	case "rate_limited":
+		_, _ = fmt.Fprintln(stderr, "Too many requests")
+		return 2
 	default:
 		if err := json.NewEncoder(stdout).Encode(buildResult(cfg)); err != nil {
 			_, _ = fmt.Fprintf(stderr, "speedtest: write result: %v\n", err)
@@ -143,7 +147,7 @@ func parseFlags(args []string, errw io.Writer) (config, error) {
 		fs.PrintDefaults()
 	}
 
-	scenario := fs.String("scenario", "success", "one of success, slow, loss, timeout, crash")
+	scenario := fs.String("scenario", "success", "one of success, slow, loss, timeout, crash, rate_limited")
 	down := fs.Float64("down", 0, "download bandwidth in Mbps (overrides scenario default)")
 	up := fs.Float64("up", 0, "upload bandwidth in Mbps (overrides scenario default)")
 	ping := fs.Float64("ping", 0, "latency in ms (overrides scenario default)")
@@ -157,7 +161,7 @@ func parseFlags(args []string, errw io.Writer) (config, error) {
 
 	cfg, ok := scenarioDefaults(*scenario)
 	if !ok {
-		return config{}, fmt.Errorf("unknown scenario %q: must be one of success, slow, loss, timeout, crash", *scenario)
+		return config{}, fmt.Errorf("unknown scenario %q: must be one of success, slow, loss, timeout, crash, rate_limited", *scenario)
 	}
 
 	fs.Visit(func(f *flag.Flag) {
@@ -194,6 +198,8 @@ func scenarioDefaults(name string) (config, bool) {
 		return config{scenario: "timeout", serverID: 12345}, true
 	case "crash":
 		return config{scenario: "crash", serverID: 12345}, true
+	case "rate_limited":
+		return config{scenario: "rate_limited", serverID: 12345}, true
 	default:
 		return config{}, false
 	}

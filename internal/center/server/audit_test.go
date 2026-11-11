@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 	"github.com/jooservices/speedtest/internal/center/audit"
 )
 
@@ -50,7 +52,7 @@ func TestAuditRecordsSuccessfulOwnerWritesOnly(t *testing.T) {
 		t.Fatalf("PATCH = %d, entries = %d", rec.Code, store.count())
 	}
 	got := store.entries[0]
-	if got.Actor != "owner@example.test" || got.Action != "node.update" || got.TargetID != nodeID || got.Remote == "" || got.Summary == "" {
+	if got.Actor != "owner@example.test" || got.AuthMethod != audit.AuthMethodSession || got.Action != "node.update" || got.TargetID != nodeID || got.Remote == "" || got.Summary == "" {
 		t.Fatalf("entry = %+v", got)
 	}
 	// Reads, refused writes and failed writes leave nothing behind.
@@ -65,6 +67,49 @@ func TestAuditRecordsSuccessfulOwnerWritesOnly(t *testing.T) {
 	rec = do(h, http.MethodPatch, "/api/nodes/"+nodeID, `{"note":"y"}`, ownerWriteWith(map[string]string{"If-Match": `"node-3"`}))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("audit failure leaked into the response: %d", rec.Code)
+	}
+}
+
+func TestAuditDistinguishesBearerCredentials(t *testing.T) {
+	store := &fakeAudit{}
+	write := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusCreated) })
+	handler := withAudit(write, store, &serverAuth{}, nil)
+	credentials := []string{"10000000-0000-4000-8000-000000000101", "10000000-0000-4000-8000-000000000102"}
+	for _, credentialID := range credentials {
+		request := httptest.NewRequest(http.MethodPost, "/api/nodes", nil)
+		request.Header.Set("Authorization", "Bearer secret-"+credentialID)
+		request = request.WithContext(apitoken.WithPrincipal(request.Context(), apitoken.Principal{
+			TokenID: credentialID, UserID: "owner-id", Email: "owner@example.test", Scope: apitoken.ReadWrite,
+		}))
+		handler.ServeHTTP(httptest.NewRecorder(), request)
+	}
+	if len(store.entries) != 2 {
+		t.Fatalf("successful writes = %d, want 2", len(store.entries))
+	}
+	for i, entry := range store.entries {
+		if entry.Actor != "owner@example.test" || entry.AuthMethod != audit.AuthMethodBearer || entry.CredentialID != credentials[i] {
+			t.Errorf("entry %d does not identify its bearer credential: %+v", i, entry)
+		}
+		encoded, err := json.Marshal(entry)
+		if err != nil || strings.Contains(string(encoded), "secret-") {
+			t.Errorf("audit entry disclosed bearer value: %s", encoded)
+		}
+	}
+}
+
+func TestAuditRecordsCreatedTokenTarget(t *testing.T) {
+	store := &fakeAudit{}
+	createdID := "10000000-0000-4000-8000-000000000103"
+	create := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		setAuditTargetID(r.Context(), createdID)
+		w.WriteHeader(http.StatusCreated)
+	})
+	handler := withAudit(create, store, &serverAuth{service: nodeTestAuth{}}, nil)
+	request := httptest.NewRequest(http.MethodPost, "/api/access-tokens", nil)
+	ownerWrite(request)
+	handler.ServeHTTP(httptest.NewRecorder(), request)
+	if len(store.entries) != 1 || store.entries[0].TargetID != createdID || store.entries[0].AuthMethod != audit.AuthMethodSession {
+		t.Fatalf("token creation entry = %+v", store.entries)
 	}
 }
 

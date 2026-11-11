@@ -1,6 +1,58 @@
+async function runManual(T, name, message) {
+  const { page } = T;
+  await T.open('#/nodes', 'Nodes');
+  const row = T.row(name);
+  try {
+    await row.waitFor({ timeout: 10000 });
+  } catch (error) {
+    const exists = T.db(`SELECT count(*) FROM nodes WHERE name='${name}'`);
+    throw new Error(`node row ${name} did not render at ${page.url()} (database rows: ${exists}): ${error.message}`);
+  }
+  await row.click();
+  await page.getByRole('heading', { name: new RegExp(name), level: 1 }).waitFor();
+  await T.press('Run test');
+  const dialog = T.dialog('Running speed test');
+  await dialog.waitFor();
+  await dialog.getByText(message).waitFor({ timeout: 90000 });
+  await T.press('Close', dialog.locator('.modal-foot'));
+}
+
+async function restartAgentAndWait(T, agent, name, scenario = 'rate_limited') {
+  const since = T.db(`SELECT last_seen_at::text FROM nodes WHERE name='${name}'`);
+  await agent.restart({ scenario });
+  await T.eventually(() => T.db(`SELECT (last_seen_at > '${since}'::timestamptz)::int FROM nodes WHERE name='${name}'`) === '1', 'the restarted rate-limited agent checked in');
+}
+
+async function verifyRateLimitedAgent(T, agent, name) {
+  const { assert } = T;
+  T.db("UPDATE alert_rules SET for_tests=1 WHERE metric='failed'");
+  try {
+    await restartAgentAndWait(T, agent, name);
+    await runManual(T, name, /Failed: speedtest: rate_limited/);
+    const stored = T.db(`SELECT count(*) FROM results r JOIN nodes n ON n.id=r.node_id WHERE n.name='${name}' AND r.failure_class='rate_limited' AND r.manual`);
+    assert.equal(stored, '1', 'the real Ookla error is spooled, ingested and classified');
+    const alerts = T.db(`SELECT count(*) FROM alert_events e JOIN nodes n ON n.id=e.node_id JOIN alert_rules r ON r.id=e.rule_id WHERE n.name='${name}' AND r.metric='failed'`);
+    assert.equal(alerts, '0', 'rate-limited ingestion does not trigger a one-test failure alert');
+    await restartAgentAndWait(T, agent, name);
+    await runManual(T, name, /Failed: Test deferred: ookla provider rate-limit backoff is active until/);
+    assert.equal(T.db(`SELECT count(*) FROM results r JOIN nodes n ON n.id=r.node_id WHERE n.name='${name}' AND r.failure_class='rate_limited' AND r.manual`), '1', 'restart preserves the deadline and prevents a second engine attempt');
+    await runManual(T, name, /Failed: Test deferred: ookla provider rate-limit backoff is active until/);
+    assert.equal(T.db(`SELECT count(*) FROM results r JOIN nodes n ON n.id=r.node_id WHERE n.name='${name}' AND r.failure_class='rate_limited' AND r.manual`), '1', 'repeated manual requests remain deferred without another rate-limit result');
+    const successfulManuals = Number(T.db(`SELECT count(*) FROM results r JOIN nodes n ON n.id=r.node_id WHERE n.name='${name}' AND r.status='ok' AND r.manual`));
+    // The deadline is 90 s +/- 20% jitter after the first rate-limited result (72-108 s); the steps above take up to about 60 s on a busy
+    // machine, so wait until the latest possible deadline has passed. (The old 30 s window was shorter than the steps on a loaded machine.)
+    await new Promise(resolve => setTimeout(resolve, 62_000));
+    await agent.restart({ scenario: 'success' });
+    await runManual(T, name, /Mbps ↓|Gbps ↓|kbps ↓/);
+    assert.equal(Number(T.db(`SELECT count(*) FROM results r JOIN nodes n ON n.id=r.node_id WHERE n.name='${name}' AND r.status='ok' AND r.manual`)), successfulManuals + 1, 'the real agent resumes successful measurements after the deadline');
+  } finally {
+    T.db("UPDATE alert_rules SET for_tests=2 WHERE metric='failed'");
+  }
+}
+
 export function nodesSuite(T, ctx) {
   const { page, assert } = T;
-  const { stack, startAgent } = ctx;
+  const { stack, startAgent, fetchAgentConfig } = ctx;
   return {
     async publishedUpdate() {
       T.db("update nodes set agent='speedtest-agent/1.0.0 (linux/amd64)' where name='VM3'");
@@ -43,9 +95,14 @@ export function nodesSuite(T, ctx) {
       assert.ok(token && token.length > 20, 'the wizard shows a real one-time enrolment key: ' + command.slice(0, 80));
       assert.match(command, /install\.sh/);
       await T.press('I ran the command', dialog);
-      await startAgent(stack, { name: 'E2E-1', token });
+      const agent = await startAgent(stack, { name: 'E2E-1', token, backoffInitial: '90s', backoffMax: '90s' });
       await T.see('E2E-1 is online', dialog, 90000);
       await dialog.getByText(/First result: .* down, .* up, .* ping\./).waitFor({ timeout: 90000 });
+      const schedules = T.db("select s.interval_minutes||':'||s.offset_minutes||':'||e.interval_minutes||':'||e.offset_minutes from schedules s join nodes n on n.id=s.node_id join engine_schedules e on e.node_id=n.id and e.engine='ookla' where n.name='E2E-1'");
+      assert.equal(schedules, '60:0:60:0', 'both center schedule tables start at 60 minutes and offset 0');
+      const agentConfig = await fetchAgentConfig(stack, 'E2E-1');
+      assert.equal(agentConfig.schedule.interval, 60, 'the enrolled agent receives the 60-minute schedule');
+      assert.equal(agentConfig.schedule.offset, 0, 'the enrolled agent receives offset 0');
       await T.press('Open node', dialog);
       await page.getByRole('heading', { name: /E2E-1/, level: 1 }).waitFor();
 
@@ -57,11 +114,38 @@ export function nodesSuite(T, ctx) {
       const stored = T.db("select count(*) from results r join nodes n on n.id=r.node_id where n.name='E2E-1' and r.manual");
       assert.ok(Number(stored) >= 1, 'the manual result is stored on the center: ' + stored);
       await T.open('#/history', 'Results');
+      await T.selectWith('Any status').selectOption('all');
       await T.fill('Search results', 'E2E-1');
       await page.getByRole('row').nth(1).waitFor();
       // The same line cannot be enrolled twice with the same one-time key.
       const again = await page.request.post(stack.origin + '/api/agent/enroll', { data: { token, name: 'E2E-copy', agent: 'x' } });
       assert.ok(again.status() >= 400, 'an enrolment key works once, got ' + again.status());
+      await verifyRateLimitedAgent(T, agent, 'E2E-1');
+    },
+
+    async demoNodeDefault() {
+      await page.goto(stack.origin + '/?demo=1#/nodes');
+      await page.getByRole('heading', { name: 'Nodes' }).waitFor();
+      await T.press('Add a node');
+      const dialog = T.dialog('Add a node');
+      await T.fill('Node name', 'Demo default');
+      await T.fill('What it measures', 'Demo default schedule');
+      await T.fill('Expected download', '100');
+      await T.fill('Expected upload', '50');
+      await T.press('Continue', dialog);
+      await T.press(/I will run a command/, dialog);
+      await T.press('I ran the command', dialog);
+      await dialog.getByRole('heading', { name: 'Demo default is online' }).waitFor({ timeout: 20000 });
+      assert.ok(await dialog.getByText('It will now test every 60 minutes.').isVisible());
+      const schedule = await page.evaluate(() => {
+        const node = ST.nodes().find(value => value.name === 'Demo default');
+        return node && { interval: node.interval, offset: node.offset };
+      });
+      assert.deepEqual(schedule, { interval: 60, offset: 0 });
+      await page.goto(stack.origin + '/?demo=1#/schedules');
+      await T.heading('Schedules').waitFor();
+      assert.equal(await T.row('Demo default').locator('select').inputValue(), '60');
+      assert.equal(await T.row('Demo default').getByRole('spinbutton').inputValue(), '0');
     },
 
     // Wizard validation: nothing is created from an incomplete or duplicate form.
@@ -139,12 +223,12 @@ export function nodesSuite(T, ctx) {
       await T.press('Pause');
       await T.toast('paused').waitFor();
       await T.settled();
-      assert.equal(T.db("select enabled from nodes where name='VM4'"), 'f');
+      await T.eventually(() => T.db("select enabled from nodes where name='VM4'") === 'f', 'the pause is stored');
       await T.eventually(async () => await page.getByRole('button', { name: 'Run test' }).isDisabled(), 'a paused node cannot be tested');
       await T.press('Resume');
       await T.toast('resumed').waitFor();
       await T.settled();
-      assert.equal(T.db("select enabled from nodes where name='VM4'"), 't');
+      await T.eventually(() => T.db("select enabled from nodes where name='VM4'") === 't', 'the resume is stored');
     },
 
     // Removing a node from the dashboard only (no SSH): the node and its results disappear.

@@ -26,10 +26,18 @@ func scopedQuery(q Query, sql string, args ...any) (string, []any) {
 			index = n
 		}
 	}
-	ipFilter := effectiveISP("r")
-	predicate := fmt.Sprintf("r.node_id = n.id AND r.engine = COALESCE(NULLIF($%d::text,''),n.primary_engine) AND ($%d::text = '' OR lower(btrim(%s)) = lower($%d::text))", index+1, index+2, ipFilter, index+2)
+	predicate := fmt.Sprintf("r.node_id = n.id AND r.engine = COALESCE(NULLIF($%d::text,''),n.primary_engine)", index+1)
+	args = append(args, q.Engine)
+	index++
+	predicate += fmt.Sprintf(" AND ($%d::text = '' OR lower(btrim(%s)) = lower($%d::text))", index+1, effectiveISP("r"), index+1)
+	args = append(args, q.ISP)
+	index++
+	if q.ISPsSet {
+		predicate += fmt.Sprintf(" AND r.isp_id = ANY($%d::uuid[])", index+1)
+		args = append(args, q.ISPIDs)
+	}
 	sql = strings.ReplaceAll(sql, "r.node_id = n.id", predicate)
-	return sql, append(args, q.Engine, q.ISP)
+	return sql, args
 }
 
 func effectiveISP(result string) string {

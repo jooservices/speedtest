@@ -8,6 +8,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-DASH-02', area: 'dashboard', title: 'the comparison chart offers every metric, table view and node toggle', covers: 'dashboard compare card', run: S.dashboard.compareConnections },
     { id: 'SC-DASH-03', area: 'dashboard', title: 'dashboard shortcuts lead to the right pages and dialogs', covers: 'navigation links, add node, run all', run: S.dashboard.shortcuts },
     { id: 'SC-DASH-04', area: 'dashboard', title: 'the time range in the top bar drives the pages', covers: 'time range', run: S.dashboard.timeRange },
+    { id: 'SC-DASH-05', area: 'dashboard', title: 'rate-limited tests stay visible and do not distort success rates', covers: 'dashboard KPI, Statistics table and node detail for mixed and all-rate-limited API data; keyboard/touch navigation and responsive dashboard count', run: S.dashboard.rateLimitedCount },
 
     { id: 'SC-QA-01', area: 'quality', title: 'every page draws real data without console errors', covers: 'all routes', run: S.quality.everyPageDraws },
     { id: 'SC-QA-02', area: 'quality', title: 'every page holds its layout at 390, 768 and 1440 px in both themes', covers: 'responsive layout, themes', run: S.quality.layoutHolds },
@@ -24,14 +25,21 @@ export function scenarios({ T, S }) {
 
     { id: 'SC-RES-01', area: 'results', title: 'results can be filtered, opened and exported', covers: 'results filter, detail, CSV export', run: S.results.filterOpenExport },
     { id: 'SC-RES-02', area: 'results', title: 'results sort, page and filter by node and speed', covers: 'results sorting, paging, chips', run: S.results.sortPageAndChips },
+    { id: 'SC-RES-03', area: 'results', title: 'failed results show a short failure-class chip', covers: 'JOOST-73 failureClass reason chip on Results', run: S.results.failureClassChip },
 
     { id: 'SC-STAT-01', area: 'statistics', title: 'statistics show the center figures', covers: '/api/stats summary on the page', run: S.statistics.summaryMatchesApi },
     { id: 'SC-STAT-02', area: 'statistics', title: 'every statistics control works', covers: 'metric tabs, chips, combined total, table, heat map, range', run: S.statistics.everyControl },
     { id: 'SC-STAT-03', area: 'statistics', title: 'analytics filters, percentiles, weekly comparison, heatmap and event cap work', covers: 'center percentile and week figures, ISP filter across every statistics request, empty heatmap, accessible cells, 500-event list/status semantics', run: S.statistics.analyticsFiltersEventsAndHeatmap },
     { id: 'SC-STAT-04', area: 'statistics', title: 'demo analytics match and remote errors can be retried', covers: 'demo percentile/week parity and numeric-epoch event marker positions/types, retry after events endpoint failure, 390/768/1440 layout in both themes', run: S.statistics.demoParityAndRetry },
+    { id: 'SC-STAT-05', area: 'statistics', title: 'demo statistics explain excluded rate-limited tests', covers: 'demo Statistics table and node detail show mixed and all-rate-limited counts', run: S.statistics.demoRateLimitExclusions },
 
     { id: 'SC-IP-01', area: 'ip', title: 'the map, lookup and address details work', covers: 'map, lookup, details', run: S.network.mapLookupAndDetails },
     { id: 'SC-IP-02', area: 'ip', title: 'the IP page filters by node and lists address changes', covers: 'node filter, change timeline', run: S.network.filterAndHistory },
+
+    { id: 'SC-ISP-01', area: 'isps', title: 'the ISP page lists providers and supports compare and filters', covers: 'ISP list, trend, compare, results isps filter', run: S.isps.listAndCompare },
+    { id: 'SC-ISP-02', area: 'isps', title: 'ISP filters stay local to Results, Statistics and Alerts', covers: 'multi-ISP predicates, clear filters, dashboard snapshot, map and full exports', run: S.isps.filtersStayPageScopedAndClear },
+    { id: 'SC-ISP-03', area: 'isps', title: 'ISP plan defaults update while explicit speeds stay fixed', covers: 'plan assignment, equal and different speed overrides, later plan edits', run: S.isps.planDefaultsPreserveOverrides },
+    { id: 'SC-ISP-04', area: 'isps', title: 'the monthly ISP report previews known metrics and downloads Unicode CSV and PDF', covers: 'JOOST-79 known monthly data, preview metrics, validation, month picker, out-of-order month responses, CSV and PDF downloads', run: S.isps.monthlyReport },
 
     { id: 'SC-ENG-01', area: 'engines', title: 'a second installed engine has an independent saved schedule', covers: 'JOOST-71 capabilities, enable/disable, 60-minute default and persistence', run: S.engines.enableSecondEngine },
     { id: 'SC-ENG-02', area: 'engines', title: 'the engine selector filters charts, results and statistics', covers: 'JOOST-71 engine-isolated views and empty states', run: S.engines.selectEngine },
@@ -50,9 +58,10 @@ export function scenarios({ T, S }) {
     { id: 'SC-SET-07', area: 'settings', title: 'notification quiet hours are saved as a complete window', covers: 'quiet hours for messages, critical exemption', run: S.settings.notificationQuietHours },
     { id: 'SC-SET-05', area: 'settings', title: 'retention and the full exports work', covers: 'retention, CSV and JSON export', run: S.settings.dataRetentionAndExport },
     { id: 'SC-SET-06', area: 'settings', title: 'the enrolment key is shown once', covers: 'enrolment key rotation', run: S.settings.enrolmentKeyShownOnce },
+    { id: 'SC-SET-09', area: 'settings', title: 'API access tokens are issued once, authorize scoped calls and can be revoked', covers: 'token creation, digest storage, bearer-only node and ISP reads, read-scope refusal of node and ISP plan writes, auth without cookies or CSRF, installation event stream revalidation, revocation', run: S.settings.apiTokenCanBeCreatedUsedAndRevoked },
 
     // Adds a real agent and a node; the removal scenario below deletes it again.
-    { id: 'SC-NODE-05', area: 'nodes', title: 'a node is added with the install command and reports', covers: 'wizard, real agent enrolment, first result, run test', run: S.nodes.addWithCommandAndRunTest },
+    { id: 'SC-NODE-05', area: 'nodes', title: 'an enrolled agent recovers from Ookla rate limits across restart', covers: 'wizard, 60-minute default, real agent enrolment/sync, matching schedules, engine classification, result ingestion, restart persistence, repeated deferred manual commands, alert suppression and post-deadline recovery', run: S.nodes.addWithCommandAndRunTest },
     { id: 'SC-NODE-06', area: 'nodes', title: 'a node can be removed from the dashboard', covers: 'node removal', run: () => S.nodes.removeFromDashboard('E2E-1') },
 
     { id: 'SC-SET-08', area: 'settings', title: 'the activity log lists owner changes without secrets', covers: 'audit log, filter, no secrets', run: S.settings.activityLog },
@@ -60,5 +69,6 @@ export function scenarios({ T, S }) {
     { id: 'SC-AUTH-02', area: 'auth', title: 'the owner can change the password', covers: 'change password, old password refused, new one works', run: () => S.auth.changePassword('a brand new passphrase 2026') },
     { id: 'SC-AUTH-04', area: 'auth', title: 'two-factor sign-in can be turned on, used and turned off', covers: 'authenticator setup, code at sign-in, recovery code once, turn off', run: () => S.auth.twoFactor(process.env.E2E_ONLY ? undefined : 'a brand new passphrase 2026') },
     { id: 'SC-AUTH-03', area: 'auth', title: 'signing out ends the session', covers: 'sign out, API refuses visitor', run: S.auth.signOutEndsSession },
+    { id: 'SC-NODE-09', area: 'nodes', title: 'demo-mode nodes start with a 60-minute schedule and zero offset', covers: 'demo wizard, new-node default, schedules display', run: S.nodes.demoNodeDefault },
   ];
 }

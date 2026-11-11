@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/alerts"
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 	"github.com/jooservices/speedtest/internal/center/audit"
 	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/dashboard"
@@ -17,12 +18,14 @@ import (
 	"github.com/jooservices/speedtest/internal/center/installer"
 	"github.com/jooservices/speedtest/internal/center/ipapi"
 	"github.com/jooservices/speedtest/internal/center/ipwatch"
+	"github.com/jooservices/speedtest/internal/center/isp"
 	"github.com/jooservices/speedtest/internal/center/jobs"
 	"github.com/jooservices/speedtest/internal/center/metrics"
 	"github.com/jooservices/speedtest/internal/center/nodes"
 	"github.com/jooservices/speedtest/internal/center/notify"
 	"github.com/jooservices/speedtest/internal/center/ownerapi"
 	"github.com/jooservices/speedtest/internal/center/release"
+	"github.com/jooservices/speedtest/internal/center/report"
 	"github.com/jooservices/speedtest/internal/center/server"
 	"github.com/jooservices/speedtest/internal/center/settings"
 	"github.com/jooservices/speedtest/internal/center/stats"
@@ -46,6 +49,8 @@ type services struct {
 	OwnerResults       server.OwnerResultsStore
 	OwnerSchedules     server.OwnerSchedulesStore
 	OwnerStats         server.OwnerStatsStore
+	OwnerISP           server.OwnerISPStore
+	OwnerReport        server.OwnerReportStore
 	Settings           settings.Store
 	OwnerIP            server.OwnerIPStore
 	OwnerNotifications server.OwnerNotificationsStore
@@ -53,6 +58,7 @@ type services struct {
 	OwnerAlerts        server.OwnerAlertsStore
 	OwnerJobs          server.OwnerJobsStore
 	Audit              server.AuditStore
+	AccessTokens       server.AccessTokenStore
 	Installer          *installer.Service
 	// Background runs until the context ends, for example the daily retention job.
 	Background func(context.Context)
@@ -65,6 +71,44 @@ func newAuthService(store auth.Store, cfg config.CenterConfig) (*auth.Service, e
 		LoginWindow:      cfg.LoginWindow,
 		AppKey:           cfg.AppKey,
 	})
+}
+
+func newOperationalStores(pool *pgxpool.Pool, cfg config.CenterConfig, logger *slog.Logger, notifications *notify.Store) (*telemetry.Telemetry, *alerts.Store, *jobs.Retention) {
+	operational := telemetry.New(version)
+	operational.RegisterDatabase(pool)
+	if notifications != nil {
+		notifications.ObserveRun = func(ok bool) { operational.Job("notification", ok) }
+	}
+	alertStore := &alerts.Store{DB: pool, AppKey: cfg.AppKey, Logger: logger, ObserveRun: func(ok bool) { operational.Job("alerts", ok) }}
+	retention := &jobs.Retention{DB: pool, Logger: logger, ObserveRun: func(ok bool) { operational.Job("retention", ok) }}
+	return operational, alertStore, retention
+}
+
+func backgroundServices(notifications *notify.Store, retention *jobs.Retention, mailer *report.Mailer, watcher *ipwatch.Watcher, dbip geo.DBIPConfig, alertStore *alerts.Store) func(context.Context) {
+	return func(ctx context.Context) {
+		if notifications != nil {
+			go notifications.Loop(ctx)
+		}
+		go retention.Loop(ctx)
+		if mailer != nil {
+			go mailer.Loop(ctx)
+		}
+		if watcher.Reader != nil {
+			// GeoLite2 (weekly, needs a licence key) or DB-IP Lite (monthly, free): the first one configured wins.
+			if os.Getenv("SPEEDTEST_GEOLITE2_LICENSE_KEY") != "" {
+				go watcher.Reader.Run(ctx, geo.EnvironmentSettings{})
+			}
+			go watcher.Reader.RunDBIP(ctx, dbip)
+		}
+		alertStore.Loop(ctx)
+	}
+}
+
+func ownerNotifications(notifications *notify.Store) server.OwnerNotificationsStore {
+	if notifications == nil {
+		return nil
+	}
+	return notifications
 }
 
 // buildServices wires every store and background job of the center. The returned function releases what was
@@ -92,30 +136,21 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		cleanup()
 		return services{}, nil, err
 	}
-	operational := telemetry.New(version)
-	operational.RegisterDatabase(pool)
-	if notifications != nil {
-		notifications.ObserveRun = func(ok bool) { operational.Job("notification", ok) }
-	}
-	alertStore := &alerts.Store{DB: pool, AppKey: cfg.AppKey, Logger: logger, ObserveRun: func(ok bool) { operational.Job("alerts", ok) }}
+	operational, alertStore, retention := newOperationalStores(pool, cfg, logger, notifications)
+	mailer := buildReportMailer(pool, notifications, logger)
 	dbip, err := geo.DBIPConfigFromEnv()
 	if err != nil {
 		cleanup()
 		return services{}, nil, err
 	}
-	retention := &jobs.Retention{DB: pool, Logger: logger, ObserveRun: func(ok bool) { operational.Job("retention", ok) }}
 	installerService, err := buildInstaller(ctx, pool, cfg, nodeService, logger)
 	if err != nil {
 		cleanup()
 		return services{}, nil, err
 	}
-	var notificationAPI server.OwnerNotificationsStore
-	if notifications != nil {
-		notificationAPI = notifications
-	}
 	return services{
 		Telemetry:          operational,
-		OwnerNotifications: notificationAPI,
+		OwnerNotifications: ownerNotifications(notifications),
 		Auth:               authService,
 		NodeCredential:     nodeService,
 		Pinger:             poolPinger{pool: pool},
@@ -125,27 +160,17 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		OwnerResults:       owner,
 		OwnerSchedules:     owner,
 		OwnerStats:         statsStore,
+		OwnerISP:           &isp.Store{DB: pool},
+		OwnerReport:        &report.Store{DB: pool},
 		Settings:           preferences,
 		OwnerIP:            &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...).WithConsensus(watcher.Consensus, logger)},
 		OwnerDashboard:     &dashboard.Cached{Source: &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore}, TTL: 5 * time.Second},
 		OwnerAlerts:        alertStore,
 		OwnerJobs:          &jobs.Registry{DB: pool},
 		Audit:              &audit.Store{DB: pool},
+		AccessTokens:       &apitoken.Store{DB: pool},
 		Installer:          installerService,
-		Background: func(ctx context.Context) {
-			if notifications != nil {
-				go notifications.Loop(ctx)
-			}
-			go retention.Loop(ctx)
-			if watcher.Reader != nil {
-				// GeoLite2 (weekly, needs a licence key) or DB-IP Lite (monthly, free): the first one configured wins.
-				if os.Getenv("SPEEDTEST_GEOLITE2_LICENSE_KEY") != "" {
-					go watcher.Reader.Run(ctx, geo.EnvironmentSettings{})
-				}
-				go watcher.Reader.RunDBIP(ctx, dbip)
-			}
-			alertStore.Loop(ctx)
-		},
+		Background:         backgroundServices(notifications, retention, mailer, watcher, dbip, alertStore),
 	}, cleanup, nil
 }
 
@@ -171,4 +196,20 @@ func buildInstaller(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCo
 		return nil, nil
 	}
 	return installer.NewService(ctx, installer.ServiceOptions{Database: pool, Enrollment: enrollment, CenterURL: cfg.PublicURL, AppKey: cfg.AppKey, Logger: logger})
+}
+
+// buildReportMailer returns the scheduled monthly report e-mail, or nil unless the owner turned it on with
+// SPEEDTEST_MONTHLY_REPORT_EMAIL=true (it needs the e-mail channel to be configured in the settings).
+func buildReportMailer(pool *pgxpool.Pool, notifications *notify.Store, logger *slog.Logger) *report.Mailer {
+	if notifications == nil || os.Getenv("SPEEDTEST_MONTHLY_REPORT_EMAIL") != "true" {
+		return nil
+	}
+	return &report.Mailer{
+		Reports: &report.Store{DB: pool},
+		DB:      pool,
+		Log:     logger,
+		Send: func(ctx context.Context, build func(string) string) error {
+			return notifications.SendText(ctx, "email", build)
+		},
+	}
 }

@@ -13,7 +13,7 @@ const root = { $id: 'urn:speedtest:contract', components: contract.components };
 ajv.addSchema(root);
 test('all fake read responses validate against their exact OpenAPI operation schemas', async t => {
   const server = await startServer(); t.after(server.close);
-  for (const path of ['/api/auth/me', '/api/settings', '/api/nodes', '/api/results', '/api/alerts/rules',
+  for (const path of ['/api/auth/me', '/api/settings', '/api/nodes', '/api/results', '/api/isps', '/api/alerts/rules',
     '/api/alerts/events', '/api/ip/addresses', '/api/ip/history', '/api/stats/summary', '/api/stats/trend',
     '/api/stats/hour-of-day', '/api/stats/heatmap', '/api/stats/distribution', '/api/stats/events', '/api/audit']) {
     const response = await fetch(server.origin + path);

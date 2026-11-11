@@ -6,6 +6,7 @@
 - **Dark theme by default**, switchable to light; the choice is remembered. Chart colours come from a validated categorical palette; each node keeps its colour for its whole life.
 - **Nodes are independent.** No WAN or load-balancer concept in the data model. Expected speed is the only thing a node needs to be judged against, so "% of expected" is the fair way to compare nodes of different capacity (offered on the dashboard chart).
 - **Sample data** is deterministic and generated in the browser (`seed.js`): 5 nodes from the owner's real setup (Viettel Fast 50 at 300 Mbps, Viettel Pro 600 at 1000, VNPT Home 5 Super at 1000, VNPT Home 2 at 1000, and one combined node at 3300), 30 days at 30-minute intervals, outages, one degraded week, changing public IPs. Sample IPs use reserved documentation ranges only.
+- **Rate-limited tests are shown separately from success rates.** The dashboard and Statistics table show the excluded count next to the rate, and node detail explains how many rate-limited tests were excluded. When every test in a period is rate-limited, the rate is empty while the count remains visible. Demo and API-backed views use the same wording.
 - **Locations** come from a sample lookup keyed by IP, standing in for GeoLite2.
 - **The map is illustrative.** The real build should use a map library with tiles.
 - Interface text is English (the product is generic); the owner reviews in Vietnamese.
