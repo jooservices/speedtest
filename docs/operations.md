@@ -293,12 +293,19 @@ and check `curl -vI https://<host>/readyz`. The probe's `cert_days` confirms the
 
 In Node → Settings → Test engines, set each installed engine's interval and enabled
 switch, then save. An uninstalled engine explains how to repair installation.
-Ookla remains the new-node default at 30 minutes. LibreSpeed starts disabled until
+Ookla remains the new-node default at 60 minutes. LibreSpeed starts disabled until
 selected, with a 60 minute default. When several nodes share a public IP, increase
 their Ookla intervals: the Ookla CLI can rate limit by public IP. Choose one engine
 in dashboard, results or statistics before interpreting trends; different engines
 are never averaged together. Alert rules without an engine evaluate the primary
 engine only.
+
+For a center binary rollback, stop all center writers before rolling back
+migration 00015 and restoring the previous binary. Start the previous binary
+only after the database default is back to 30 minutes; its node-create response
+assumes that former default. The current binary reports the value actually
+inserted, so node creation remains consistent if 00015 is rolled back while the
+current binary is running.
 
 Migration 00010 keeps the single-row legacy `schedules` table, backfills
 `engine_schedules`, and adds `results.engine NOT NULL DEFAULT 'ookla'`. New code

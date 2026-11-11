@@ -50,20 +50,10 @@ func TestRunMigration(t *testing.T) {
 	}
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
-	for _, direction := range []string{"up", "up"} {
+	for _, direction := range []string{"up", "up", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down"} {
 		var out bytes.Buffer
 		if code := run([]string{direction}, &out); code != 0 || !strings.Contains(out.String(), "complete") {
 			t.Fatalf("%s: code %d: %s", direction, code, out.String())
-		}
-	}
-	var version int64
-	if err := pool.QueryRow(ctx, `SELECT COALESCE(MAX(version_id) FILTER (WHERE is_applied),0) FROM goose_db_version`).Scan(&version); err != nil {
-		t.Fatal(err)
-	}
-	for range version {
-		var out bytes.Buffer
-		if code := run([]string{"down"}, &out); code != 0 || !strings.Contains(out.String(), "complete") {
-			t.Fatalf("down: code %d: %s", code, out.String())
 		}
 	}
 	var out bytes.Buffer

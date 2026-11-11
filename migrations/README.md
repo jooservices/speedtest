@@ -22,6 +22,20 @@ per-node event enablement and templates. The notification versions are
 additive; the 1.0.0 binary continues to use its existing tables and columns.
 
 `00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
+`00010_engine_schedules.sql` adds per-engine schedules with a 60-minute default;
+Ookla writes remain mirrored to the legacy `schedules` table.
+`00015_default_schedule_60.sql` changes only the `schedules.interval_minutes`
+column default from 30 to 60. It does not update existing schedule rows or
+30-minute result/history fixtures. Rolling back 00015 restores the former 30-
+minute default without changing rows; `engine_schedules` keeps its 60-minute
+default. New node creation copies the resulting schedule into its Ookla row.
+The create-node response reports the inserted schedule values, including when
+00015 has been rolled back. During a binary rollout, stop all center writers,
+apply the migration, deploy the matching center binary, then start the center.
+For rollback, stop all center writers, roll back 00015, restore the previous
+center binary, then start it. Do not run an older center binary against the
+new default: that version reports a hard-coded 30-minute response after 00015
+has changed the database default to 60.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file
