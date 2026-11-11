@@ -79,7 +79,7 @@ export function statisticsSuite(T) {
     async demoRateLimitExclusions() {
       const origin = new URL(T.url('#/')).origin;
       await loadDemoCase(page, origin, ['ok', 'failed']);
-      assert.match(await T.row('Review fixture').innerText(), /2\s+100\.0%\s+1 rate-limited excluded/);
+      assert.match(await T.summaryRow('Review fixture').innerText(), /2\s+100\.0%\s+1 rate-limited excluded/);
       await page.setViewportSize({ width: 390, height: 900 });
       assert.ok(await page.getByText('1 rate-limited excluded', { exact: true }).isVisible());
       await page.goto(`${origin}/?demo=1#/nodes/demo73`);
@@ -88,7 +88,7 @@ export function statisticsSuite(T) {
       assert.match(await mixed.innerText(), /100\.0%[\s\S]*1 failed; 1 rate-limited excluded of 2/);
 
       await loadDemoCase(page, origin, ['failed']);
-      assert.match(await T.row('Review fixture').innerText(), /1\s+—\s+1 rate-limited excluded/);
+      assert.match(await T.summaryRow('Review fixture').innerText(), /1\s+—\s+1 rate-limited excluded/);
       await page.goto(`${origin}/?demo=1#/nodes/demo73`);
       const allLimited = page.locator('.stat').filter({ hasText: 'Success rate' });
       await allLimited.waitFor();
