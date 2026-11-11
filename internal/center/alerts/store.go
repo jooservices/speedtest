@@ -67,22 +67,22 @@ func scanRule(row rowScanner) (Rule, error) {
 	return r, nil
 }
 
-const eventColumns = `id::text,rule_id::text,node_id::text,severity,ts,resolved_at,title,detail,acked`
+const eventColumns = `id::text,rule_id::text,node_id::text,isp_id::text,severity,ts,resolved_at,title,detail,acked`
 
 func qualifyEventColumns(alias string) string {
-	return alias + `.id::text,` + alias + `.rule_id::text,` + alias + `.node_id::text,` +
+	return alias + `.id::text,` + alias + `.rule_id::text,` + alias + `.node_id::text,` + alias + `.isp_id::text,` +
 		alias + `.severity,` + alias + `.ts,` + alias + `.resolved_at,` + alias + `.title,` + alias + `.detail,` + alias + `.acked`
 }
 
 func scanEvent(row rowScanner) (Event, error) {
 	var e Event
-	var ruleID *string
+	var ruleID, ispID *string
 	var ts time.Time
 	var resolved *time.Time
-	if err := row.Scan(&e.ID, &ruleID, &e.NodeID, &e.Severity, &ts, &resolved, &e.Title, &e.Detail, &e.Acked); err != nil {
+	if err := row.Scan(&e.ID, &ruleID, &e.NodeID, &ispID, &e.Severity, &ts, &resolved, &e.Title, &e.Detail, &e.Acked); err != nil {
 		return Event{}, err
 	}
-	e.RuleID = ruleID
+	e.RuleID, e.ISPID = ruleID, ispID
 	e.TS = ts.UTC().Format(time.RFC3339Nano)
 	if resolved != nil {
 		value := resolved.UTC().Format(time.RFC3339Nano)
@@ -258,7 +258,7 @@ func (s *Store) ListEvents(ctx context.Context, filter EventFilter, page, size i
 	}
 	args := []any{filter.State == "open", filter.Severity, node, isp}
 	where := `($1::boolean=false OR e.acked=false) AND ($2::text='' OR e.severity=$2) AND ($3::uuid IS NULL OR e.node_id=$3)
-		AND ($4::uuid IS NULL OR EXISTS (SELECT 1 FROM results r WHERE r.id=e.trigger_result_id AND r.isp_id=$4::uuid))`
+		AND ($4::uuid IS NULL OR e.isp_id=$4::uuid)`
 	var total int
 	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM alert_events e WHERE `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err

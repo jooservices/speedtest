@@ -31,6 +31,37 @@ Login failures use the same 401 problem for an unknown email
 and an incorrect password. New passwords must contain at least 12 Unicode
 characters and at most 1024 UTF-8 bytes.
 
+Owner API access tokens are separate named credentials created and revoked at
+`/api/access-tokens` from an authenticated session. A token is returned only in
+its creation response; PostgreSQL stores its SHA-256 digest, and token metadata
+never includes the bearer value or digest. Tokens can expire and successful
+uses update `lastUsedAt`. Revocation blocks new requests immediately; an open
+installation event stream closes at its next 10-second credential check. Keep
+the bearer value in a secret store and send it as
+`Authorization: Bearer <token>` over HTTPS. Bearer requests do not need the
+session cookie, Origin or CSRF header.
+The per-token request bucket defaults to 120 requests per minute with a burst
+of 20, configured by `SPEEDTEST_API_TOKEN_REQUESTS_PER_MINUTE`.
+
+The scopes are `read` (safe owner operations), `read-write` (read plus
+non-destructive changes), and `full` (all operations, including destructive
+changes). Every operation declares its required scope in
+`docs/openapi.yaml` using `x-access-token-scope`; a token must meet that
+operation's scope before its handler runs. Agent credentials and auth/session
+endpoints are not API-token operations. Creating and revoking a token creates a
+safe audit entry. Audit rows retain the authentication method, the non-secret
+credential ID for bearer writes, and the created token ID as the creation
+target, so operators can distinguish tokens owned by the same account. MCP
+tool writes retain the incoming client address using the same trusted-proxy
+rules as REST writes. Access logs omit request headers and query data; bearer
+values are never written to the audit log or application logs.
+
+The Streamable HTTP MCP endpoint is `/mcp`. Its tools are generated from the
+OpenAPI operations marked with `x-mcp-tool`, including their input schemas and
+scope requirements; it does not return integration secrets. The separate
+`speedtest-mcp` executable exposes the same remote tools over stdio for MCP
+clients. See [MCP setup and tool reference](mcp.md).
+
 Run `go run ./cmd/center seed-admin` to ensure the documented default owner is
 present in local or test environments. `APP_ENV` must be `local` or `test`; the
 command refuses staging, production and unknown values. It inserts only when the
@@ -164,7 +195,8 @@ replay by the same node is `duplicate` (200) and cannot create another row.
 Changed content for that UUID, or a UUID already owned by another node, is a
 per-item 409 conflict with a generic diagnostic that reveals no other-node data. Retry transport failures/429/5xx with backoff and jitter;
 never discard unacknowledged spool entries. Failed results require an error and
-allow null measurements and `ip: null` when the address is unavailable. Never invent an IP or reuse a stale one. IP history hooks skip null-IP results; consumers display "unavailable".
+allow null measurements and `ip: null` when the address is unavailable. They also
+carry `failureClass` (omitted values are classified from the error text). Never invent an IP or reuse a stale one. IP history hooks skip null-IP results; consumers display "unavailable".
 Successful/degraded results require down/up/ping, a non-null IP, a server object with a nonblank name or host, and `error: null`. Numeric `serverId` is optional for every status, positive when present (LibreSpeed automatic selection has no numeric ID). Engines may omit
 loss/jitter/loaded latency even on success; preserve those as null. Optional
 loadedDown/loadedUp retain low/iqm/high; engine details retain ISP, result ID/URL,
@@ -196,6 +228,7 @@ The center coordinates offsets; there is no WAN, load-balancer or peer-node mode
 | Nodes and wizard, JOOST-25/41/43/44 | node CRUD/run/commands, installer probes/installations/uninstallations and SSE; `Node`, `Enrollment`, `Install`, `InstallEvent`, pinned fingerprint, `Command` progress |
 | Results, JOOST-24/32/38 | results list/detail/filtered CSV and full CSV/JSON exports; `Result` includes every measured field, `Server`, `Geo`, raw JSON and manual flag; search/sort/range/download/status filters |
 | Statistics, JOOST-26/39 | `/api/stats/{summary,trend,hour-of-day,heatmap,distribution}`; `SummaryComparison`, `MetricSummary`, `Series`, `HourSeries`, `Heatmap` counts, `Distribution` edges/count/percent; combined total is display-only; optional `isps` filter |
+| ISPs, JOOST-74 | `/api/isps`, `/api/isps/compare`, `/api/isps/{id}`, `/api/isps/{id}/trend`, `/api/isps/{id}/plans`; entities from uint32 ASN/organisation; engine-isolated aggregates; optional plans; `isps`/`isp` filters on results, statistics and alert events |
 | Monthly report, JOOST-79 | `GET /api/reports/monthly?month=YYYY-MM&format=json|csv|pdf&isp=&engine=`; per ISP and node; UTC month; `partial` while the month runs; CSV cells that start with `= + - @` are prefixed with `'` |
 | ISPs, JOOST-74 | `/api/isps`, `/api/isps/compare`, `/api/isps/{id}`, `/api/isps/{id}/trend`, `/api/isps/{id}/plans`; entities from ASN/organisation; engine-isolated aggregates; optional plans; `isps`/`isp` filters on results, statistics and alert events |
 | IP & location, JOOST-33/34/35/36/39/42 | `/api/ip/{history,addresses,lookup,map}` (location database updates run on the center's schedule; manual update/refresh/status endpoints are not part of v1); `IPChange`, `IPAddress`, `Geo` (all location/ASN/ISP/accuracy/source fields), `MapLocation`, database timestamp/cache count, maintenance `Job` |
@@ -212,7 +245,7 @@ part of this OpenAPI contract.
 Field names follow `seed.js` and `store.js`: Node `name`, `label`, `provider`,
 `plan`, `colorSlot`, `expectedDown`, `expectedUp`, `interval`, `offset`, `threads`,
 `server`, `enabled`, `host`, `agent`, `note`, `createdAt`; Result `id`, `nodeId`,
-`ts`, `serverId`, `threads`, `ip`, `status`, `error`, `down`, `up`, `ping`, `jitter`,
+`ts`, `serverId`, `threads`, `ip`, `status`, `error`, `failureClass`, `down`, `up`, `ping`, `jitter`,
 `loss`, `dLat`, `uLat`, `bytesDown`, `bytesUp`, `duration`, `manual`. Real IDs are
 opaque (result IDs are UUIDs); demo IDs are not wire IDs. `profile`, `ipModel`,
 `pref`, `OUTAGES` and RNG state are simulation inputs, never API fields. Demo
@@ -225,8 +258,12 @@ Statistics follow the UI formulas: summaries include nonfailed samples;
 trend/hour-of-day/heatmap/distribution include only `ok` samples as `stats.js`
 does. Percentiles interpolate at `(n-1)*p`, standard deviation is population,
 and stability is `clamp(100-220*std/mean,0,100)`, null for zero/no mean. Counts
-include failures; success rate includes degraded tests. Fleet percentages are
-unweighted means of node percentages; fleet latency is median of ok-only pings.
+include failures; success rate includes degraded tests and excludes
+`failureClass=rate_limited` (shown separately as `rateLimited`). Fleet
+percentages are unweighted means of node percentages; fleet latency is median of
+ok-only pings. Alert rules with metric `failed` also ignore rate-limited results.
+`failureClass` is the fixed vocabulary `rate_limited`, `no_network`,
+`server_unreachable`, `engine_missing`, `timeout`, `other`.
 Summary previous periods have equal adjacent duration. Missing chart buckets
 have null value/count=0. Timezone grouping uses IANA local calendar boundaries,
 including DST; heatmap is Monday=0..Sunday=6 × hour 0..23, last 30 days. Combined
@@ -251,11 +288,12 @@ GET /api/stats/distribution?range=30d&metric=down&bins=12
 ```
 
 `summary` returns current and immediately previous intervals of equal length.
-Its counts include failed tests; `ok` and success rate include both `ok` and
-`degraded` results. Each metric's `n` counts its non-null measurements from
-those nonfailed results. Download and upload expected percentages use that
-node's configured expected speed. Stability uses download's population standard
-deviation. Empty values are null, and a single value has standard deviation 0.
+Its counts include failed tests; `ok` includes both `ok` and `degraded` results.
+Success rate is `ok/(count-rateLimited)*100`. Each metric's `n` counts its
+non-null measurements from those nonfailed results. Download and upload expected
+percentages use that node's configured expected speed. Stability uses download's
+population standard deviation. Empty values are null, and a single value has
+standard deviation 0.
 
 Trend, hour-of-day, heatmap, and distribution use only status `ok`. Trend uses
 calendar `hour` or `day` buckets in the supplied IANA zone (`UTC` by default),
@@ -280,9 +318,13 @@ Settings defaults match the preview: dark, 7d, auto units, browser timezone,
 24-hour clock, one decimal, 365-day retention (0=forever), GeoLite2 + ip-api fallback,
 weekly updates, Ookla/auto server/4 threads, stagger on/maxConcurrent=1, empty
 quiet hours, email enabled to `ops@example.com`, other channels off/empty.
-Public center URL comes from deployment `.env`, not the demo URL. New nodes
-start at interval=30/offset=0, enabled, threads=4, server=auto. Schedule PUT clamps
-offset after interval changes; effective quiet timezone is explicit. Usage uses
+Public center URL comes from deployment `.env`, not the demo URL. `POST /api/nodes`
+does not accept an interval; its response and the new node's Ookla schedule use
+interval=60/offset=0, enabled, threads=4, server=auto. Newly enabled engine
+schedules also default to 60 when interval is omitted or zero. Legacy schedule
+PUT fields remain required. The 60-minute migration changes only the schedules
+column default, never existing rows; rollback restores that default to 30.
+Schedule PUT clamps offset after interval changes; effective quiet timezone is explicit. Usage uses
 up to 200 recent nonfailed results × tests/day, month=30 days; paused/no history=0.
 The UI should display null measurements/location as unavailable, not zero.
 
@@ -510,7 +552,7 @@ A daily job (03:15 UTC) deletes results older than the `retentionDays` setting (
 
 ## Dashboard and series
 
-`GET /api/dashboard?range=6h|24h|7d|30d` (default 7d) returns the whole dashboard in one call: `current` and `previous` fleet figures (the previous period is the same length, directly before), a card per node (node, summary for the window, 48-point 24 hour download sparkline), the 9 newest results, the 6 newest unacknowledged alert events and the unacknowledged count. Fleet figures follow the preview: `down`/`up` are the unweighted mean of each node's percentage of its expected speed (nodes without data are left out), `ping` is the median of every `ok` test's latency, `success` is non-failed over all tests, `ips` counts address changes (the first address a node ever reports is not a change). An empty fleet returns empty arrays, zero counts and null aggregates.
+`GET /api/dashboard?range=6h|24h|7d|30d` (default 7d) returns the whole dashboard in one call: `current` and `previous` fleet figures (the previous period is the same length, directly before), a card per node (node, summary for the window, 48-point 24 hour download sparkline), the 9 newest results, the 6 newest unacknowledged alert events and the unacknowledged count. Fleet figures follow the preview: `down`/`up` are the unweighted mean of each node's percentage of its expected speed (nodes without data are left out), `ping` is the median of every `ok` test's latency, `success` is non-failed eligible tests divided by all tests except `rate_limited` results, and `rateLimited` is reported separately. `ips` counts address changes (the first address a node ever reports is not a change). An empty fleet returns empty arrays, zero counts and null aggregates.
 
 `GET /api/series` returns comparison series with equally spaced buckets (`nodes`, `range` or `from`+`to`, `metric` down|up|ping|jitter|loss, `mode` absolute|percent, `maxPoints` 1–300, default 300; `timezone` is accepted for symmetry and does not change equal-width buckets). Each point is the mean of the non-failed samples in its bucket plus their count; a bucket without samples is a `null` gap. In percent mode each sample is divided by its own node's expected speed before it is averaged. The summary of a series is computed from the original samples of the window, not from the bucket means. Five 7-day series stay below 100 KB.
 
@@ -575,3 +617,20 @@ average. Full exports retain all measurements and their engine identity. CSV add
 `engine` as its final column. Alert rules optionally specify `engine`; omission
 selects the node's primary engine, so another engine cannot advance or reset its
 measurement streak.
+
+## ISP plans and page filters
+
+An assigned ISP plan supplies the node's expected download and upload speeds
+when those values are omitted. The center records default provenance separately
+for each speed. Editing a plan updates only values still using that plan default;
+an owner-entered value remains an override even when it equals the advertised
+speed. Existing assignments migrate as explicit values because their original
+provenance cannot be inferred from numeric equality. Clear and reassign a plan
+to opt an existing node into its advertised defaults. Clearing a plan keeps the
+current expected speeds as node settings.
+
+ISP trends use hourly buckets for windows up to 24 hours and daily buckets for
+longer windows. Each point is timestamped at the average time of its samples, so
+all points remain inside a rolling window, including across UTC midnight. The
+Results and Alerts ISP selectors filter their own page data; they do not narrow
+the shared snapshot used by dashboard, node, map or export views.

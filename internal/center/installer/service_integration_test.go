@@ -21,6 +21,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/center/nodes"
 	"github.com/jooservices/speedtest/internal/shared/config"
+	"github.com/jooservices/speedtest/internal/shared/testenv"
 )
 
 const installerIntegrationNode = "00000000-0000-4000-8000-000000000943"
@@ -31,9 +32,7 @@ func openInstallerIntegrationPool(t *testing.T) (*pgxpool.Pool, context.Context,
 	if err != nil {
 		t.Fatal("a configured worktree .env is required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid worktree integration configuration")
