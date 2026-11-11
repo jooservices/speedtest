@@ -1451,7 +1451,10 @@ paths:
       description: >-
         Per ISP and node for one UTC month: delivered against advertised speed, p95, worst hours, failures, downtime
         minutes and IP changes. `format=csv` and `format=pdf` return a download. Engines are never blended.
-        Omitting `month` uses the previous month.
+        An unlinked result follows the latest IP-history event; a latest event without an ISP stays in `Unknown ISP`.
+        When no IP-history event exists, the result can inherit an earlier ISP-linked result. IP changes belong to the
+        destination ISP; an unresolved destination uses `Unknown ISP` and can create a row with zero tests. Omitting
+        `month` uses the previous month.
       security:
         - SessionCookie: []
       parameters:
