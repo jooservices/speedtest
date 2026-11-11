@@ -13,6 +13,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/shared/config"
+	"github.com/jooservices/speedtest/internal/shared/testenv"
 )
 
 type fatalMessage string
@@ -52,9 +53,7 @@ func TestResetAndMigrateFailurePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal("worktree .env required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid test configuration")

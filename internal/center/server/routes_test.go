@@ -33,6 +33,19 @@ func TestRouteTableOrderNilAreasAndFallback(t *testing.T) {
 	}
 }
 
+func TestAccessTokenRouteMatchesOnlyItsCollection(t *testing.T) {
+	for path, want := range map[string]bool{
+		"/api/access-tokens": true,
+		"/api/access-tokens/123e4567-e89b-12d3-a456-426614174000": true,
+		"/api/access-tokens-extra":                                false,
+		"/api/other":                                              false,
+	} {
+		if got := accessTokenRoute(path); got != want {
+			t.Errorf("accessTokenRoute(%q) = %t, want %t", path, got, want)
+		}
+	}
+}
+
 func TestOwnerReaderGuardsRunInOrder(t *testing.T) {
 	called := 0
 	next := func(http.ResponseWriter, *http.Request) { called++ }

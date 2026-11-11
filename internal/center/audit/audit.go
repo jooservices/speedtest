@@ -16,15 +16,22 @@ import (
 
 // Entry is one recorded change.
 type Entry struct {
-	ID         string    `json:"id"`
-	TS         time.Time `json:"ts"`
-	Actor      string    `json:"actor"`
-	Action     string    `json:"action"`
-	TargetType string    `json:"targetType"`
-	TargetID   string    `json:"targetId"`
-	Summary    string    `json:"summary"`
-	Remote     string    `json:"remote"`
+	ID           string    `json:"id"`
+	TS           time.Time `json:"ts"`
+	Actor        string    `json:"actor"`
+	AuthMethod   string    `json:"authMethod"`
+	CredentialID string    `json:"credentialId,omitempty"`
+	Action       string    `json:"action"`
+	TargetType   string    `json:"targetType"`
+	TargetID     string    `json:"targetId"`
+	Summary      string    `json:"summary"`
+	Remote       string    `json:"remote"`
 }
+
+const (
+	AuthMethodSession = "session"
+	AuthMethodBearer  = "bearer"
+)
 
 // Store keeps the audit log in PostgreSQL.
 type Store struct {
@@ -65,6 +72,12 @@ func record(ctx context.Context, writer entryWriter, e Entry, nowFn func() time.
 	if e.Actor == "" || e.Action == "" {
 		return fmt.Errorf("audit entry needs an actor and an action")
 	}
+	if e.AuthMethod == "" {
+		e.AuthMethod = AuthMethodSession
+	}
+	if e.AuthMethod != AuthMethodSession && e.AuthMethod != AuthMethodBearer {
+		return fmt.Errorf("audit entry has an unsupported authentication method")
+	}
 	if len(e.Summary) > 300 {
 		e.Summary = e.Summary[:300]
 	}
@@ -72,8 +85,9 @@ func record(ctx context.Context, writer entryWriter, e Entry, nowFn func() time.
 	if nowFn != nil {
 		now = nowFn()
 	}
-	_, err := writer.Exec(ctx, `INSERT INTO audit_log(id,ts,actor,action,target_type,target_id,summary,remote) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		newID(), now.UTC(), e.Actor, e.Action, e.TargetType, e.TargetID, e.Summary, e.Remote)
+	_, err := writer.Exec(ctx, `INSERT INTO audit_log(id,ts,actor,action,target_type,target_id,summary,remote,auth_method,credential_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')::uuid)`,
+		newID(), now.UTC(), e.Actor, e.Action, e.TargetType, e.TargetID, e.Summary, e.Remote, e.AuthMethod, e.CredentialID)
 	return err
 }
 
@@ -91,13 +105,13 @@ func (s *Store) List(ctx context.Context, f Filter, page, size int) ([]Entry, in
 		return nil, 0, err
 	}
 	args = append(args, size, (page-1)*size)
-	rows, err := s.DB.Query(ctx, fmt.Sprintf(`SELECT id::text,ts,actor,action,target_type,target_id,summary,remote FROM audit_log%s ORDER BY ts DESC, id LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
+	rows, err := s.DB.Query(ctx, fmt.Sprintf(`SELECT id::text,ts,actor,auth_method,coalesce(credential_id::text,''),action,target_type,target_id,summary,remote FROM audit_log%s ORDER BY ts DESC, id LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
 	}
 	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Entry, error) {
 		var e Entry
-		err := row.Scan(&e.ID, &e.TS, &e.Actor, &e.Action, &e.TargetType, &e.TargetID, &e.Summary, &e.Remote)
+		err := row.Scan(&e.ID, &e.TS, &e.Actor, &e.AuthMethod, &e.CredentialID, &e.Action, &e.TargetType, &e.TargetID, &e.Summary, &e.Remote)
 		e.TS = e.TS.UTC()
 		return e, err
 	})
@@ -122,6 +136,8 @@ type rule struct {
 // rules map an owner write to a readable action. Patterns use {id} for one path segment.
 var rules = []rule{
 	{"POST", "/api/nodes", "node.create", "node", "Added a node"},
+	{"POST", "/api/access-tokens", "access_token.create", "access_token", "Created an API access token"},
+	{"DELETE", "/api/access-tokens/{id}", "access_token.revoke", "access_token", "Revoked an API access token"},
 	{"PATCH", "/api/nodes/{id}", "node.update", "node", "Changed node settings"},
 	{"DELETE", "/api/nodes/{id}", "node.delete", "node", "Removed a node"},
 	{"POST", "/api/nodes/{id}/run", "node.run", "node", "Started a speed test"},

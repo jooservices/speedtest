@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 	"github.com/jooservices/speedtest/internal/center/audit"
 )
 
@@ -22,6 +23,19 @@ type auditRecordedState struct{ recorded atomic.Bool }
 func markAuditRecorded(ctx context.Context) {
 	if state, ok := ctx.Value(auditRecordedKey{}).(*auditRecordedState); ok {
 		state.recorded.Store(true)
+	}
+}
+
+type auditMetadataContextKey struct{}
+
+type auditMetadata struct {
+	targetID string
+}
+
+func setAuditTargetID(ctx context.Context, targetID string) {
+	metadata, _ := ctx.Value(auditMetadataContextKey{}).(*auditMetadata)
+	if metadata != nil {
+		metadata.targetID = targetID
 	}
 }
 
@@ -41,7 +55,10 @@ func withAudit(next http.Handler, store AuditStore, auth *serverAuth, logger *sl
 		}
 		actor := auth.actor(r)
 		state := &auditRecordedState{}
-		r = r.WithContext(context.WithValue(r.Context(), auditRecordedKey{}, state))
+		metadata := &auditMetadata{}
+		ctx := context.WithValue(r.Context(), auditRecordedKey{}, state)
+		ctx = context.WithValue(ctx, auditMetadataContextKey{}, metadata)
+		r = r.WithContext(ctx)
 		response := &statusWriter{ResponseWriter: w}
 		next.ServeHTTP(response, r)
 		status := response.status
@@ -52,6 +69,14 @@ func withAudit(next http.Handler, store AuditStore, auth *serverAuth, logger *sl
 			return
 		}
 		entry.Actor = actor
+		entry.AuthMethod = audit.AuthMethodSession
+		if principal, ok := apitoken.PrincipalFromContext(r.Context()); ok {
+			entry.AuthMethod = audit.AuthMethodBearer
+			entry.CredentialID = principal.TokenID
+		}
+		if metadata.targetID != "" {
+			entry.TargetID = metadata.targetID
+		}
 		entry.Remote = remoteIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), auth.trustedProxyCIDRs)
 		if err := store.Record(context.WithoutCancel(r.Context()), entry); err != nil && logger != nil {
 			logger.ErrorContext(r.Context(), "audit entry not recorded", slog.String("action", entry.Action), slog.String("request_id", requestIDFromContext(r.Context())))
@@ -61,6 +86,12 @@ func withAudit(next http.Handler, store AuditStore, auth *serverAuth, logger *sl
 
 // actor returns the signed-in owner's e-mail for the request's session, or "" without a valid session.
 func (s *serverAuth) actor(r *http.Request) string {
+	if principal, ok := apitoken.PrincipalFromContext(r.Context()); ok {
+		if principal.Email != "" {
+			return principal.Email
+		}
+		return principal.UserID
+	}
 	if s == nil || s.service == nil {
 		return ""
 	}

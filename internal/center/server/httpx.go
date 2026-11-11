@@ -131,7 +131,7 @@ var idSegment = regexp.MustCompile(`^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F
 
 // routeWords are the fixed words that appear in this API's paths; any other segment is shown as *.
 var routeWords = map[string]bool{
-	"api": true, "auth": true, "agent": true, "nodes": true, "schedules": true, "alerts": true, "settings": true, "notifications": true,
+	"api": true, "auth": true, "agent": true, "nodes": true, "schedules": true, "alerts": true, "settings": true, "notifications": true, "access-tokens": true,
 	"ip": true, "stats": true, "results": true, "export": true, "dashboard": true, "series": true, "installations": true,
 	"installer": true, "jobs": true, "audit": true, "rules": true, "events": true, "stagger": true, "ack": true, "acknowledgements": true,
 	"run": true, "commands": true, "credential": true, "uninstallations": true, "tokens": true, "enroll": true, "heartbeat": true,
