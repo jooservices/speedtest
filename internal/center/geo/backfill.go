@@ -325,7 +325,9 @@ func (b *Backfill) refreshBatch(ctx context.Context, candidates []backfillCandid
 	pending := make([]pendingBatch, 0, len(candidates))
 	for i, candidate := range candidates {
 		location, err := b.resolveCandidate(ctx, candidate)
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		// A cache, offline or storage failure is not a provider miss: stop here, keep the progress made so far and never send this
+		// address (or the ones after it) to the batch endpoint on the strength of an unchecked cache.
+		if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrBudgetExhausted) {
 			return i, err
 		}
 		if location.City == "" || location.Latitude == 0 && location.Longitude == 0 {
