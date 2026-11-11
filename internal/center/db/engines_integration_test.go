@@ -14,13 +14,8 @@ func TestEngineMigrationBackfillLegacyWritesAndRollback(t *testing.T) {
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	dbtest.MigrateUp(t, pool)
-	// Roll back 00020, 00019, 00016, 00015 and then 00010 before exercising the legacy schema.
-	for range 5 {
-		if err := db.Migrate(ctx, pool, "down"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Migrate(ctx, pool, "down"); err != nil {
+	// The v1.0.0 schema (00008, before two-factor and engine schedules), whatever migrations were added since.
+	if err := db.MigrateDownTo(ctx, pool, 8); err != nil {
 		t.Fatal(err)
 	}
 	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES ('00000000-0000-4000-8000-000000000071','legacy',300,100);
@@ -36,12 +31,8 @@ func TestEngineMigrationBackfillLegacyWritesAndRollback(t *testing.T) {
 	// A v1.0.0 result insert has no engine; legacy schedule queries still address exactly one row.
 	exec(t, ctx, pool, `INSERT INTO results(id,node_id,ts,status,threads,error) SELECT '00000000-0000-4000-8000-000000000073',id,now(),'failed',4,'old binary insert' FROM nodes;
  INSERT INTO engine_schedules(node_id,engine) SELECT id,'librespeed' FROM nodes;`)
-	for range 5 {
-		if err := db.Migrate(ctx, pool, "down"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Migrate(ctx, pool, "down"); err != nil {
+	// The v1.0.0 schema (00008, before two-factor and engine schedules), whatever migrations were added since.
+	if err := db.MigrateDownTo(ctx, pool, 8); err != nil {
 		t.Fatal(err)
 	}
 	var results, interval, offset int
