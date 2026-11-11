@@ -191,7 +191,7 @@ func (s *Store) Summary(ctx context.Context, q Query) ([]SummaryComparison, erro
 	for rows.Next() {
 		var id, name, period string
 		var summary NodeSummary
-		dest := []any{&id, &name, &period, &summary.Count, &summary.OK, &summary.Failed, &summary.IPCount}
+		dest := []any{&id, &name, &period, &summary.Count, &summary.OK, &summary.Failed, &summary.RateLimited, &summary.IPCount}
 		for _, metric := range []*MetricSummary{&summary.Down, &summary.Up, &summary.Ping, &summary.Jitter, &summary.Loss} {
 			dest = append(dest, metricDest(metric)...)
 		}
@@ -217,41 +217,7 @@ func (s *Store) Summary(ctx context.Context, q Query) ([]SummaryComparison, erro
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("read statistics summary: %w", err)
 	}
-	rows.Close()
-	if err := s.addRateLimitedCounts(ctx, q, items, byID); err != nil {
-		return nil, err
-	}
 	return items, nil
-}
-
-func (s *Store) addRateLimitedCounts(ctx context.Context, q Query, items []SummaryComparison, byID map[string]int) error {
-	if len(items) == 0 {
-		return nil
-	}
-	rows, err := s.query(ctx, q, rateLimitedCountsSQL(), q.nodeIDs(), q.From, q.To, q.PreviousFrom, q.PreviousTo)
-	if err != nil {
-		return fmt.Errorf("query rate-limited statistics: %w", err)
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var id string
-		var current, previous int
-		if err := rows.Scan(&id, &current, &previous); err != nil {
-			return fmt.Errorf("scan rate-limited statistics: %w", err)
-		}
-		idx, found := byID[id]
-		if !found {
-			continue
-		}
-		items[idx].Current.RateLimited = current
-		items[idx].Previous.RateLimited = previous
-		items[idx].Current.setSuccessRate()
-		items[idx].Previous.setSuccessRate()
-	}
-	if err := rows.Err(); err != nil {
-		return fmt.Errorf("read rate-limited statistics: %w", err)
-	}
-	return nil
 }
 
 // derive fills the percentiles, success rate, percentages of the expected speed and the stability from the raw aggregates.
@@ -283,7 +249,8 @@ func (summary *NodeSummary) setSuccessRate() {
 
 func summarySQL() string {
 	selects := []string{"n.id::text", "n.name", "p.period", "count(r.id)::int", "count(r.id) FILTER (WHERE r.status <> 'failed')::int",
-		"count(r.id) FILTER (WHERE r.status = 'failed')::int", "count(DISTINCT r.ip)::int"}
+		"count(r.id) FILTER (WHERE r.status = 'failed')::int", "count(r.id) FILTER (WHERE r.status = 'failed' AND r.failure_class = 'rate_limited')::int",
+		"count(DISTINCT r.ip)::int"}
 	for _, col := range []string{"down_mbps", "up_mbps", "ping_ms", "jitter_ms", "loss_percent"} {
 		selects = append(selects, metricAggregate("r."+col)...)
 	}
@@ -297,19 +264,6 @@ FROM selected_nodes n CROSS JOIN periods p
 LEFT JOIN results r ON r.node_id = n.id AND r.ts >= p.start_at AND r.ts < p.end_at
 GROUP BY n.id, n.name, n.expected_down_mbps, n.expected_up_mbps, p.period
 ORDER BY n.name, n.id, p.period`
-}
-
-func rateLimitedCountsSQL() string {
-	return `WITH selected_nodes AS (` + selectedNodes + `)
-SELECT n.id::text,
-       count(r.id) FILTER (WHERE r.ts >= $2 AND r.ts < $3)::int,
-       count(r.id) FILTER (WHERE r.ts >= $4 AND r.ts < $5)::int
-FROM selected_nodes n
-LEFT JOIN results r ON r.node_id = n.id
- AND r.status = 'failed' AND r.failure_class = 'rate_limited'
- AND ((r.ts >= $2 AND r.ts < $3) OR (r.ts >= $4 AND r.ts < $5))
-GROUP BY n.id
-ORDER BY n.id`
 }
 
 func metricAggregate(column string) []string {

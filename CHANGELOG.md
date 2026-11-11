@@ -11,6 +11,7 @@ All notable changes to Speedtest are recorded here. The format follows
 ### Added
 - Optional two-factor sign-in with an authenticator app (TOTP) and ten one-time recovery codes, in Settings > Access; the operator command `disable-2fa` is the recovery path.
 - Geolocation: ipwho.is, ipapi.co and ipgeolocation.io providers (off by default), consensus mode, and a built-in monthly DB-IP Lite database updater.
+- Fixed failure classes on test results; Ookla rate limits use capped exponential backoff, and rate-limited tests are counted separately from success rates and ignored by failure alerts.
 
 ### Changed
 - New nodes, missing agent intervals, and newly enabled engine schedules default to 60 minutes; existing schedules retain their configured values. Docker staging scripts keep their current default until JOOST-89.

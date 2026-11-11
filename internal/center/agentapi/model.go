@@ -25,25 +25,26 @@ var (
 
 // Result preserves nullable measurements and original engine details.
 type Result struct {
-	Engine          string          `json:"engine,omitempty"`
-	ID              string          `json:"id"`
-	TS              string          `json:"ts"`
-	Status          string          `json:"status"`
-	Down            *float64        `json:"down"`
-	Up              *float64        `json:"up"`
-	Ping            *float64        `json:"ping"`
-	Jitter          *float64        `json:"jitter"`
-	DLat            *float64        `json:"dLat"`
-	ULat            *float64        `json:"uLat"`
-	Loss            *float64        `json:"loss"`
-	ServerID        *int            `json:"serverId"`
-	IP              *string         `json:"ip"`
-	Threads         int             `json:"threads"`
-	BytesDown       int64           `json:"bytesDown"`
-	BytesUp         int64           `json:"bytesUp"`
-	Duration        float64         `json:"duration"`
-	Error           *string         `json:"error"`
-	FailureClass    string          `json:"failureClass,omitempty"`
+	Engine          string   `json:"engine,omitempty"`
+	ID              string   `json:"id"`
+	TS              string   `json:"ts"`
+	Status          string   `json:"status"`
+	Down            *float64 `json:"down"`
+	Up              *float64 `json:"up"`
+	Ping            *float64 `json:"ping"`
+	Jitter          *float64 `json:"jitter"`
+	DLat            *float64 `json:"dLat"`
+	ULat            *float64 `json:"uLat"`
+	Loss            *float64 `json:"loss"`
+	ServerID        *int     `json:"serverId"`
+	IP              *string  `json:"ip"`
+	Threads         int      `json:"threads"`
+	BytesDown       int64    `json:"bytesDown"`
+	BytesUp         int64    `json:"bytesUp"`
+	Duration        float64  `json:"duration"`
+	Error           *string  `json:"error"`
+	FailureClass    string   `json:"failureClass,omitempty"`
+	classOmitted    bool
 	Manual          bool            `json:"manual"`
 	Raw             json.RawMessage `json:"raw"`
 	LoadedDown      *LoadedLatency  `json:"loadedDown"`
@@ -196,6 +197,11 @@ func ParseResult(data []byte) (Result, error) {
 	var r Result
 	fields, err := decodeFields(data, &r, "id", "ts", "status", "down", "up", "ping", "jitter", "dLat", "uLat", "loss", "serverId", "ip", "threads", "bytesDown", "bytesUp", "duration", "error", "manual")
 	if err != nil || !nonNullFields(fields, "id", "ts", "status", "threads", "bytesDown", "bytesUp", "duration", "manual", "raw", "warnings") {
+		return r, ErrInvalid
+	}
+	_, present := fields["failureClass"]
+	r.classOmitted = !present
+	if present && (!nonNullFields(fields, "failureClass") || r.FailureClass == "") {
 		return r, ErrInvalid
 	}
 	if r.Engine == "" {

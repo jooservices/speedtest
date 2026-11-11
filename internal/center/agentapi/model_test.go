@@ -102,6 +102,28 @@ func TestResultValidation(t *testing.T) {
 		t.Fatal("trailing JSON")
 	}
 }
+
+func TestParseResultPreservesFailureClassPresence(t *testing.T) {
+	data := change(validResult, "status", "failed")
+	data = change(string(data), "error", "speedtest: timeout")
+	for _, key := range []string{"down", "up", "ping", "jitter", "dLat", "uLat", "loss", "serverId", "ip", "server"} {
+		data = change(string(data), key, nil)
+	}
+	legacy, err := ParseResult(data)
+	if err != nil || !legacy.classOmitted || legacy.FailureClass != "timeout" {
+		t.Fatalf("omitted class = %+v, %v", legacy, err)
+	}
+	explicit, err := ParseResult(change(string(data), "failureClass", "timeout"))
+	if err != nil || explicit.classOmitted || explicit.FailureClass != "timeout" {
+		t.Fatalf("explicit class = %+v, %v", explicit, err)
+	}
+	for _, value := range []any{"", nil} {
+		if _, err := ParseResult(change(string(data), "failureClass", value)); !errors.Is(err, ErrInvalid) {
+			t.Errorf("accepted explicit empty class %v: %v", value, err)
+		}
+	}
+}
+
 func TestHeartbeatValidation(t *testing.T) {
 	valid := `{"agent":"1.0","uptime":0,"lastTest":null}`
 	for _, data := range []string{valid, `{"agent":"","uptime":12,"lastTest":"2026-11-03T00:00:00Z","updateResult":{"version":"v1","status":"succeeded","ts":"2026-11-03T00:00:00Z","error":null}}`} {

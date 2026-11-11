@@ -92,6 +92,35 @@ export function dashboardSuite(T, ctx) {
         assert.equal(await hint.getAttribute('aria-hidden'), null, 'rate-limit count remains exposed to assistive technology');
         assert.equal((await success.locator('.stat-value').innerText()).trim(), '—%', 'an all-rate-limited range has no success percentage');
         assert.equal((await hint.innerText()).replaceAll(/\s+/g, ' ').trim(), '3 rate-limited tests excluded from success rate · no eligible tests');
+        await T.open('#/stats', 'Statistics');
+        await T.choose(page.locator('#topbar select').first(), '6h');
+        await T.settled();
+        assert.match(await T.row('VM1').innerText(), /3\s+—\s+3 rate-limited excluded/, 'all-rate-limited statistics show the excluded count');
+        const nodeId = T.db("SELECT id::text FROM nodes WHERE name='VM1'");
+        await T.open('#/nodes/' + nodeId, 'VM1');
+        let nodeSuccess = page.locator('.stat').filter({ hasText: 'Success rate' });
+        assert.match(await nodeSuccess.innerText(), /—[\s\S]*3 failed; 3 rate-limited excluded of 3/, 'node detail explains an all-rate-limited range');
+
+        T.db(`UPDATE results SET status='ok',down_mbps=100,up_mbps=50,ping_ms=10,error=NULL,failure_class='other',
+          server_id=1,server='{"name":"Fixture"}'::jsonb,ip=(SELECT ip FROM ip_addresses LIMIT 1)
+          WHERE id='${ids[0]}'; DELETE FROM results WHERE id='${ids[2]}'`);
+        await page.reload();
+        await page.waitForFunction(() => ST.remote.status === 'ready');
+        await T.open('#/', 'Dashboard');
+        await T.choose(page.locator('#topbar select').first(), '6h');
+        await T.settled();
+        const mixedKPI = page.locator('.stat').filter({ hasText: 'Tests succeeded' });
+        assert.match(await mixedKPI.innerText(), /100\.0%[\s\S]*1 rate-limited test excluded from success rate/);
+        await T.open('#/stats', 'Statistics');
+        await T.choose(page.locator('#topbar select').first(), '6h');
+        await T.settled();
+        assert.match(await T.row('VM1').innerText(), /2\s+100\.0%\s+1 rate-limited excluded/, 'mixed statistics show one eligible success and the excluded rate limit');
+        await T.open('#/nodes/' + nodeId, 'VM1');
+        nodeSuccess = page.locator('.stat').filter({ hasText: 'Success rate' });
+        assert.match(await nodeSuccess.innerText(), /100\.0%[\s\S]*1 failed; 1 rate-limited excluded of 2/, 'node detail explains the mixed success rate');
+        await T.open('#/', 'Dashboard');
+        await T.choose(page.locator('#topbar select').first(), '6h');
+        await T.settled();
         for (const theme of ['dark', 'light']) {
           await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
           for (const width of [390, 768, 1440]) {
@@ -122,7 +151,7 @@ export function dashboardSuite(T, ctx) {
           await touchPage.goto(stack.origin);
           const touchHint = touchPage.locator('.stat-hint');
           await touchHint.waitFor();
-          assert.match(await touchHint.innerText(), /3 rate-limited tests excluded from success rate/);
+          assert.match(await touchHint.innerText(), /1 rate-limited test excluded from success rate/);
           await touchPage.getByRole('button', { name: 'Open menu' }).tap();
           await touchPage.locator('#sidebar.open').waitFor();
           await touchPage.getByRole('link', { name: 'Dashboard' }).tap();
