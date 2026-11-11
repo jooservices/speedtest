@@ -114,8 +114,8 @@ func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool,
 		var identical bool
 		// A new READ COMMITTED statement sees a concurrent insert after ON CONFLICT
 		// waits for it. Compare every stored field, never return foreign row data.
-		replayArgs := append(args, r.classOmitted)
-		err = tx.QueryRow(ctx, resultReplayQuery, replayArgs...).Scan(&identical)
+		args = append(args, r.classOmitted)
+		err = tx.QueryRow(ctx, resultReplayQuery, args...).Scan(&identical)
 		if err != nil {
 			return false, err
 		}
