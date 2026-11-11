@@ -44,9 +44,9 @@ the migration does not infer default provenance from numeric equality. Owners ca
 clear and reassign a plan to opt an existing node into advertised defaults. Its
 down migration removes those flags and leaves node speeds and plan assignments
 otherwise intact.
-`00023_geo_provider_usage.sql` adds durable online-provider usage, cooldowns
+`00034_geo_provider_usage.sql` adds durable online-provider usage, cooldowns
 and a resumable node-first geolocation refresh cursor. Its down migration
-preserves cached locations and address history. `00024_geo_provider_rolling_window.sql`
+preserves cached locations and address history. `00035_geo_provider_rolling_window.sql`
 adds the persisted next-request time used to enforce ip-api's 15-per-minute batch
 limit across minute boundaries; its down migration drops only that column.
 SQL files are embedded by
@@ -123,6 +123,7 @@ that a subsequent up can reapply version 1.
 | `alert_notification_outbox` | One event-keyed, channel-snapshotted handoff to JOOST-30 |
 | `maintenance_jobs` | Status of owner-started maintenance work (bulk alert acknowledgement, later IP refresh) polled at `/api/jobs/{id}` |
 | `settings` | Public JSON or encrypted secret bytes, revision |
+| `monthly_report_runs` | Durable scheduled-report delivery attempts, retry time, and expiring claim lease |
 | `api_idempotency` | Hashed request identity and encrypted one-time issuance responses, expiring after 24 hours |
 | `agent_commands` | Per-node command lifecycle and progress |
 | `installer_probes` | Expiring unauthenticated SSH host-key observations; one use per install |
