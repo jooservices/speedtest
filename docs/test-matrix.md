@@ -75,7 +75,7 @@ Operations: 73. Without a test: 0.
 | getJob | GET | `/api/jobs/{id}` | `internal/center/server/owneralerts_test.go`<br>`internal/center/server/ownerjobs_test.go` |
 | probeSSH | POST | `/api/installer/probes` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | installAgent | POST | `/api/nodes/{id}/installations` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go` |
-| getInstallation | GET | `/api/installations/{id}` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
-| streamInstallEvents | GET | `/api/installations/{id}/events` | `internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
+| getInstallation | GET | `/api/installations/{id}` | `internal/center/server/access_tokens_integration_test.go`<br>`internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`tests/e2e/suites/settings.mjs`<br>+2 more |
+| streamInstallEvents | GET | `/api/installations/{id}/events` | `internal/center/server/access_tokens_integration_test.go`<br>`internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`tests/e2e/suites/settings.mjs`<br>+2 more |
 | uninstallAgent | POST | `/api/nodes/{id}/uninstallations` | `internal/center/server/installer_test.go` |
 | getInstallScript | GET | `/install.sh` | `internal/center/install/install_test.go`<br>`internal/center/server/server_test.go` |

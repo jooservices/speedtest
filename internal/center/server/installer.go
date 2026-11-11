@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 	"github.com/jooservices/speedtest/internal/center/installer"
 	"github.com/jooservices/speedtest/internal/center/nodes"
 )
@@ -26,9 +27,10 @@ type InstallerService interface {
 }
 
 type installerAPI struct {
-	service InstallerService
-	auth    *serverAuth
-	limiter *nodeRateLimiter
+	service              InstallerService
+	auth                 *serverAuth
+	limiter              *nodeRateLimiter
+	sessionCheckInterval time.Duration
 }
 
 func newInstallerHandler(service InstallerService, auth *serverAuth, perMinute int) http.Handler {
@@ -231,14 +233,18 @@ func lastEventID(w http.ResponseWriter, r *http.Request) (string, bool) {
 func (h *installerAPI) follow(w http.ResponseWriter, r *http.Request, controller *http.ResponseController, id, last string) {
 	poll := time.NewTicker(250 * time.Millisecond)
 	defer poll.Stop()
-	sessionCheck := time.NewTicker(10 * time.Second)
+	checkInterval := h.sessionCheckInterval
+	if checkInterval <= 0 {
+		checkInterval = 10 * time.Second
+	}
+	sessionCheck := time.NewTicker(checkInterval)
 	defer sessionCheck.Stop()
 	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-sessionCheck.C:
-			if !h.sessionValid(r) {
+			if !h.streamCredentialValid(r) {
 				return
 			}
 		case <-poll.C:
@@ -258,6 +264,19 @@ func (h *installerAPI) follow(w http.ResponseWriter, r *http.Request, controller
 			}
 		}
 	}
+}
+
+func (h *installerAPI) streamCredentialValid(r *http.Request) bool {
+	original, bearer := apitoken.PrincipalFromContext(r.Context())
+	if !bearer {
+		return h.sessionValid(r)
+	}
+	raw, present := readOwnerBearer(r)
+	if !present || h.auth == nil || h.auth.tokens == nil {
+		return false
+	}
+	current, err := h.auth.tokens.Authenticate(r.Context(), raw)
+	return err == nil && current.TokenID == original.TokenID && current.UserID == original.UserID
 }
 
 func (h *installerAPI) sessionValid(r *http.Request) bool {

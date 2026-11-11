@@ -2998,7 +2998,8 @@ paths:
       description: "SSE data is one InstallEvent JSON object per event, event: progress. id matches
         InstallEvent.id. Replay retained events on reconnect; 409 if cursor expired. Terminal event
         closes stream. Errors before opening use Problem; after opening use failed InstallEvent.
-        Session authorization checked before stream and on expiry."
+        The session or bearer credential that opened the stream is revalidated every 10 seconds
+        while the installation is nonterminal; expiry or revocation closes the stream on that check."
       security:
         - SessionCookie: []
         - OwnerBearer: []

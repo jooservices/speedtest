@@ -345,12 +345,23 @@ func (f *accessTokenFixture) verifyAuditIdentity(t *testing.T, action, targetID,
 
 func (f *accessTokenFixture) verifyExpiryAndRevoke(t *testing.T, readToken, readID, writeToken, writeID string) {
 	t.Helper()
+	expiredStream, expiredRequest := f.streamCredential(t, readToken, true)
+	if !expiredStream.streamCredentialValid(expiredRequest) {
+		t.Fatal("active bearer stream credential was rejected")
+	}
 	expired := time.Now().UTC().Add(-time.Minute)
 	if _, err := f.pool.Exec(f.ctx, `UPDATE api_access_tokens SET expires_at=$2 WHERE id=$1`, readID, expired); err != nil {
 		t.Fatal("expire test token:", err)
 	}
+	if expiredStream.streamCredentialValid(expiredRequest) {
+		t.Fatal("expired bearer stream credential remained valid")
+	}
 	if got := f.request(http.MethodGet, "/api/nodes", readToken, "").Code; got != http.StatusUnauthorized {
 		t.Fatalf("expired token status = %d, want 401", got)
+	}
+	revokedStream, revokedRequest := f.streamCredential(t, writeToken, true)
+	if !revokedStream.streamCredentialValid(revokedRequest) {
+		t.Fatal("active bearer stream credential was rejected before revocation")
 	}
 	revoke := httptest.NewRequest(http.MethodDelete, "http://center.test/api/access-tokens/"+writeID, nil)
 	ownerHTTPWrite(revoke, f.session, f.csrf)
@@ -359,6 +370,9 @@ func (f *accessTokenFixture) verifyExpiryAndRevoke(t *testing.T, readToken, read
 	if response.Code != http.StatusNoContent {
 		t.Fatalf("revoke token status = %d", response.Code)
 	}
+	if revokedStream.streamCredentialValid(revokedRequest) {
+		t.Fatal("revoked bearer stream credential remained valid")
+	}
 	if _, err := f.pool.Exec(f.ctx, `UPDATE api_access_tokens SET expires_at=NULL WHERE id=$1`, writeID); err != nil {
 		t.Fatal("clear expiry on revoked token:", err)
 	}
@@ -366,6 +380,25 @@ func (f *accessTokenFixture) verifyExpiryAndRevoke(t *testing.T, readToken, read
 		t.Fatalf("revoked token status = %d, want 401", got)
 	}
 	f.verifyTokenAudit(t, "access_token.revoke", 1)
+}
+
+func (f *accessTokenFixture) streamCredential(t *testing.T, token string, withSession bool) (*installerAPI, *http.Request) {
+	t.Helper()
+	store := &apitoken.Store{DB: f.pool}
+	principal, err := store.Authenticate(f.ctx, token)
+	if err != nil {
+		t.Fatal("authenticate stream fixture token:", err)
+	}
+	request := httptest.NewRequest(http.MethodGet, "http://center.test/api/installations/00000000-0000-4000-8000-000000000901/events", nil)
+	request.Header.Set("Authorization", "Bearer "+token)
+	if withSession {
+		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: f.session})
+	}
+	request = request.WithContext(apitoken.WithPrincipal(request.Context(), principal))
+	service := scriptedAuthService{session: func(context.Context, string) (auth.SessionView, error) {
+		return auth.SessionView{Identity: &auth.Identity{ID: "session-owner"}}, nil
+	}}
+	return &installerAPI{auth: &serverAuth{service: service, tokens: store}}, request
 }
 
 func (f *accessTokenFixture) verifyTokenAudit(t *testing.T, action string, want int) {
