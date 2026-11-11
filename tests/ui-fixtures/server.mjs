@@ -10,7 +10,7 @@ export function fixture() {
     colorSlot: 1, interval: 30, offset: 0, host: '', agent: 'test', createdAt: ts, lastSeen: ts, status: 'online',
     latest: null, latestGood: null, currentIp: '203.0.113.9', geo: null, updateVersion: null };
   const result = { id: 'a4bbcf7b-8938-4e90-8128-59047d35b087', nodeId: node.id, ts,
-    serverId: 1, pinnedServerId: null, threads: 4, ip: '203.0.113.9', status: 'ok', error: null, down: 90, up: 40, ping: 0,
+    serverId: 1, pinnedServerId: null, serverSelectionKnown: false, threads: 4, ip: '203.0.113.9', status: 'ok', error: null, down: 90, up: 40, ping: 0,
     jitter: null, loss: null, dLat: null, uLat: null, bytesDown: 1000, bytesUp: 500, duration: 1,
     manual: false, raw: {}, server: { id: 1, name: 'Fixture server', city: '', sponsor: '' }, geo: null };
   node.latest = result; node.latestGood = result;
@@ -154,7 +154,7 @@ export async function startServer() {
       if (url.pathname.startsWith('/api/alerts/events/')) { send(200, envelope(data.event)); return; }
       const lists = {
         '/api/nodes': [data.node], '/api/results': [data.result], '/api/alerts/rules': [], '/api/alerts/events': [],
-        '/api/audit': [{ id: '7d1c0000-0000-4000-8000-000000000001', ts: '2026-11-05T05:00:00Z', actor: 'owner@example.com', action: 'settings.update', targetType: 'settings', targetId: '', summary: 'Changed settings', remote: '127.0.0.1' }],
+        '/api/audit': [{ id: '7d1c0000-0000-4000-8000-000000000001', ts: '2026-11-05T05:00:00Z', actor: 'owner@example.com', action: 'settings.update', authMethod: 'session', targetType: 'settings', targetId: '', summary: 'Changed settings', remote: '127.0.0.1' }],
         '/api/ip/addresses': [{ nodeId: data.node.id, ip: data.result.ip, first: data.result.ts, last: data.result.ts,
           tests: 1, avgDown: 90, avgUp: 40, geo: null }], '/api/ip/history': []
       };

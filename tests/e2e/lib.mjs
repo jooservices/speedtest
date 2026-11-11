@@ -32,11 +32,21 @@ function freePort(requested) {
   });
 }
 
+export async function e2ePort(configured = process.env.E2E_HTTP_PORT) {
+  if (!configured) return freePort();
+  const port = Number(configured);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new Error('E2E_HTTP_PORT must be an integer between 1024 and 65535');
+  }
+  return port;
+}
+
 // The database must be a verified, non-live worktree or test database: the reset below drops everything in it.
 function database(env) {
-  const name = env.SPEEDTEST_DB_NAME || '';
+  const config = { ...env, ...process.env };
+  const name = config.SPEEDTEST_DB_NAME || '';
   if (!/^speedtest_(test|wt[0-9a-z]{1,16})$/.test(name)) throw new Error(`refusing to reset database "${name}": not a worktree or test database`);
-  const pg = { PGHOST: env.SPEEDTEST_DB_HOST, PGPORT: env.SPEEDTEST_DB_PORT, PGUSER: env.SPEEDTEST_DB_USER, PGPASSWORD: env.SPEEDTEST_DB_PASSWORD, PGDATABASE: name };
+  const pg = { PGHOST: config.SPEEDTEST_DB_HOST, PGPORT: config.SPEEDTEST_DB_PORT, PGUSER: config.SPEEDTEST_DB_USER, PGPASSWORD: config.SPEEDTEST_DB_PASSWORD, PGDATABASE: name };
   const marker = run('psql', ['-Atc', "select shobj_description(oid,'pg_database') from pg_database where datname=current_database()"], { env: { ...process.env, ...pg } }).trim();
   if (marker !== 'workspaces-project:speedtest') throw new Error('refusing to reset a database without the Speedtest ownership marker');
   return { name, pg: { ...process.env, ...pg } };
@@ -54,14 +64,14 @@ export async function startStack({ seed = true } = {}) {
   run('go', ['build', '-o', join(out, 'bin', 'agent'), './cmd/agent']);
   run('go', ['build', '-o', join(out, 'bin', 'fake-speedtest'), './internal/agent/testdata/fake-speedtest']);
   sql(db, 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
-  const port = await freePort(process.env.E2E_PORT ? Number(process.env.E2E_PORT) : undefined);
+  const port = await e2ePort();
   const releaseDir = join(out, 'release');
   mkdirSync(releaseDir, { recursive: true });
   const artifact = 'speedtest-agent-linux-amd64';
   const binary = 'e2e-release-artifact';
   writeFileSync(join(releaseDir, artifact), binary);
   writeFileSync(join(releaseDir, 'release.json'), JSON.stringify({ version: '2.0.0', commit: 'e2e', builtAt: new Date().toISOString(), files: { [artifact]: createHash('sha256').update(binary).digest('hex') } }));
-  const centerEnv = { ...process.env, ...env, APP_ENV: 'local', APP_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=', SPEEDTEST_HTTP_ADDR: `127.0.0.1:${port}`, // gitleaks:allow (fixed test-only key)
+  const centerEnv = { ...env, ...process.env, APP_ENV: 'local', APP_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=', SPEEDTEST_HTTP_ADDR: `127.0.0.1:${port}`, // gitleaks:allow (fixed test-only key)
     SPEEDTEST_PUBLIC_URL: `http://127.0.0.1:${port}`, SPEEDTEST_RELEASE_DIR: releaseDir, SPEEDTEST_ADMIN_EMAIL: '', SPEEDTEST_LOGIN_MAX_ATTEMPTS: '100', SPEEDTEST_GEO_DBIP_AUTO_UPDATE: 'false' };
   run('go', ['run', './internal/center/db/cmd/migrate', 'up'], { env: centerEnv });
   run(join(out, 'bin', 'center'), ['seed-admin'], { env: centerEnv });
@@ -96,6 +106,15 @@ export async function startAgent(stack, { name, token }) {
   const agent = spawn(join(out, 'bin', 'agent'), ['run'], { cwd: dir, env, stdio: 'ignore' });
   processes.push(agent);
   return agent;
+}
+
+export async function fetchAgentConfig(stack, name) {
+  const safeName = name.replaceAll(/[^A-Za-z0-9]/g, '_');
+  const credential = readFileSync(join(out, 'agents', safeName, 'credential'), 'utf8').trim();
+  const response = await fetch(stack.origin + '/api/agent/config', { headers: { Authorization: `Bearer ${credential}` } });
+  if (!response.ok) throw new Error(`agent config returned HTTP ${response.status}`);
+  const body = await response.json();
+  return body.data || body;
 }
 
 export function stopAll() {

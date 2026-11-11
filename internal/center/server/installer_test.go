@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/installer"
 )
@@ -347,6 +348,24 @@ func TestInstallerSessionValidity(t *testing.T) {
 	}
 }
 
+func TestInstallerStreamCredentialValidPreservesSessionChecks(t *testing.T) {
+	r := httptest.NewRequest(http.MethodGet, "/api/installations/job/events", nil)
+	r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "valid-session"})
+	service := scriptedAuthService{session: func(context.Context, string) (auth.SessionView, error) {
+		return auth.SessionView{Identity: &auth.Identity{ID: "owner"}}, nil
+	}}
+	h := &installerAPI{auth: &serverAuth{service: service}}
+	if !h.streamCredentialValid(r) {
+		t.Fatal("valid session stream credential rejected")
+	}
+	h.auth.service = scriptedAuthService{session: func(context.Context, string) (auth.SessionView, error) {
+		return auth.SessionView{}, auth.ErrInvalidSession
+	}}
+	if h.streamCredentialValid(r) {
+		t.Fatal("invalid session stream credential accepted")
+	}
+}
+
 func TestInstallerSessionRequiresAuthenticatedIdentity(t *testing.T) {
 	r := httptest.NewRequest("GET", "/events", nil)
 	r.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "token"})
@@ -364,6 +383,100 @@ func TestInstallerSessionRequiresAuthenticatedIdentity(t *testing.T) {
 			t.Fatalf("session validity=%t want=%t", got, tc.want)
 		}
 	}
+}
+
+type streamTokenAuthStore struct {
+	tokenAuthStore
+	recheckErr error
+	rechecks   chan error
+}
+
+func (s *streamTokenAuthStore) Authenticate(_ context.Context, raw string) (apitoken.Principal, error) {
+	s.calls++
+	if raw != "valid-token" {
+		return apitoken.Principal{}, apitoken.ErrInvalidToken
+	}
+	if s.calls == 1 {
+		return s.principal, nil
+	}
+	s.rechecks <- s.recheckErr
+	if s.recheckErr != nil {
+		return apitoken.Principal{}, s.recheckErr
+	}
+	return s.principal, nil
+}
+
+func TestInstallerStreamRevalidatesBearerCredential(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		recheckErr  error
+		withSession bool
+	}{
+		{name: "bearer-only stream survives a recheck"},
+		{name: "expired bearer closes stream despite session", recheckErr: apitoken.ErrInvalidToken, withSession: true},
+		{name: "revoked bearer closes stream despite session", recheckErr: apitoken.ErrInvalidToken, withSession: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rechecks, done, cancel, response := startInstallerBearerStream(t, tc.recheckErr, tc.withSession)
+			defer cancel()
+			select {
+			case err := <-rechecks:
+				if err != tc.recheckErr {
+					t.Fatalf("recheck error = %v, want %v", err, tc.recheckErr)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("stream did not revalidate bearer token")
+			}
+			if tc.recheckErr == nil {
+				select {
+				case <-done:
+					t.Fatal("stream ended after a valid bearer recheck")
+				case <-time.After(25 * time.Millisecond):
+				}
+			}
+			if tc.recheckErr == nil {
+				cancel()
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("stream did not finish after cancellation or invalidation")
+			}
+			if response.Code != http.StatusOK {
+				t.Fatalf("stream response status = %d", response.Code)
+			}
+		})
+	}
+}
+
+func startInstallerBearerStream(t *testing.T, recheckErr error, withSession bool) (<-chan error, <-chan struct{}, context.CancelFunc, *httptest.ResponseRecorder) {
+	t.Helper()
+	principal := apitoken.Principal{TokenID: "token-1", UserID: "owner-1", Scope: apitoken.ReadOnly}
+	tokens := &streamTokenAuthStore{tokenAuthStore: tokenAuthStore{principal: principal}, recheckErr: recheckErr, rechecks: make(chan error, 64)}
+	sessionService := scriptedAuthService{}
+	if withSession {
+		sessionService.session = func(context.Context, string) (auth.SessionView, error) {
+			return auth.SessionView{Identity: &auth.Identity{ID: "session-owner"}}, nil
+		}
+	}
+	auth := &serverAuth{service: sessionService, tokens: tokens, tokenLimiter: newNodeRateLimiter(1000, 1000)}
+	api := &installerAPI{service: &pollingInstaller{}, auth: auth, limiter: newNodeRateLimiter(1000, 1000), sessionCheckInterval: 5 * time.Millisecond}
+	read := auth.requireSession(http.HandlerFunc(api.serve))
+	routes := routeTable{{matches: onPath(installerRoute), tokenScope: operationScope}}
+	handler := withAPITokenAuth(read, routes, auth)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	request := httptest.NewRequest(http.MethodGet, "/api/installations/"+installerTestJobID+"/events", nil).WithContext(ctx)
+	request.Header.Set("Authorization", "Bearer valid-token")
+	if withSession {
+		request.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "valid-session"})
+	}
+	response, done := httptest.NewRecorder(), make(chan struct{})
+	go func() {
+		handler.ServeHTTP(response, request)
+		close(done)
+	}()
+	return tokens.rechecks, done, cancel, response
 }
 
 func TestInstallerMethodRoutingAndErrors(t *testing.T) {

@@ -26,6 +26,7 @@ var allEnvVars = []string{
 	"SPEEDTEST_DB_MAX_CONNS",
 	"APP_KEY",
 	"SPEEDTEST_AGENT_REQUESTS_PER_MINUTE",
+	"SPEEDTEST_API_TOKEN_REQUESTS_PER_MINUTE",
 	"SPEEDTEST_PUBLIC_URL",
 	"SPEEDTEST_RELEASE_DIR",
 }
@@ -64,7 +65,7 @@ func TestLoadCenterDefaults(t *testing.T) {
 			SSLMode:  "disable",
 			MaxConns: 10,
 		},
-		AgentRequestsPerMinute: 120,
+		AgentRequestsPerMinute: 120, APITokenRequestsPerMinute: 120,
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("LoadCenter() = %+v, want %+v", cfg, want)
@@ -87,6 +88,7 @@ func TestLoadCenterOverrides(t *testing.T) {
 	t.Setenv("SPEEDTEST_DB_PASSWORD", "s3cret")
 	t.Setenv("SPEEDTEST_DB_SSLMODE", "require")
 	t.Setenv("SPEEDTEST_AGENT_REQUESTS_PER_MINUTE", "240")
+	t.Setenv("SPEEDTEST_API_TOKEN_REQUESTS_PER_MINUTE", "180")
 	encodedKey := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
 	t.Setenv("APP_KEY", "base64:"+encodedKey)
 
@@ -114,7 +116,7 @@ func TestLoadCenterOverrides(t *testing.T) {
 			MaxConns: 10,
 		},
 		AppKey:                 []byte(strings.Repeat("k", 32)),
-		AgentRequestsPerMinute: 240,
+		AgentRequestsPerMinute: 240, APITokenRequestsPerMinute: 180,
 	}
 	if !reflect.DeepEqual(cfg, want) {
 		t.Fatalf("LoadCenter() = %+v, want %+v", cfg, want)
@@ -176,6 +178,11 @@ func TestLoadCenterInvalid(t *testing.T) {
 			name:    "agent rate limit invalid",
 			env:     map[string]string{"SPEEDTEST_AGENT_REQUESTS_PER_MINUTE": "0"},
 			wantErr: "SPEEDTEST_AGENT_REQUESTS_PER_MINUTE must be between",
+		},
+		{
+			name:    "API token rate limit invalid",
+			env:     map[string]string{"SPEEDTEST_API_TOKEN_REQUESTS_PER_MINUTE": "0"},
+			wantErr: "SPEEDTEST_API_TOKEN_REQUESTS_PER_MINUTE must be between",
 		},
 		{
 			name:    "app key invalid",

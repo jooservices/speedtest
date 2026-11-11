@@ -16,12 +16,32 @@ state and replayable progress events, with hashed idempotency keys and an active
 installation limit per node. It stores no SSH credentials or enrollment tokens.
 
 `00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
-`00017_node_engine_servers.sql` adds per-node/per-engine server catalogs, engine-scoped discovery
-commands and pins. Existing primary-engine pins are backfilled from `nodes.server_id`; the legacy
-column remains synchronized for compatibility with older agents. Results record whether the
-measurement-time selection is known and the pin active then; old result rows remain unknown.
-Terminal catalog acknowledgements store a payload digest so a conflicting retry can be rejected
-without replacing a newer catalog refresh.
+`00019_api_access_tokens.sql` adds owner-scoped API tokens with named permissions,
+optional expiry, last-use and revocation timestamps, and only a 32-byte token
+digest. Its down migration removes that table and its index.
+`00010_engine_schedules.sql` adds per-engine schedules with a 60-minute default;
+Ookla writes remain mirrored to the legacy `schedules` table.
+`00015_default_schedule_60.sql` changes only the `schedules.interval_minutes`
+column default from 30 to 60. It does not update existing schedule rows or
+30-minute result/history fixtures. Rolling back 00015 restores the former 30-
+minute default without changing rows; `engine_schedules` keeps its 60-minute
+default. New node creation copies the resulting schedule into its Ookla row.
+The create-node response reports the inserted schedule values, including when
+00015 has been rolled back. During a binary rollout, stop all center writers,
+apply the migration, deploy the matching center binary, then start the center.
+For rollback, stop all center writers, roll back 00015, restore the previous
+center binary, then start it. Do not run an older center binary against the
+new default: that version reports a hard-coded 30-minute response after 00015
+has changed the database default to 60.
+`00020_audit_authentication_source.sql` records whether each audited change used
+a session or bearer credential and stores only the non-secret bearer token ID.
+Token creation audit targets also retain the newly created token ID.
+`00021_node_engine_servers.sql` adds per-node/per-engine server catalogs,
+engine-scoped discovery commands and pins. Existing engine pins are backfilled
+from `nodes.server_id`; the legacy column remains synchronized for older agents.
+Results store whether the measurement-time selection and pin are known; old rows
+remain unknown. Terminal catalog acknowledgements store a payload digest to reject
+conflicting retries without replacing a newer catalog refresh.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file
@@ -104,6 +124,8 @@ that a subsequent up can reapply version 1.
 | `installer_jobs` | Owner-scoped installation state; at most one active job per node |
 | `installer_events` | Safe, replayable plain-language progress events |
 | `installer_idempotency` | HMAC-protected install request digest and job link, expiring after 24 hours |
+| `api_access_tokens` | Owner-scoped bearer token metadata, expiry and last-use timestamps, and unique SHA-256 digest |
+| `audit_log` | Owner changes, authentication method, optional bearer credential ID, and resolved client address; never bearer values |
 
 All IDs are UUIDs. A result ID has **no server default**, so retries cannot
 accidentally obtain another identity. The primary key rejects duplicate UUIDs;
@@ -206,9 +228,9 @@ history through the operator backup process when needed. On a disposable test
 DB, `TestNotificationMigrationRollback` rehearses populated down/up and verifies
 that events and consumed markers survive without replaying old deliveries.
 
-## Version 17 rollback
+## Version 21 rollback
 
-Migration 17 is additive. Its down migration removes `list_servers` commands,
+Migration 21 is additive. Its down migration removes `list_servers` commands,
 the new per-engine catalog table and the command `engine` column; it preserves legacy
 node settings and results. Reapplying the migration backfills a primary-engine pin
 from `nodes.server_id`. `TestServerCatalogMigrationUpDownIntegration` verifies the

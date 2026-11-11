@@ -13,6 +13,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/shared/config"
+	"github.com/jooservices/speedtest/internal/shared/testenv"
 )
 
 func openPool(t *testing.T) (*pgxpool.Pool, context.Context) {
@@ -21,9 +22,7 @@ func openPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	if err != nil {
 		t.Fatal("a configured worktree .env is required")
 	}
-	for k, v := range values {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid test configuration")

@@ -2,7 +2,7 @@
 // change is fixed in one place.
 import assert from 'node:assert/strict';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join } from 'node:path';
 
 export const OWNER = { email: 'jooservices@gmail.com', password: 'password' };
 
@@ -48,12 +48,10 @@ export function coreSteps(ctx) {
     async see(text, scope = page, timeout) { await scope.getByText(text).first().waitFor(timeout ? { timeout } : undefined); },
     async download(trigger) {
       const [file] = await Promise.all([page.waitForEvent('download'), trigger()]);
-      const directory = mkdtempSync(resolve('.tmp/e2e-download-'));
-      try {
-        const path = join(directory, file.suggestedFilename());
-        await file.saveAs(path);
-        return readFileSync(path, 'utf8');
-      } finally { rmSync(directory, { recursive: true, force: true }); }
+      const directory = mkdtempSync(join(process.cwd(), '.tmp', 'e2e-download-'));
+      const path = join(directory, file.suggestedFilename());
+      try { await file.saveAs(path); return readFileSync(path, 'utf8'); }
+      finally { rmSync(directory, { recursive: true, force: true }); }
     },
 
     // Polls a condition (a stored value, a file) for a few seconds: for results that are saved a moment after the click.

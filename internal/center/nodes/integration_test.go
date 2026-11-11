@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/shared/testenv"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/db"
@@ -27,9 +29,7 @@ func openIntegrationPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	if err != nil {
 		t.Fatal("a configured worktree .env is required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid test configuration")
@@ -66,7 +66,9 @@ func TestEnrollmentCredentialLifecycleIntegration(t *testing.T) {
 	}
 	var issued struct {
 		Node struct {
-			ID string `json:"id"`
+			ID       string `json:"id"`
+			Interval int    `json:"interval"`
+			Offset   int    `json:"offset"`
 		} `json:"node"`
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expiresAt"`
@@ -76,6 +78,17 @@ func TestEnrollmentCredentialLifecycleIntegration(t *testing.T) {
 	}
 	if !validUUID(issued.Node.ID) || !strings.HasPrefix(issued.Token, "enr_") {
 		t.Fatalf("invalid issuance response: %s", created)
+	}
+	var interval, offset int
+	var engineInterval, engineOffset int
+	if err := pool.QueryRow(ctx, `SELECT s.interval_minutes,s.offset_minutes,e.interval_minutes,e.offset_minutes
+FROM schedules s JOIN engine_schedules e ON e.node_id=s.node_id AND e.engine='ookla'
+WHERE s.node_id=$1`, issued.Node.ID).Scan(&interval, &offset, &engineInterval, &engineOffset); err != nil ||
+		interval != 60 || offset != 0 || engineInterval != 60 || engineOffset != 0 {
+		t.Fatalf("new node schedules = Ookla %d:%d and engine %d:%d, want both 60:0: %v", interval, offset, engineInterval, engineOffset, err)
+	}
+	if issued.Node.Interval != interval || issued.Node.Offset != offset {
+		t.Fatalf("create response schedule = %d:%d, stored schedule = %d:%d", issued.Node.Interval, issued.Node.Offset, interval, offset)
 	}
 	if issued.ExpiresAt.Before(time.Now().Add(23*time.Hour)) || issued.ExpiresAt.After(time.Now().Add(25*time.Hour)) {
 		t.Fatalf("enrollment expiry = %s, want 24 hours", issued.ExpiresAt)
@@ -282,6 +295,46 @@ func TestEnrollmentCredentialLifecycleIntegration(t *testing.T) {
 		t.Fatalf("missing APP_KEY error = %v", err)
 	}
 	t.Log("PASS: enrollment reuse/expiry/name binding, hashed storage, credential rotation/revocation, Settings bootstrap key and encrypted idempotent replay")
+}
+
+func TestCreateNodeResponseUsesInsertedScheduleDefaultIntegration(t *testing.T) {
+	pool, ctx := openIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	if _, err := pool.Exec(ctx, `ALTER TABLE schedules ALTER COLUMN interval_minutes SET DEFAULT 30`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), `ALTER TABLE schedules ALTER COLUMN interval_minutes SET DEFAULT 60`); err != nil {
+			t.Errorf("restore schedules default: %v", err)
+		}
+	})
+
+	service := NewService(pool, bytes.Repeat([]byte{0x6c}, 32))
+	created, replay, err := service.CreateNode(ctx, Input{Name: "rollback-default", ExpectedDown: 300, ExpectedUp: 100, Threads: 4}, "owner:test-user", "rollback-default-create")
+	if err != nil || replay {
+		t.Fatalf("CreateNode() = %s, %t, %v", created, replay, err)
+	}
+	var response struct {
+		Node struct {
+			ID       string `json:"id"`
+			Interval int    `json:"interval"`
+			Offset   int    `json:"offset"`
+		} `json:"node"`
+	}
+	if err := json.Unmarshal(created, &response); err != nil {
+		t.Fatal(err)
+	}
+	var legacyInterval, legacyOffset, engineInterval, engineOffset int
+	if err := pool.QueryRow(ctx, `SELECT s.interval_minutes,s.offset_minutes,e.interval_minutes,e.offset_minutes
+FROM schedules s JOIN engine_schedules e ON e.node_id=s.node_id AND e.engine='ookla'
+WHERE s.node_id=$1`, response.Node.ID).Scan(&legacyInterval, &legacyOffset, &engineInterval, &engineOffset); err != nil {
+		t.Fatal(err)
+	}
+	if response.Node.Interval != 30 || response.Node.Offset != 0 || legacyInterval != 30 || legacyOffset != 0 || engineInterval != 30 || engineOffset != 0 {
+		t.Fatalf("create response schedule %d:%d; stored schedules %d:%d and %d:%d; want all 30:0", response.Node.Interval, response.Node.Offset, legacyInterval, legacyOffset, engineInterval, engineOffset)
+	}
 }
 
 func testHash(value string) string {

@@ -5,9 +5,33 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/jooservices/speedtest/internal/agent/engine"
 )
+
+func TestResultFixturesStayWithinDefaultRetention(t *testing.T) {
+	now := time.Now()
+	fixtures := []struct {
+		name string
+		item Result
+	}{
+		{name: "successful", item: okResult("00000000-0000-4000-8000-000000000001")},
+		{name: "failed", item: failedResult("00000000-0000-4000-8000-000000000002", "offline")},
+	}
+	for _, fixture := range fixtures {
+		t.Run(fixture.name, func(t *testing.T) {
+			got, err := time.Parse(time.RFC3339, fixture.item.TS)
+			if err != nil {
+				t.Fatalf("fixture timestamp is invalid: %v", err)
+			}
+			age := now.Sub(got)
+			if age < 0 || age >= DefaultMaxAge {
+				t.Fatalf("fixture age = %s, want within 0..%s", age, DefaultMaxAge)
+			}
+		})
+	}
+}
 
 func TestCommandJournalAtomicReplayAndFailures(t *testing.T) {
 	log, _ := testLogger(t)
