@@ -180,3 +180,6 @@ E2E_ONLY=SC-SET-09 node tests/e2e/main.mjs
 reset. `SC-SET-04` covers test delivery. The JOOST-78 scenario extends
 `SC-SET-09` to edit and restore the consecutive-test threshold for a quality
 event.
+
+## IP change text
+The default template of `network.ip_changed` says what changed without opening the dashboard: `Now {ip} (was {old_ip}) in {city}. ISP {isp}.`, so every delivered message carries the new and the old address (JOOST-91 added the same text to the alert event, `Changed from <old> to <new>`).

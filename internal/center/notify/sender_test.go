@@ -113,6 +113,14 @@ func TestMessageAndBackoff(t *testing.T) {
 	if got != "Speed low — Node One\nSince 2026-11-03T03:00:00Z\nhttps://dashboard.example/#/alerts" {
 		t.Fatal(got)
 	}
+	// An optional detail (the old and the new address of an IP change) sits under the title; blank or multi-line details are tidied.
+	detailed := Message("Public IP changed", "Home", since, "https://dashboard.example/", "Changed from 203.0.113.1 to 203.0.113.2\n(Hanoi)")
+	if detailed != "Public IP changed — Home\nChanged from 203.0.113.1 to 203.0.113.2 (Hanoi)\nSince 2026-11-03T03:00:00Z\nhttps://dashboard.example/#/alerts" {
+		t.Fatal(detailed)
+	}
+	if Message("x", "n", since, "https://d/", "  ") != Message("x", "n", since, "https://d/") {
+		t.Fatal("a blank detail must not add a line")
+	}
 	for n, want := range map[int]time.Duration{-1: time.Minute, 0: time.Minute, 1: time.Minute, 2: 2 * time.Minute, 6: 32 * time.Minute, 7: time.Hour, 8: time.Hour, 100: time.Hour} {
 		if Backoff(n) != want {
 			t.Errorf("backoff(%d)=%v", n, Backoff(n))
