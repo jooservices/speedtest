@@ -36,7 +36,7 @@ has changed the database default to 60.
 `00020_audit_authentication_source.sql` records whether each audited change used
 a session or bearer credential and stores only the non-secret bearer token ID.
 Token creation audit targets also retain the newly created token ID.
-`00023_bandwidth_usage_budgets.sql` adds a monthly per-node/engine byte rollup
+`00033_bandwidth_usage_budgets.sql` adds a monthly per-node/engine byte rollup
 refreshed when a budget is configured and maintained by an insert trigger while
 budgets exist (so older center writers remain compatible),
 optional global/node budget state, a durable budget-event extension queue and
@@ -123,6 +123,7 @@ that a subsequent up can reapply version 1.
 | `alert_notification_outbox` | One event-keyed, channel-snapshotted handoff to JOOST-30 |
 | `maintenance_jobs` | Status of owner-started maintenance work (bulk alert acknowledgement, later IP refresh) polled at `/api/jobs/{id}` |
 | `settings` | Public JSON or encrypted secret bytes, revision |
+| `monthly_report_runs` | Durable scheduled-report delivery attempts, retry time, and expiring claim lease |
 | `api_idempotency` | Hashed request identity and encrypted one-time issuance responses, expiring after 24 hours |
 | `agent_commands` | Per-node command lifecycle and progress |
 | `installer_probes` | Expiring unauthenticated SSH host-key observations; one use per install |
