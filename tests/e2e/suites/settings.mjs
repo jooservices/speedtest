@@ -155,7 +155,24 @@ export function settingsSuite(T, ctx) {
     async notificationEventCatalog() {
       await T.open('#/settings', 'Settings');
       await T.tab('Notifications');
+      await T.fillAndLeave('URL for Webhook', receiver.url);
+      await T.toast('Saved').waitFor();
+      await T.settled();
+      await page.getByLabel('Enable Webhook').check({ force: true });
+      await T.settled();
       await T.see('Events and message templates');
+      const quality = page.locator('[data-event-key="quality.ping_high"]');
+      await quality.waitFor();
+      await quality.locator('details > summary').click();
+      const consecutive = quality.getByLabel('Threshold for tests for Ping above limit');
+      await consecutive.fill('3');
+      await T.press('Save event settings', quality);
+      await T.toast('Event settings saved').waitFor();
+      assert.equal(T.db("select thresholds->>'for_tests' from notification_event_settings where event_key='quality.ping_high'"), '3', 'quality alerts expose a configurable integer streak');
+      await consecutive.fill('2');
+      await T.press('Save event settings', quality);
+      await T.toast('Event settings saved').waitFor();
+
       const card = page.locator('[data-event-key="test.success"]');
       await card.waitFor();
       const editor = card.locator('textarea');
@@ -179,6 +196,11 @@ export function settingsSuite(T, ctx) {
       assert.ok(T.db("select body from notification_templates where event_key='test.success' and channel='webhook'").includes('E2E preview'), 'custom webhook template is stored');
       const deliveredBefore = receiver.bodies.length;
       await T.press('Send test', card);
+      await T.eventually(() => {
+        const state = T.db("select d.status||':'||d.attempts||':'||coalesce(d.error,'') from notification_deliveries d join alert_events e on e.id=d.event_id where e.event_key='test.success' and e.detail='Template test' and d.channel='webhook' order by d.created_at desc limit 1");
+        if (state.startsWith('failed:')) throw new Error('template test delivery failed: ' + state);
+        return state.startsWith('sent:') ? true : state || 'no template test delivery';
+      }, 'the template test delivery reaches the configured webhook', 30000);
       await T.toast('Test message delivered').waitFor({ timeout: 30000 });
       await T.eventually(() => receiver.bodies.slice(deliveredBefore).some(body => body.text === 'E2E preview for Viettel Fast 50 download 180 Mbps'), 'the configured webhook receives the exact edited event template');
       const activity = await T.api('/api/alerts/events?state=all');
@@ -201,6 +223,7 @@ export function settingsSuite(T, ctx) {
       await T.settled();
       const nodeToggle = card.getByLabel('Enable Test success for VM1');
       await nodeToggle.waitFor();
+      await T.eventually(() => nodeToggle.isEnabled(), 'the per-node setting has loaded');
       await nodeToggle.uncheck({ force: true });
       await T.eventually(() => T.db("select ns.enabled::text from notification_event_node_settings ns join nodes n on n.id=ns.node_id where ns.event_key='test.success' and n.name='VM1'") === 'false', 'per-node event setting is stored');
       await nodeToggle.check({ force: true });

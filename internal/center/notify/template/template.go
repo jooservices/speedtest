@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -18,7 +17,6 @@ var (
 	ErrUnknownPlaceholder = errors.New("unknown placeholder")
 	// ErrInvalidTemplate is returned for empty or oversized bodies.
 	ErrInvalidTemplate = errors.New("invalid template")
-	tokenPattern       = regexp.MustCompile(`\{([a-z0-9_]+)\}`)
 )
 
 const maxBodyRunes = 4000
@@ -66,7 +64,11 @@ func Validate(eventKey, body string) error {
 	if !catalog.ValidEventKey(eventKey) {
 		return ErrInvalidTemplate
 	}
-	for _, name := range PlaceholdersIn(body) {
+	names, valid := placeholderNames(body)
+	if !valid {
+		return ErrInvalidTemplate
+	}
+	for _, name := range names {
 		if !catalog.ValidEventPlaceholder(eventKey, name) {
 			return fmt.Errorf("%w: {%s}", ErrUnknownPlaceholder, name)
 		}
@@ -89,8 +91,12 @@ func ValidateForChannel(eventKey, channel, body string) error {
 func PlaceholdersIn(body string) []string {
 	seen := map[string]bool{}
 	var out []string
-	for _, m := range tokenPattern.FindAllStringSubmatch(body, -1) {
-		name := m[1]
+	spans, valid := placeholderSpans(body)
+	if !valid {
+		return out
+	}
+	for _, span := range spans {
+		name := span.name
 		if seen[name] {
 			continue
 		}
@@ -100,6 +106,52 @@ func PlaceholdersIn(body string) []string {
 	return out
 }
 
+type placeholderSpan struct {
+	start int
+	end   int
+	name  string
+}
+
+func placeholderNames(body string) ([]string, bool) {
+	spans, valid := placeholderSpans(body)
+	names := make([]string, 0, len(spans))
+	for _, span := range spans {
+		names = append(names, span.name)
+	}
+	return names, valid
+}
+
+func placeholderSpans(body string) ([]placeholderSpan, bool) {
+	var stack []int
+	var spans []placeholderSpan
+	for i := 0; i < len(body); i++ {
+		switch body[i] {
+		case '{':
+			stack = append(stack, i)
+		case '}':
+			if len(stack) == 0 {
+				return nil, false
+			}
+			start := stack[len(stack)-1]
+			stack = stack[:len(stack)-1]
+			content := body[start+1 : i]
+			if placeholderCandidate(content) {
+				spans = append(spans, placeholderSpan{start: start, end: i + 1, name: content})
+			}
+		}
+	}
+	if len(stack) > 0 {
+		return nil, false
+	}
+	sort.Slice(spans, func(i, j int) bool { return spans[i].start < spans[j].start })
+	return spans, true
+}
+
+func placeholderCandidate(content string) bool {
+	content = strings.TrimSpace(content)
+	return content != "" && !strings.ContainsAny(content, `":,[]`)
+}
+
 // Render substitutes placeholders. Missing values become empty strings.
 // Channel selects formatting: Telegram values are HTML-escaped and webhook
 // values are JSON-string-escaped before they enter the configured payload.
@@ -107,37 +159,56 @@ func Render(channel, body string, data Data) (string, error) {
 	if strings.TrimSpace(body) == "" {
 		return "", ErrInvalidTemplate
 	}
+	spans, valid := placeholderSpans(body)
+	if !valid {
+		return "", ErrInvalidTemplate
+	}
 	webhookJSON := channel == "webhook" && validWebhookTemplate(body)
-	out := tokenPattern.ReplaceAllStringFunc(body, func(tok string) string {
-		name := tok[1 : len(tok)-1]
+	var out strings.Builder
+	last := 0
+	for _, span := range spans {
+		out.WriteString(body[last:span.start])
 		val := ""
 		if data != nil {
-			val = data[name]
+			val = data[span.name]
 		}
 		if channel == "telegram" {
-			return escapeHTML(val)
+			val = escapeHTML(val)
+		} else if webhookJSON {
+			val = escapeJSONString(val)
 		}
-		if webhookJSON {
-			return escapeJSONString(val)
-		}
-		return val
-	})
+		out.WriteString(val)
+		last = span.end
+	}
+	out.WriteString(body[last:])
+	renderedBody := out.String()
 	if channel == "webhook" {
-		if !json.Valid([]byte(out)) {
+		if !json.Valid([]byte(renderedBody)) {
 			// Owner templates may be plain text; wrap as {"text":"..."}.
-			raw, err := json.Marshal(map[string]string{"text": out})
+			raw, err := json.Marshal(map[string]string{"text": renderedBody})
 			if err != nil {
 				return "", err
 			}
 			return string(raw), nil
 		}
 	}
-	return out, nil
+	return renderedBody, nil
 }
 
 func validWebhookTemplate(body string) bool {
-	probe := tokenPattern.ReplaceAllString(body, "sample")
-	return json.Valid([]byte(probe))
+	spans, valid := placeholderSpans(body)
+	if !valid {
+		return false
+	}
+	var probe strings.Builder
+	last := 0
+	for _, span := range spans {
+		probe.WriteString(body[last:span.start])
+		probe.WriteString("sample")
+		last = span.end
+	}
+	probe.WriteString(body[last:])
+	return json.Valid([]byte(probe.String()))
 }
 
 // DefaultBody returns the catalog default for event/channel.

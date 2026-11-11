@@ -131,10 +131,10 @@ func TestMetricMatches(t *testing.T) {
 	}
 }
 
-func TestMetricObservationFailedResultBreaksQualityStreak(t *testing.T) {
+func TestMetricObservationFailedResultLeavesQualityStreakUnobserved(t *testing.T) {
 	_, observed := metricObservation(Rule{Metric: "ping", Op: ">", Value: 30}, agentapi.Result{Status: "failed"}, 0, 0)
-	if !observed {
-		t.Fatal("a failed test must break a consecutive quality streak")
+	if observed {
+		t.Fatal("a failed test without a quality measurement must not resolve the alert")
 	}
 	_, observed = metricObservation(Rule{Metric: "ping", Op: ">", Value: 30}, agentapi.Result{Status: "ok"}, 0, 0)
 	if observed {

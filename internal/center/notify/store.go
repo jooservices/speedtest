@@ -277,6 +277,13 @@ func heldByQuietHours(ctx context.Context, q interface {
 	if !window.Contains(now) {
 		return false, nil
 	}
+	var templateTest bool
+	if err := q.QueryRow(ctx, `SELECT detail=$2 FROM alert_events WHERE id=$1`, eventID, templateTestDetail).Scan(&templateTest); err != nil {
+		return false, err
+	}
+	if templateTest {
+		return false, nil
+	}
 	if critical {
 		var severity string
 		if err := q.QueryRow(ctx, `SELECT severity FROM alert_events WHERE id=$1`, eventID).Scan(&severity); err != nil {

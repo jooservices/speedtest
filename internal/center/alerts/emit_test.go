@@ -16,17 +16,24 @@ import (
 )
 
 type fakeTx struct {
-	settings          map[string]bool
-	channels          map[string][]string
-	nodes             map[string]bool
-	nodeName          string
-	limits            [][2]any
-	medianScans       int
-	medianConfigReads int
-	serverReads       int
-	ispReads          int
-	fail              string
-	inserted          int
+	settings             map[string]bool
+	channels             map[string][]string
+	nodes                map[string]bool
+	nodeName             string
+	limits               [][2]any
+	medianScans          int
+	medianConfigReads    int
+	serverReads          int
+	ispReads             int
+	bandwidthConfigReads int
+	bandwidthUsageReads  int
+	alertSettingsReads   int
+	combinedEventWrites  int
+	alertStateUpserts    int
+	alertStateReads      int
+	lastStateWrite       string
+	fail                 string
+	inserted             int
 }
 
 func (f *fakeTx) Begin(context.Context) (pgx.Tx, error) { return f, nil }
@@ -41,17 +48,28 @@ func (f *fakeTx) Prepare(context.Context, string, string) (*pgconn.StatementDesc
 	return nil, nil
 }
 func (f *fakeTx) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, "INSERT INTO alert_state") {
+		f.alertStateUpserts++
+		f.lastStateWrite = sql
+	}
 	if strings.Contains(sql, "WITH created AS") || strings.Contains(sql, "INSERT INTO alert_events") {
 		if f.fail == "insert" || f.fail == "outbox" {
 			return pgconn.CommandTag{}, errors.New(f.fail)
 		}
 		f.inserted++
 	}
+	if strings.Contains(sql, "WITH inserted AS") && strings.Contains(sql, "INSERT INTO alert_notification_outbox") {
+		f.combinedEventWrites++
+	}
 	return pgconn.CommandTag{}, nil
 }
 func (f *fakeTx) Conn() *pgx.Conn { return nil }
 
 func (f *fakeTx) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+	if strings.Contains(sql, "alert_event_settings_batch") {
+		f.alertSettingsReads++
+		return &alertRows{}, nil
+	}
 	if f.fail == "limits" && strings.Contains(sql, "alert_rules") {
 		return nil, errors.New("limits")
 	}
@@ -63,6 +81,16 @@ func (f *fakeTx) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error
 }
 
 func (f *fakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	if strings.Contains(sql, "FROM alert_state") {
+		f.alertStateReads++
+	}
+	if strings.Contains(sql, "bandwidth_budget_configured") {
+		f.bandwidthConfigReads++
+		return alertRow{vals: []any{false}}
+	}
+	if strings.Contains(sql, "FROM results r JOIN nodes n") {
+		f.bandwidthUsageReads++
+	}
 	if strings.Contains(sql, "percentile_cont") {
 		f.medianScans++
 	}
@@ -162,7 +190,7 @@ func (f *fakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 			return alertRow{err: errors.New("results")}
 		}
 		down, up, ping := 200.0, 80.0, 10.0
-		return alertRow{vals: []any{"rid", "2026-11-08T01:00:00Z", "ok", &down, &up, &ping, (*float64)(nil), (*float64)(nil), (*string)(nil), false, []byte(`{"name":"HCMC-1"}`), (*string)(nil), (*string)(nil)}}
+		return alertRow{vals: []any{"rid", "2026-11-08T01:00:00Z", "ok", &down, &up, &ping, (*float64)(nil), (*float64)(nil), (*string)(nil), false, []byte(`{"name":"HCMC-1"}`), (*string)(nil), (*string)(nil), "other", "ookla"}}
 	}
 	return alertRow{err: errors.New("unexpected: " + sql)}
 }
@@ -425,6 +453,45 @@ func TestEmitHelpersAndOutcomes(t *testing.T) {
 	tx.fail = ""
 }
 
+func TestCatalogEventAndOutboxUseOneAtomicWrite(t *testing.T) {
+	store, tx, ctx := newEmitFixture()
+	settings := effectiveEventSettings{Enabled: true, Severity: "info", Channels: []string{"telegram"}}
+	if _, err := store.insertCatalogEventWithSettings(ctx, tx, "test.success", "n1", "Success", "Done", "result", map[string]string{}, time.Now(), settings); err != nil {
+		t.Fatal(err)
+	}
+	if tx.inserted != 1 || tx.combinedEventWrites != 1 {
+		t.Fatalf("event and outbox writes = %d events, %d combined statements", tx.inserted, tx.combinedEventWrites)
+	}
+	tx.fail = "outbox"
+	if _, err := store.insertCatalogEventWithSettings(ctx, tx, "test.success", "n1", "Success", "Done", "result", map[string]string{}, time.Now(), settings); err == nil {
+		t.Fatal("expected atomic event/outbox write to fail")
+	}
+}
+
+func TestUnobservedMetricAdvancesStateWithOneMonotonicUpsert(t *testing.T) {
+	store, tx, ctx := newEmitFixture()
+	if err := store.advanceRule(ctx, tx, Rule{ID: "rule-1"}, "node-1", time.Now(), "", false, false); err != nil {
+		t.Fatal(err)
+	}
+	if tx.alertStateUpserts != 1 || tx.alertStateReads != 0 {
+		t.Fatalf("unobserved state writes/reads = %d/%d, want one upsert and no lock read", tx.alertStateUpserts, tx.alertStateReads)
+	}
+	if !strings.Contains(tx.lastStateWrite, "ON CONFLICT") || !strings.Contains(tx.lastStateWrite, "GREATEST(") {
+		t.Fatalf("unobserved timestamp update is not monotonic: %s", tx.lastStateWrite)
+	}
+}
+
+func TestRuleEvaluationBatchSkipsAlreadyEvaluatedTimestamps(t *testing.T) {
+	batch := &ruleEvaluationBatch{}
+	first := time.Date(2026, 11, 12, 0, 0, 0, 0, time.UTC)
+	if !batch.accept("rule-1", first) || batch.accept("rule-1", first) || batch.accept("rule-1", first.Add(-time.Second)) {
+		t.Fatal("equal or older rule timestamp was accepted")
+	}
+	if !batch.accept("rule-1", first.Add(time.Second)) || !batch.accept("rule-2", first) {
+		t.Fatal("newer timestamp or independent rule was rejected")
+	}
+}
+
 func TestDisabledMedianDropSkipsHistoryScan(t *testing.T) {
 	store, tx, ctx := newEmitFixture()
 	down, up := 100.0, 50.0
@@ -446,6 +513,9 @@ func TestPrepareObservedBatchCachesStableSettings(t *testing.T) {
 	prepared, err := store.PrepareResultBatch(ctx, "n1", []agentapi.Result{result, result})
 	if err != nil {
 		t.Fatal(err)
+	}
+	if tx.alertSettingsReads != 1 {
+		t.Fatalf("alert event settings read %d times for one batch", tx.alertSettingsReads)
 	}
 	state, ok := prepared.Value(observedBatchContextKey{}).(*observedBatchState)
 	if !ok {
@@ -544,10 +614,15 @@ func TestPrepareTestOutcomeBatch(t *testing.T) {
 	}
 	tx.fail = ""
 	tx.settings["test.success"] = false
+	tx.fail = "node"
 	prepared, err = store.PrepareResultBatch(ctx, "n1", []agentapi.Result{result})
 	if err != nil {
 		t.Fatal(err)
 	}
+	if tx.alertSettingsReads != 2 {
+		t.Fatalf("alert event settings batch reads = %d after two requests, want 2", tx.alertSettingsReads)
+	}
+	tx.fail = ""
 	if err := store.emitTestOutcome(prepared, tx, "n1", result, time.Now().UTC()); err != nil || tx.inserted != 1 {
 		t.Fatalf("disabled batch emitted event: %v, inserted=%d", err, tx.inserted)
 	}

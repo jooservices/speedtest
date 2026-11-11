@@ -61,6 +61,7 @@ type Event struct {
 	ID         string  `json:"id"`
 	RuleID     *string `json:"ruleId"`
 	NodeID     *string `json:"nodeId"`
+	ISPID      *string `json:"ispId"`
 	Severity   string  `json:"severity"`
 	TS         string  `json:"ts"`
 	ResolvedAt *string `json:"resolvedAt"`

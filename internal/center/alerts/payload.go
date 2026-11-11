@@ -8,6 +8,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/catalog"
 	"github.com/jooservices/speedtest/internal/center/notify/template"
+	"github.com/jooservices/speedtest/internal/shared/failureclass"
 )
 
 // QualityLimits are the configured thresholds used in every quality/success message.
@@ -59,8 +60,8 @@ func BuildPayload(eventKey, nodeName, centerURL string, severity string, result 
 	data["event"] = title
 	data["severity"] = severity
 	data["severity_icon"] = template.SeverityIcon(severity)
-	data["download_limit"] = configuredLimit(limits.DownloadSet, strconv.FormatFloat(limits.DownloadPct, 'f', 0, 64)+"% of expected")
-	data["upload_limit"] = configuredLimit(limits.UploadSet, strconv.FormatFloat(limits.UploadPct, 'f', 0, 64)+"% of expected")
+	data["download_limit"] = configuredLimit(limits.DownloadSet, formatNum(limits.DownloadPct)+"% of expected")
+	data["upload_limit"] = configuredLimit(limits.UploadSet, formatNum(limits.UploadPct)+"% of expected")
 	data["ping_limit"] = configuredLimit(limits.PingSet, formatNum(limits.PingMS))
 	data["jitter_limit"] = configuredLimit(limits.JitterSet, formatNum(limits.JitterMS))
 	data["loss_limit"] = configuredLimit(limits.LossSet, formatNum(limits.LossPct))
@@ -75,6 +76,7 @@ func BuildPayload(eventKey, nodeName, centerURL string, severity string, result 
 }
 
 func fillResult(data map[string]string, result agentapi.Result, expectedDown, expectedUp float64, limits QualityLimits) {
+	data["engine"] = result.Engine
 	if result.TS != "" {
 		data["since"] = result.TS
 	}
@@ -132,6 +134,13 @@ func formatNum(v float64) string {
 	return strconv.FormatFloat(v, 'f', -1, 64)
 }
 
+func failureReason(result agentapi.Result) string {
+	if result.Status != "failed" {
+		return ""
+	}
+	return failureclass.ShortLabel(result.FailureClass)
+}
+
 func okFlag(ok bool) string {
 	if ok {
 		return "yes"
@@ -165,21 +174,42 @@ func metricValue(rule Rule, result agentapi.Result, expectedDown, expectedUp flo
 	case "down_pct":
 		if result.Down != nil && expectedDown > 0 {
 			p := *result.Down / expectedDown * 100
-			return formatNum(p), formatNum(expectedDown), formatNum(p)
+			return formatNum(*result.Down) + " Mbps", formatNum(expectedDown) + " Mbps", formatNum(p)
 		}
 	case "up_pct":
 		if result.Up != nil && expectedUp > 0 {
 			p := *result.Up / expectedUp * 100
-			return formatNum(p), formatNum(expectedUp), formatNum(p)
+			return formatNum(*result.Up) + " Mbps", formatNum(expectedUp) + " Mbps", formatNum(p)
 		}
 	case "ping":
-		return optNum(result.Ping), "", optNum(result.Ping)
+		return optNum(result.Ping), formatNum(rule.Value) + " ms", ratio(result.Ping, rule.Value)
 	case "jitter":
-		return optNum(result.Jitter), "", optNum(result.Jitter)
+		return optNum(result.Jitter), formatNum(rule.Value) + " ms", ratio(result.Jitter, rule.Value)
 	case "loss":
-		return optNum(result.Loss), "", optNum(result.Loss)
+		return optNum(result.Loss), formatNum(rule.Value) + "%", ratio(result.Loss, rule.Value)
 	case "failed":
 		return strconv.Itoa(rule.ForTests), "", ""
 	}
 	return "", "", ""
+}
+
+func ratio(value *float64, threshold float64) string {
+	if value == nil || threshold <= 0 {
+		return ""
+	}
+	return formatNum(*value / threshold * 100)
+}
+
+func metricThreshold(rule Rule) string {
+	value := formatNum(rule.Value)
+	switch rule.Metric {
+	case "down_pct", "up_pct":
+		return value + "% of expected"
+	case "ping", "jitter":
+		return value + " ms"
+	case "loss":
+		return value + "%"
+	default:
+		return value
+	}
 }

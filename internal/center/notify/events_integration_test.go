@@ -4,8 +4,10 @@ package notify
 
 import (
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/jooservices/speedtest/internal/center/audit"
 	"github.com/jooservices/speedtest/internal/center/notify/template"
@@ -165,5 +167,81 @@ func TestCatalogPublisherSupportsSystemAndNodeEvents(t *testing.T) {
 	}
 	if err := p.QueryRow(ctx, `SELECT count(*) FROM alert_events e LEFT JOIN alert_notification_outbox o ON o.event_id=e.id WHERE e.event_key='network.server_differs' AND o.event_id IS NULL`).Scan(&deliveries); err != nil || deliveries != 1 {
 		t.Fatalf("disabled catalog event was not retained without dispatch: %d %v", deliveries, err)
+	}
+}
+
+func TestCatalogPublisherCooldownIsPerEventAndNode(t *testing.T) {
+	p, ctx := database(t)
+	for index, id := range []string{"10000000-0000-4000-8000-000000000081", "10000000-0000-4000-8000-000000000082"} {
+		if _, err := p.Exec(ctx, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES($1,$2,100,50)`, id, fmt.Sprintf("Fiber %d", index+1)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	cooldown, repeat := 300, 60
+	if _, err := (&EventStore{DB: p}).UpdateEvent(ctx, "network.isp_changed", EventPatch{CooldownSeconds: &cooldown, RepeatSeconds: &repeat}); err != nil {
+		t.Fatal("save event delivery policy:", err)
+	}
+	now := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	store := &Store{DB: p, Now: func() time.Time { return now }}
+	if err := store.PublishEvent(ctx, "network.isp_changed", "10000000-0000-4000-8000-000000000081", map[string]string{"isp": "Alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	if err := store.PublishEvent(ctx, "network.isp_changed", "10000000-0000-4000-8000-000000000081", map[string]string{"isp": "Beta"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.PublishEvent(ctx, "network.isp_changed", "10000000-0000-4000-8000-000000000082", map[string]string{"isp": "Alpha"}); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(4 * time.Minute)
+	if err := store.PublishEvent(ctx, "network.isp_changed", "10000000-0000-4000-8000-000000000081", map[string]string{"isp": "Gamma"}); err != nil {
+		t.Fatal(err)
+	}
+	var events, queued int
+	if err := p.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE o.event_id IS NOT NULL)
+		FROM alert_events e LEFT JOIN alert_notification_outbox o ON o.event_id=e.id WHERE e.event_key='network.isp_changed'`).Scan(&events, &queued); err != nil {
+		t.Fatal(err)
+	}
+	if events != 4 || queued != 3 {
+		t.Fatalf("cooldown events/queued = %d/%d, want 4/3", events, queued)
+	}
+}
+
+func TestAuthenticationEventProducersUseScopedThresholds(t *testing.T) {
+	p, ctx := database(t)
+	now := time.Date(2026, 11, 11, 12, 0, 0, 0, time.UTC)
+	store := &Store{DB: p, Now: func() time.Time { return now }}
+	threshold := 3.0
+	if _, err := (&EventStore{DB: p}).UpdateEvent(ctx, "security.login_burst", EventPatch{Thresholds: map[string]float64{"attempts": threshold}}); err != nil {
+		t.Fatal("set failed-login threshold:", err)
+	}
+	userKey := "10000000-0000-4000-8000-000000000083"
+	if err := store.RecordSignIn(ctx, userKey, "203.0.113.81"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSignIn(ctx, userKey, "203.0.113.81"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RecordSignIn(ctx, userKey, "198.51.100.81"); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		if err := store.RecordLoginFailure(ctx, "192.0.2.81"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var newSignIns, bursts, failures, locations int
+	if err := p.QueryRow(ctx, `SELECT count(*) FILTER (WHERE event_key='security.signin_new'),
+		count(*) FILTER (WHERE event_key='security.login_burst') FROM alert_events`).Scan(&newSignIns, &bursts); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.QueryRow(ctx, `SELECT count(*) FROM notification_login_failures`).Scan(&failures); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.QueryRow(ctx, `SELECT count(*) FROM notification_signin_locations`).Scan(&locations); err != nil {
+		t.Fatal(err)
+	}
+	if newSignIns != 2 || bursts != 1 || failures != 3 || locations != 2 {
+		t.Fatalf("signin/burst/failure/location rows = %d/%d/%d/%d", newSignIns, bursts, failures, locations)
 	}
 }

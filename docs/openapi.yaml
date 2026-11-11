@@ -2930,7 +2930,7 @@ paths:
       tags:
         - Notifications
       summary: Update notification event settings
-      description: Owner overrides for enabled, severity and channels. Requires CSRF.
+      description: Owner overrides for event delivery and thresholds. `for_tests` on test.failed and quality events is an integer from 1 through 100. Requires CSRF.
       security:
         - SessionCookie: []
         - OwnerBearer: []
@@ -6301,6 +6301,10 @@ components:
           anyOf:
             - $ref: "#/components/schemas/ID"
             - type: "null"
+        ispId:
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
         severity:
           $ref: "#/components/schemas/Severity"
         ts:
@@ -6798,6 +6802,15 @@ components:
           type: string
         thresholds:
           type: object
+          properties:
+            for_tests:
+              type: integer
+              minimum: 1
+              maximum: 100
+            attempts:
+              type: integer
+              minimum: 1
+              maximum: 100
           additionalProperties:
             type: number
         cooldownSeconds:
@@ -6861,6 +6874,15 @@ components:
           maxItems: 4
         thresholds:
           type: object
+          properties:
+            for_tests:
+              type: integer
+              minimum: 1
+              maximum: 100
+            attempts:
+              type: integer
+              minimum: 1
+              maximum: 100
           additionalProperties:
             type: number
         cooldownSeconds:

@@ -4,15 +4,18 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/catalog"
+	"github.com/jooservices/speedtest/internal/center/notify"
 )
 
 type testOutcomeBatchKey struct{}
+type alertEventSettingsBatchKey struct{}
 
 func (s *Store) centerURL(ctx context.Context, tx pgx.Tx) (string, error) {
 	var raw []byte
@@ -38,7 +41,8 @@ type notificationQuerier interface {
 func (s *Store) qualityLimits(ctx context.Context, q notificationQuerier, node, engine string) (QualityLimits, error) {
 	limits := DefaultQualityLimits()
 	seen := map[string]bool{}
-	rows, err := q.Query(ctx, `SELECT r.metric,COALESCE((es.thresholds->>r.metric)::float8,r.value)
+	rows, err := q.Query(ctx, `SELECT r.metric,CASE WHEN r.node_ids IS NULL AND r.engine IS NULL AND es.updated_at>r.updated_at
+		THEN COALESCE((es.thresholds->>r.metric)::float8,r.value) ELSE r.value END
 		FROM alert_rules r
 		LEFT JOIN notification_event_settings es ON es.event_key=CASE r.metric
 			WHEN 'down_pct' THEN 'quality.download_low' WHEN 'up_pct' THEN 'quality.upload_low'
@@ -84,51 +88,12 @@ func (s *Store) qualityLimits(ctx context.Context, q notificationQuerier, node, 
 	if err := rows.Err(); err != nil {
 		return limits, err
 	}
-	if err := applyEventLimitOverrides(ctx, q, &limits); err != nil {
-		return limits, err
-	}
 	return limits, nil
-}
-
-func applyEventLimitOverrides(ctx context.Context, q notificationQuerier, limits *QualityLimits) error {
-	for _, item := range []struct{ key, metric string }{
-		{"quality.download_low", "down_pct"}, {"quality.upload_low", "up_pct"},
-		{"quality.ping_high", "ping"}, {"quality.jitter_high", "jitter"}, {"quality.loss_high", "loss"},
-	} {
-		var raw []byte
-		err := q.QueryRow(ctx, `SELECT thresholds FROM notification_event_settings WHERE event_key=$1`, item.key).Scan(&raw)
-		if errors.Is(err, pgx.ErrNoRows) {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		var thresholds map[string]float64
-		if err := json.Unmarshal(raw, &thresholds); err != nil {
-			return err
-		}
-		value, ok := thresholds[item.metric]
-		if !ok {
-			continue
-		}
-		switch item.metric {
-		case "down_pct":
-			limits.DownloadPct = value
-		case "up_pct":
-			limits.UploadPct = value
-		case "ping":
-			limits.PingMS = value
-		case "jitter":
-			limits.JitterMS = value
-		case "loss":
-			limits.LossPct = value
-		}
-	}
-	return nil
 }
 
 type effectiveEventSettings struct {
 	Enabled             bool
+	Configured          bool
 	Severity            string
 	Channels            []string
 	Thresholds          map[string]float64
@@ -146,7 +111,8 @@ func resolveEventSettings(ctx context.Context, q notificationQuerier, key, node,
 		return effectiveEventSettings{Enabled: true, Severity: fallbackSeverity, Channels: append([]string(nil), fallbackChannels...)}, nil
 	}
 	settings := effectiveEventSettings{Enabled: event.Enabled, Severity: event.Severity, Channels: append([]string(nil), event.Channels...),
-		Thresholds: cloneThresholdMap(event.Thresholds), MaintenanceTimezone: "UTC"}
+		Thresholds: cloneThresholdMap(event.Thresholds), CooldownSeconds: event.CooldownSeconds,
+		RepeatSeconds: event.RepeatSeconds, MaintenanceTimezone: "UTC"}
 	var enabled bool
 	var severity string
 	var channels []string
@@ -158,6 +124,7 @@ func resolveEventSettings(ctx context.Context, q notificationQuerier, key, node,
 			&settings.MaintenanceStart, &settings.MaintenanceEnd, &settings.MaintenanceTimezone, &settings.ISPScope)
 	switch {
 	case err == nil:
+		settings.Configured = true
 		settings.Enabled, settings.Severity, settings.Channels = enabled, severity, channels
 		if err = json.Unmarshal(thresholds, &settings.Thresholds); err != nil {
 			return effectiveEventSettings{}, err
@@ -197,6 +164,59 @@ func cloneThresholdMap(in map[string]float64) map[string]float64 {
 		out[key] = value
 	}
 	return out
+}
+
+func (s *Store) prepareAlertEventSettings(ctx context.Context, q notificationQuerier) (map[string]effectiveEventSettings, error) {
+	settings := make(map[string]effectiveEventSettings)
+	keys := make([]string, 0)
+	for _, event := range catalog.Events() {
+		if event.AlertMetric == "" {
+			continue
+		}
+		keys = append(keys, event.Key)
+		settings[event.Key] = effectiveEventSettings{
+			Enabled: event.Enabled, Severity: event.Severity, Channels: append([]string(nil), event.Channels...),
+			Thresholds: cloneThresholdMap(event.Thresholds), CooldownSeconds: event.CooldownSeconds,
+			RepeatSeconds: event.RepeatSeconds, MaintenanceTimezone: "UTC",
+		}
+	}
+	rows, err := q.Query(ctx, `/* alert_event_settings_batch */ SELECT event_key,enabled,severity,channels,cooldown_seconds,repeat_seconds,
+		COALESCE(to_char(maintenance_start,'HH24:MI'),''),COALESCE(to_char(maintenance_end,'HH24:MI'),''),maintenance_timezone,isp_scopes
+		FROM notification_event_settings WHERE event_key=ANY($1::text[])`, keys)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var key string
+		var override effectiveEventSettings
+		if err := rows.Scan(&key, &override.Enabled, &override.Severity, &override.Channels,
+			&override.CooldownSeconds, &override.RepeatSeconds, &override.MaintenanceStart,
+			&override.MaintenanceEnd, &override.MaintenanceTimezone, &override.ISPScope); err != nil {
+			return nil, err
+		}
+		override.Configured = true
+		settings[key] = override
+	}
+	return settings, rows.Err()
+}
+
+func ruleEventSettings(ctx context.Context, tx pgx.Tx, key, node, severity string, channels []string) (effectiveEventSettings, error) {
+	settings, ok := ctx.Value(alertEventSettingsBatchKey{}).(map[string]effectiveEventSettings)
+	if ok {
+		if config, exists := settings[key]; exists {
+			if !config.Configured {
+				if severity != "" {
+					config.Severity = severity
+				}
+				if len(channels) > 0 {
+					config.Channels = append([]string(nil), channels...)
+				}
+			}
+			return config, nil
+		}
+	}
+	return resolveEventSettings(ctx, tx, key, node, severity, channels)
 }
 
 func eventDeliveryAllowed(event effectiveEventSettings, severity string, payload map[string]string, ts time.Time) bool {
@@ -293,6 +313,13 @@ func (s *Store) insertCatalogEvent(ctx context.Context, tx pgx.Tx, key, nodeID, 
 func (s *Store) insertCatalogEventWithSettings(ctx context.Context, tx pgx.Tx, key, nodeID, title, detail, resultID string, payload map[string]string, ts time.Time, eventSettings effectiveEventSettings) (string, error) {
 	severity, channels := eventSettings.Severity, eventSettings.Channels
 	send := eventSettings.Enabled && eventDeliveryAllowed(eventSettings, severity, payload, ts)
+	if send {
+		var err error
+		send, err = notify.PolicyAllows(ctx, tx, key, nodeID, ts, eventSettings.CooldownSeconds, eventSettings.RepeatSeconds)
+		if err != nil {
+			return "", err
+		}
+	}
 	id, err := s.newUUID()
 	if err != nil {
 		return "", err
@@ -302,21 +329,22 @@ func (s *Store) insertCatalogEventWithSettings(ctx context.Context, tx pgx.Tx, k
 	var query string
 	var args []any
 	if resultID == "" {
-		query = `INSERT INTO alert_events(id,node_id,severity,ts,resolved_at,title,detail,acked,event_key,payload)
-			VALUES ($1,$2,$3,$4,$4,$5,$6,true,$7,$8)`
+		query = `INSERT INTO alert_events(id,node_id,severity,ts,resolved_at,title,detail,acked,event_key,payload,isp_id)
+			VALUES ($1,$2,$3,$4,$4,$5,$6,true,$7,$8,
+				(SELECT r.isp_id FROM results r WHERE r.node_id=$2 AND r.ts<=$4 AND r.isp_id IS NOT NULL ORDER BY r.ts DESC,r.id DESC LIMIT 1))`
 		args = []any{id, nodeID, severity, ts, title, detail, key, raw}
 	} else {
-		query = `INSERT INTO alert_events(id,node_id,severity,ts,resolved_at,title,detail,acked,trigger_result_id,event_key,payload)
-			VALUES ($1,$2,$3,$4,$4,$5,$6,true,$7,$8,$9)`
+		query = `INSERT INTO alert_events(id,node_id,severity,ts,resolved_at,title,detail,acked,trigger_result_id,event_key,payload,isp_id)
+			VALUES ($1,$2,$3,$4,$4,$5,$6,true,$7,$8,$9,(SELECT r.isp_id FROM results r WHERE r.id=$7))`
 		args = []any{id, nodeID, severity, ts, title, detail, resultID, key, raw}
+	}
+	if send {
+		args = append(args, channels)
+		query = "WITH inserted AS (" + query + " RETURNING id) " +
+			"INSERT INTO alert_notification_outbox(event_id,channels) SELECT id,$" + strconv.Itoa(len(args)) + " FROM inserted ON CONFLICT(event_id) DO NOTHING"
 	}
 	if _, err = tx.Exec(ctx, query, args...); err != nil {
 		return "", err
-	}
-	if send {
-		if err := s.enqueueNotification(ctx, tx, id, channels); err != nil {
-			return "", err
-		}
 	}
 	return id, nil
 }
@@ -353,8 +381,8 @@ func (s *Store) emitRecovery(ctx context.Context, tx pgx.Tx, rule Rule, node str
 		return err
 	}
 	extra := map[string]string{"duration": formatDuration(resolvedAt.Sub(openedAt)), "since": formatOwnerTime(openedAt, zone)}
-	if result.Error != nil {
-		extra["failure_reason"] = *result.Error
+	if reason := failureReason(result); reason != "" {
+		extra["failure_reason"] = reason
 	}
 	url, err := s.centerURL(ctx, tx)
 	if err != nil {
@@ -403,8 +431,8 @@ func (s *Store) emitOneTestOutcome(ctx context.Context, tx pgx.Tx, node string, 
 		return err
 	}
 	extra := map[string]string{"since": formatOwnerTime(ts, config.Timezone)}
-	if result.Error != nil {
-		extra["failure_reason"] = *result.Error
+	if reason := failureReason(result); reason != "" {
+		extra["failure_reason"] = reason
 	}
 	payload := BuildPayload(key, config.NodeName, config.CenterURL, config.Severity, result, config.ExpectedDown, config.ExpectedUp, config.Limits, extra)
 	detail := "Test finished"
@@ -417,10 +445,16 @@ func (s *Store) emitOneTestOutcome(ctx context.Context, tx pgx.Tx, node string, 
 
 // PrepareResultBatch loads notification settings once for all successful results in a request.
 func (s *Store) PrepareResultBatch(ctx context.Context, node string, results []agentapi.Result) (context.Context, error) {
+	ctx = context.WithValue(ctx, ruleEvaluationBatchKey{}, &ruleEvaluationBatch{lastEvaluated: make(map[string]time.Time)})
 	ctx, err := s.prepareObservedBatch(ctx, node, results)
 	if err != nil {
 		return ctx, err
 	}
+	alertSettings, err := s.prepareAlertEventSettings(ctx, s.DB)
+	if err != nil {
+		return ctx, err
+	}
+	ctx = context.WithValue(ctx, alertEventSettingsBatchKey{}, alertSettings)
 	events := make(map[string]catalog.Event, 3)
 	for _, result := range results {
 		for _, key := range testOutcomeKeys(result) {
@@ -441,7 +475,18 @@ func (s *Store) PrepareResultBatch(ctx context.Context, node string, results []a
 		}
 		configs[mapKey] = config
 	}
-	return context.WithValue(ctx, testOutcomeBatchKey{}, configs), nil
+	ctx = context.WithValue(ctx, testOutcomeBatchKey{}, configs)
+	for _, result := range results {
+		if result.Status != "ok" && result.Status != "degraded" {
+			continue
+		}
+		configured, err := configuredBandwidthBudget(ctx, s.DB)
+		if err != nil {
+			return ctx, err
+		}
+		return context.WithValue(ctx, bandwidthBudgetBatchKey{}, configured), nil
+	}
+	return ctx, nil
 }
 
 type testOutcomeConfig struct {
@@ -459,6 +504,15 @@ func eventConfigKey(key, engine string) string { return key + "|" + measurementE
 
 func (s *Store) testOutcomeConfig(ctx context.Context, q notificationQuerier, node string, event catalog.Event, engine string) (testOutcomeConfig, error) {
 	var config testOutcomeConfig
+	effective, err := resolveEventSettings(ctx, q, event.Key, node, "", nil)
+	if err != nil {
+		return config, err
+	}
+	config.Enabled, config.Severity, config.Channels = effective.Enabled, effective.Severity, effective.Channels
+	config.EventSettings = effective
+	if !config.Enabled {
+		return config, nil
+	}
 	if err := q.QueryRow(ctx, `/* test_outcome_config */
 		SELECT n.name,n.expected_down_mbps,n.expected_up_mbps,
 			COALESCE((SELECT value->>'centerUrl' FROM settings WHERE key='display'),'')
@@ -466,12 +520,6 @@ func (s *Store) testOutcomeConfig(ctx context.Context, q notificationQuerier, no
 		Scan(&config.NodeName, &config.ExpectedDown, &config.ExpectedUp, &config.CenterURL); err != nil {
 		return config, err
 	}
-	effective, err := resolveEventSettings(ctx, q, event.Key, node, "", nil)
-	if err != nil {
-		return config, err
-	}
-	config.Enabled, config.Severity, config.Channels = effective.Enabled, effective.Severity, effective.Channels
-	config.EventSettings = effective
 	config.Timezone, err = ownerTimezone(ctx, q)
 	if err != nil {
 		return config, err
@@ -523,8 +571,8 @@ func loadResult(ctx context.Context, tx pgx.Tx, id string) (agentapi.Result, err
 	var ip *string
 	var rawServer []byte
 	err := tx.QueryRow(ctx, `SELECT id::text,ts::text,status,down_mbps,up_mbps,ping_ms,jitter_ms,loss_percent,host(ip),manual,
-		server,engine_isp,error FROM results WHERE id=$1`, id).
-		Scan(&r.ID, &r.TS, &r.Status, &down, &up, &ping, &jitter, &loss, &ip, &r.Manual, &rawServer, &r.EngineISP, &r.Error)
+		server,engine_isp,error,failure_class,engine FROM results WHERE id=$1`, id).
+		Scan(&r.ID, &r.TS, &r.Status, &down, &up, &ping, &jitter, &loss, &ip, &r.Manual, &rawServer, &r.EngineISP, &r.Error, &r.FailureClass, &r.Engine)
 	if err != nil {
 		return agentapi.Result{}, err
 	}

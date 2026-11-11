@@ -230,6 +230,8 @@ test('demo rate-limited results preserve failed and numeric alert streaks', asyn
   const failure = { ...limited, failureClass: 'other', error: 'fixture failure' };
   await run(ping); await run(limited); await run(ping); await run(limited);
   assert.ok(ST.events().some(event => event.ruleId === pingRule.id && !event.resolvedAt), 'rate limit between and after high ping results preserves the numeric alert');
+  await run(failure); await run(ping);
+  assert.ok(ST.events().some(event => event.ruleId === pingRule.id && !event.resolvedAt), 'a failed measurement does not recover a numeric alert');
   await run(failure); await run(limited); await run(failure); await run(limited);
   assert.ok(ST.events().some(event => event.ruleId === failedRule.id && !event.resolvedAt), 'rate limit between and after failures preserves the failed-test alert');
 });

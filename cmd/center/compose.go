@@ -52,6 +52,7 @@ type services struct {
 	Settings           settings.Store
 	OwnerIP            server.OwnerIPStore
 	OwnerNotifications server.OwnerNotificationsStore
+	NotificationEvents server.NotificationEvents
 	OwnerDashboard     server.OwnerDashboardStore
 	OwnerAlerts        server.OwnerAlertsStore
 	OwnerJobs          server.OwnerJobsStore
@@ -131,6 +132,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		cleanup()
 		return services{}, nil, err
 	}
+	owner.Events = notifications
 	operational, alertStore, retention := newOperationalStores(pool, cfg, logger, notifications)
 	dbip, err := geo.DBIPConfigFromEnv()
 	if err != nil {
@@ -152,6 +154,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 	return services{
 		Telemetry:          operational,
 		OwnerNotifications: ownerNotifications(notifications),
+		NotificationEvents: notifications,
 		Auth:               authService,
 		NodeCredential:     nodeService,
 		Pinger:             poolPinger{pool: pool},

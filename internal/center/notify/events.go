@@ -402,6 +402,7 @@ func mergeEvent(base catalog.Event, o eventOverride) EventView {
 		Enabled: base.Enabled, Severity: base.Severity, Channels: slices.Clone(base.Channels),
 		NodeScoped: base.NodeScoped, EngineScoped: base.EngineScoped,
 		AlertMetric: base.AlertMetric, Thresholds: cloneThresholds(base.Thresholds), MaintenanceTimezone: "UTC",
+		CooldownSeconds: base.CooldownSeconds, RepeatSeconds: base.RepeatSeconds,
 		ISPScope: []string{}, Placeholders: slices.Clone(base.Placeholders),
 	}
 	if o.Present {
@@ -428,7 +429,9 @@ func cloneThresholds(in map[string]float64) map[string]float64 {
 func validateRuntimePatch(event catalog.Event, patch EventPatch) error {
 	if patch.Thresholds != nil {
 		for key, value := range patch.Thresholds {
-			if !allowedThreshold(event, key) || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || (strings.HasSuffix(key, "_pct") && value > 100) || (key == "for_tests" && (value < 1 || value > 100)) {
+			if !allowedThreshold(event, key) || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 ||
+				(strings.HasSuffix(key, "_pct") && value > 100) ||
+				((key == "for_tests" || key == "attempts") && (value < 1 || value > 100 || math.Trunc(value) != value)) {
 				return ErrInvalidEvent
 			}
 		}
@@ -485,7 +488,13 @@ func allowedThreshold(event catalog.Event, key string) bool {
 	if _, ok := event.Thresholds[key]; ok {
 		return true
 	}
-	return event.AlertMetric != "" && (key == event.AlertMetric || (event.AlertMetric == "failed" && key == "for_tests"))
+	if event.AlertMetric == "" {
+		return false
+	}
+	if key == event.AlertMetric {
+		return true
+	}
+	return key == "for_tests" && (event.AlertMetric == "failed" || event.Category == "quality")
 }
 
 func validateEventWrite(severity string, channels []string) error {

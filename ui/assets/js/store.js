@@ -255,7 +255,7 @@
         if (rule.nodes !== 'all' && rule.nodes.indexOf(node.id) < 0) return;
         var streak = 0, open = null, prevIp = null;
         (byNode[node.id] || []).forEach(function (r) {
-          if (r.status === 'failed' && r.failureClass === 'rate_limited') return;
+          if (r.status === 'failed' && (r.failureClass === 'rate_limited' || rule.metric !== 'failed')) return;
           var hit = ruleMatch(rule, r, node, prevIp);
           prevIp = r.ip;
           if (hit) {

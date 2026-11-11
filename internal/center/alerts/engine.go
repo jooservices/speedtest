@@ -17,6 +17,23 @@ import (
 
 const signalBatchSize = 100
 
+type ruleEvaluationBatchKey struct{}
+
+type ruleEvaluationBatch struct {
+	lastEvaluated map[string]time.Time
+}
+
+func (b *ruleEvaluationBatch) accept(ruleID string, ts time.Time) bool {
+	if last, ok := b.lastEvaluated[ruleID]; ok && !ts.After(last) {
+		return false
+	}
+	if b.lastEvaluated == nil {
+		b.lastEvaluated = make(map[string]time.Time)
+	}
+	b.lastEvaluated[ruleID] = ts
+	return true
+}
+
 type signal struct {
 	ResultID string
 	NodeID   string
@@ -55,6 +72,11 @@ func (s *Store) AfterResultStored(ctx context.Context, tx pgx.Tx, node string, r
 	if err := s.emitObservedEvents(ctx, tx, node, result, ts); err != nil {
 		return err
 	}
+	if result.Status == "ok" || result.Status == "degraded" {
+		if err := s.emitBandwidthEvents(ctx, tx, node, result, ts); err != nil {
+			return err
+		}
+	}
 	if result.IP != nil {
 		if err := s.consumeResultSignal(ctx, tx, result.ID); err != nil {
 			return err
@@ -65,8 +87,11 @@ func (s *Store) AfterResultStored(ctx context.Context, tx pgx.Tx, node string, r
 
 func (s *Store) evaluateResult(ctx context.Context, tx pgx.Tx, node string, result agentapi.Result, ts time.Time) error {
 	rows, err := tx.Query(ctx, `SELECT r.id::text,r.name,r.metric,r.op,
-		COALESCE((es.thresholds->>CASE WHEN r.metric='failed' THEN 'for_tests' ELSE r.metric END)::float8,r.value),
-		COALESCE((es.thresholds->>'for_tests')::integer,r.for_tests),r.node_ids IS NULL,
+		CASE WHEN r.node_ids IS NULL AND r.engine IS NULL AND es.updated_at>r.updated_at
+			THEN COALESCE((es.thresholds->>CASE WHEN r.metric='failed' THEN 'for_tests' ELSE r.metric END)::float8,r.value)
+			ELSE r.value END,
+		CASE WHEN r.node_ids IS NULL AND r.engine IS NULL AND es.updated_at>r.updated_at
+			THEN COALESCE((es.thresholds->>'for_tests')::integer,r.for_tests) ELSE r.for_tests END,r.node_ids IS NULL,
 		COALESCE(r.node_ids::text[],ARRAY[]::text[]),r.severity,r.channels,r.enabled,r.revision,
 		n.expected_down_mbps,n.expected_up_mbps
 		FROM alert_rules r JOIN nodes n ON n.id=$1
@@ -98,7 +123,11 @@ func (s *Store) evaluateResult(ctx context.Context, tx pgx.Tx, node string, resu
 		return err
 	}
 	rows.Close()
+	batch, _ := ctx.Value(ruleEvaluationBatchKey{}).(*ruleEvaluationBatch)
 	for _, rule := range rules {
+		if batch != nil && !batch.accept(rule.ID, ts) {
+			continue
+		}
 		hit, observed := metricObservation(rule.Rule, result, rule.ExpectedDown, rule.ExpectedUp)
 		if err := s.advanceRule(ctx, tx, rule.Rule, node, ts, result.ID, hit, observed); err != nil {
 			return err
@@ -127,7 +156,7 @@ func metricObservation(rule Rule, result agentapi.Result, expectedDown, expected
 		}
 	}
 	if result.Status == "failed" {
-		return false, true
+		return false, false
 	}
 	if result.Status != "ok" && result.Status != "degraded" {
 		return false, false
@@ -175,6 +204,9 @@ type ruleState struct {
 }
 
 func (s *Store) advanceRule(ctx context.Context, tx pgx.Tx, rule Rule, node string, ts time.Time, resultID string, hit, observed bool) error {
+	if !observed {
+		return s.saveLastEvaluated(ctx, tx, rule.ID, node, ts)
+	}
 	state, err := s.lockRuleState(ctx, tx, rule.ID, node)
 	if err != nil {
 		return err
@@ -182,14 +214,12 @@ func (s *Store) advanceRule(ctx context.Context, tx pgx.Tx, rule Rule, node stri
 	if state.lastEvaluatedAt != nil && !ts.After(*state.lastEvaluatedAt) {
 		return nil
 	}
-	if !observed {
-		return s.saveRuleState(ctx, tx, rule.ID, node, ts, streakTransition{count: state.count, active: state.active}, state)
-	}
 	change := advanceStreak(state.count, state.active, hit, rule.ForTests)
 	if hit && state.count == 0 {
 		started := ts
 		state.streakStartedAt = &started
 	}
+	previousEventID, previousNotifiedAt := state.eventID, state.lastNotifiedAt
 	state.eventID, state.lastNotifiedAt, err = s.emitRuleTransition(ctx, tx, rule, node, ts, resultID, state, change, hit)
 	if err != nil {
 		return err
@@ -199,6 +229,10 @@ func (s *Store) advanceRule(ctx context.Context, tx pgx.Tx, rule Rule, node stri
 	}
 	if !hit {
 		state.streakStartedAt = nil
+	}
+	if change.count == state.count && change.active == state.active &&
+		previousEventID == state.eventID && previousNotifiedAt == state.lastNotifiedAt {
+		return s.saveLastEvaluated(ctx, tx, rule.ID, node, ts)
 	}
 	return s.saveRuleState(ctx, tx, rule.ID, node, ts, change, state)
 }
@@ -220,18 +254,28 @@ func (s *Store) saveRuleState(ctx context.Context, tx pgx.Tx, ruleID, node strin
 	return err
 }
 
+func (s *Store) saveLastEvaluated(ctx context.Context, tx pgx.Tx, ruleID, node string, ts time.Time) error {
+	_, err := tx.Exec(ctx, `INSERT INTO alert_state(rule_id,node_id,last_evaluated_at) VALUES ($1,$2,$3)
+		ON CONFLICT(rule_id,node_id) DO UPDATE SET last_evaluated_at=GREATEST(alert_state.last_evaluated_at,EXCLUDED.last_evaluated_at)`, ruleID, node, ts)
+	return err
+}
+
 func (s *Store) emitRuleTransition(ctx context.Context, tx pgx.Tx, rule Rule, node string, ts time.Time, resultID string, state ruleState, change streakTransition, hit bool) (*string, *time.Time, error) {
+	if !change.opened && !change.resolved && !change.recovered && !state.active {
+		return state.eventID, state.lastNotifiedAt, nil
+	}
 	config := effectiveEventSettings{Enabled: true, CooldownSeconds: 0}
 	if cat, ok := catalog.EventForAlertMetric(rule.Metric); ok {
 		var err error
-		config, err = resolveEventSettings(ctx, tx, cat.Key, node, rule.Severity, rule.Channels)
+		config, err = ruleEventSettings(ctx, tx, cat.Key, node, rule.Severity, rule.Channels)
 		if err != nil {
 			return state.eventID, state.lastNotifiedAt, err
 		}
 	}
 	eventID, lastNotified := state.eventID, state.lastNotifiedAt
-	if change.opened && shouldOpenNotification(ts, lastNotified, config.CooldownSeconds) {
-		created, sent, err := s.insertEvent(ctx, tx, rule, node, ts, resultID, ruleText(rule), state.streakStartedAt, true)
+	if change.opened {
+		allowDelivery := shouldOpenNotification(ts, lastNotified, config.CooldownSeconds)
+		created, sent, err := s.insertEvent(ctx, tx, rule, node, ts, resultID, ruleText(rule), state.streakStartedAt, allowDelivery)
 		if err != nil {
 			return eventID, lastNotified, err
 		}
@@ -240,11 +284,14 @@ func (s *Store) emitRuleTransition(ctx context.Context, tx pgx.Tx, rule Rule, no
 			lastNotified = timePointer(ts)
 		}
 	} else if state.active && hit && config.RepeatSeconds > 0 && shouldRepeatNotification(ts, lastNotified, config.RepeatSeconds) {
-		created, sent, err := s.insertEvent(ctx, tx, rule, node, ts, resultID, ruleText(rule), state.streakStartedAt, true)
+		allowDelivery := shouldOpenNotification(ts, lastNotified, config.CooldownSeconds)
+		created, sent, err := s.insertEvent(ctx, tx, rule, node, ts, resultID, ruleText(rule), state.streakStartedAt, allowDelivery)
 		if err != nil {
 			return eventID, lastNotified, err
 		}
-		_ = created
+		if _, err := tx.Exec(ctx, `UPDATE alert_events SET resolved_at=GREATEST(ts,$2),acked=true WHERE id=$1 AND resolved_at IS NULL`, created, ts); err != nil {
+			return eventID, lastNotified, err
+		}
 		if sent {
 			lastNotified = timePointer(ts)
 		}
@@ -307,11 +354,13 @@ func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, rule Rule, node stri
 	raw := PayloadJSON(payload)
 	var created string
 	if resultID == "" {
-		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail,event_key,payload)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail, eventKey, raw).Scan(&created)
+		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail,event_key,payload,isp_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,
+				(SELECT r.isp_id FROM results r WHERE r.node_id=$3 AND r.ts<=$5 AND r.isp_id IS NOT NULL ORDER BY r.ts DESC,r.id DESC LIMIT 1))
+			RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail, eventKey, raw).Scan(&created)
 	} else {
-		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail,trigger_result_id,event_key,payload)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail,trigger_result_id,event_key,payload,isp_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,(SELECT r.isp_id FROM results r WHERE r.id=$8))
 			ON CONFLICT (rule_id,node_id,trigger_result_id) WHERE trigger_result_id IS NOT NULL DO NOTHING
 			RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail, resultID, eventKey, raw).Scan(&created)
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -356,17 +405,12 @@ func (s *Store) rulePayload(ctx context.Context, tx pgx.Tx, eventKey string, rul
 	if err != nil {
 		return nil, err
 	}
-	extra := map[string]string{"value": value, "expected": expected, "pct": pct, "threshold": formatNum(rule.Value), "count": strconv.Itoa(rule.ForTests)}
+	extra := map[string]string{"value": value, "expected": expected, "pct": pct, "threshold": metricThreshold(rule), "count": strconv.Itoa(rule.ForTests)}
 	if onset != nil {
 		extra["since"] = formatOwnerTime(*onset, zone)
 	}
-	if result.TS != "" {
-		if parsed, parseErr := time.Parse(time.RFC3339Nano, result.TS); parseErr == nil {
-			extra["since"] = formatOwnerTime(parsed, zone)
-		}
-	}
-	if result.Error != nil {
-		extra["failure_reason"] = *result.Error
+	if reason := failureReason(result); reason != "" {
+		extra["failure_reason"] = reason
 	}
 	_ = detail
 	url, err := s.centerURL(ctx, tx)
@@ -539,61 +583,112 @@ func (s *Store) EvaluateOffline(ctx context.Context) error {
 	return tx.Commit(ctx)
 }
 
+type offlineAlertState struct {
+	count        int
+	active       bool
+	eventID      *string
+	onset        *time.Time
+	lastNotified *time.Time
+}
+
 func (s *Store) advanceOffline(ctx context.Context, tx pgx.Tx, rule Rule, node string, anchor, threshold, now time.Time, hit bool) error {
-	if _, err := tx.Exec(ctx, `INSERT INTO alert_state(rule_id,node_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, rule.ID, node); err != nil {
+	state, err := lockOfflineState(ctx, tx, rule.ID, node)
+	if err != nil {
 		return err
 	}
-	var count int
-	var active bool
-	var eventID *string
-	var onset, lastNotified *time.Time
-	if err := tx.QueryRow(ctx, `SELECT consecutive_count,active,active_event_id::text,streak_started_at,last_notified_at
-		FROM alert_state WHERE rule_id=$1 AND node_id=$2 FOR UPDATE`, rule.ID, node).
-		Scan(&count, &active, &eventID, &onset, &lastNotified); err != nil {
+	change := advanceStreak(state.count, state.active, hit, 1)
+	config, err := resolveEventSettings(ctx, tx, "node.offline", node, rule.Severity, rule.Channels)
+	if err != nil {
 		return err
 	}
-	change := advanceStreak(count, active, hit, 1)
-	if change.opened {
-		started := anchor
-		onset = &started
-		created, sent, err := s.insertEvent(ctx, tx, rule, node, threshold, "", "No heartbeat for three scheduled intervals.", onset, true)
-		if err != nil {
-			return err
-		}
-		eventID = &created
-		if sent {
-			lastNotified = timePointer(threshold)
-		}
+	if err := s.openOfflineEvent(ctx, tx, rule, node, anchor, threshold, &state, change, config.CooldownSeconds); err != nil {
+		return err
 	}
-	if change.resolved && eventID != nil {
-		if _, err := tx.Exec(ctx, `UPDATE alert_events SET resolved_at=GREATEST(ts,$2) WHERE id=$1 AND resolved_at IS NULL`, *eventID, now); err != nil {
-			return err
-		}
-		recoveredAt := threshold
-		if onset != nil {
-			recoveredAt = *onset
-		} else if err := tx.QueryRow(ctx, `SELECT ts FROM alert_events WHERE id=$1`, *eventID).Scan(&recoveredAt); err != nil {
-			return err
-		}
-		if err := s.emitRecovery(ctx, tx, rule, node, recoveredAt, now, ""); err != nil {
-			return err
-		}
-		eventID = nil
+	if err := s.repeatOfflineEvent(ctx, tx, rule, node, now, &state, change, config.CooldownSeconds, config.RepeatSeconds); err != nil {
+		return err
 	}
-	if change.recovered && onset != nil && !change.resolved {
-		if err := s.emitRecovery(ctx, tx, rule, node, *onset, now, ""); err != nil {
-			return err
-		}
+	if err := s.recoverOfflineEvent(ctx, tx, rule, node, threshold, now, &state, change); err != nil {
+		return err
 	}
 	if !change.active {
-		eventID = nil
+		state.eventID = nil
 	}
 	if !hit {
-		onset = nil
+		state.onset = nil
 	}
-	_, err := tx.Exec(ctx, `UPDATE alert_state SET consecutive_count=$3,active=$4,active_event_id=$5,last_evaluated_at=$6,streak_started_at=$7,last_notified_at=$8
-		WHERE rule_id=$1 AND node_id=$2`, rule.ID, node, change.count, change.active, eventID, now, onset, lastNotified)
+	_, err = tx.Exec(ctx, `UPDATE alert_state SET consecutive_count=$3,active=$4,active_event_id=$5,last_evaluated_at=$6,streak_started_at=$7,last_notified_at=$8
+		WHERE rule_id=$1 AND node_id=$2`, rule.ID, node, change.count, change.active, state.eventID, now, state.onset, state.lastNotified)
 	return err
+}
+
+func lockOfflineState(ctx context.Context, tx pgx.Tx, ruleID, node string) (offlineAlertState, error) {
+	var state offlineAlertState
+	if _, err := tx.Exec(ctx, `INSERT INTO alert_state(rule_id,node_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, ruleID, node); err != nil {
+		return state, err
+	}
+	err := tx.QueryRow(ctx, `SELECT consecutive_count,active,active_event_id::text,streak_started_at,last_notified_at
+		FROM alert_state WHERE rule_id=$1 AND node_id=$2 FOR UPDATE`, ruleID, node).
+		Scan(&state.count, &state.active, &state.eventID, &state.onset, &state.lastNotified)
+	return state, err
+}
+
+func (s *Store) openOfflineEvent(ctx context.Context, tx pgx.Tx, rule Rule, node string, anchor, threshold time.Time, state *offlineAlertState, change streakTransition, cooldown int) error {
+	if !change.opened {
+		return nil
+	}
+	started := anchor
+	state.onset = &started
+	allow := shouldOpenNotification(threshold, state.lastNotified, cooldown)
+	created, sent, err := s.insertEvent(ctx, tx, rule, node, threshold, "", "No heartbeat for three scheduled intervals.", state.onset, allow)
+	if err != nil {
+		return err
+	}
+	state.eventID = &created
+	if sent {
+		state.lastNotified = timePointer(threshold)
+	}
+	return nil
+}
+
+func (s *Store) repeatOfflineEvent(ctx context.Context, tx pgx.Tx, rule Rule, node string, now time.Time, state *offlineAlertState, change streakTransition, cooldown, repeat int) error {
+	if !state.active || !change.active || change.opened || repeat <= 0 || !shouldRepeatNotification(now, state.lastNotified, repeat) {
+		return nil
+	}
+	allowDelivery := shouldOpenNotification(now, state.lastNotified, cooldown)
+	created, sent, err := s.insertEvent(ctx, tx, rule, node, now, "", "Node remains offline.", state.onset, allowDelivery)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE alert_events SET resolved_at=GREATEST(ts,$2),acked=true WHERE id=$1 AND resolved_at IS NULL`, created, now); err != nil {
+		return err
+	}
+	if sent {
+		state.lastNotified = timePointer(now)
+	}
+	return nil
+}
+
+func (s *Store) recoverOfflineEvent(ctx context.Context, tx pgx.Tx, rule Rule, node string, threshold, now time.Time, state *offlineAlertState, change streakTransition) error {
+	if change.resolved && state.eventID != nil {
+		if _, err := tx.Exec(ctx, `UPDATE alert_events SET resolved_at=GREATEST(ts,$2) WHERE id=$1 AND resolved_at IS NULL`, *state.eventID, now); err != nil {
+			return err
+		}
+		onset := threshold
+		if state.onset != nil {
+			onset = *state.onset
+		} else if err := tx.QueryRow(ctx, `SELECT ts FROM alert_events WHERE id=$1`, *state.eventID).Scan(&onset); err != nil {
+			return err
+		}
+		if err := s.emitRecovery(ctx, tx, rule, node, onset, now, ""); err != nil {
+			return err
+		}
+		state.eventID = nil
+		return nil
+	}
+	if change.recovered && state.onset != nil {
+		return s.emitRecovery(ctx, tx, rule, node, *state.onset, now, "")
+	}
+	return nil
 }
 
 // Loop drains durable IP signals immediately and then checks offline state on

@@ -168,7 +168,7 @@
       });
       var thresholdInputs = {};
       var thresholdFields = Object.keys(ev.thresholds || {}).map(function (name) {
-        var input = U.input(ev.thresholds[name], null, { type: 'number', min: name === 'for_tests' ? 1 : 0, max: name.indexOf('_pct') >= 0 ? 100 : null, step: name === 'for_tests' ? 1 : 'any', 'aria-label': 'Threshold ' + name.replaceAll('_', ' ') + ' for ' + ev.title });
+        var input = U.input(ev.thresholds[name], null, { type: 'number', min: name === 'for_tests' ? 1 : 0, max: name === 'for_tests' ? 100 : name.indexOf('_pct') >= 0 ? 100 : null, step: name === 'for_tests' ? 1 : 'any', 'aria-label': 'Threshold ' + name.replaceAll('_', ' ') + ' for ' + ev.title });
         thresholdInputs[name] = input;
         return U.field('Threshold ' + name.replaceAll('_', ' '), input);
       });
@@ -187,6 +187,7 @@
           var raw = thresholdInputs[name].value;
           if (!raw || !Number.isFinite(Number(raw))) return true;
           thresholds[name] = Number(raw);
+          if (name === 'for_tests' && !Number.isInteger(thresholds[name])) return true;
           return false;
         });
         if (invalidThreshold) { U.toast('Enter a valid value for every threshold.', 'error'); return; }

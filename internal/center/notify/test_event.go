@@ -8,6 +8,8 @@ import (
 	"github.com/jooservices/speedtest/internal/center/notify/template"
 )
 
+const templateTestDetail = "Template test"
+
 // TestNotificationEvent queues one sample through the saved template and the real channel transport.
 func (s *Store) TestNotificationEvent(ctx context.Context, key, channel string) (Delivery, error) {
 	tx, err := s.DB.Begin(ctx)
@@ -38,7 +40,7 @@ func (s *Store) TestNotificationEvent(ctx context.Context, key, channel string) 
 	}
 	now, eventID, deliveryID := s.now(), uuid.NewString(), uuid.NewString()
 	if _, err := tx.Exec(ctx, `INSERT INTO alert_events(id,node_id,severity,ts,resolved_at,title,detail,acked,event_key,payload)
-		VALUES($1,NULL,$2,$3,$3,$4,'Template test',true,$5,$6)`, eventID, event.Severity, now, event.Title, key, marshalEventPayload(payload)); err != nil {
+		VALUES($1,NULL,$2,$3,$3,$4,$5,true,$6,$7)`, eventID, event.Severity, now, event.Title, templateTestDetail, key, marshalEventPayload(payload)); err != nil {
 		return Delivery{}, err
 	}
 	if _, err := tx.Exec(ctx, `INSERT INTO notification_deliveries(id,event_id,channel,created_at,next_attempt_at)

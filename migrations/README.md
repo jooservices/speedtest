@@ -15,20 +15,23 @@ Its down migration preserves results, cached locations and derived history; see
 state and replayable progress events, with hashed idempotency keys and an active
 installation limit per node. It stores no SSH credentials or enrollment tokens.
 `00010_engine_schedules.sql` adds per-engine schedules and result identity;
-existing nodes and results backfill to Ookla. `00011_alert_event_payload.sql`
-adds defaulted event keys and placeholder payloads to alert history, and
-`00012_notification_events.sql` adds owner overrides for event settings,
-per-node event enablement and templates. `00017_alert_streak_timestamps.sql`
-tracks consecutive-test timing and adds configurable event thresholds, cooldowns,
-repeat intervals and maintenance windows. `00018_notification_defaults.sql`
-preserves existing global rule settings and fills missing quiet-hour defaults.
-`00019_system_notification_events.sql` permits platform events without a node;
-`00022_notification_escalation.sql` records delivery escalation time. These
+existing nodes and results backfill to Ookla. Develop migrations 19–22 add API
+tokens, audit authentication metadata and ISP management. JOOST-78 migrations
+start after that baseline: `00023_alert_event_payload.sql` adds event keys and
+placeholder payloads to alert history; `00024_notification_events.sql` adds
+event overrides, per-node switches and templates; `00025_alert_streak_timestamps.sql`
+adds event thresholds, cooldowns, repeat intervals and maintenance windows;
+`00026_notification_defaults.sql` seeds missing default rules and quiet-hour
+defaults without replacing owner rules; `00027_system_notification_events.sql`
+permits events without a node; `00028_notification_escalation.sql` records
+delivery escalation time; and `00029_notification_auth_activity.sql` stores
+bounded login-failure counts and new sign-in IPs without retaining credentials.
+Upgrading from develop migration 22 applies versions 23–29 in order. These
 changes are additive; the 1.0.0 binary continues to use its existing tables and
 columns.
 
 `00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
-`00020_api_access_tokens.sql` adds owner-scoped API tokens with named permissions,
+`00019_api_access_tokens.sql` adds owner-scoped API tokens with named permissions,
 optional expiry, last-use and revocation timestamps, and only a 32-byte token
 digest. Its down migration removes that table and its index.
 `00010_engine_schedules.sql` adds per-engine schedules with a 60-minute default;
@@ -45,7 +48,7 @@ For rollback, stop all center writers, roll back 00015, restore the previous
 center binary, then start it. Do not run an older center binary against the
 new default: that version reports a hard-coded 30-minute response after 00015
 has changed the database default to 60.
-`00021_audit_authentication_source.sql` records whether each audited change used
+`00020_audit_authentication_source.sql` records whether each audited change used
 a session or bearer credential and stores only the non-secret bearer token ID.
 Token creation audit targets also retain the newly created token ID.
 `00021_isp_entities.sql` adds ASN-derived ISP entities, plan records and links
@@ -141,6 +144,8 @@ that a subsequent up can reapply version 1.
 | `notification_event_settings` | Owner overrides for event enabled state, severity and channels |
 | `notification_event_node_settings` | Per-node enable overrides for node-scoped events |
 | `notification_templates` | Per-event, per-channel owner template overrides |
+| `notification_login_failures` | Source IP and timestamp for failed-login burst thresholds; rows older than one day are pruned on new failures |
+| `notification_signin_locations` | Previously seen owner identifier/IP pairs for first-seen sign-in notifications |
 | `api_access_tokens` | Owner-scoped bearer token metadata, expiry and last-use timestamps, and unique SHA-256 digest |
 
 All IDs are UUIDs. A result ID has **no server default**, so retries cannot
