@@ -263,6 +263,45 @@ func TestIncrementalStreakRestartResolutionAndRuleLifecycleIntegration(t *testin
 	}
 }
 
+func TestObservedNetworkAndMedianEventsIntegration(t *testing.T) {
+	pool, ctx := integrationDB(t)
+	addNode(t, ctx, pool, testNodeID, "observed-edge", time.Now().UTC().Add(-time.Hour), 30)
+	if _, err := pool.Exec(ctx, `UPDATE nodes SET server_id=2 WHERE id=$1`, testNodeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO notification_event_settings(event_key,enabled,severity,channels,thresholds) VALUES
+		('network.server_differs',true,'warn',ARRAY['email'],'{}'),
+		('quality.drop_vs_median',true,'warn',ARRAY['email'],'{"drop_pct":30}')`); err != nil {
+		t.Fatal(err)
+	}
+	store := &alerts.Store{DB: pool, AppKey: []byte(appKey)}
+	start := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	ip := "203.0.113.30"
+	for i := 0; i < 3; i++ {
+		result := testResult(fmt.Sprintf("30000000-0000-4000-8000-%012d", i+1), start.Add(time.Duration(i)*time.Hour), "ok", &ip, 100)
+		isp := "Alpha ISP"
+		result.EngineISP = &isp
+		if _, err := (&agentapi.Postgres{Pool: pool, Hook: store}).SaveResult(ctx, testNodeID, result); err != nil {
+			t.Fatal("save baseline:", err)
+		}
+	}
+	result := testResult("30000000-0000-4000-8000-000000000004", start.Add(3*time.Hour), "ok", &ip, 30)
+	isp := "Beta ISP"
+	result.EngineISP = &isp
+	if _, err := (&agentapi.Postgres{Pool: pool, Hook: store}).SaveResult(ctx, testNodeID, result); err != nil {
+		t.Fatal("save changed result:", err)
+	}
+	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE node_id=$1 AND event_key='network.server_differs'`, testNodeID) != 4 {
+		t.Fatal("pinned server mismatch events were not emitted")
+	}
+	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE node_id=$1 AND event_key='network.isp_changed' AND payload->>'old_isp'='Alpha ISP' AND payload->>'isp'='Beta ISP'`, testNodeID) != 1 {
+		t.Fatal("ISP change payload was not emitted")
+	}
+	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE node_id=$1 AND event_key='quality.drop_vs_median' AND payload->>'threshold'='70.0'`, testNodeID) != 1 {
+		t.Fatal("seven-day median drop event was not emitted")
+	}
+}
+
 type fixedGeo struct{}
 
 func (fixedGeo) Lookup(context.Context, string) (geo.Location, error) {
@@ -430,6 +469,22 @@ type eventSignature struct {
 	Acked                    bool
 }
 
+func missingEventSignatures(want, got []eventSignature) []eventSignature {
+	counts := make(map[eventSignature]int, len(got))
+	for _, event := range got {
+		counts[event]++
+	}
+	var missing []eventSignature
+	for _, event := range want {
+		if counts[event] == 0 {
+			missing = append(missing, event)
+			continue
+		}
+		counts[event]--
+	}
+	return missing
+}
+
 func deref(value *string) string {
 	if value == nil {
 		return ""
@@ -525,7 +580,7 @@ func TestThirtyDayReplayMatchesApprovedUIPreviewIntegration(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		signature := eventSignature{RuleID: deref(event.RuleID), NodeID: event.NodeID, Severity: event.Severity, TS: ts.UnixMilli(), Title: event.Title, Detail: event.Detail, Acked: event.Acked}
+		signature := eventSignature{RuleID: deref(event.RuleID), NodeID: deref(event.NodeID), Severity: event.Severity, TS: ts.UnixMilli(), Title: event.Title, Detail: event.Detail, Acked: event.Acked}
 		if event.ResolvedAt != nil {
 			resolved, parseErr := time.Parse(time.RFC3339Nano, *event.ResolvedAt)
 			if parseErr != nil {
@@ -559,7 +614,8 @@ func TestThirtyDayReplayMatchesApprovedUIPreviewIntegration(t *testing.T) {
 	order(actualSet)
 	order(expectedSet)
 	if len(actualSet) != len(expectedSet) {
-		t.Fatalf("30-day replay event count differs: center=%d preview=%d", len(actualSet), len(expectedSet))
+		t.Fatalf("30-day replay event count differs: center=%d preview=%d missing=%+v extra=%+v",
+			len(actualSet), len(expectedSet), missingEventSignatures(expectedSet, actualSet), missingEventSignatures(actualSet, expectedSet))
 	}
 	for i := range actualSet {
 		if actualSet[i] != expectedSet[i] {

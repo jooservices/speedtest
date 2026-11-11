@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -10,12 +11,16 @@ import (
 )
 
 type renderDB struct {
-	event []any
-	tmpl  string
+	event   []any
+	tmpl    string
+	tmplErr error
 }
 
 func (r *renderDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 	if strings.Contains(sql, "notification_templates") {
+		if r.tmplErr != nil {
+			return memRow{err: r.tmplErr}
+		}
 		if r.tmpl == "" {
 			return memRow{err: pgx.ErrNoRows}
 		}
@@ -48,9 +53,9 @@ func TestRenderDeliveryUsesCatalogTemplate(t *testing.T) {
 		t.Fatal("trim")
 	}
 	empty := &renderDB{}
-	body, ok := store.templateBody(context.Background(), empty, "not.an.event", "email")
-	if ok || body != "" {
-		t.Fatalf("missing body %q %v", body, ok)
+	body, err := store.templateBody(context.Background(), empty, "not.an.event", "email")
+	if err != nil || body != "" {
+		t.Fatalf("missing body %q %v", body, err)
 	}
 	legacy := &renderDB{event: []any{"Title", "Node", time.Unix(1, 0).UTC(), "", []byte(`{}`)}}
 	text, err = store.renderDelivery(context.Background(), legacy, Delivery{EventID: &id, Channel: "email"}, "https://c.example/")
@@ -62,12 +67,16 @@ func TestRenderDeliveryUsesCatalogTemplate(t *testing.T) {
 	if err != nil || !strings.Contains(text, "Node") {
 		t.Fatalf("sparse %q %v", text, err)
 	}
-	def, ok := store.templateBody(context.Background(), empty, "test.success", "telegram")
-	if !ok || def == "" {
-		t.Fatalf("default body %q %v", def, ok)
+	def, err := store.templateBody(context.Background(), empty, "test.success", "telegram")
+	if err != nil || def == "" {
+		t.Fatalf("default body %q %v", def, err)
 	}
-	fallback, ok := store.templateBody(context.Background(), empty, "test.success", "nope")
-	if !ok || fallback == "" {
-		t.Fatalf("email fallback %q %v", fallback, ok)
+	fallback, err := store.templateBody(context.Background(), empty, "test.success", "nope")
+	if err != nil || fallback == "" {
+		t.Fatalf("email fallback %q %v", fallback, err)
+	}
+	failing := &renderDB{event: db.event, tmplErr: errors.New("temporary database outage")}
+	if _, err := store.renderDelivery(context.Background(), failing, Delivery{EventID: &id, Channel: "telegram"}, "https://c.example/"); err == nil || !strings.Contains(err.Error(), "temporary database outage") {
+		t.Fatalf("database failure must be retried instead of sending a default: %v", err)
 	}
 }

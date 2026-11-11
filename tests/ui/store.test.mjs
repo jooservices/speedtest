@@ -218,6 +218,37 @@ test('remote engine schedule queries select the node and default legacy entries 
   assert.equal(ST.engineSchedules({ id: 'missing' }).length, 0);
 });
 
+test('notification catalog and template methods use their REST endpoints', async t => {
+  const { ST, control } = await setup(t);
+  await ST.load();
+  const events = await ST.notificationEvents();
+  assert.equal(events[0].key, 'test.success');
+  await ST.updateNotificationEvent('test.success', { enabled: false, severity: 'warn', channels: ['webhook'] });
+  assert.equal(await ST.notificationNodeEnabled('test.success', 'node/contract'), true);
+  assert.equal((await ST.setNotificationNodeEnabled('test.success', 'node/contract', false)).enabled, false);
+  await ST.notificationTemplate('test.success', 'telegram');
+  await ST.saveNotificationTemplate('test.success', 'telegram', 'Hello {node}');
+  const preview = await ST.previewNotificationTemplate('test.success', 'telegram', 'Hello {node}');
+  assert.equal(preview.body, 'Hello Viettel Fast 50');
+  const reset = await ST.resetNotificationTemplate('test.success', 'telegram');
+  assert.equal(reset.body, 'Hello {node}');
+  const calls = control.requests.filter(r => r.path.startsWith('/api/notifications/'));
+  assert.deepEqual(calls.map(r => `${r.method} ${r.path}`), [
+    'GET /api/notifications/events',
+    'PATCH /api/notifications/events/test.success',
+    'GET /api/notifications/events/test.success/nodes/node%2Fcontract',
+    'PUT /api/notifications/events/test.success/nodes/node%2Fcontract',
+    'GET /api/notifications/templates/test.success/telegram',
+    'PUT /api/notifications/templates/test.success/telegram',
+    'POST /api/notifications/templates/test.success/telegram/previews',
+    'POST /api/notifications/templates/test.success/telegram/resets',
+  ]);
+  assert.deepEqual(calls[3].body, { enabled: false });
+  assert.deepEqual(calls[5].body, { body: 'Hello {node}' });
+  assert.deepEqual(calls[6].body, { body: 'Hello {node}' });
+  assert.equal(calls[1].headers['x-csrf-token'], 'fixture-csrf');
+});
+
 test('a manual test follows the command to its result and reports a failed command plainly', async t => {
   const { ST, control, data } = await setup(t);
   await ST.load();

@@ -29,6 +29,18 @@ func TestValidateAndPlaceholders(t *testing.T) {
 	}
 }
 
+func TestValidateForChannel(t *testing.T) {
+	if err := ValidateForChannel("test.success", "webhook", `{"node":"{node}","download":"{download}"}`); err != nil {
+		t.Fatalf("valid JSON webhook template: %v", err)
+	}
+	if err := ValidateForChannel("test.success", "webhook", `download for {node}`); !errors.Is(err, ErrInvalidTemplate) {
+		t.Fatalf("plain text webhook accepted: %v", err)
+	}
+	if err := ValidateForChannel("test.success", "telegram", "Hello {node}"); err != nil {
+		t.Fatalf("plain Telegram template: %v", err)
+	}
+}
+
 func TestRenderChannels(t *testing.T) {
 	data := Data{"node": "A <B>", "event": "Warn", "severity": "warn", "severity_icon": SeverityIcon("warn"), "since": "t", "link": "https://x"}
 	body := "{severity_icon} {event} — {node}\n{link}"
@@ -55,6 +67,22 @@ func TestRenderChannels(t *testing.T) {
 	wrapped, err := Render("webhook", "plain {node}", data)
 	if err != nil || !json.Valid([]byte(wrapped)) {
 		t.Fatalf("webhook wrap = %q %v", wrapped, err)
+	}
+	special := `node "quoted" \ slash` + "\nnext line"
+	encoded, err := Render("webhook", `{"event":"{event}","node":"{node}"}`, Data{"event": "changed", "node": special})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]string
+	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil || decoded["node"] != special {
+		t.Fatalf("webhook interpolation = %q, decoded=%q, err=%v", encoded, decoded["node"], err)
+	}
+	plainEncoded, err := Render("webhook", "Event for {node}", Data{"node": special})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(plainEncoded), &decoded); err != nil || decoded["text"] != "Event for "+special {
+		t.Fatalf("webhook text interpolation = %q, decoded=%q, err=%v", plainEncoded, decoded["text"], err)
 	}
 	if _, err := Render("email", "   ", nil); !errors.Is(err, ErrInvalidTemplate) {
 		t.Fatalf("blank: %v", err)

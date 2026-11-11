@@ -4,12 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/catalog"
 )
+
+type testOutcomeBatchKey struct{}
 
 func (s *Store) centerURL(ctx context.Context, tx pgx.Tx) (string, error) {
 	var raw []byte
@@ -27,10 +30,25 @@ func (s *Store) centerURL(ctx context.Context, tx pgx.Tx) (string, error) {
 	return view.CenterURL, nil
 }
 
-func (s *Store) qualityLimits(ctx context.Context, tx pgx.Tx, node string) (QualityLimits, error) {
+type notificationQuerier interface {
+	Query(context.Context, string, ...any) (pgx.Rows, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+func (s *Store) qualityLimits(ctx context.Context, q notificationQuerier, node, engine string) (QualityLimits, error) {
 	limits := DefaultQualityLimits()
-	rows, err := tx.Query(ctx, `SELECT metric,value FROM alert_rules WHERE enabled AND metric IN ('down_pct','up_pct','ping','jitter','loss')
-		AND (node_ids IS NULL OR $1=ANY(node_ids))`, node)
+	seen := map[string]bool{}
+	rows, err := q.Query(ctx, `SELECT r.metric,COALESCE((es.thresholds->>r.metric)::float8,r.value)
+		FROM alert_rules r
+		LEFT JOIN notification_event_settings es ON es.event_key=CASE r.metric
+			WHEN 'down_pct' THEN 'quality.download_low' WHEN 'up_pct' THEN 'quality.upload_low'
+			WHEN 'ping' THEN 'quality.ping_high' WHEN 'jitter' THEN 'quality.jitter_high'
+			WHEN 'loss' THEN 'quality.loss_high' ELSE '' END
+		WHERE r.enabled
+		AND r.metric IN ('down_pct','up_pct','ping','jitter','loss')
+		AND (r.node_ids IS NULL OR $1=ANY(r.node_ids))
+		AND COALESCE(r.engine,(SELECT primary_engine FROM nodes WHERE id=$1))=$2
+		ORDER BY (r.node_ids IS NULL),(r.engine IS NULL),r.id`, node, measurementEngine(engine))
 	if err != nil {
 		return limits, err
 	}
@@ -41,7 +59,59 @@ func (s *Store) qualityLimits(ctx context.Context, tx pgx.Tx, node string) (Qual
 		if err := rows.Scan(&metric, &value); err != nil {
 			return limits, err
 		}
+		if seen[metric] {
+			continue
+		}
+		seen[metric] = true
 		switch metric {
+		case "down_pct":
+			limits.DownloadPct = value
+			limits.DownloadSet = true
+		case "up_pct":
+			limits.UploadPct = value
+			limits.UploadSet = true
+		case "ping":
+			limits.PingMS = value
+			limits.PingSet = true
+		case "jitter":
+			limits.JitterMS = value
+			limits.JitterSet = true
+		case "loss":
+			limits.LossPct = value
+			limits.LossSet = true
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return limits, err
+	}
+	if err := applyEventLimitOverrides(ctx, q, &limits); err != nil {
+		return limits, err
+	}
+	return limits, nil
+}
+
+func applyEventLimitOverrides(ctx context.Context, q notificationQuerier, limits *QualityLimits) error {
+	for _, item := range []struct{ key, metric string }{
+		{"quality.download_low", "down_pct"}, {"quality.upload_low", "up_pct"},
+		{"quality.ping_high", "ping"}, {"quality.jitter_high", "jitter"}, {"quality.loss_high", "loss"},
+	} {
+		var raw []byte
+		err := q.QueryRow(ctx, `SELECT thresholds FROM notification_event_settings WHERE event_key=$1`, item.key).Scan(&raw)
+		if errors.Is(err, pgx.ErrNoRows) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		var thresholds map[string]float64
+		if err := json.Unmarshal(raw, &thresholds); err != nil {
+			return err
+		}
+		value, ok := thresholds[item.metric]
+		if !ok {
+			continue
+		}
+		switch item.metric {
 		case "down_pct":
 			limits.DownloadPct = value
 		case "up_pct":
@@ -54,7 +124,114 @@ func (s *Store) qualityLimits(ctx context.Context, tx pgx.Tx, node string) (Qual
 			limits.LossPct = value
 		}
 	}
-	return limits, rows.Err()
+	return nil
+}
+
+type effectiveEventSettings struct {
+	Enabled             bool
+	Severity            string
+	Channels            []string
+	Thresholds          map[string]float64
+	CooldownSeconds     int
+	RepeatSeconds       int
+	MaintenanceStart    string
+	MaintenanceEnd      string
+	MaintenanceTimezone string
+	ISPScope            []string
+}
+
+func resolveEventSettings(ctx context.Context, q notificationQuerier, key, node, fallbackSeverity string, fallbackChannels []string) (effectiveEventSettings, error) {
+	event, ok := catalog.LookupEvent(key)
+	if !ok {
+		return effectiveEventSettings{Enabled: true, Severity: fallbackSeverity, Channels: append([]string(nil), fallbackChannels...)}, nil
+	}
+	settings := effectiveEventSettings{Enabled: event.Enabled, Severity: event.Severity, Channels: append([]string(nil), event.Channels...),
+		Thresholds: cloneThresholdMap(event.Thresholds), MaintenanceTimezone: "UTC"}
+	var enabled bool
+	var severity string
+	var channels []string
+	var thresholds []byte
+	err := q.QueryRow(ctx, `SELECT enabled,severity,channels,thresholds,cooldown_seconds,repeat_seconds,
+		COALESCE(to_char(maintenance_start,'HH24:MI'),''),COALESCE(to_char(maintenance_end,'HH24:MI'),''),maintenance_timezone,isp_scopes
+		FROM notification_event_settings WHERE event_key=$1`, key).
+		Scan(&enabled, &severity, &channels, &thresholds, &settings.CooldownSeconds, &settings.RepeatSeconds,
+			&settings.MaintenanceStart, &settings.MaintenanceEnd, &settings.MaintenanceTimezone, &settings.ISPScope)
+	switch {
+	case err == nil:
+		settings.Enabled, settings.Severity, settings.Channels = enabled, severity, channels
+		if err = json.Unmarshal(thresholds, &settings.Thresholds); err != nil {
+			return effectiveEventSettings{}, err
+		}
+		for k, v := range event.Thresholds {
+			if _, ok := settings.Thresholds[k]; !ok {
+				settings.Thresholds[k] = v
+			}
+		}
+		// Existing alert_rules settings remain the effective defaults until the
+		// owner explicitly saves an event override.
+	case !errors.Is(err, pgx.ErrNoRows):
+		return effectiveEventSettings{}, err
+	default:
+		if fallbackSeverity != "" {
+			settings.Severity = fallbackSeverity
+		}
+		if len(fallbackChannels) > 0 {
+			settings.Channels = append([]string(nil), fallbackChannels...)
+		}
+	}
+	if event.NodeScoped && node != "" && settings.Enabled {
+		var nodeEnabled bool
+		err = q.QueryRow(ctx, `SELECT enabled FROM notification_event_node_settings WHERE event_key=$1 AND node_id=$2`, key, node).Scan(&nodeEnabled)
+		if err == nil {
+			settings.Enabled = nodeEnabled
+		} else if !errors.Is(err, pgx.ErrNoRows) {
+			return effectiveEventSettings{}, err
+		}
+	}
+	return settings, nil
+}
+
+func cloneThresholdMap(in map[string]float64) map[string]float64 {
+	out := make(map[string]float64, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func eventDeliveryAllowed(event effectiveEventSettings, severity string, payload map[string]string, ts time.Time) bool {
+	if len(event.ISPScope) > 0 {
+		isp := strings.TrimSpace(payload["isp"])
+		matched := false
+		for _, allowed := range event.ISPScope {
+			if strings.EqualFold(isp, strings.TrimSpace(allowed)) {
+				matched = true
+				break
+			}
+		}
+		if !matched {
+			return false
+		}
+	}
+	if severity == "crit" || event.MaintenanceStart == "" || event.MaintenanceEnd == "" {
+		return true
+	}
+	start, startErr := time.Parse("15:04", event.MaintenanceStart)
+	end, endErr := time.Parse("15:04", event.MaintenanceEnd)
+	location, zoneErr := time.LoadLocation(event.MaintenanceTimezone)
+	if startErr != nil || endErr != nil || zoneErr != nil {
+		return true
+	}
+	local := ts.In(location)
+	minute := local.Hour()*60 + local.Minute()
+	from, to := start.Hour()*60+start.Minute(), end.Hour()*60+end.Minute()
+	if from == to {
+		return false
+	}
+	if from < to {
+		return minute < from || minute >= to
+	}
+	return minute < from && minute >= to
 }
 
 func (s *Store) eventChannels(ctx context.Context, tx pgx.Tx, key string, fallback []string) ([]string, error) {
@@ -106,27 +283,42 @@ func (s *Store) insertCatalogEvent(ctx context.Context, tx pgx.Tx, key, nodeID, 
 			return "", err
 		}
 	}
+	eventSettings, err := resolveEventSettings(ctx, tx, key, nodeID, severity, channels)
+	if err != nil {
+		return "", err
+	}
+	return s.insertCatalogEventWithSettings(ctx, tx, key, nodeID, title, detail, resultID, payload, ts, eventSettings)
+}
+
+func (s *Store) insertCatalogEventWithSettings(ctx context.Context, tx pgx.Tx, key, nodeID, title, detail, resultID string, payload map[string]string, ts time.Time, eventSettings effectiveEventSettings) (string, error) {
+	severity, channels := eventSettings.Severity, eventSettings.Channels
+	send := eventSettings.Enabled && eventDeliveryAllowed(eventSettings, severity, payload, ts)
 	id, err := s.newUUID()
 	if err != nil {
 		return "", err
 	}
 	raw := PayloadJSON(payload)
 	// Instant notifications are resolved and acked so they do not stay in open alert activity.
-	var created string
+	var query string
+	var args []any
 	if resultID == "" {
-		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,node_id,severity,ts,resolved_at,title,detail,acked,event_key,payload)
-			VALUES ($1,$2,$3,$4,$4,$5,$6,true,$7,$8) RETURNING id::text`, id, nodeID, severity, ts, title, detail, key, raw).Scan(&created)
+		query = `INSERT INTO alert_events(id,node_id,severity,ts,resolved_at,title,detail,acked,event_key,payload)
+			VALUES ($1,$2,$3,$4,$4,$5,$6,true,$7,$8)`
+		args = []any{id, nodeID, severity, ts, title, detail, key, raw}
 	} else {
-		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,node_id,severity,ts,resolved_at,title,detail,acked,trigger_result_id,event_key,payload)
-			VALUES ($1,$2,$3,$4,$4,$5,$6,true,$7,$8,$9) RETURNING id::text`, id, nodeID, severity, ts, title, detail, resultID, key, raw).Scan(&created)
+		query = `INSERT INTO alert_events(id,node_id,severity,ts,resolved_at,title,detail,acked,trigger_result_id,event_key,payload)
+			VALUES ($1,$2,$3,$4,$4,$5,$6,true,$7,$8,$9)`
+		args = []any{id, nodeID, severity, ts, title, detail, resultID, key, raw}
 	}
-	if err != nil {
+	if _, err = tx.Exec(ctx, query, args...); err != nil {
 		return "", err
 	}
-	if err = s.enqueueNotification(ctx, tx, created, channels); err != nil {
-		return "", err
+	if send {
+		if err := s.enqueueNotification(ctx, tx, id, channels); err != nil {
+			return "", err
+		}
 	}
-	return created, nil
+	return id, nil
 }
 
 func (s *Store) emitRecovery(ctx context.Context, tx pgx.Tx, rule Rule, node string, openedAt, resolvedAt time.Time, resultID string) error {
@@ -134,75 +326,181 @@ func (s *Store) emitRecovery(ctx context.Context, tx pgx.Tx, rule Rule, node str
 	if !ok || cat.RecoveryKey == "" {
 		return nil
 	}
-	on, err := s.catalogEnabled(ctx, tx, cat.RecoveryKey, node)
-	if err != nil || !on {
+	rec, _ := catalog.LookupEvent(cat.RecoveryKey)
+	config, err := resolveEventSettings(ctx, tx, cat.RecoveryKey, node, rec.Severity, rule.Channels)
+	if err != nil || !config.Enabled {
 		return err
 	}
-	rec, _ := catalog.LookupEvent(cat.RecoveryKey)
 	var nodeName string
 	var expectedDown, expectedUp float64
 	if err := tx.QueryRow(ctx, `SELECT name,expected_down_mbps,expected_up_mbps FROM nodes WHERE id=$1`, node).
 		Scan(&nodeName, &expectedDown, &expectedUp); err != nil {
 		return err
 	}
-	limits, err := s.qualityLimits(ctx, tx, node)
+	var result agentapi.Result
+	if resultID != "" {
+		result, err = loadResult(ctx, tx, resultID)
+		if err != nil {
+			return err
+		}
+	}
+	limits, err := s.qualityLimits(ctx, tx, node, result.Engine)
 	if err != nil {
 		return err
 	}
-	extra := map[string]string{"duration": formatDuration(resolvedAt.Sub(openedAt)), "since": openedAt.UTC().Format(time.RFC3339)}
-	var result agentapi.Result
-	if resultID != "" {
-		var loadErr error
-		result, loadErr = loadResult(ctx, tx, resultID)
-		if loadErr != nil {
-			return loadErr
-		}
+	zone, err := ownerTimezone(ctx, tx)
+	if err != nil {
+		return err
+	}
+	extra := map[string]string{"duration": formatDuration(resolvedAt.Sub(openedAt)), "since": formatOwnerTime(openedAt, zone)}
+	if result.Error != nil {
+		extra["failure_reason"] = *result.Error
 	}
 	url, err := s.centerURL(ctx, tx)
 	if err != nil {
 		return err
 	}
-	payload := BuildPayload(cat.RecoveryKey, nodeName, url, rec.Severity, result, expectedDown, expectedUp, limits, extra)
-	channels, err := s.eventChannels(ctx, tx, cat.RecoveryKey, rule.Channels)
-	if err != nil {
-		return err
-	}
-	_, err = s.insertCatalogEvent(ctx, tx, cat.RecoveryKey, node, rec.Severity, rec.Title, "Recovered after "+extra["duration"], resultID, channels, payload, resolvedAt)
+	payload := BuildPayload(cat.RecoveryKey, nodeName, url, config.Severity, result, expectedDown, expectedUp, limits, extra)
+	_, err = s.insertCatalogEvent(ctx, tx, cat.RecoveryKey, node, config.Severity, rec.Title, "Recovered after "+extra["duration"], resultID, config.Channels, payload, resolvedAt)
 	return err
 }
 
-func (s *Store) emitTestOutcome(ctx context.Context, tx pgx.Tx, node string, result agentapi.Result, ts time.Time, expectedDown, expectedUp float64) error {
-	key := "test.success"
-	if result.Manual {
-		key = "test.manual_finished"
+func (s *Store) emitTestOutcome(ctx context.Context, tx pgx.Tx, node string, result agentapi.Result, ts time.Time) error {
+	keys := testOutcomeKeys(result)
+	for _, key := range keys {
+		if err := s.emitOneTestOutcome(ctx, tx, node, result, ts, key); err != nil {
+			return err
+		}
 	}
-	if result.Status != "ok" && result.Status != "degraded" {
+	return nil
+}
+
+func testOutcomeKeys(result agentapi.Result) []string {
+	keys := make([]string, 0, 2)
+	success := result.Status == "ok" || result.Status == "degraded"
+	if success {
+		keys = append(keys, "test.success")
+	}
+	if result.Manual {
+		keys = append(keys, "test.manual_finished")
+	}
+	return keys
+}
+
+func (s *Store) emitOneTestOutcome(ctx context.Context, tx pgx.Tx, node string, result agentapi.Result, ts time.Time, key string) error {
+	ev, ok := catalog.LookupEvent(key)
+	if !ok {
 		return nil
 	}
-	on, err := s.catalogEnabled(ctx, tx, key, node)
-	if err != nil || !on {
+	configs, _ := ctx.Value(testOutcomeBatchKey{}).(map[string]testOutcomeConfig)
+	configKey := eventConfigKey(key, result.Engine)
+	config, found := configs[configKey]
+	var err error
+	if !found {
+		config, err = s.testOutcomeConfig(ctx, tx, node, ev, result.Engine)
+	}
+	if err != nil || !config.Enabled {
 		return err
 	}
-	ev, _ := catalog.LookupEvent(key)
-	var nodeName string
-	if err := tx.QueryRow(ctx, `SELECT name FROM nodes WHERE id=$1`, node).Scan(&nodeName); err != nil {
-		return err
+	extra := map[string]string{"since": formatOwnerTime(ts, config.Timezone)}
+	if result.Error != nil {
+		extra["failure_reason"] = *result.Error
 	}
-	limits, err := s.qualityLimits(ctx, tx, node)
-	if err != nil {
-		return err
+	payload := BuildPayload(key, config.NodeName, config.CenterURL, config.Severity, result, config.ExpectedDown, config.ExpectedUp, config.Limits, extra)
+	detail := "Test finished"
+	if result.Error != nil {
+		detail = *result.Error
 	}
-	url, err := s.centerURL(ctx, tx)
-	if err != nil {
-		return err
-	}
-	payload := BuildPayload(key, nodeName, url, ev.Severity, result, expectedDown, expectedUp, limits, nil)
-	channels, err := s.eventChannels(ctx, tx, key, ev.Channels)
-	if err != nil {
-		return err
-	}
-	_, err = s.insertCatalogEvent(ctx, tx, key, node, ev.Severity, ev.Title, "Test finished", result.ID, channels, payload, ts)
+	_, err = s.insertCatalogEventWithSettings(ctx, tx, key, node, ev.Title, detail, result.ID, payload, ts, config.EventSettings)
 	return err
+}
+
+// PrepareResultBatch loads notification settings once for all successful results in a request.
+func (s *Store) PrepareResultBatch(ctx context.Context, node string, results []agentapi.Result) (context.Context, error) {
+	events := make(map[string]catalog.Event, 3)
+	for _, result := range results {
+		for _, key := range testOutcomeKeys(result) {
+			if event, ok := catalog.LookupEvent(key); ok {
+			events[eventConfigKey(key, result.Engine)] = event
+			}
+		}
+	}
+	if len(events) == 0 {
+		return ctx, nil
+	}
+	configs := make(map[string]testOutcomeConfig, len(events))
+	for mapKey, event := range events {
+		engine := strings.TrimPrefix(mapKey, event.Key+"|")
+		config, err := s.testOutcomeConfig(ctx, s.DB, node, event, engine)
+		if err != nil {
+			return ctx, err
+		}
+		configs[mapKey] = config
+	}
+	return context.WithValue(ctx, testOutcomeBatchKey{}, configs), nil
+}
+
+type testOutcomeConfig struct {
+	NodeName, CenterURL      string
+	ExpectedDown, ExpectedUp float64
+	Enabled                  bool
+	Severity                 string
+	Channels                 []string
+	Limits                   QualityLimits
+	Timezone                 string
+	EventSettings            effectiveEventSettings
+}
+
+func eventConfigKey(key, engine string) string { return key + "|" + measurementEngine(engine) }
+
+func (s *Store) testOutcomeConfig(ctx context.Context, q notificationQuerier, node string, event catalog.Event, engine string) (testOutcomeConfig, error) {
+	var config testOutcomeConfig
+	if err := q.QueryRow(ctx, `/* test_outcome_config */
+		SELECT n.name,n.expected_down_mbps,n.expected_up_mbps,
+			COALESCE((SELECT value->>'centerUrl' FROM settings WHERE key='display'),'')
+		FROM nodes n WHERE n.id=$1`, node).
+		Scan(&config.NodeName, &config.ExpectedDown, &config.ExpectedUp, &config.CenterURL); err != nil {
+		return config, err
+	}
+	effective, err := resolveEventSettings(ctx, q, event.Key, node, "", nil)
+	if err != nil {
+		return config, err
+	}
+	config.Enabled, config.Severity, config.Channels = effective.Enabled, effective.Severity, effective.Channels
+	config.EventSettings = effective
+	config.Timezone, err = ownerTimezone(ctx, q)
+	if err != nil {
+		return config, err
+	}
+	config.Limits, err = s.qualityLimits(ctx, q, node, engine)
+	return config, err
+}
+
+func ownerTimezone(ctx context.Context, q notificationQuerier) (string, error) {
+	var zone string
+	if err := q.QueryRow(ctx, `SELECT COALESCE(
+		(SELECT value #>> '{}' FROM settings WHERE key='notifyQuietTimezone'),
+		(SELECT value #>> '{}' FROM settings WHERE key='timezone'),
+		'Asia/Bangkok')`).Scan(&zone); errors.Is(err, pgx.ErrNoRows) {
+		return "Asia/Bangkok", nil
+	} else if err != nil {
+		return "", err
+	}
+	if zone == "" {
+		return "Asia/Bangkok", nil
+	}
+	if _, err := time.LoadLocation(zone); err != nil {
+		return "Asia/Bangkok", nil
+	}
+	return zone, nil
+}
+
+func formatOwnerTime(value time.Time, zone string) string {
+	location, err := time.LoadLocation(zone)
+	if err != nil {
+		location = time.UTC
+	}
+	return value.In(location).Format(time.RFC3339)
 }
 
 func formatDuration(d time.Duration) string {
@@ -219,11 +517,20 @@ func loadResult(ctx context.Context, tx pgx.Tx, id string) (agentapi.Result, err
 	var r agentapi.Result
 	var down, up, ping, jitter, loss *float64
 	var ip *string
-	err := tx.QueryRow(ctx, `SELECT id::text,ts::text,status,down_mbps,up_mbps,ping_ms,jitter_ms,loss_percent,host(ip),manual
-		FROM results WHERE id=$1`, id).Scan(&r.ID, &r.TS, &r.Status, &down, &up, &ping, &jitter, &loss, &ip, &r.Manual)
+	var rawServer []byte
+	err := tx.QueryRow(ctx, `SELECT id::text,ts::text,status,down_mbps,up_mbps,ping_ms,jitter_ms,loss_percent,host(ip),manual,
+		server,engine_isp,error FROM results WHERE id=$1`, id).
+		Scan(&r.ID, &r.TS, &r.Status, &down, &up, &ping, &jitter, &loss, &ip, &r.Manual, &rawServer, &r.EngineISP, &r.Error)
 	if err != nil {
 		return agentapi.Result{}, err
 	}
 	r.Down, r.Up, r.Ping, r.Jitter, r.Loss, r.IP = down, up, ping, jitter, loss, ip
+	if len(rawServer) > 0 && string(rawServer) != "null" {
+		var server agentapi.Server
+		if err := json.Unmarshal(rawServer, &server); err != nil {
+			return agentapi.Result{}, err
+		}
+		r.Server = &server
+	}
 	return r, nil
 }

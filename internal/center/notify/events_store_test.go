@@ -2,6 +2,7 @@ package notify
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -62,7 +63,9 @@ func (m *memEventDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, e
 		}
 		rows := make([][]any, 0, len(m.settings))
 		for k, v := range m.settings {
-			rows = append(rows, []any{k, v.Enabled, v.Severity, v.Channels})
+			thresholds, _ := json.Marshal(v.Thresholds)
+			rows = append(rows, []any{k, v.Enabled, v.Severity, v.Channels, thresholds, v.CooldownSeconds, v.RepeatSeconds,
+				v.MaintenanceStart, v.MaintenanceEnd, v.MaintenanceTimezone, v.ISPScope})
 		}
 		return &memRows{rows: rows}, nil
 	}
@@ -74,6 +77,48 @@ func (m *memEventDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Ro
 		return memRow{err: m.fail}
 	}
 	switch {
+	case strings.Contains(sql, "INSERT INTO notification_event_settings"):
+		key := args[0].(string)
+		current, exists := m.settings[key]
+		if !exists {
+			current = eventOverride{Enabled: args[2].(bool), Severity: args[4].(string), Channels: args[6].([]string),
+				Thresholds: map[string]float64{}, MaintenanceTimezone: "UTC", Present: true}
+		}
+		if args[1] != nil {
+			current.Enabled = args[1].(bool)
+		}
+		if args[3] != nil {
+			current.Severity = args[3].(string)
+		}
+		if args[5] != nil {
+			current.Channels = args[5].([]string)
+		}
+		if args[7] != nil {
+			_ = json.Unmarshal(args[7].([]byte), &current.Thresholds)
+		}
+		if args[8] != nil {
+			current.CooldownSeconds = args[8].(int)
+		}
+		if args[9] != nil {
+			current.RepeatSeconds = args[9].(int)
+		}
+		if args[10] != nil {
+			current.MaintenanceStart = args[10].(string)
+		}
+		if args[11] != nil {
+			current.MaintenanceEnd = args[11].(string)
+		}
+		if args[12] != nil {
+			current.MaintenanceTimezone = args[12].(string)
+		}
+		if args[13] != nil {
+			current.ISPScope = args[13].([]string)
+		}
+		current.Present = true
+		m.settings[key] = current
+		thresholds, _ := json.Marshal(current.Thresholds)
+		return memRow{vals: []any{current.Enabled, current.Severity, current.Channels, thresholds, current.CooldownSeconds,
+			current.RepeatSeconds, current.MaintenanceStart, current.MaintenanceEnd, current.MaintenanceTimezone, current.ISPScope}}
 	case strings.Contains(sql, "FROM notification_templates"):
 		if m.failTemplate {
 			return memRow{err: errors.New("template query failed")}
@@ -113,6 +158,8 @@ func (r memRow) Scan(dest ...any) error {
 			*d = r.vals[i].(bool)
 		case *time.Time:
 			*d = r.vals[i].(time.Time)
+		case *int:
+			*d = r.vals[i].(int)
 		case *[]string:
 			*d = r.vals[i].([]string)
 		case *[]byte:
@@ -149,6 +196,10 @@ func (r *memRows) Scan(dest ...any) error {
 			*d = vals[i].(bool)
 		case *[]string:
 			*d = vals[i].([]string)
+		case *[]byte:
+			*d = vals[i].([]byte)
+		case *int:
+			*d = vals[i].(int)
 		}
 	}
 	return nil
@@ -250,8 +301,8 @@ func TestEventStoreWithMemoryDB(t *testing.T) {
 	}
 	db.failTemplate = false
 	db.failSettings = true
-	if _, err := store.UpdateEvent(ctx, "test.success", EventPatch{Enabled: &en}); err == nil {
-		t.Fatal("update settings load failure")
+	if _, err := store.UpdateEvent(ctx, "test.success", EventPatch{Enabled: &en}); err != nil {
+		t.Fatalf("atomic field patch should not read all settings first: %v", err)
 	}
 	db.failSettings = false
 	if _, err := store.ResetTemplate(ctx, "missing", "email"); !errors.Is(err, ErrEventNotFound) {

@@ -72,12 +72,14 @@ const eventColumns = `id::text,rule_id::text,node_id::text,severity,ts,resolved_
 func scanEvent(row rowScanner) (Event, error) {
 	var e Event
 	var ruleID *string
+	var nodeID *string
 	var ts time.Time
 	var resolved *time.Time
-	if err := row.Scan(&e.ID, &ruleID, &e.NodeID, &e.Severity, &ts, &resolved, &e.Title, &e.Detail, &e.Acked); err != nil {
+	if err := row.Scan(&e.ID, &ruleID, &nodeID, &e.Severity, &ts, &resolved, &e.Title, &e.Detail, &e.Acked); err != nil {
 		return Event{}, err
 	}
 	e.RuleID = ruleID
+	e.NodeID = nodeID
 	e.TS = ts.UTC().Format(time.RFC3339Nano)
 	if resolved != nil {
 		value := resolved.UTC().Format(time.RFC3339Nano)

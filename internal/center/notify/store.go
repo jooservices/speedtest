@@ -199,6 +199,7 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 	next := now
 	attempts := d.Attempts
 	held := false
+	var attemptErr error
 	if now.Before(d.CreatedAt.Add(24*time.Hour)) && d.EventID != nil {
 		if held, err = heldByQuietHours(ctx, tx, *d.EventID, now); err != nil {
 			return false, err
@@ -213,11 +214,11 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 		text := "delivery expired after 24 hours"
 		safeError = &text
 	default:
-		sendErr := s.attempt(ctx, tx, d)
+		attemptErr = s.attempt(ctx, tx, d)
 		attempts++
 		last = &now
 		status = "sent"
-		if sendErr != nil {
+		if attemptErr != nil {
 			status = "pending"
 			text := "notification attempt failed"
 			safeError = &text
@@ -230,6 +231,11 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 	}
 	if _, err = tx.Exec(ctx, `UPDATE notification_deliveries SET status=$2,attempts=$3,last_attempt=$4,error=$5,next_attempt_at=$6 WHERE id=$1`, d.ID, status, attempts, last, safeError, next); err != nil {
 		return false, err
+	}
+	if attemptErr != nil && attempts >= 3 && d.EventID != nil {
+		if err := s.escalateDeliveryFailure(ctx, tx, d.ID, *d.EventID, d.Channel, attempts, now); err != nil {
+			return false, err
+		}
 	}
 	return true, tx.Commit(ctx)
 }
@@ -244,7 +250,7 @@ func heldByQuietHours(ctx context.Context, q interface {
 	if err != nil {
 		return false, err
 	}
-	var window schedules.Quiet
+	window := schedules.Quiet{Start: "23:00", End: "07:00", Timezone: "Asia/Bangkok"}
 	critical := true
 	for rows.Next() {
 		var key string

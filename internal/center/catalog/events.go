@@ -14,6 +14,8 @@ type Event struct {
 	Channels    []string
 	// AlertMetric links legacy alert_rules.metric rows to this catalog event when non-empty.
 	AlertMetric string
+	// Thresholds are the in-code defaults for this event; owner values can override them.
+	Thresholds map[string]float64
 	// RecoveryKey is the catalog event emitted when this alert clears (empty = none).
 	RecoveryKey string
 	// NodeScoped allows per-node enable overrides (test.success).
@@ -32,7 +34,7 @@ var qualityPlaceholders = []string{
 	"download", "upload", "ping", "jitter", "loss",
 	"download_limit", "upload_limit", "ping_limit", "jitter_limit", "loss_limit",
 	"download_ok", "upload_ok", "ping_ok", "jitter_ok", "loss_ok",
-	"server", "isp", "ip", "old_ip", "city", "since", "duration", "count", "link", "center",
+	"server", "isp", "ip", "old_ip", "city", "since", "duration", "count", "failure_reason", "link", "center",
 }
 
 func basePlaceholders(extra ...string) []string {
@@ -61,7 +63,7 @@ func qualityBody() string {
 }
 
 func successBody() string {
-	return "Download {download} (limit {download_limit}, ok={download_ok}); upload {upload} (limit {upload_limit}, ok={upload_ok}); ping {ping} ms (limit {ping_limit}, ok={ping_ok}); jitter {jitter} ms (limit {jitter_limit}, ok={jitter_ok}); loss {loss}% (limit {loss_limit}, ok={loss_ok}). Server {server}; ISP {isp}."
+	return "Download {download} ({pct}% of expected; limit {download_limit}, ok={download_ok}); upload {upload} (limit {upload_limit}, ok={upload_ok}); ping {ping} ms (limit {ping_limit}, ok={ping_ok}); jitter {jitter} ms (limit {jitter_limit}, ok={jitter_ok}); loss {loss}% (limit {loss_limit}, ok={loss_ok}). Server {server}; ISP {isp}. {failure_reason}"
 }
 
 var events = []Event{
@@ -104,7 +106,7 @@ var events = []Event{
 	{
 		Key: "test.failed", Category: "tests", Title: "Test failed",
 		Description: "N consecutive failed tests.", Enabled: true, Severity: "crit",
-		Channels: []string{"telegram"}, AlertMetric: "failed", RecoveryKey: "test.recovered",
+		Channels: []string{"telegram"}, AlertMetric: "failed", Thresholds: map[string]float64{"for_tests": 2}, RecoveryKey: "test.recovered",
 		Placeholders: basePlaceholders(), Templates: defaultTemplates("Test failed", "{count} failed tests in a row."),
 	},
 	{
@@ -128,36 +130,36 @@ var events = []Event{
 	{
 		Key: "quality.download_low", Category: "quality", Title: "Download below limit",
 		Description: "Download below the configured percent of expected.", Enabled: true, Severity: "warn",
-		Channels: []string{"telegram"}, AlertMetric: "down_pct", RecoveryKey: "quality.recovered",
+		Channels: []string{"telegram"}, AlertMetric: "down_pct", Thresholds: map[string]float64{"down_pct": 65}, RecoveryKey: "quality.recovered",
 		Placeholders: basePlaceholders(), Templates: defaultTemplates("Download below limit", qualityBody()),
 	},
 	{
 		Key: "quality.upload_low", Category: "quality", Title: "Upload below limit",
 		Description: "Upload below the configured percent of expected.", Enabled: true, Severity: "warn",
-		Channels: []string{"telegram"}, AlertMetric: "up_pct", RecoveryKey: "quality.recovered",
+		Channels: []string{"telegram"}, AlertMetric: "up_pct", Thresholds: map[string]float64{"up_pct": 40}, RecoveryKey: "quality.recovered",
 		Placeholders: basePlaceholders(), Templates: defaultTemplates("Upload below limit", qualityBody()),
 	},
 	{
 		Key: "quality.ping_high", Category: "quality", Title: "Ping above limit",
 		Description: "Ping above the configured limit.", Enabled: true, Severity: "warn",
-		Channels: []string{"telegram"}, AlertMetric: "ping", RecoveryKey: "quality.recovered",
+		Channels: []string{"telegram"}, AlertMetric: "ping", Thresholds: map[string]float64{"ping": 30}, RecoveryKey: "quality.recovered",
 		Placeholders: basePlaceholders(), Templates: defaultTemplates("Ping above limit", qualityBody()),
 	},
 	{
 		Key: "quality.jitter_high", Category: "quality", Title: "Jitter above limit",
 		Description: "Jitter above the configured limit.", Enabled: true, Severity: "warn",
-		Channels: []string{"telegram"}, AlertMetric: "jitter", RecoveryKey: "quality.recovered",
+		Channels: []string{"telegram"}, AlertMetric: "jitter", Thresholds: map[string]float64{"jitter": 10}, RecoveryKey: "quality.recovered",
 		Placeholders: basePlaceholders(), Templates: defaultTemplates("Jitter above limit", qualityBody()),
 	},
 	{
 		Key: "quality.loss_high", Category: "quality", Title: "Packet loss above limit",
 		Description: "Packet loss above the configured limit.", Enabled: true, Severity: "warn",
-		Channels: []string{"telegram"}, AlertMetric: "loss", RecoveryKey: "quality.recovered",
+		Channels: []string{"telegram"}, AlertMetric: "loss", Thresholds: map[string]float64{"loss": 2}, RecoveryKey: "quality.recovered",
 		Placeholders: basePlaceholders(), Templates: defaultTemplates("Packet loss above limit", qualityBody()),
 	},
 	{
 		Key: "quality.drop_vs_median", Category: "quality", Title: "Drop versus 7-day median",
-		Description: "Speed dropped against the node's 7-day median.", Enabled: false, Severity: "warn",
+		Description: "Speed dropped against the node's 7-day median.", Enabled: false, Severity: "warn", Thresholds: map[string]float64{"drop_pct": 30},
 		Channels: []string{"telegram"}, Placeholders: basePlaceholders(), EngineScoped: true,
 		Templates: defaultTemplates("Drop versus median", qualityBody()),
 	},
@@ -187,19 +189,19 @@ var events = []Event{
 	},
 	{
 		Key: "bandwidth.budget_80", Category: "bandwidth", Title: "Bandwidth budget 80%",
-		Description: "Estimated monthly bandwidth reached 80%.", Enabled: true, Severity: "warn",
+		Description: "Estimated monthly bandwidth reached 80%.", Enabled: true, Severity: "warn", Thresholds: map[string]float64{"monthly_gb": 0},
 		Channels: []string{"telegram"}, Placeholders: basePlaceholders(),
 		Templates: defaultTemplates("Bandwidth budget 80%", "Bandwidth budget reached 80%."),
 	},
 	{
 		Key: "bandwidth.budget_100", Category: "bandwidth", Title: "Bandwidth budget 100%",
-		Description: "Estimated monthly bandwidth reached 100%.", Enabled: true, Severity: "crit",
+		Description: "Estimated monthly bandwidth reached 100%.", Enabled: true, Severity: "crit", Thresholds: map[string]float64{"monthly_gb": 0},
 		Channels: []string{"telegram"}, Placeholders: basePlaceholders(),
 		Templates: defaultTemplates("Bandwidth budget 100%", "Bandwidth budget reached 100%."),
 	},
 	{
 		Key: "bandwidth.projection_over", Category: "bandwidth", Title: "Projection over budget",
-		Description: "Projected usage will exceed the monthly budget.", Enabled: true, Severity: "warn",
+		Description: "Projected usage will exceed the monthly budget.", Enabled: true, Severity: "warn", Thresholds: map[string]float64{"monthly_gb": 0},
 		Channels: []string{"telegram"}, Placeholders: basePlaceholders(),
 		Templates: defaultTemplates("Projection over budget", "Projected usage is over budget."),
 	},
@@ -217,7 +219,7 @@ var events = []Event{
 	},
 	{
 		Key: "security.login_burst", Category: "security", Title: "Failed-login burst",
-		Description: "Too many failed sign-in attempts.", Enabled: true, Severity: "crit",
+		Description: "Too many failed sign-in attempts.", Enabled: true, Severity: "crit", Thresholds: map[string]float64{"attempts": 5},
 		Channels: []string{"telegram", "email"}, Placeholders: basePlaceholders(),
 		Templates: defaultTemplates("Failed-login burst", "{count} failed sign-in attempts."),
 	},
@@ -333,6 +335,13 @@ func cloneEvent(e Event) Event {
 			cp[k] = v
 		}
 		e.Templates = cp
+	}
+	if e.Thresholds != nil {
+		cp := make(map[string]float64, len(e.Thresholds))
+		for k, v := range e.Thresholds {
+			cp[k] = v
+		}
+		e.Thresholds = cp
 	}
 	return e
 }

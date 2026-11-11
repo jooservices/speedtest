@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync/atomic"
 
 	"github.com/jooservices/speedtest/internal/center/audit"
 )
@@ -13,6 +14,15 @@ import (
 type AuditStore interface {
 	Record(ctx context.Context, e audit.Entry) error
 	List(ctx context.Context, f audit.Filter, page, size int) ([]audit.Entry, int, error)
+}
+
+type auditRecordedKey struct{}
+type auditRecordedState struct{ recorded atomic.Bool }
+
+func markAuditRecorded(ctx context.Context) {
+	if state, ok := ctx.Value(auditRecordedKey{}).(*auditRecordedState); ok {
+		state.recorded.Store(true)
+	}
 }
 
 // withAudit records every successful owner write (see audit.Classify). The actor is read from the session before
@@ -30,13 +40,15 @@ func withAudit(next http.Handler, store AuditStore, auth *serverAuth, logger *sl
 			return
 		}
 		actor := auth.actor(r)
+		state := &auditRecordedState{}
+		r = r.WithContext(context.WithValue(r.Context(), auditRecordedKey{}, state))
 		response := &statusWriter{ResponseWriter: w}
 		next.ServeHTTP(response, r)
 		status := response.status
 		if status == 0 {
 			status = http.StatusOK
 		}
-		if actor == "" || status < 200 || status > 299 {
+		if actor == "" || status < 200 || status > 299 || state.recorded.Load() {
 			return
 		}
 		entry.Actor = actor

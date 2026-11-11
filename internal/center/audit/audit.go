@@ -49,6 +49,19 @@ func newID() string {
 
 // Record stores one entry. The summary is cut to 300 characters.
 func (s *Store) Record(ctx context.Context, e Entry) error {
+	return record(ctx, s.DB, e, s.Now)
+}
+
+// RecordTx writes an audit entry inside the caller's transaction.
+func RecordTx(ctx context.Context, tx pgx.Tx, e Entry) error {
+	return record(ctx, tx, e, nil)
+}
+
+type entryWriter interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func record(ctx context.Context, writer entryWriter, e Entry, nowFn func() time.Time) error {
 	if e.Actor == "" || e.Action == "" {
 		return fmt.Errorf("audit entry needs an actor and an action")
 	}
@@ -56,10 +69,10 @@ func (s *Store) Record(ctx context.Context, e Entry) error {
 		e.Summary = e.Summary[:300]
 	}
 	now := time.Now()
-	if s.Now != nil {
-		now = s.Now()
+	if nowFn != nil {
+		now = nowFn()
 	}
-	_, err := s.DB.Exec(ctx, `INSERT INTO audit_log(id,ts,actor,action,target_type,target_id,summary,remote) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+	_, err := writer.Exec(ctx, `INSERT INTO audit_log(id,ts,actor,action,target_type,target_id,summary,remote) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
 		newID(), now.UTC(), e.Actor, e.Action, e.TargetType, e.TargetID, e.Summary, e.Remote)
 	return err
 }
@@ -129,6 +142,8 @@ var rules = []rule{
 	{"POST", "/api/settings/enrolment-key", "settings.enrolment_key", "settings", "Generated a new enrolment key"},
 	{"POST", "/api/notifications/test/{id}", "notification.test", "notification", "Sent a test notification"},
 	{"PATCH", "/api/notifications/events/{id}", "notification.event.update", "notification_event", "Changed a notification event"},
+	{"POST", "/api/notifications/events/{id}/tests/{id}", "notification.event.test", "notification_event", "Sent a sample notification event"},
+	{"PUT", "/api/notifications/events/{id}/nodes/{id}", "notification.event.node.update", "notification_event", "Changed a node notification event"},
 	{"PUT", "/api/notifications/templates/{id}/{id}", "notification.template.update", "notification_template", "Changed a notification template"},
 	{"POST", "/api/notifications/templates/{id}/{id}/resets", "notification.template.reset", "notification_template", "Reset a notification template"},
 	{"POST", "/api/auth/password", "auth.password", "user", "Changed the password"},
@@ -142,16 +157,17 @@ func match(pattern, path string) (id string, ok bool) {
 	if len(a) != len(b) {
 		return "", false
 	}
+	var ids []string
 	for i := range a {
 		if a[i] == "{id}" {
-			id = b[i]
+			ids = append(ids, b[i])
 			continue
 		}
 		if a[i] != b[i] {
 			return "", false
 		}
 	}
-	return id, true
+	return strings.Join(ids, "/"), true
 }
 
 // Classify turns an owner write into an entry (without actor, time or origin). ok is false for requests that are

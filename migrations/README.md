@@ -18,8 +18,14 @@ installation limit per node. It stores no SSH credentials or enrollment tokens.
 existing nodes and results backfill to Ookla. `00011_alert_event_payload.sql`
 adds defaulted event keys and placeholder payloads to alert history, and
 `00012_notification_events.sql` adds owner overrides for event settings,
-per-node event enablement and templates. The notification versions are
-additive; the 1.0.0 binary continues to use its existing tables and columns.
+per-node event enablement and templates. `00016_alert_streak_timestamps.sql`
+tracks consecutive-test timing and adds configurable event thresholds, cooldowns,
+repeat intervals and maintenance windows. `00017_notification_defaults.sql`
+preserves existing global rule settings and fills missing quiet-hour defaults.
+`00018_system_notification_events.sql` permits platform events without a node;
+`00019_notification_escalation.sql` records delivery escalation time. These
+changes are additive; the 1.0.0 binary continues to use its existing tables and
+columns.
 
 `00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
 `00010_engine_schedules.sql` adds per-engine schedules with a 60-minute default;

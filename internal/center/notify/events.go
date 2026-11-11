@@ -2,7 +2,9 @@ package notify
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"math"
 	"slices"
 	"strings"
 	"time"
@@ -24,24 +26,39 @@ var (
 
 // EventView is the effective event configuration (catalog merged with overrides).
 type EventView struct {
-	Key          string   `json:"key"`
-	Category     string   `json:"category"`
-	Title        string   `json:"title"`
-	Description  string   `json:"description"`
-	Enabled      bool     `json:"enabled"`
-	Severity     string   `json:"severity"`
-	Channels     []string `json:"channels"`
-	NodeScoped   bool     `json:"nodeScoped"`
-	EngineScoped bool     `json:"engineScoped"`
-	Placeholders []string `json:"placeholders"`
-	Customized   bool     `json:"customized"`
+	Key                 string             `json:"key"`
+	Category            string             `json:"category"`
+	Title               string             `json:"title"`
+	Description         string             `json:"description"`
+	Enabled             bool               `json:"enabled"`
+	Severity            string             `json:"severity"`
+	Channels            []string           `json:"channels"`
+	NodeScoped          bool               `json:"nodeScoped"`
+	EngineScoped        bool               `json:"engineScoped"`
+	AlertMetric         string             `json:"alertMetric,omitempty"`
+	Thresholds          map[string]float64 `json:"thresholds"`
+	CooldownSeconds     int                `json:"cooldownSeconds"`
+	RepeatSeconds       int                `json:"repeatSeconds"`
+	MaintenanceStart    string             `json:"maintenanceStart"`
+	MaintenanceEnd      string             `json:"maintenanceEnd"`
+	MaintenanceTimezone string             `json:"maintenanceTimezone"`
+	ISPScope            []string           `json:"ispScopes"`
+	Placeholders        []string           `json:"placeholders"`
+	Customized          bool               `json:"customized"`
 }
 
 // EventPatch updates owner-level event settings.
 type EventPatch struct {
-	Enabled  *bool
-	Severity *string
-	Channels []string
+	Enabled             *bool
+	Severity            *string
+	Channels            []string
+	Thresholds          map[string]float64
+	CooldownSeconds     *int
+	RepeatSeconds       *int
+	MaintenanceStart    *string
+	MaintenanceEnd      *string
+	MaintenanceTimezone *string
+	ISPScope            []string
 }
 
 // TemplateView is one channel template with default tracking.
@@ -104,16 +121,17 @@ func (s *EventStore) UpdateEvent(ctx context.Context, key string, patch EventPat
 	if !ok {
 		return EventView{}, ErrEventNotFound
 	}
-	current := mergeEvent(base, eventOverride{})
-	if existing, err := s.loadSettings(ctx); err != nil {
+	args, err := prepareEventWrite(base, patch)
+	if err != nil {
 		return EventView{}, err
-	} else if o, ok := existing[key]; ok {
-		current = mergeEvent(base, o)
 	}
-	enabled, severity, channels := current.Enabled, current.Severity, slices.Clone(current.Channels)
-	if patch.Enabled != nil {
-		enabled = *patch.Enabled
-	}
+	return s.persistEventPatch(ctx, key, base, args)
+}
+
+type eventWriteArgs struct{ values []any }
+
+func prepareEventWrite(base catalog.Event, patch EventPatch) (eventWriteArgs, error) {
+	severity, channels := base.Severity, slices.Clone(base.Channels)
 	if patch.Severity != nil {
 		severity = strings.TrimSpace(*patch.Severity)
 	}
@@ -121,16 +139,101 @@ func (s *EventStore) UpdateEvent(ctx context.Context, key string, patch EventPat
 		channels = slices.Clone(patch.Channels)
 	}
 	if err := validateEventWrite(severity, channels); err != nil {
-		return EventView{}, err
+		return eventWriteArgs{}, err
 	}
-	_, err := s.DB.Exec(ctx, `INSERT INTO notification_event_settings(event_key,enabled,severity,channels,updated_at)
-		VALUES($1,$2,$3,$4,now())
-		ON CONFLICT(event_key) DO UPDATE SET enabled=EXCLUDED.enabled,severity=EXCLUDED.severity,channels=EXCLUDED.channels,updated_at=now()`,
-		key, enabled, severity, channels)
+	if err := validateRuntimePatch(base, patch); err != nil {
+		return eventWriteArgs{}, err
+	}
+	var values [7]any
+	if patch.Enabled != nil {
+		values[0] = *patch.Enabled
+	}
+	if patch.Severity != nil {
+		values[2] = severity
+	}
+	if patch.Channels != nil {
+		values[4] = channels
+	}
+	if patch.Thresholds != nil {
+		raw, err := json.Marshal(patch.Thresholds)
+		if err != nil {
+			return eventWriteArgs{}, ErrInvalidEvent
+		}
+		values[5] = raw
+	}
+	if patch.CooldownSeconds != nil {
+		values[6] = *patch.CooldownSeconds
+	}
+	return eventWriteArgs{values: valuesToSQL(base, patch, values)}, nil
+}
+
+func valuesToSQL(base catalog.Event, patch EventPatch, values [7]any) []any {
+	var repeatArg, startArg, endArg, zoneArg, scopesArg any
+	if patch.RepeatSeconds != nil {
+		repeatArg = *patch.RepeatSeconds
+	}
+	if patch.MaintenanceStart != nil {
+		startArg = strings.TrimSpace(*patch.MaintenanceStart)
+	}
+	if patch.MaintenanceEnd != nil {
+		endArg = strings.TrimSpace(*patch.MaintenanceEnd)
+	}
+	if patch.MaintenanceTimezone != nil {
+		zoneArg = strings.TrimSpace(*patch.MaintenanceTimezone)
+		if zoneArg == "" {
+			zoneArg = "UTC"
+		}
+	}
+	if patch.ISPScope != nil {
+		scopesArg = normalizeScopes(patch.ISPScope)
+	}
+	return []any{base.Key, values[0], base.Enabled, values[2], base.Severity, values[4], base.Channels,
+		values[5], values[6], repeatArg, startArg, endArg, zoneArg, scopesArg}
+}
+
+func normalizeScopes(scopes []string) []string {
+	out := make([]string, 0, len(scopes))
+	for _, scope := range scopes {
+		out = append(out, strings.TrimSpace(scope))
+	}
+	return out
+}
+
+const updateEventSettingsSQL = `INSERT INTO notification_event_settings(event_key,enabled,severity,channels,thresholds,cooldown_seconds,repeat_seconds,
+	maintenance_start,maintenance_end,maintenance_timezone,isp_scopes,updated_at)
+	VALUES($1,COALESCE($2::boolean,$3),COALESCE($4::text,$5),COALESCE($6::text[],$7::text[]),COALESCE($8::jsonb,'{}'::jsonb),
+	COALESCE($9::integer,0),COALESCE($10::integer,0),NULLIF($11::text,'')::time,NULLIF($12::text,'')::time,
+	COALESCE($13::text,'UTC'),COALESCE($14::text[],'{}'::text[]),now())
+	ON CONFLICT(event_key) DO UPDATE SET enabled=COALESCE($2::boolean,notification_event_settings.enabled),
+	severity=COALESCE($4::text,notification_event_settings.severity),channels=COALESCE($6::text[],notification_event_settings.channels),
+	thresholds=COALESCE($8::jsonb,notification_event_settings.thresholds),cooldown_seconds=COALESCE($9::integer,notification_event_settings.cooldown_seconds),
+	repeat_seconds=COALESCE($10::integer,notification_event_settings.repeat_seconds),
+	maintenance_start=CASE WHEN $11::text IS NULL THEN notification_event_settings.maintenance_start ELSE NULLIF($11::text,'')::time END,
+	maintenance_end=CASE WHEN $12::text IS NULL THEN notification_event_settings.maintenance_end ELSE NULLIF($12::text,'')::time END,
+	maintenance_timezone=COALESCE($13::text,notification_event_settings.maintenance_timezone),isp_scopes=COALESCE($14::text[],notification_event_settings.isp_scopes),updated_at=now()
+	RETURNING enabled,severity,channels,thresholds,cooldown_seconds,repeat_seconds,
+	COALESCE(to_char(maintenance_start,'HH24:MI'),''),COALESCE(to_char(maintenance_end,'HH24:MI'),''),maintenance_timezone,isp_scopes`
+
+func (s *EventStore) persistEventPatch(ctx context.Context, key string, base catalog.Event, args eventWriteArgs) (EventView, error) {
+	var enabled bool
+	var storedSeverity string
+	var storedChannels []string
+	var storedThresholds []byte
+	var cooldown, repeat int
+	var maintenanceStart, maintenanceEnd, timezone string
+	var scopes []string
+	err := s.DB.QueryRow(ctx, updateEventSettingsSQL, args.values...).
+		Scan(&enabled, &storedSeverity, &storedChannels, &storedThresholds, &cooldown, &repeat, &maintenanceStart, &maintenanceEnd, &timezone, &scopes)
 	if err != nil {
 		return EventView{}, err
 	}
-	return s.GetEvent(ctx, key)
+	var thresholds map[string]float64
+	if err := json.Unmarshal(storedThresholds, &thresholds); err != nil {
+		return EventView{}, err
+	}
+	return mergeEvent(base, eventOverride{Enabled: enabled, Severity: storedSeverity, Channels: storedChannels,
+		Thresholds: thresholds, CooldownSeconds: cooldown, RepeatSeconds: repeat, MaintenanceStart: maintenanceStart,
+		MaintenanceEnd: maintenanceEnd, MaintenanceTimezone: timezone, ISPScope: scopes, Present: true}), nil
 }
 
 // GetTemplate returns the effective template body for event/channel.
@@ -158,7 +261,7 @@ func (s *EventStore) PutTemplate(ctx context.Context, key, channel, body string)
 		return templateLookupError(key)
 	}
 	body = strings.ReplaceAll(body, "\r\n", "\n")
-	if err := template.Validate(key, body); err != nil {
+	if err := template.ValidateForChannel(key, channel, body); err != nil {
 		return TemplateView{}, err
 	}
 	_, err := s.DB.Exec(ctx, `INSERT INTO notification_templates(event_key,channel,body,updated_at)
@@ -190,7 +293,7 @@ func (s *EventStore) PreviewTemplate(ctx context.Context, key, channel, body str
 		}
 		body = view.Body
 	}
-	if err := template.Validate(key, body); err != nil {
+	if err := template.ValidateForChannel(key, channel, body); err != nil {
 		return TemplatePreview{}, err
 	}
 	sample := template.Sample(key)
@@ -250,14 +353,23 @@ func (s *EventStore) ResolveBody(ctx context.Context, key, channel string) (body
 }
 
 type eventOverride struct {
-	Enabled  bool
-	Severity string
-	Channels []string
-	Present  bool
+	Enabled             bool
+	Severity            string
+	Channels            []string
+	Thresholds          map[string]float64
+	CooldownSeconds     int
+	RepeatSeconds       int
+	MaintenanceStart    string
+	MaintenanceEnd      string
+	MaintenanceTimezone string
+	ISPScope            []string
+	Present             bool
 }
 
 func (s *EventStore) loadSettings(ctx context.Context) (map[string]eventOverride, error) {
-	rows, err := s.DB.Query(ctx, `SELECT event_key,enabled,severity,channels FROM notification_event_settings`)
+	rows, err := s.DB.Query(ctx, `SELECT event_key,enabled,severity,channels,thresholds,cooldown_seconds,repeat_seconds,
+		COALESCE(to_char(maintenance_start,'HH24:MI'),''),COALESCE(to_char(maintenance_end,'HH24:MI'),''),maintenance_timezone,isp_scopes
+		FROM notification_event_settings`)
 	if err != nil {
 		return nil, err
 	}
@@ -266,11 +378,20 @@ func (s *EventStore) loadSettings(ctx context.Context) (map[string]eventOverride
 	for rows.Next() {
 		var key, severity string
 		var enabled bool
-		var channels []string
-		if err := rows.Scan(&key, &enabled, &severity, &channels); err != nil {
+		var channels, scopes []string
+		var thresholdsRaw []byte
+		var cooldown, repeat int
+		var maintenanceStart, maintenanceEnd, timezone string
+		if err := rows.Scan(&key, &enabled, &severity, &channels, &thresholdsRaw, &cooldown, &repeat, &maintenanceStart, &maintenanceEnd, &timezone, &scopes); err != nil {
 			return nil, err
 		}
-		out[key] = eventOverride{Enabled: enabled, Severity: severity, Channels: channels, Present: true}
+		var thresholds map[string]float64
+		if err := json.Unmarshal(thresholdsRaw, &thresholds); err != nil {
+			return nil, err
+		}
+		out[key] = eventOverride{Enabled: enabled, Severity: severity, Channels: channels, Thresholds: thresholds,
+			CooldownSeconds: cooldown, RepeatSeconds: repeat, MaintenanceStart: maintenanceStart,
+			MaintenanceEnd: maintenanceEnd, MaintenanceTimezone: timezone, ISPScope: scopes, Present: true}
 	}
 	return out, rows.Err()
 }
@@ -280,13 +401,91 @@ func mergeEvent(base catalog.Event, o eventOverride) EventView {
 		Key: base.Key, Category: base.Category, Title: base.Title, Description: base.Description,
 		Enabled: base.Enabled, Severity: base.Severity, Channels: slices.Clone(base.Channels),
 		NodeScoped: base.NodeScoped, EngineScoped: base.EngineScoped,
-		Placeholders: slices.Clone(base.Placeholders),
+		AlertMetric: base.AlertMetric, Thresholds: cloneThresholds(base.Thresholds), MaintenanceTimezone: "UTC",
+		ISPScope: []string{}, Placeholders: slices.Clone(base.Placeholders),
 	}
 	if o.Present {
 		view.Enabled, view.Severity, view.Channels = o.Enabled, o.Severity, slices.Clone(o.Channels)
+		for key, value := range o.Thresholds {
+			view.Thresholds[key] = value
+		}
+		view.CooldownSeconds, view.RepeatSeconds = o.CooldownSeconds, o.RepeatSeconds
+		view.MaintenanceStart, view.MaintenanceEnd, view.MaintenanceTimezone = o.MaintenanceStart, o.MaintenanceEnd, o.MaintenanceTimezone
+		view.ISPScope = append([]string{}, o.ISPScope...)
 		view.Customized = true
 	}
 	return view
+}
+
+func cloneThresholds(in map[string]float64) map[string]float64 {
+	out := make(map[string]float64, len(in))
+	for key, value := range in {
+		out[key] = value
+	}
+	return out
+}
+
+func validateRuntimePatch(event catalog.Event, patch EventPatch) error {
+	if patch.Thresholds != nil {
+		for key, value := range patch.Thresholds {
+			if !allowedThreshold(event, key) || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 || (strings.HasSuffix(key, "_pct") && value > 100) || (key == "for_tests" && (value < 1 || value > 100)) {
+				return ErrInvalidEvent
+			}
+		}
+	}
+	if patch.CooldownSeconds != nil && (*patch.CooldownSeconds < 0 || *patch.CooldownSeconds > 604800) {
+		return ErrInvalidEvent
+	}
+	if patch.RepeatSeconds != nil && (*patch.RepeatSeconds < 0 || *patch.RepeatSeconds > 604800) {
+		return ErrInvalidEvent
+	}
+	if (patch.MaintenanceStart == nil) != (patch.MaintenanceEnd == nil) {
+		return ErrInvalidEvent
+	}
+	if patch.MaintenanceStart != nil {
+		start, end := strings.TrimSpace(*patch.MaintenanceStart), strings.TrimSpace(*patch.MaintenanceEnd)
+		if (start == "") != (end == "") {
+			return ErrInvalidEvent
+		}
+		if start != "" {
+			if _, err := time.Parse("15:04", start); err != nil {
+				return ErrInvalidEvent
+			}
+			if _, err := time.Parse("15:04", end); err != nil {
+				return ErrInvalidEvent
+			}
+		}
+	}
+	zone := ""
+	if patch.MaintenanceTimezone != nil {
+		zone = strings.TrimSpace(*patch.MaintenanceTimezone)
+	}
+	if zone != "" {
+		if _, err := time.LoadLocation(zone); err != nil {
+			return ErrInvalidEvent
+		}
+	}
+	if patch.ISPScope != nil {
+		if len(patch.ISPScope) > 100 {
+			return ErrInvalidEvent
+		}
+		seen := map[string]bool{}
+		for _, value := range patch.ISPScope {
+			value = strings.TrimSpace(value)
+			if value == "" || len(value) > 120 || seen[strings.ToLower(value)] {
+				return ErrInvalidEvent
+			}
+			seen[strings.ToLower(value)] = true
+		}
+	}
+	return nil
+}
+
+func allowedThreshold(event catalog.Event, key string) bool {
+	if _, ok := event.Thresholds[key]; ok {
+		return true
+	}
+	return event.AlertMetric != "" && (key == event.AlertMetric || (event.AlertMetric == "failed" && key == "for_tests"))
 }
 
 func validateEventWrite(severity string, channels []string) error {

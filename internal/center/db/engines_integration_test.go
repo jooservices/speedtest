@@ -78,5 +78,9 @@ INSERT INTO results(id,node_id,engine,ts,status,threads,error) VALUES ('00000000
 		AND to_regclass('notification_templates') IS NOT NULL`).Scan(&preserved); err != nil || !preserved {
 		t.Fatal("upgrade from version 10 changed engine data or omitted notification tables", err)
 	}
-	t.Log("PASS: populated version 10 engine schema upgrades through versions 11 and 12 without changing engine data")
+	var streakColumn bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='alert_state' AND column_name='streak_started_at')`).Scan(&streakColumn); err != nil || !streakColumn {
+		t.Fatal("upgrade omitted recovery streak timestamp", err)
+	}
+	t.Log("PASS: populated version 10 engine schema upgrades through notification versions without changing engine data")
 }

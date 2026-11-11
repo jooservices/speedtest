@@ -86,7 +86,7 @@ func TestAdvanceStreak(t *testing.T) {
 		{name: "opens at threshold", count: 1, hit: true, threshold: 2, want: streakTransition{count: 2, active: true, opened: true}},
 		{name: "stays open", count: 2, active: true, hit: true, threshold: 2, want: streakTransition{count: 2, active: true}},
 		{name: "miss clears and resolves", count: 2, active: true, threshold: 2, want: streakTransition{resolved: true}},
-		{name: "miss before opening", count: 1, threshold: 3, want: streakTransition{}},
+		{name: "miss before opening", count: 1, threshold: 3, want: streakTransition{recovered: true}},
 		{name: "offline one test", hit: true, threshold: 1, want: streakTransition{count: 1, active: true, opened: true}},
 	}
 	for _, tc := range tests {
