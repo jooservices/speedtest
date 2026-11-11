@@ -4,6 +4,7 @@ package geo
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"path/filepath"
@@ -261,11 +262,12 @@ VALUES($1,$2::inet,1,now(),now(),1,1,1),($1,$3::inet,1,now(),now(),1,1,1)`, back
 	now := time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC)
 	job := &Backfill{DB: pool, Cache: NewPostgresCache(pool), Batch: batch, MaxPerRun: 1, BatchSize: 1,
 		Now: func() time.Time { return now }}
-	if processed, err := job.RunOnce(ctx); err != nil || processed != 0 {
-		t.Fatalf("initial budget stop = (%d,%v)", processed, err)
+	if processed, err := job.RunOnce(ctx); err != nil || processed != 1 {
+		t.Fatalf("batch budget refusal should advance the cursor = (%d,%v)", processed, err)
 	}
 	batch.err = nil
-	wantOrder := []string{addresses[2], addresses[3], addresses[0], addresses[1]}
+	batch.weak = false
+	wantOrder := []string{addresses[3], addresses[0], addresses[1]}
 	for i, want := range wantOrder {
 		now = now.AddDate(0, 0, 1)
 		if processed, err := job.RunOnce(ctx); err != nil || processed != 1 {
@@ -281,7 +283,11 @@ VALUES($1,$2::inet,1,now(),now(),1,1,1),($1,$3::inet,1,now(),now(),1,1,1)`, back
 	}
 	now = now.AddDate(0, 0, 1)
 	if processed, err := job.RunOnce(ctx); err != nil || processed != 1 || batch.addresses[len(batch.addresses)-1][0] != addresses[2] {
-		t.Fatalf("new pass did not revisit first node address: (%d,%v), calls=%v", processed, err, batch.addresses)
+		t.Fatalf("cursor wrap did not retry refused address = (%d,%v), calls=%v", processed, err, batch.addresses)
+	}
+	now = now.AddDate(0, 0, 1)
+	if processed, err := job.RunOnce(ctx); err != nil || processed != 0 {
+		t.Fatalf("completed pass = (%d,%v)", processed, err)
 	}
 	var n int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM ip_addresses WHERE host(ip) IN($1,$2,$3,$4) AND looked_up_at IS NOT NULL`, addresses[0], addresses[1], addresses[2], addresses[3]).Scan(&n); err != nil {
@@ -289,6 +295,83 @@ VALUES($1,$2::inet,1,now(),now(),1,1,1),($1,$3::inet,1,now(),now(),1,1,1)`, back
 	}
 	if n != 4 {
 		t.Fatalf("missing placeholders were not backfilled alongside weak records: %d", n)
+	}
+}
+
+func TestBackfillAgeScoreMatchesQualityScoreForCurrentAndLegacyRowsIntegration(t *testing.T) {
+	pool, ctx := integrationPool(t)
+	addresses := []string{"203.0.113.211", "203.0.113.212", "203.0.113.213"}
+	now := time.Now().UTC().Truncate(time.Second)
+	strong := Location{City: "London", Country: "GB", Latitude: 51.5, Longitude: -0.1, ASN: 64500, Organisation: "Example Network", AccuracyRadius: 5}
+	weak := Location{Country: "GB"}
+	legacyScore := 100
+	for i, fixture := range []struct {
+		location Location
+		source   string
+		quality  *int
+		age      time.Duration
+	}{
+		{location: strong, source: "geolite2", age: 180},
+		{location: weak, source: "ipwho", age: 0},
+		{location: strong, source: "geolite2", quality: &legacyScore, age: 108},
+	} {
+		fixtureAge := fixture.age
+		lookedUp := now.Add(-fixtureAge * 24 * time.Hour)
+		raw, err := json.Marshal(fixture.location)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if fixture.quality != nil {
+			var values map[string]any
+			if err := json.Unmarshal(raw, &values); err != nil {
+				t.Fatal(err)
+			}
+			values["quality_score"] = *fixture.quality
+			raw, err = json.Marshal(values)
+			if err != nil {
+				t.Fatal(err)
+			}
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO ip_addresses(ip,geo,source,looked_up_at) VALUES($1::inet,$2::jsonb,$3,$4)`, addresses[i], raw, fixture.source, lookedUp); err != nil {
+			t.Fatal("could not insert backfill quality fixture")
+		}
+	}
+	cache := NewPostgresCache(pool)
+	for range 2 {
+		if _, _, err := cache.Merge(ctx, addresses[0], strong, "geolite2"); err != nil {
+			t.Fatal("no-op merge failed")
+		}
+	}
+	var raw []byte
+	var source string
+	var lookedUp time.Time
+	if err := pool.QueryRow(ctx, `SELECT geo,source,looked_up_at FROM ip_addresses WHERE ip=$1::inet`, addresses[0]).Scan(&raw, &source, &lookedUp); err != nil {
+		t.Fatal(err)
+	}
+	var stored Location
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		t.Fatal(err)
+	}
+	actualAge := int(time.Since(lookedUp).Hours() / 24)
+	if stored.QualityScore != QualityScore(strong, "geolite2", actualAge) || source != "geolite2" || !lookedUp.Equal(now.Add(-180*24*time.Hour)) {
+		t.Fatalf("repeated no-op merge changed score/source/freshness: location=%+v source=%q looked_up_at=%s", stored, source, lookedUp)
+	}
+
+	job := &Backfill{DB: pool, Cache: cache}
+	candidates, err := job.candidates(ctx, now, true, "", 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, candidate := range candidates {
+		got[candidate.address] = true
+	}
+	wantScores := []int{QualityScore(strong, "geolite2", 180), QualityScore(weak, "ipwho", 0), QualityScore(strong, "geolite2", 108)}
+	for i, address := range addresses {
+		want := wantScores[i] < QualityThreshold
+		if got[address] != want {
+			t.Fatalf("candidate selection for %s = %v, fresh score=%d want candidate=%v; all=%v", address, got[address], wantScores[i], want, got)
+		}
 	}
 }
 
@@ -307,7 +390,7 @@ func TestGeoQuotaMigrationRollbackPreservesAddressHistoryIntegration(t *testing.
 	if _, err := pool.Exec(ctx, `INSERT INTO geo_provider_usage(provider,day,requests) VALUES('rollback-fixture',current_date,3)`); err != nil {
 		t.Fatal(err)
 	}
-	if err := centerdb.Migrate(ctx, pool, "down"); err != nil {
+	if err := centerdb.MigrateDownTo(ctx, pool, 22); err != nil {
 		t.Fatal(err)
 	}
 	if n := countGeoRows(t, pool, ctx, `SELECT count(*) FROM ip_addresses WHERE ip=$1::inet`, address); n != 1 {

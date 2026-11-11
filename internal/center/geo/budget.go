@@ -8,6 +8,20 @@ import (
 
 const backgroundReserve = 0.2
 
+type providerPurposeKey struct{}
+
+func withProviderPurpose(ctx context.Context, purpose budget.Purpose) context.Context {
+	return context.WithValue(ctx, providerPurposeKey{}, purpose)
+}
+
+func providerPurpose(ctx context.Context) budget.Purpose {
+	purpose, ok := ctx.Value(providerPurposeKey{}).(budget.Purpose)
+	if !ok {
+		return budget.Background
+	}
+	return purpose
+}
+
 // NewBudgetBroker builds the documented per-provider quota policy over a durable store.
 func NewBudgetBroker(cfg ProviderConfig, store budget.Store) (*budget.Broker, error) {
 	limits := map[string]budget.Limit{
@@ -26,8 +40,6 @@ func NewBudgetBroker(cfg ProviderConfig, store budget.Store) (*budget.Broker, er
 
 type budgetedFallback struct {
 	provider Fallback
-	broker   *budget.Broker
-	observe  func(string, string)
 }
 
 func (p budgetedFallback) Source() string { return p.provider.Source() }
@@ -37,29 +49,16 @@ func (p budgetedFallback) Lookup(ctx context.Context, ip string) (Location, erro
 }
 
 func (p budgetedFallback) LookupFor(ctx context.Context, ip string, purpose budget.Purpose) (Location, error) {
-	allowed, err := p.broker.Allow(ctx, p.provider.Source(), purpose)
-	if err != nil {
-		if p.observe != nil {
-			p.observe(p.provider.Source(), "error")
-		}
-		return Location{}, err
-	}
-	if !allowed {
-		if p.observe != nil {
-			p.observe(p.provider.Source(), "budget_exhausted")
-		}
-		return Location{}, ErrBudgetExhausted
-	}
-	return p.provider.Lookup(ctx, ip)
+	return p.provider.Lookup(withProviderPurpose(ctx, purpose), ip)
 }
 
-func budgetProviders(providers []Fallback, broker *budget.Broker, observe func(string, string)) []Fallback {
+func budgetProviders(providers []Fallback, broker *budget.Broker) []Fallback {
 	if broker == nil {
 		return providers
 	}
 	wrapped := make([]Fallback, len(providers))
 	for i, provider := range providers {
-		wrapped[i] = budgetedFallback{provider: provider, broker: broker, observe: observe}
+		wrapped[i] = budgetedFallback{provider: provider}
 	}
 	return wrapped
 }

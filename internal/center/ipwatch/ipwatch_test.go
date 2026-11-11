@@ -86,8 +86,12 @@ func testTransaction(before, after *position, cached bool) *transaction {
 			tx.rows = append(tx.rows, row{values: []any{p.id, p.ip}})
 		}
 	}
-	lookedUpAt := time.Unix(1, 0)
-	tx.rows = append(tx.rows, row{values: []any{[]byte(`{}`), cached, cached}})
+	lookedUpAt := time.Now().UTC()
+	raw, source := []byte(`{"city":"Fixture city","country":"ZZ","latitude":1,"longitude":1,"accuracy_radius":25,"asn":64512,"organisation":"Fixture Network"}`), "geolite2"
+	if !cached {
+		raw, source = []byte(`{}`), ""
+	}
+	tx.rows = append(tx.rows, row{values: []any{raw, cached, cached, source, lookedUpAt}})
 	if !cached {
 		tx.rows = append(tx.rows, row{values: []any{[]byte(`{}`), "", false, lookedUpAt}})
 		tx.rows = append(tx.rows, row{values: []any{[]byte(`{}`), "", false, lookedUpAt}})
@@ -240,6 +244,25 @@ func TestGeoLookupAndDegradation(t *testing.T) {
 		t.Fatal("default logger")
 	}
 }
+
+func TestWeakLinkedCacheStillRefreshes(t *testing.T) {
+	now := time.Now().UTC()
+	weak := []byte(`{"city":"Fixture city"}`)
+	tx := &transaction{rows: []row{
+		{values: []any{weak, true, true, "fixture", now}},
+		{values: []any{weak, "fixture", true, now}},
+		{values: []any{weak, "fixture", true, now}},
+	}}
+	offline := &lookup{err: geo.ErrNotFound}
+	watcher := &Watcher{Offline: offline, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err := watcher.resolveAndLink(t.Context(), tx, "node", "result", "203.0.113.1"); err != nil {
+		t.Fatal(err)
+	}
+	if offline.calls != 1 || len(tx.queries) != 3 {
+		t.Fatalf("weak linked cache skipped refresh: lookups=%d queries=%d", offline.calls, len(tx.queries))
+	}
+}
+
 func TestOpen(t *testing.T) {
 	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "false")
 	t.Setenv("SPEEDTEST_GEO_IPINFO_ENABLED", "false")

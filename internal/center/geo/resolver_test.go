@@ -8,6 +8,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/jooservices/speedtest/internal/center/geo/budget"
 )
 
 type cachedResult struct {
@@ -77,9 +79,34 @@ type testFallback struct {
 	geo  *testGeo
 }
 
+type mergeTestCache struct {
+	*testCache
+	mergeErr error
+}
+
+func (c *mergeTestCache) Merge(_ context.Context, _ string, location Location, source string) (Location, string, error) {
+	if c.mergeErr != nil {
+		return Location{}, "", c.mergeErr
+	}
+	return location, source, nil
+}
+
 func (f testFallback) Source() string { return f.name }
 func (f testFallback) Lookup(ctx context.Context, ip string) (Location, error) {
 	return f.geo.Lookup(ctx, ip)
+}
+
+type cancelFallback struct {
+	name   string
+	cancel context.CancelFunc
+	calls  atomic.Int32
+}
+
+func (f *cancelFallback) Source() string { return f.name }
+func (f *cancelFallback) Lookup(context.Context, string) (Location, error) {
+	f.calls.Add(1)
+	f.cancel()
+	return Location{}, ErrNotFound
 }
 
 func TestResolverCacheHitSkipsAllLookups(t *testing.T) {
@@ -140,6 +167,92 @@ func TestResolverLowValueFallbackSkipsUnusableProvidersUntilSuccess(t *testing.T
 		if err != nil || got.Country != "US" || first.geo.calls.Load() != 1 || second.geo.calls.Load() != 1 || third.geo.calls.Load() != 0 {
 			t.Fatalf("first=%v lookup = %+v, %v; calls=(%d,%d,%d)", firstErr, got, err,
 				first.geo.calls.Load(), second.geo.calls.Load(), third.geo.calls.Load())
+		}
+	}
+}
+
+type agedMergeCache struct {
+	location Location
+	source   string
+	found    bool
+}
+
+func (c *agedMergeCache) Get(context.Context, string) (Location, string, bool, error) {
+	return c.location, c.source, c.found, nil
+}
+
+func (c *agedMergeCache) Put(_ context.Context, _ string, location Location, source string) error {
+	c.location, c.source, c.found = location, source, true
+	return nil
+}
+
+func (c *agedMergeCache) Merge(_ context.Context, _ string, incoming Location, source string) (Location, string, error) {
+	merged, mergedSource := MergeLocations(c.location, c.source, incoming, source)
+	if !sameLocationData(c.location, merged) || c.source != mergedSource {
+		merged.AgeDays = 0
+	} else {
+		merged.AgeDays = c.location.AgeDays
+	}
+	merged.QualityScore = QualityScore(merged, mergedSource, merged.AgeDays)
+	c.location, c.source, c.found = merged, mergedSource, true
+	return merged, mergedSource, nil
+}
+
+func TestAgedNoOpOfflineMergeKeepsAgeAndStillRefreshes(t *testing.T) {
+	old := Location{City: "London", Country: "GB", Latitude: 51.5, Longitude: -0.1, ASN: 64500,
+		Organisation: "Example Network", AgeDays: 180}
+	old.FieldSources = sourcesFor(old, "geolite2")
+	for _, path := range []string{"interactive", "backfill"} {
+		t.Run(path, func(t *testing.T) {
+			cache := &agedMergeCache{location: old, source: "geolite2", found: true}
+			offline := &testGeo{location: old}
+			provider := testFallback{name: "freeipapi", geo: &testGeo{err: ErrNotFound}}
+			resolver := NewResolver(cache, offline, provider)
+			if path == "backfill" {
+				job := &Backfill{Cache: cache, Resolver: resolver}
+				if _, err := job.refresh(context.Background(), []backfillCandidate{{address: "8.8.8.8"}}); err != nil {
+					t.Fatal(err)
+				}
+			} else if _, err := resolver.Lookup(context.Background(), "8.8.8.8"); err != nil {
+				t.Fatal(err)
+			}
+			if provider.geo.calls.Load() != 1 || cache.location.AgeDays != 180 || cache.location.QualityScore != QualityScore(old, "ipwho", 180) {
+				t.Fatalf("no-op offline refresh changed freshness or skipped provider: calls=%d location=%+v", provider.geo.calls.Load(), cache.location)
+			}
+		})
+	}
+}
+
+func TestConsensusRetainsPartialOfflineAnswerWhenProvidersHaveNoUsableAnswer(t *testing.T) {
+	partial := Location{Country: "GB", ASN: 64500, Organisation: "Example Network"}
+	for _, tc := range []struct {
+		name string
+		err  error
+	}{
+		{name: "miss", err: ErrNotFound},
+		{name: "failure", err: errors.New("provider unavailable")},
+		{name: "exhausted", err: ErrBudgetExhausted},
+	} {
+		for _, withCache := range []bool{false, true} {
+			t.Run(tc.name+map[bool]string{false: "/without-cache", true: "/with-cache"}[withCache], func(t *testing.T) {
+				var cache Cache
+				if withCache {
+					cache = &testCache{}
+				}
+				first := testFallback{name: "ipwho", geo: &testGeo{err: tc.err}}
+				second := testFallback{name: "freeipapi", geo: &testGeo{err: tc.err}}
+				got, err := NewResolver(cache, &testGeo{location: partial}, first, second).
+					WithHighValue(true).WithConsensus(true, nil).Lookup(context.Background(), "8.8.8.8")
+				if got.Country != partial.Country || got.ASN != partial.ASN || got.Organisation != partial.Organisation || err != nil {
+					t.Fatalf("partial offline result = (%+v,%v)", got, err)
+				}
+				if withCache {
+					stored := cache.(*testCache)
+					if stored.entries["8.8.8.8"].location.Country != partial.Country || stored.puts == 0 {
+						t.Fatalf("offline answer was not persisted: %+v", stored.entries)
+					}
+				}
+			})
 		}
 	}
 }
@@ -218,6 +331,91 @@ func TestResolverErrorAndInvalidIPPaths(t *testing.T) {
 			t.Fatalf("zero-value resolver = %v", err)
 		}
 	})
+}
+
+func TestResolverUsesPurposeAwareFallbackAndPreservesStorageErrors(t *testing.T) {
+	location := Location{Country: "GB", City: "London", Latitude: 51.5, Longitude: -0.1,
+		ASN: 64500, Organisation: "Example Network", AccuracyRadius: 5}
+	t.Run("passes background purpose", func(t *testing.T) {
+		provider := &purposeFallback{name: "ipwho", location: location}
+		got, err := NewResolver(nil, nil, provider).WithPurpose(budget.Background).Lookup(context.Background(), "8.8.8.8")
+		if err != nil || got.Country != location.Country || provider.lastPurpose != budget.Background || provider.calls != 1 {
+			t.Fatalf("purpose-aware lookup = (%+v,%v), purpose=%v calls=%d", got, err, provider.lastPurpose, provider.calls)
+		}
+	})
+	t.Run("offline merge storage failure", func(t *testing.T) {
+		cache := &mergeTestCache{testCache: &testCache{}, mergeErr: errors.New("database unavailable")}
+		_, err := NewResolver(cache, &testGeo{location: location}).Lookup(context.Background(), "8.8.8.8")
+		if err == nil || err.Error() != "geolocation cache write failed" {
+			t.Fatalf("offline merge storage error = %v", err)
+		}
+	})
+	t.Run("consensus seed storage failure", func(t *testing.T) {
+		cache := &testCache{putErr: errors.New("database unavailable"), entries: map[string]cachedResult{
+			"8.8.8.8": {location: Location{Country: "GB"}, source: "ipwho"},
+		}}
+		first := testFallback{name: "ipwho", geo: &testGeo{location: location}}
+		second := testFallback{name: "freeipapi", geo: &testGeo{location: location}}
+		_, err := NewResolver(cache, nil, first, second).WithHighValue(true).WithConsensus(true, nil).Lookup(context.Background(), "8.8.8.8")
+		if err == nil || err.Error() != "geolocation cache write failed" || first.geo.calls.Load() != 0 || second.geo.calls.Load() != 0 {
+			t.Fatalf("consensus seed storage error = %v provider calls=(%d,%d)", err, first.geo.calls.Load(), second.geo.calls.Load())
+		}
+	})
+}
+
+func TestResolverWaiterCancellationDoesNotCancelSharedLookup(t *testing.T) {
+	providerGeo := &testGeo{location: Location{Country: "GB"}, wait: 50 * time.Millisecond}
+	resolver := NewResolver(nil, nil, testFallback{name: "ipwho", geo: providerGeo})
+	first := make(chan error, 1)
+	go func() {
+		_, err := resolver.Lookup(context.Background(), "8.8.8.8")
+		first <- err
+	}()
+	deadline := time.Now().Add(time.Second)
+	for providerGeo.calls.Load() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	waiter := make(chan error, 1)
+	go func() {
+		_, err := resolver.Lookup(ctx, "8.8.8.8")
+		waiter <- err
+	}()
+	time.Sleep(5 * time.Millisecond)
+	cancel()
+	if err := <-waiter; !errors.Is(err, context.Canceled) {
+		t.Fatalf("canceled waiter error = %v", err)
+	}
+	if err := <-first; err != nil || providerGeo.calls.Load() != 1 {
+		t.Fatalf("shared lookup = %v, provider calls=%d", err, providerGeo.calls.Load())
+	}
+}
+
+func TestResolverStopsProviderChainWhenContextIsCanceledBetweenProviders(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	first := &cancelFallback{name: "ipwho", cancel: cancel}
+	second := &testGeo{location: Location{Country: "GB"}}
+	resolver := NewResolver(nil, nil, first, testFallback{name: "freeipapi", geo: second}).WithHighValue(true)
+	if _, err := resolver.Lookup(ctx, "8.8.8.8"); !errors.Is(err, context.Canceled) {
+		t.Fatalf("provider chain cancellation = %v", err)
+	}
+	if first.calls.Load() != 1 || second.calls.Load() != 0 {
+		t.Fatalf("provider calls after cancellation = (%d,%d)", first.calls.Load(), second.calls.Load())
+	}
+}
+
+func TestCheapProviderAgreementIgnoresCountrylessAnswers(t *testing.T) {
+	answers := []sourced{
+		{source: "ripestat", location: Location{ASN: 64500}},
+		{source: "ipwho", location: Location{Country: "gb"}},
+		{source: "freeipapi", location: Location{Country: "GB"}},
+	}
+	if !cheapProvidersAgree(answers) {
+		t.Fatal("countryless ASN answer prevented agreeing country providers from bypassing ipgeolocation")
+	}
+	if cheapProvidersAgree([]sourced{{location: Location{ASN: 64500}}, {location: Location{}}}) {
+		t.Fatal("countryless answers were counted as a country agreement")
+	}
 }
 
 func TestResolverCoalescesConcurrentLookups(t *testing.T) {

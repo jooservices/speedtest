@@ -125,8 +125,10 @@ path permissions and capacity, then call `Update` to retry. Archive and checksum
 can refer to different releases during a vendor release: the checksum mismatch
 safely retains that edition's old file; retry later. For rollback, stop/join the
 updater, restore previously backed-up MMDBs to configured paths, then reopen the
-reader. Migration `00021_geo_provider_usage.sql` adds durable provider budget
-and resumable backfill state; its Down section removes both tables.
+reader. Migration `00023_geo_provider_usage.sql` adds durable provider budget
+and resumable backfill state; `00024_geo_provider_rolling_window.sql` adds the
+persistent next-request timestamp used to pace ip-api batch requests across
+minute boundaries. Their Down sections remove only these additions and tables.
 
 ## Verification
 
@@ -203,9 +205,9 @@ daily cap. Background work can use at most 80% of a configured daily quota, leav
 The broker observes ip-api `X-Rl`, `X-Ttl` and HTTP 429 responses and blocks calls until the provider window expires.
 The ip-api free endpoint defaults off; enabling it logs a warning that request IPs travel over plaintext HTTP and that
 the free service is for non-commercial use. Single lookups are paced to 45/minute; batch requests are paced to 15/minute
-and contain at most 100 IPs per request. The batch window has its own durable reservation key; batch calls atomically
-reserve both that window and the shared ip-api request budget, and batch `X-Rl`/`X-Ttl` or 429 responses persist its
-cooldown across restarts and center replicas.
+and contain at most 100 IPs per request. The batch window has its own durable reservation key; an atomic rolling
+reservation spaces requests across minute boundaries and reserves the shared ip-api request budget in the same
+transaction. Batch `X-Rl`/`X-Ttl` or 429 responses persist the cooldown across restarts and center replicas.
 
 At the configured UTC hour (02:00 by default), the resumable backfill selects at most 100 weak or aged addresses per
 night, in bounded batches of up to 100. It includes unlooked placeholders, visits node addresses before lookup-only

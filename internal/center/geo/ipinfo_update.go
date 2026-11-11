@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -114,18 +115,25 @@ func (r *Reader) RunIPInfo(ctx context.Context) {
 	if ctx.Err() != nil || strings.TrimSpace(r.cfg.IPInfoToken) == "" {
 		return
 	}
-	if err := r.UpdateIPInfo(ctx); err != nil && ctx.Err() == nil {
-		r.log.Error("IPinfo Lite database update failed; previous database retained", "error", err)
-	}
 	ticker := time.NewTicker(ipInfoUpdateInterval)
 	defer ticker.Stop()
+	runIPInfoUpdates(ctx, ticker.C, r.UpdateIPInfo, r.log)
+}
+
+func runIPInfoUpdates(ctx context.Context, ticks <-chan time.Time, update func(context.Context) error, logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	if err := update(ctx); err != nil && ctx.Err() == nil {
+		logger.Error("IPinfo Lite database update failed; previous database retained", "error", err)
+	}
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
-			if err := r.UpdateIPInfo(ctx); err != nil && ctx.Err() == nil {
-				r.log.Error("IPinfo Lite database update failed; previous database retained", "error", err)
+		case <-ticks:
+			if err := update(ctx); err != nil && ctx.Err() == nil {
+				logger.Error("IPinfo Lite database update failed; previous database retained", "error", err)
 			}
 		}
 	}

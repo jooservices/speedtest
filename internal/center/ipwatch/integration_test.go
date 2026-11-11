@@ -34,7 +34,8 @@ type locator struct{ calls atomic.Int64 }
 
 func (l *locator) Lookup(context.Context, string) (geo.Location, error) {
 	l.calls.Add(1)
-	return geo.Location{City: "Fixture city", Country: "ZZ"}, nil
+	return geo.Location{City: "Fixture city", Country: "ZZ", Latitude: 1, Longitude: 1, AccuracyRadius: 25,
+		ASN: 64512, Organisation: "Fixture Network"}, nil
 }
 
 type unavailableGeo struct{}

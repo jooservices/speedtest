@@ -83,18 +83,18 @@ func extraProviders(cfg ProviderConfig, providers []Fallback) ([]Fallback, error
 		}
 		providers = append(providers, p)
 	}
-	if cfg.IPGeoEnabled {
-		if strings.TrimSpace(cfg.IPGeoKey) == "" {
-			return nil, errors.New("ipgeolocation.io key is required")
-		}
-		p, err := newJSONProvider("ipgeolocation", cfg.IPGeoURL, cfg.IPGeoRequestsPerMinute, cfg.IPGeoKey, cfg, parseIPGeo, ipgeoEndpoint)
+	if cfg.RIPEStatEnabled {
+		p, err := newJSONProvider("ripestat", cfg.RIPEStatURL, cfg.RIPEStatRequestsPerMinute, "", cfg, parseRIPEStat, ripeStatEndpoint)
 		if err != nil {
 			return nil, err
 		}
 		providers = append(providers, p)
 	}
-	if cfg.RIPEStatEnabled {
-		p, err := newJSONProvider("ripestat", cfg.RIPEStatURL, cfg.RIPEStatRequestsPerMinute, "", cfg, parseRIPEStat, ripeStatEndpoint)
+	if cfg.IPGeoEnabled {
+		if strings.TrimSpace(cfg.IPGeoKey) == "" {
+			return nil, errors.New("ipgeolocation.io key is required")
+		}
+		p, err := newJSONProvider("ipgeolocation", cfg.IPGeoURL, cfg.IPGeoRequestsPerMinute, cfg.IPGeoKey, cfg, parseIPGeo, ipgeoEndpoint)
 		if err != nil {
 			return nil, err
 		}

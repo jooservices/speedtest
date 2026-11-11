@@ -32,6 +32,9 @@ func (r *Resolver) lookupConsensus(ctx context.Context, ip string) (Location, er
 	var failures []error
 	budgetExhausted := false
 	for _, provider := range r.fallbacks {
+		if provider.Source() == "ipgeolocation" && cheapProvidersAgree(answers) {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return Location{}, err
 		}
@@ -62,6 +65,22 @@ func (r *Resolver) lookupConsensus(ctx context.Context, ip string) (Location, er
 		r.log.Warn("geolocation providers disagree", "countries", disagreement)
 	}
 	return r.store(ctx, ip, location, source)
+}
+
+func cheapProvidersAgree(answers []sourced) bool {
+	country, count := "", 0
+	for _, answer := range answers {
+		value := strings.ToUpper(answer.location.Country)
+		if value == "" {
+			continue
+		}
+		if country != "" && country != value {
+			return false
+		}
+		country = value
+		count++
+	}
+	return count >= 2
 }
 
 // pickConsensus chooses the country most providers report (ties go to the earliest provider), merges the agreeing

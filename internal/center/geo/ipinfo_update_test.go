@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/oschwald/maxminddb-golang"
 )
@@ -297,6 +298,40 @@ func TestIPInfoSchedulerStopsAfterInitialFailedUpdateIsCanceled(t *testing.T) {
 	if requests.Load() != 1 {
 		t.Fatalf("initial provider checks = %d, want 1", requests.Load())
 	}
+}
+
+func TestIPInfoSchedulerRunsDailyUpdateAndKeepsGoingAfterFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	ticks := make(chan time.Time, 2)
+	ticks <- time.Now()
+	ticks <- time.Now().Add(ipInfoUpdateInterval)
+	var logs strings.Builder
+	var calls int
+	update := func(context.Context) error {
+		calls++
+		if calls < 3 {
+			return errors.New("sanitized update failure")
+		}
+		cancel()
+		return nil
+	}
+	runIPInfoUpdates(ctx, ticks, update, slog.New(slog.NewTextHandler(&logs, nil)))
+	if calls != 3 || strings.Count(logs.String(), "IPinfo Lite database update failed") != 2 || strings.Contains(logs.String(), "private") {
+		t.Fatalf("scheduler calls=%d logs=%q", calls, logs.String())
+	}
+}
+
+func TestIPInfoSchedulerDefaultsLoggerAndStopsWhenInitialFailureCancels(t *testing.T) {
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer slog.SetDefault(previous)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	update := func(context.Context) error {
+		cancel()
+		return errors.New("sanitized update failure")
+	}
+	runIPInfoUpdates(ctx, nil, update, nil)
 }
 
 func TestIPInfoRedirectRejectsUnsafeRequests(t *testing.T) {

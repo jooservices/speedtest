@@ -28,6 +28,8 @@ type Reservation struct {
 	Provider                string
 	Day, Minute, Now        time.Time
 	DailyLimit, MinuteLimit int
+	MinuteWindow            bool
+	MinimumInterval         time.Duration
 }
 
 // MultiReserver atomically reserves multiple provider dimensions or none.
@@ -94,6 +96,13 @@ func (b *Broker) Allow(ctx context.Context, provider string, p Purpose) (bool, e
 		return false, ErrUnknownProvider
 	}
 	now := b.now().UTC()
+	if limit.MinuteWindow {
+		store, ok := b.store.(MultiReserver)
+		if !ok {
+			return false, errors.New("geolocation budget store does not support atomic minute windows")
+		}
+		return store.ReserveMany(ctx, []Reservation{b.reservation(provider, limit, now, p)})
+	}
 	return b.store.Reserve(ctx, provider, reservationDay(now, limit), now.Truncate(time.Minute), now, b.dailyCeiling(limit.PerDay, p), limit.PerMinute)
 }
 
@@ -116,10 +125,19 @@ func (b *Broker) AllowTogether(ctx context.Context, p Purpose, providers ...stri
 		if !known {
 			return false, ErrUnknownProvider
 		}
-		reservations = append(reservations, Reservation{Provider: provider, Day: reservationDay(now, limit),
-			Minute: now.Truncate(time.Minute), Now: now, DailyLimit: b.dailyCeiling(limit.PerDay, p), MinuteLimit: limit.PerMinute})
+		reservations = append(reservations, b.reservation(provider, limit, now, p))
 	}
 	return store.ReserveMany(ctx, reservations)
+}
+
+func (b *Broker) reservation(provider string, limit Limit, now time.Time, purpose Purpose) Reservation {
+	interval := time.Duration(0)
+	if limit.MinuteWindow && limit.PerMinute > 0 {
+		interval = time.Minute/time.Duration(limit.PerMinute) + 10*time.Millisecond
+	}
+	return Reservation{Provider: provider, Day: reservationDay(now, limit), Minute: now.Truncate(time.Minute), Now: now,
+		DailyLimit: b.dailyCeiling(limit.PerDay, purpose), MinuteLimit: limit.PerMinute,
+		MinuteWindow: limit.MinuteWindow, MinimumInterval: interval}
 }
 
 // ObserveQuota persists a provider cooldown when its response exhausts the advertised window or returns 429.

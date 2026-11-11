@@ -47,19 +47,23 @@ func (s *PostgresStore) Reserve(ctx context.Context, provider string, day, minut
 
 func reserve(ctx context.Context, db DB, reservation Reservation) (bool, error) {
 	var counted int
-	err := db.QueryRow(ctx, `INSERT INTO geo_provider_usage(provider,day,requests,minute_start,minute_requests)
-SELECT $1,$2::date,1,$3,1
+	err := db.QueryRow(ctx, `INSERT INTO geo_provider_usage(provider,day,requests,minute_start,minute_requests,next_request_at)
+SELECT $1,$2::date,1,$3,1,CASE WHEN $7::boolean THEN $4::timestamptz + make_interval(secs => $8::double precision / 1000000.0) ELSE NULL::timestamptz END
 WHERE $5>=0 AND ($5=0 OR $5>=1)
 	AND $6>=0 AND ($6=0 OR $6>=1)
-	AND (SELECT coalesce(max(blocked_until),'-infinity'::timestamptz) FROM geo_provider_usage WHERE provider=$1)<=$4
+	AND (NOT $7::boolean OR (SELECT coalesce(max(next_request_at),'-infinity'::timestamptz) FROM geo_provider_usage WHERE provider=$1)<=$4::timestamptz)
+	AND (SELECT coalesce(max(blocked_until),'-infinity'::timestamptz) FROM geo_provider_usage WHERE provider=$1)<=$4::timestamptz
 ON CONFLICT(provider,day) DO UPDATE SET
 	requests=geo_provider_usage.requests+1,
 	minute_requests=CASE WHEN geo_provider_usage.minute_start=$3 THEN geo_provider_usage.minute_requests+1 ELSE 1 END,
-	minute_start=$3
+	minute_start=$3,
+	next_request_at=CASE WHEN $7::boolean THEN $4::timestamptz + make_interval(secs => $8::double precision / 1000000.0) ELSE geo_provider_usage.next_request_at END
 WHERE $5>=0 AND ( $5=0 OR geo_provider_usage.requests < $5 )
 	AND $6>=0 AND ( $6=0 OR geo_provider_usage.minute_start<>$3 OR geo_provider_usage.minute_requests<$6 )
-	AND (SELECT coalesce(max(blocked_until),'-infinity'::timestamptz) FROM geo_provider_usage WHERE provider=$1)<=$4
-RETURNING requests`, reservation.Provider, reservation.Day.UTC(), reservation.Minute.UTC(), reservation.Now.UTC(), reservation.DailyLimit, reservation.MinuteLimit).Scan(&counted)
+	AND (NOT $7::boolean OR coalesce(geo_provider_usage.next_request_at,'-infinity'::timestamptz)<=$4::timestamptz)
+	AND (SELECT coalesce(max(blocked_until),'-infinity'::timestamptz) FROM geo_provider_usage WHERE provider=$1)<=$4::timestamptz
+	RETURNING requests`, reservation.Provider, reservation.Day.UTC(), reservation.Minute.UTC(), reservation.Now.UTC(),
+		reservation.DailyLimit, reservation.MinuteLimit, reservation.MinuteWindow, reservation.MinimumInterval.Microseconds()).Scan(&counted)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}

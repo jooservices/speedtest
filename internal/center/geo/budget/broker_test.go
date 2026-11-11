@@ -26,13 +26,14 @@ type fakeStore struct {
 	counts   map[string]int
 	minutes  map[string]int
 	blocked  map[string]time.Time
+	next     map[string]time.Time
 	usedErr  error
 	addErr   error
 	blockErr error
 }
 
 func newFakeStore() *fakeStore {
-	return &fakeStore{counts: map[string]int{}, minutes: map[string]int{}, blocked: map[string]time.Time{}}
+	return &fakeStore{counts: map[string]int{}, minutes: map[string]int{}, blocked: map[string]time.Time{}, next: map[string]time.Time{}}
 }
 
 func (f *fakeStore) key(provider string, day time.Time) string {
@@ -89,25 +90,33 @@ func (f *fakeStore) ReserveMany(_ context.Context, reservations []Reservation) (
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	counts, minutes := map[string]int{}, map[string]int{}
+	next := map[string]time.Time{}
 	for key, value := range f.counts {
 		counts[key] = value
 	}
 	for key, value := range f.minutes {
 		minutes[key] = value
 	}
+	for key, value := range f.next {
+		next[key] = value
+	}
 	for _, reservation := range reservations {
 		dayKey := f.key(reservation.Provider, reservation.Day)
 		minuteKey := reservation.Provider + "|" + reservation.Minute.UTC().Format("2006-01-02T15:04")
 		blocked := f.blocked[reservation.Provider].After(reservation.Now)
 		if blocked || reservation.DailyLimit < 0 || reservation.MinuteLimit < 0 ||
+			(reservation.MinuteWindow && next[reservation.Provider].After(reservation.Now)) ||
 			(reservation.DailyLimit > 0 && counts[dayKey] >= reservation.DailyLimit) ||
 			(reservation.MinuteLimit > 0 && minutes[minuteKey] >= reservation.MinuteLimit) {
 			return false, nil
 		}
 		counts[dayKey]++
 		minutes[minuteKey]++
+		if reservation.MinuteWindow {
+			next[reservation.Provider] = reservation.Now.Add(reservation.MinimumInterval)
+		}
 	}
-	f.counts, f.minutes = counts, minutes
+	f.counts, f.minutes, f.next = counts, minutes, next
 	return true, nil
 }
 
@@ -418,16 +427,23 @@ func TestAtomicBatchWindowPersistsAcrossBrokerInstancesAndCooldowns(t *testing.T
 		return broker.WithClock(func() time.Time { return now })
 	}
 	broker := newBroker()
-	for range 15 {
+	for i := range 15 {
 		if allowed, err := broker.AllowTogether(context.Background(), Background, "ip-api", "ip-api-batch"); err != nil || !allowed {
 			t.Fatalf("batch reservation before cap = (%v,%v)", allowed, err)
 		}
+		if i < 14 {
+			now = now.Add(4100 * time.Millisecond)
+		}
 	}
 	if allowed, err := newBroker().AllowTogether(context.Background(), Background, "ip-api", "ip-api-batch"); err != nil || allowed {
-		t.Fatalf("replica exceeded persisted batch cap: (%v,%v)", allowed, err)
+		t.Fatalf("replica exceeded persisted rolling window: (%v,%v)", allowed, err)
 	}
 	if used, _ := store.Used(context.Background(), "ip-api", utcDay(now)); used != 15 {
 		t.Fatalf("refused batch consumed shared provider quota: %d", used)
+	}
+	now = now.Add(4100 * time.Millisecond)
+	if allowed, err := newBroker().AllowTogether(context.Background(), Background, "ip-api", "ip-api-batch"); err != nil || !allowed {
+		t.Fatalf("request after rolling window = (%v,%v)", allowed, err)
 	}
 	if err := broker.ObserveQuota(context.Background(), "ip-api-batch", 0, 90*time.Second, 200); err != nil {
 		t.Fatal(err)
@@ -439,6 +455,27 @@ func TestAtomicBatchWindowPersistsAcrossBrokerInstancesAndCooldowns(t *testing.T
 	now = now.Add(time.Minute)
 	if allowed, err := newBroker().AllowTogether(context.Background(), Background, "ip-api", "ip-api-batch"); err != nil || !allowed {
 		t.Fatalf("batch reservation after cap and cooldown = (%v,%v)", allowed, err)
+	}
+}
+
+func TestAllowMinuteWindowRequiresAtomicStore(t *testing.T) {
+	limit := map[string]Limit{testProvider: {PerMinute: 15, MinuteWindow: true}}
+	plain := newFakeStore()
+	broker, err := New(limit, storeOnly{Store: plain}, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := broker.Allow(context.Background(), testProvider, Interactive); allowed || err == nil {
+		t.Fatalf("minute-window request with non-atomic store = (%v,%v)", allowed, err)
+	}
+
+	atomic := newFakeStore()
+	broker, err = New(limit, atomic, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if allowed, err := broker.Allow(context.Background(), testProvider, Interactive); err != nil || !allowed {
+		t.Fatalf("minute-window request with atomic store = (%v,%v)", allowed, err)
 	}
 }
 

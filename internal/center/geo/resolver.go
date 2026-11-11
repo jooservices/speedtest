@@ -16,6 +16,11 @@ import (
 
 const GeoLiteSource = "geolite2"
 
+var (
+	errCacheRead  = errors.New("geolocation cache read failed")
+	errCacheWrite = errors.New("geolocation cache write failed")
+)
+
 // Cache stores a successful geolocation result for an IP address.
 type Cache interface {
 	Get(context.Context, string) (Location, string, bool, error)
@@ -124,7 +129,7 @@ func (r *Resolver) cacheCandidate(ctx context.Context, ip string) (Location, str
 	}
 	location, source, found, err := r.cache.Get(ctx, ip)
 	if err != nil {
-		return Location{}, "", 0, false, errors.New("geolocation cache read failed")
+		return Location{}, "", 0, false, errCacheRead
 	}
 	if !found {
 		return Location{}, "", 0, false, nil
@@ -144,51 +149,63 @@ func (r *Resolver) offlineCandidate(ctx context.Context, ip string, best Locatio
 		}
 		return best, source, score, false, nil
 	}
+	previous, previousSource := best, source
 	best, source = MergeLocations(best, source, location, GeoLiteSource)
-	score = QualityScore(best, source, 0)
+	if !sameLocationData(previous, best) || previousSource != source {
+		best.AgeDays = 0
+	}
+	score = QualityScore(best, source, best.AgeDays)
+	best.QualityScore = score
 	if score < QualityThreshold {
 		return best, source, score, false, nil
 	}
-	location, err = r.store(ctx, ip, best, source)
-	return location, source, score, true, err
+	best, err = r.store(ctx, ip, best, source)
+	if err != nil {
+		return Location{}, "", 0, false, err
+	}
+	return best, source, score, true, nil
 }
 
 func (r *Resolver) lookupProviders(ctx context.Context, ip string, best Location, bestSource string, bestScore int) (Location, error) {
 	providers := r.fallbacks
 	if r.consensus && r.highValue && len(providers) > 1 {
-		if bestScore > 0 {
-			if _, err := r.store(ctx, ip, best, bestSource); err != nil {
-				return Location{}, err
-			}
-		}
-		return r.lookupConsensus(ctx, ip)
+		return r.lookupHighValueConsensus(ctx, ip, best, bestSource, bestScore)
 	}
 	var failures []error
 	budgetExhausted := false
 	for _, provider := range providers {
+		if !providerCanImprove(best, provider.Source(), r.highValue) {
+			continue
+		}
 		if err := ctx.Err(); err != nil {
 			return Location{}, err
 		}
 		location, err := lookupFallback(ctx, provider, ip, r.purpose)
 		if err == nil {
+			previous, previousSource := best, bestSource
 			best, bestSource = MergeLocations(best, bestSource, location, provider.Source())
-			bestScore = QualityScore(best, bestSource, 0)
-			if bestScore >= QualityThreshold || !r.highValue {
+			improved := !sameLocationData(previous, best) || previousSource != bestSource
+			if improved {
+				best.AgeDays = 0
+			}
+			bestScore = QualityScore(best, bestSource, best.AgeDays)
+			best.QualityScore = bestScore
+			if bestScore >= QualityThreshold || !r.highValue && improved {
 				return r.store(ctx, ip, best, bestSource)
 			}
 			continue
 		}
-		if errors.Is(err, ErrBudgetExhausted) {
+		switch {
+		case errors.Is(err, ErrBudgetExhausted):
 			budgetExhausted = true
 			continue
-		}
-		if errors.Is(err, ErrNotFound) {
+		case errors.Is(err, ErrNotFound):
 			continue
-		}
-		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 			return Location{}, err
+		default:
+			failures = append(failures, err)
 		}
-		failures = append(failures, err)
 	}
 	if bestScore > 0 {
 		return r.store(ctx, ip, best, bestSource)
@@ -202,6 +219,47 @@ func (r *Resolver) lookupProviders(ctx context.Context, ip string, best Location
 	return Location{}, ErrNotFound
 }
 
+func (r *Resolver) lookupHighValueConsensus(ctx context.Context, ip string, best Location, source string, score int) (Location, error) {
+	if score > 0 {
+		if _, err := r.store(ctx, ip, best, source); err != nil {
+			return Location{}, err
+		}
+	}
+	location, err := r.lookupConsensus(ctx, ip)
+	if consensusErrorIsTerminal(err) {
+		return location, err
+	}
+	if score > 0 && (errors.Is(err, ErrNotFound) || errors.Is(err, ErrBudgetExhausted)) {
+		return r.store(ctx, ip, best, source)
+	}
+	return Location{}, err
+}
+
+func consensusErrorIsTerminal(err error) bool {
+	return err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(err, errCacheRead) || errors.Is(err, errCacheWrite)
+}
+
+func providerCanImprove(location Location, source string, highValue bool) bool {
+	switch source {
+	case "ip-api":
+		return location.City == "" || location.Latitude == 0 && location.Longitude == 0
+	case "ipinfo-lite":
+		return location.Country == "" || location.ASN == 0 || location.Organisation == ""
+	case "ripestat":
+		return location.ASN == 0
+	case "ipgeolocation":
+		return highValue && hasLocationGap(location)
+	default:
+		return hasLocationGap(location)
+	}
+}
+
+func hasLocationGap(location Location) bool {
+	return location.Country == "" || location.City == "" || location.Latitude == 0 && location.Longitude == 0 ||
+		location.ASN == 0 || location.Organisation == "" || location.AccuracyRadius == 0
+}
+
 func lookupFallback(ctx context.Context, provider Fallback, ip string, purpose budget.Purpose) (Location, error) {
 	if limited, ok := provider.(interface {
 		LookupFor(context.Context, string, budget.Purpose) (Location, error)
@@ -212,19 +270,22 @@ func lookupFallback(ctx context.Context, provider Fallback, ip string, purpose b
 }
 
 func (r *Resolver) store(ctx context.Context, ip string, location Location, source string) (Location, error) {
+	ageDays := location.AgeDays
 	location, source = MergeLocations(Location{}, "", location, source)
+	location.AgeDays = ageDays
+	location.QualityScore = QualityScore(location, source, ageDays)
 	if r.cache != nil {
 		if merger, ok := r.cache.(interface {
 			Merge(context.Context, string, Location, string) (Location, string, error)
 		}); ok {
 			merged, _, err := merger.Merge(ctx, ip, location, source)
 			if err != nil {
-				return Location{}, errors.New("geolocation cache write failed")
+				return Location{}, errCacheWrite
 			}
 			return merged, nil
 		}
 		if err := r.cache.Put(ctx, ip, location, source); err != nil {
-			return Location{}, errors.New("geolocation cache write failed")
+			return Location{}, errCacheWrite
 		}
 	}
 	return location, nil
@@ -289,7 +350,9 @@ func (c *PostgresCache) Merge(ctx context.Context, ip string, location Location,
 	var oldSource string
 	var lookedUp bool
 	var lookedUpAt time.Time
-	if err = tx.QueryRow(ctx, `SELECT geo,source,looked_up_at IS NOT NULL,COALESCE(looked_up_at,now()) FROM ip_addresses WHERE ip=$1::inet FOR UPDATE`, ip).
+	// Geo writes do not change the primary key. NO KEY UPDATE still serializes
+	// cache writers while remaining compatible with result foreign-key checks.
+	if err = tx.QueryRow(ctx, `SELECT geo,source,looked_up_at IS NOT NULL,COALESCE(looked_up_at,now()) FROM ip_addresses WHERE ip=$1::inet FOR NO KEY UPDATE`, ip).
 		Scan(&raw, &oldSource, &lookedUp, &lookedUpAt); err != nil {
 		return Location{}, "", errors.New("cannot read geolocation cache")
 	}

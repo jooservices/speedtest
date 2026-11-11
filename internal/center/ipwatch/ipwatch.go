@@ -196,7 +196,10 @@ func bumpAddressStats(ctx context.Context, tx pgx.Tx, node, ip string, ts time.T
 func cachedLocation(ctx context.Context, tx pgx.Tx, ip string) (geo.Location, bool, bool, error) {
 	var raw []byte
 	var lookedUp, linked bool
-	err := tx.QueryRow(ctx, `SELECT geo,looked_up_at IS NOT NULL,isp_id IS NOT NULL FROM ip_addresses WHERE ip=$1::inet`, ip).Scan(&raw, &lookedUp, &linked)
+	var source string
+	var lookedUpAt time.Time
+	err := tx.QueryRow(ctx, `SELECT geo,looked_up_at IS NOT NULL,isp_id IS NOT NULL,source,COALESCE(looked_up_at,now()) FROM ip_addresses WHERE ip=$1::inet`, ip).
+		Scan(&raw, &lookedUp, &linked, &source, &lookedUpAt)
 	if errors.Is(err, pgx.ErrNoRows) || err == nil && !lookedUp {
 		return geo.Location{}, false, linked, nil
 	}
@@ -207,6 +210,8 @@ func cachedLocation(ctx context.Context, tx pgx.Tx, ip string) (geo.Location, bo
 	if err := json.Unmarshal(raw, &location); err != nil {
 		return geo.Location{}, false, false, errors.New("invalid cached geolocation")
 	}
+	location.AgeDays = max(0, int(time.Since(lookedUpAt).Hours()/24))
+	location.QualityScore = geo.QualityScore(location, source, location.AgeDays)
 	return location, true, linked, nil
 }
 
@@ -215,7 +220,7 @@ func (w *Watcher) resolveAndLink(ctx context.Context, tx pgx.Tx, node, resultID,
 	if err != nil {
 		return err
 	}
-	if found && cached.ASN == 0 && linked {
+	if found && linked && cached.QualityScore >= geo.QualityThreshold {
 		return isp.LinkResult(ctx, tx, resultID, node, ip)
 	}
 	if err := isp.LockAddress(ctx, tx, ip); err != nil {
@@ -225,11 +230,12 @@ func (w *Watcher) resolveAndLink(ctx context.Context, tx pgx.Tx, node, resultID,
 		WithPurpose(budget.Background).WithHighValue(true).WithConsensus(w.Consensus, w.Logger)
 	location, err := resolver.Lookup(ctx, ip)
 	if err != nil {
-		if errors.Is(err, geo.ErrBudgetExhausted) {
+		switch {
+		case errors.Is(err, geo.ErrBudgetExhausted):
 			w.logger().InfoContext(ctx, "public IP location lookup deferred until provider quota is available", "node_id", node, "result_id", resultID)
-		} else if !errors.Is(err, geo.ErrNotFound) {
+		case !errors.Is(err, geo.ErrNotFound):
 			return err
-		} else {
+		default:
 			w.logger().InfoContext(ctx, "public IP location unavailable", "node_id", node, "result_id", resultID)
 		}
 		return isp.LinkResult(ctx, tx, resultID, node, ip)

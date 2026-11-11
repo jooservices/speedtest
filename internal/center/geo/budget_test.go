@@ -42,33 +42,61 @@ func TestBudgetBrokerReservesBackgroundQuotaAndWrapsFallback(t *testing.T) {
 	if remaining, err := broker.Remaining(context.Background(), "ip-api", budget.Background); err != nil || remaining != 40 {
 		t.Fatalf("ip-api background reserve = (%d,%v), want (40,nil)", remaining, err)
 	}
-	provider := testFallback{name: "ipwho", geo: &testGeo{location: Location{Country: "US"}}}
-	var outcomes []string
-	wrapped := budgetProviders([]Fallback{provider}, broker, func(_, result string) { outcomes = append(outcomes, result) })[0]
+	provider := &purposeFallback{name: "ipwho", location: Location{Country: "US"}}
+	wrapped := budgetProviders([]Fallback{provider}, broker)[0]
 	if wrapped.Source() != "ipwho" {
 		t.Fatalf("wrapped provider source = %q", wrapped.Source())
 	}
 	for range 4 {
-		if _, err := wrapped.Lookup(context.Background(), "8.8.8.8"); err != nil {
-			t.Fatal(err)
+		allowed, err := broker.Allow(context.Background(), "ipwho", budget.Background)
+		if err != nil || !allowed {
+			t.Fatalf("background reservation = (%v,%v)", allowed, err)
 		}
 	}
-	if _, err := wrapped.Lookup(context.Background(), "8.8.8.8"); !errors.Is(err, ErrBudgetExhausted) {
-		t.Fatalf("background lookup at reserve = %v", err)
+	if allowed, err := broker.Allow(context.Background(), "ipwho", budget.Background); err != nil || allowed {
+		t.Fatalf("background reservation at protected share = (%v,%v)", allowed, err)
 	}
 	if _, err := wrapped.(interface {
 		LookupFor(context.Context, string, budget.Purpose) (Location, error)
 	}).LookupFor(context.Background(), "8.8.8.8", budget.Interactive); err != nil {
-		t.Fatalf("interactive reserved request = %v", err)
+		t.Fatalf("interactive lookup = %v", err)
 	}
-	if provider.geo.calls.Load() != 5 || len(outcomes) != 1 || outcomes[0] != "budget_exhausted" {
-		t.Fatalf("provider calls=%d outcomes=%v", provider.geo.calls.Load(), outcomes)
+	if provider.calls != 1 || provider.lastPurpose != budget.Interactive {
+		t.Fatalf("provider calls=%d purpose=%v", provider.calls, provider.lastPurpose)
 	}
+}
+
+func TestBudgetedFallbackLookupDefaultsToBackgroundPurpose(t *testing.T) {
+	provider := &purposeFallback{name: "ipwho", location: Location{Country: "US"}}
+	wrapped := budgetedFallback{provider: provider}
+	location, err := wrapped.Lookup(context.Background(), "8.8.8.8")
+	if err != nil || location.Country != "US" || provider.calls != 1 || provider.lastPurpose != budget.Background {
+		t.Fatalf("default-purpose lookup = (%+v,%v), calls=%d purpose=%v", location, err, provider.calls, provider.lastPurpose)
+	}
+}
+
+type purposeFallback struct {
+	name        string
+	location    Location
+	calls       int
+	lastPurpose budget.Purpose
+}
+
+func (p *purposeFallback) Source() string { return p.name }
+func (p *purposeFallback) Lookup(ctx context.Context, _ string) (Location, error) {
+	p.calls++
+	p.lastPurpose = providerPurpose(ctx)
+	return p.location, nil
+}
+func (p *purposeFallback) LookupFor(_ context.Context, _ string, purpose budget.Purpose) (Location, error) {
+	p.calls++
+	p.lastPurpose = purpose
+	return p.location, nil
 }
 
 func TestBudgetFallbackErrorsAndDisabledBroker(t *testing.T) {
 	provider := testFallback{name: "ipwho", geo: &testGeo{location: Location{Country: "US"}}}
-	if got := budgetProviders([]Fallback{provider}, nil, nil); len(got) != 1 || got[0] != provider {
+	if got := budgetProviders([]Fallback{provider}, nil); len(got) != 1 || got[0] != provider {
 		t.Fatal("nil broker unexpectedly wrapped providers")
 	}
 	store := &policyBudgetStore{err: errors.New("store unavailable")}
@@ -76,9 +104,7 @@ func TestBudgetFallbackErrorsAndDisabledBroker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var outcome string
-	wrapped := budgetProviders([]Fallback{provider}, broker, func(_, value string) { outcome = value })[0]
-	if _, err := wrapped.Lookup(context.Background(), "8.8.8.8"); err == nil || outcome != "error" {
-		t.Fatalf("store error = %v outcome=%q", err, outcome)
+	if allowed, err := broker.Allow(context.Background(), "ipwho", budget.Interactive); err == nil || allowed {
+		t.Fatalf("store error reservation = (%v,%v)", allowed, err)
 	}
 }
