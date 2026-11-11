@@ -46,12 +46,11 @@ test-db:
 
 ## shellcheck lints the shell scripts shipped or used by the project.
 shellcheck:
-	shellcheck internal/center/install/install.sh scripts/test-install.sh tests/deploy/schedule-defaults.test.sh deploy/docker/schedule-defaults.sh deploy/docker/entrypoint.sh deploy/docker/node-entrypoint.sh deploy/docker/nodes.sh internal/center/installer/*_remote.sh deploy/prod/prod.sh deploy/prod/entrypoint.sh deploy/observability/observe.sh deploy/observability/probe.sh
+	shellcheck internal/center/install/install.sh scripts/test-install.sh internal/center/installer/*_remote.sh deploy/prod/prod.sh deploy/prod/entrypoint.sh deploy/observability/observe.sh deploy/observability/probe.sh
 
 ## test-install runs ShellCheck and the installer test against a fake download server.
 test-install: shellcheck
 	sh scripts/test-install.sh
-	bash tests/deploy/schedule-defaults.test.sh
 
 VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null | sed 's/^v//' || true)
 ifeq ($(strip $(VERSION)),)

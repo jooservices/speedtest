@@ -13,7 +13,7 @@
 #
 # Needs Docker access (sg docker -c "deploy/docker/nodes.sh ...") and deploy/docker/stg.env (0600) for the
 # owner credentials; they are read by parsing, never sourced or printed.
-# Environment: CENTER_URL (default http://<host LAN IP>:18090), NODE_INTERVAL (60), EXPECTED_DOWN/UP (500).
+# Environment: CENTER_URL (default http://<host LAN IP>:18090), NODE_INTERVAL (30), EXPECTED_DOWN/UP (500).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 IMAGE="${STG_IMAGE:-speedtest-staging:latest}"
@@ -46,7 +46,7 @@ up)
     if [ "$NODE_NETWORK" != host ]; then net="speedtest-net-$name"; docker network inspect "$net" >/dev/null 2>&1 || docker network create "$net" >/dev/null; fi
     docker volume create "speedtest-node-$name" >/dev/null
     docker run -d --name "speedtest-node-$name" --restart unless-stopped --network "$net" \
-      -e NODE_NAME="$name" -e CENTER_URL="$CENTER_URL" -e ENROLL_TOKEN="$token" -e NODE_INTERVAL="${NODE_INTERVAL:-60}" \
+      -e NODE_NAME="$name" -e CENTER_URL="$CENTER_URL" -e ENROLL_TOKEN="$token" -e NODE_INTERVAL="${NODE_INTERVAL:-30}" \
       -e EXPECTED_DOWN="${EXPECTED_DOWN:-500}" -e EXPECTED_UP="${EXPECTED_UP:-500}" -v "speedtest-node-$name":/var/lib/speedtest \
       --entrypoint /usr/bin/tini "$IMAGE" -- /usr/local/bin/node-entrypoint.sh >/dev/null
     echo "started node $name (network $net)"

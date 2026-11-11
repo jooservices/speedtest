@@ -10,7 +10,7 @@ if [ ! -f "$STATE/enrolled" ]; then
   : "${ENROLL_TOKEN:?}"
   log "enrolling with ${CENTER_URL}"
   speedtest-agent enroll --center "$CENTER_URL" --token "$ENROLL_TOKEN" --name "$NODE_NAME" --host "${NODE_HOST:-$(hostname)}"
-  printf 'name: %s\nengine: %s\ninterval: %sm\nexpected_download_mbps: %s\nexpected_upload_mbps: %s\n' "$NODE_NAME" "${NODE_ENGINE:-ookla}" "${NODE_INTERVAL:-60}" "${EXPECTED_DOWN:-500}" "${EXPECTED_UP:-500}" > "$SPEEDTEST_AGENT_CONFIG"
+  printf 'name: %s\nengine: %s\ninterval: %sm\nexpected_download_mbps: %s\nexpected_upload_mbps: %s\n' "$NODE_NAME" "${NODE_ENGINE:-ookla}" "${NODE_INTERVAL:-30}" "${EXPECTED_DOWN:-500}" "${EXPECTED_UP:-500}" > "$SPEEDTEST_AGENT_CONFIG"
   touch "$STATE/enrolled"
 fi
 log "starting the agent"

@@ -300,9 +300,6 @@ in dashboard, results or statistics before interpreting trends; different engine
 are never averaged together. Alert rules without an engine evaluate the primary
 engine only.
 
-Docker staging defaults to a 60-minute schedule. `STAGING_INTERVAL_MINUTES` and
-`NODE_INTERVAL` continue to provide explicit overrides.
-
 For a center binary rollback, stop all center writers before rolling back
 migration 00015 and restoring the previous binary. Start the previous binary
 only after the database default is back to 30 minutes; its node-create response
