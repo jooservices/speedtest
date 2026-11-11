@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -27,6 +28,14 @@ type Mailer struct {
 	Every time.Duration
 }
 
+const (
+	claimLease  = 15 * time.Minute
+	retryDelay  = 5 * time.Minute
+	cleanupTime = 5 * time.Second
+)
+
+var errLeaseLost = errors.New("monthly report lease is no longer owned")
+
 func (m *Mailer) now() time.Time {
 	if m.Now != nil {
 		return m.Now().UTC()
@@ -40,15 +49,15 @@ func Due(now time.Time) bool {
 	return now.Day() <= 3 && (now.Day() > 1 || now.Hour() >= 1)
 }
 
-// RunOnce sends the previous month's report if it is due and not yet sent. A failed send releases the claim so the
-// next pass retries, until the window closes.
+// RunOnce sends the previous month's report if it is due and claims are available.
 func (m *Mailer) RunOnce(ctx context.Context) error {
 	now := m.now()
 	if !Due(now) {
 		return nil
 	}
 	month := PreviousMonth(now)
-	tag, err := m.DB.Exec(ctx, `INSERT INTO monthly_report_runs (month) VALUES ($1) ON CONFLICT (month) DO NOTHING`, month)
+	leaseID := uuid.NewString()
+	tag, err := m.DB.Exec(ctx, claimSQL, month, leaseID, now.Add(claimLease), now)
 	if err != nil {
 		return err
 	}
@@ -60,11 +69,42 @@ func (m *Mailer) RunOnce(ctx context.Context) error {
 		err = m.Send(ctx, func(centerURL string) string { return Summary(data, centerURL) })
 	}
 	if err != nil {
-		_, _ = m.DB.Exec(ctx, `DELETE FROM monthly_report_runs WHERE month = $1 AND sent_at IS NULL`, month)
+		return m.release(ctx, month, leaseID, now.Add(retryDelay), err)
+	}
+	return m.markSent(ctx, month, leaseID, now)
+}
+
+const claimSQL = `INSERT INTO monthly_report_runs (month, claimed_at, lease_id, lease_until, attempt_count, next_attempt_at)
+VALUES ($1, $4, $2, $3, 1, $4)
+ON CONFLICT (month) DO UPDATE SET claimed_at = EXCLUDED.claimed_at, lease_id = EXCLUDED.lease_id,
+	lease_until = EXCLUDED.lease_until, attempt_count = monthly_report_runs.attempt_count + 1
+WHERE monthly_report_runs.sent_at IS NULL AND monthly_report_runs.next_attempt_at <= EXCLUDED.claimed_at
+	AND (monthly_report_runs.lease_until IS NULL OR monthly_report_runs.lease_until <= EXCLUDED.claimed_at)`
+
+func (m *Mailer) release(ctx context.Context, month, leaseID string, retryAt time.Time, cause error) error {
+	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTime)
+	defer cancel()
+	tag, err := m.DB.Exec(cleanup, `UPDATE monthly_report_runs SET lease_id = NULL, lease_until = NULL, next_attempt_at = $3
+		WHERE month = $1 AND lease_id = $2 AND sent_at IS NULL`, month, leaseID, retryAt)
+	if err != nil {
+		return errors.Join(cause, fmt.Errorf("could not release monthly report lease: %w", err))
+	}
+	if tag.RowsAffected() != 1 {
+		return errors.Join(cause, errLeaseLost)
+	}
+	return cause
+}
+
+func (m *Mailer) markSent(ctx context.Context, month, leaseID string, at time.Time) error {
+	tag, err := m.DB.Exec(ctx, `UPDATE monthly_report_runs SET sent_at = $3, lease_id = NULL, lease_until = NULL
+		WHERE month = $1 AND lease_id = $2 AND sent_at IS NULL`, month, leaseID, at)
+	if err != nil {
 		return err
 	}
-	_, err = m.DB.Exec(ctx, `UPDATE monthly_report_runs SET sent_at = now() WHERE month = $1`, month)
-	return err
+	if tag.RowsAffected() != 1 {
+		return errLeaseLost
+	}
+	return nil
 }
 
 // Loop checks hourly until cancelled.
@@ -92,7 +132,7 @@ func Summary(r Report, centerURL string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Monthly ISP and plan report %s (UTC)\n\n", r.Month)
 	if len(r.Rows) == 0 {
-		b.WriteString("No tests with a known ISP this month.\n")
+		b.WriteString("No tests reported this month.\n")
 	}
 	for _, row := range r.Rows {
 		fmt.Fprintf(&b, "%s / %s: %d tests, %d failed, avg down %s Mbps, delivered %s%%, downtime %d min, IP changes %d\n",

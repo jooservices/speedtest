@@ -85,7 +85,12 @@ func (h *ownerReport) write(w http.ResponseWriter, r *http.Request, format strin
 		body = raw
 		w.Header().Set("Content-Type", "text/csv; charset=utf-8")
 	case "pdf":
-		body = report.PDF(data)
+		raw, err := report.PDF(data)
+		if err != nil {
+			writeAPIProblem(w, r, http.StatusInternalServerError, "Internal failure", "Internal failure; safe detail only.")
+			return
+		}
+		body = raw
 		w.Header().Set("Content-Type", "application/pdf")
 	default:
 		writeEnvelope(w, http.StatusOK, "Success", data)

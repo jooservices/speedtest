@@ -184,18 +184,24 @@
     var months = lastMonths(12), month = months[1], host = h('div', { 'data-report-preview': '' });
     var csv = h('a', { class: 'btn', download: '', 'data-report-download': 'csv' }, 'Download CSV');
     var pdf = h('a', { class: 'btn', download: '', 'data-report-download': 'pdf' }, 'Download PDF');
+    var requestGeneration = 0, controller = null;
     function path(format) { return '/api/reports/monthly?month=' + encodeURIComponent(month) + '&format=' + format + ST.engineQuery(); }
     function load() {
+      var generation = ++requestGeneration;
+      if (controller) controller.abort();
+      controller = new AbortController();
       csv.setAttribute('href', path('csv'));
       pdf.setAttribute('href', path('pdf'));
       U.clear(host);
       host.appendChild(h('div', { class: 'muted' }, 'Loading report…'));
-      ST.api.request(path('json')).then(function (res) {
+      ST.api.request(path('json'), { signal: controller.signal }).then(function (res) {
+        if (generation !== requestGeneration) return;
         var data = res.data || { rows: [] };
         U.clear(host);
         if (data.partial) host.appendChild(h('p', { class: 'muted' }, 'This month is not over yet; figures cover the days so far.'));
         host.appendChild(U.table({ columns: reportColumns(), rows: data.rows, empty: U.empty('No data for this month', 'Pick another month, or wait until tests with a known ISP have run.') }));
       }).catch(function (err) {
+        if (generation !== requestGeneration || err.name === 'AbortError') return;
         U.clear(host);
         host.appendChild(U.empty('Could not load the report', err.message || 'Retry later.', U.btn('Retry', { onClick: load })));
       });

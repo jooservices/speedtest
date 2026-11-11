@@ -144,16 +144,19 @@ export function ispsSuite(T) {
       assert.equal(T.db(`select expected_down_mbps::int||'/'||expected_up_mbps::int||':'||COALESCE(isp_plan_id::text,'none') from nodes where id='10000000-0000-4000-8000-000000000001'`), '500/100:none', 'plan scenario restores the seeded node state');
     },
     async monthlyReport() {
+      const month = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
+      await seedMonthlyReport(T, month);
       await T.open('#/isps', 'ISPs');
       await T.see('Monthly report');
-      const month = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth() - 1, 1)).toISOString().slice(0, 7);
+      await T.settled();
       const json = await T.api(`/api/reports/monthly?month=${month}`);
-      T.assert(json.status === 200 && Array.isArray(json.body.data.rows), 'report JSON returns rows');
+      T.assert(json.status === 200 && json.body.data.rows.length === 2, 'the known monthly fixture returns one row for each node');
       T.assert(json.body.data.month === month && json.body.data.partial === false, 'report covers the requested whole month');
       const csv = await T.api(`/api/reports/monthly?month=${month}&format=csv`);
-      T.assert(csv.status === 200 && csv.text.startsWith('month,isp,asn,node,plan'), 'report CSV has the header');
+      T.assert(csv.status === 200 && csv.text.startsWith('month,isp,asn,node,plan') && csv.text.includes('Viettel Việt Nam'), 'report CSV contains its header and known Vietnamese row');
       const pdf = await T.api(`/api/reports/monthly?month=${month}&format=pdf`);
-      T.assert(pdf.status === 200 && pdf.text.startsWith('%PDF-1.4'), 'report PDF is a PDF');
+      T.assert(pdf.status === 200 && pdf.text.startsWith('%PDF-') && pdf.text.includes('/ToUnicode'), 'report PDF embeds a Unicode text map');
+      await assertMonthlyPreview(page, assert);
       for (const bad of ['month=2999-01', 'month=2026-13', `month=${month}&format=xml`, `month=${month}&engine=nope`]) {
         const res = await T.api(`/api/reports/monthly?${bad}`);
         T.assert(res.status === 422, `report rejects ${bad}`);
@@ -162,13 +165,116 @@ export function ispsSuite(T) {
       const csvLink = await T.page.getAttribute('[data-report-download="csv"]', 'href');
       const pdfLink = await T.page.getAttribute('[data-report-download="pdf"]', 'href');
       T.assert(csvLink.includes('format=csv') && pdfLink.includes('format=pdf'), 'download links point at the report API');
+      const file = await T.download(() => T.page.click('[data-report-download="csv"]'));
+      T.assert(file.includes('Viettel Việt Nam') && file.includes('350.00'), 'the UI CSV download keeps the populated metrics');
+      const pdfFile = await T.downloadBytes(() => T.page.click('[data-report-download="pdf"]'));
+      assertDownloadedPDF(assert, pdfFile);
       const oldest = await T.page.locator('select.report-month option').last().getAttribute('value');
       await T.choose(T.page.locator('select.report-month'), oldest);
       await T.see('No data for this month');
-      const file = await T.download(() => T.page.click('[data-report-download="csv"]'));
-      T.assert(file.startsWith('month,isp,asn,node,plan'), 'the CSV download button saves the report');
+      await assertMonthRace(page, T, month, assert);
     },
   };
+}
+
+async function seedMonthlyReport(T, month) {
+  const ispName = 'Viettel Việt Nam - Internet băng thông rộng doanh nghiệp';
+  const planName = 'PLAN-START Fiber plan for enterprise broadband connections PLAN-END';
+  const nodeName = 'NODE-START Long report node name for a Vietnamese household NODE-END';
+  const day = date => `${month}-${date}T`;
+  T.db(`UPDATE isps SET name='${ispName}' WHERE id='${VIETTEL_ISP}'`);
+  T.db(`UPDATE isp_plans SET name='${planName}',advertised_down_mbps=500,advertised_up_mbps=100 WHERE id='${E2E_PLAN}'`);
+  T.db(`UPDATE nodes SET isp_plan_id='${E2E_PLAN}',expected_down_mbps=500,expected_up_mbps=100 WHERE id='10000000-0000-4000-8000-000000000001'`);
+  T.db(`INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps,isp_plan_id) VALUES ('10000000-0000-4000-8000-000000000079','${nodeName}',500,100,'${E2E_PLAN}')`);
+  T.db(`INSERT INTO node_ip_history(id,node_id,ts,from_ip,to_ip,from_isp_id,to_isp_id) VALUES
+    (gen_random_uuid(),'10000000-0000-4000-8000-000000000001','${day('01')}00:00:00Z',NULL,'203.0.113.12',NULL,'${VIETTEL_ISP}'),
+    (gen_random_uuid(),'10000000-0000-4000-8000-000000000001','${day('06')}00:00:00Z','203.0.113.12','203.0.113.11','${VIETTEL_ISP}','${VIETTEL_ISP}'),
+    (gen_random_uuid(),'10000000-0000-4000-8000-000000000079','${day('01')}00:00:00Z',NULL,'203.0.113.12',NULL,'${VIETTEL_ISP}')`);
+  T.db(`INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,engine,isp_id,error) VALUES
+    (gen_random_uuid(),'10000000-0000-4000-8000-000000000001','${day('05')}03:10:00Z','ok',300,60,10,9,'{"id":9,"name":"report fixture","city":"Hanoi"}'::jsonb,'203.0.113.12',4,'ookla','${VIETTEL_ISP}',NULL),
+    (gen_random_uuid(),'10000000-0000-4000-8000-000000000001','${day('07')}09:00:00Z','failed',NULL,NULL,NULL,NULL,NULL,NULL,4,'ookla',NULL,'timeout'),
+    (gen_random_uuid(),'10000000-0000-4000-8000-000000000001','${day('07')}10:00:00Z','ok',400,80,10,9,'{"id":9,"name":"report fixture","city":"Hanoi"}'::jsonb,'203.0.113.11',4,'ookla','${VIETTEL_ISP}',NULL),
+    (gen_random_uuid(),'10000000-0000-4000-8000-000000000079','${day('12')}04:00:00Z','ok',480,90,10,9,'{"id":9,"name":"report fixture","city":"Hanoi"}'::jsonb,'203.0.113.12',4,'ookla','${VIETTEL_ISP}',NULL)`);
+}
+
+async function assertMonthlyPreview(page, assert) {
+  const row = page.locator('[data-report-preview] tbody tr').filter({ hasText: 'VM1' }).first();
+  await row.waitFor();
+  const cells = await row.locator('td').allTextContents();
+  assert.equal(cells.length, 10, 'the preview shows all monthly metric columns');
+  assert.ok(cells[0].includes('Viettel Việt Nam') && cells[1] === 'VM1' && cells[2].includes('PLAN-START'), 'the preview identifies the ISP, node and advertised plan');
+  assert.ok(cells[3].includes('350') && cells[4].includes('395') && cells[5].includes('70'), 'the preview shows average, p95 and delivered speed');
+  assert.ok(cells[6].includes('3') && cells[6].includes('10') && cells[7] === '1' && cells[8] === '60' && cells[9] === '1', 'the preview shows worst hours, failure, downtime and IP change');
+}
+
+function assertDownloadedPDF(assert, pdf) {
+  assert.ok(pdf.subarray(0, 5).toString('ascii') === '%PDF-' && pdf.includes(Buffer.from('/ToUnicode')) && pdf.includes(Buffer.from('/FontFile2')), 'the UI downloads a PDF with an embedded Unicode font');
+  assert.ok(pdfHasText(pdf, 'Việt Nam') && pdfHasText(pdf, 'NODE-START') && pdfHasText(pdf, 'NODE-END') && pdfHasText(pdf, 'PLAN-START') && pdfHasText(pdf, 'PLAN-END'), 'the downloaded PDF text keeps Vietnamese and wrapped name boundaries');
+}
+
+async function assertMonthRace(page, T, month, assert) {
+  const newer = month;
+  const older = new Date(Date.UTC(Number(month.slice(0, 4)), Number(month.slice(5, 7)) - 2, 1)).toISOString().slice(0, 7);
+  let notifyOld, releaseOld;
+  const oldStarted = new Promise(resolve => { notifyOld = resolve; });
+  const oldRelease = new Promise(resolve => { releaseOld = resolve; });
+  await page.evaluate(() => {
+    window.__reportNativeAbort = window.AbortController;
+    window.AbortController = function () { const controller = new window.__reportNativeAbort(); this.signal = controller.signal; this.abort = function () {}; };
+  });
+  await page.route('**/api/reports/monthly*', async route => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('format') !== 'json') return route.continue();
+    const selected = url.searchParams.get('month');
+    if (selected === older) {
+      notifyOld();
+      await oldRelease;
+      return route.fulfill({ json: reportEnvelope(older, 'Older month response') }).catch(() => {});
+    }
+    if (selected === newer) return route.fulfill({ json: reportEnvelope(newer, 'Selected month response') });
+    return route.continue();
+  });
+  await page.locator('select.report-month').selectOption(older);
+  await oldStarted;
+  const olderResponse = page.waitForResponse(response => new URL(response.url()).searchParams.get('month') === older);
+  await page.locator('select.report-month').selectOption(newer);
+  await T.see('Selected month response');
+  releaseOld();
+  await olderResponse;
+  await T.settled();
+  assert.equal(await page.locator('[data-report-preview]').getByText('Selected month response').count(), 1, 'an older response cannot replace the selected month preview');
+  assert.equal(await page.locator('[data-report-preview]').getByText('Older month response').count(), 0, 'the superseded month stays out of the preview');
+  await page.unroute('**/api/reports/monthly*');
+  await page.evaluate(() => { window.AbortController = window.__reportNativeAbort; delete window.__reportNativeAbort; });
+}
+
+function reportEnvelope(month, node) {
+  return { success: true, code: 200, message: 'Success', meta: {}, errors: null, data: {
+    month, from: `${month}-01T00:00:00Z`, to: `${month}-02T00:00:00Z`, partial: false, engine: '', generatedAt: new Date().toISOString(),
+    rows: [{ ispId: VIETTEL_ISP, isp: 'Test ISP', asn: 7552, nodeId: '10000000-0000-4000-8000-000000000079', node, plan: null,
+      advertisedDownMbps: null, advertisedUpMbps: null, tests: 1, failures: 0, avgDownMbps: 200, p95DownMbps: 200, avgUpMbps: 50,
+      p95UpMbps: 50, deliveredPercent: null, worstHoursUtc: [], downtimeMinutes: 0, ipChanges: 0 }]
+  } };
+}
+
+function pdfHasText(pdf, value) {
+  const units = [];
+  for (const char of value) {
+    const cp = char.codePointAt(0);
+    if (cp > 0xffff) { const high = cp - 0x10000; units.push(0xd800 + (high >> 10), 0xdc00 + (high & 0x3ff)); }
+    else units.push(cp);
+  }
+  const needle = Buffer.from(units.flatMap(unit => [unit >> 8, unit & 0xff]));
+  let offset = 0;
+  while (offset < pdf.length) {
+    const start = pdf.indexOf(Buffer.from('stream\n'), offset);
+    if (start < 0) return false;
+    const content = start + 7, end = pdf.indexOf(Buffer.from('endstream'), content);
+    if (end < 0) return false;
+    if (pdf.subarray(content, end).includes(needle)) return true;
+    offset = end + 9;
+  }
+  return false;
 }
 
 async function assertFullExportKeepsAllISPs(T, assert) {

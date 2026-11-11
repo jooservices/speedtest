@@ -53,6 +53,13 @@ export function coreSteps(ctx) {
       try { await file.saveAs(path); return readFileSync(path, 'utf8'); }
       finally { rmSync(directory, { recursive: true, force: true }); }
     },
+    async downloadBytes(trigger) {
+      const [file] = await Promise.all([page.waitForEvent('download'), trigger()]);
+      const directory = mkdtempSync(join(process.cwd(), '.tmp', 'e2e-download-'));
+      const path = join(directory, file.suggestedFilename());
+      try { await file.saveAs(path); return readFileSync(path); }
+      finally { rmSync(directory, { recursive: true, force: true }); }
+    },
 
     // Polls a condition (a stored value, a file) for a few seconds: for results that are saved a moment after the click.
     async eventually(check, message, timeout = 8000) {
