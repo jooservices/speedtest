@@ -42,7 +42,7 @@ func Sample(eventKey string) Data {
 		"download_ok": "no", "upload_ok": "yes", "ping_ok": "yes", "jitter_ok": "yes", "loss_ok": "yes",
 		"server": "HCMC-1", "isp": "Viettel", "ip": "203.0.113.10", "old_ip": "198.51.100.8",
 		"city": "Ho Chi Minh City", "since": "2026-11-08T01:00:00Z", "duration": "45m",
-		"count": "3", "link": "https://speedtest.example/#/alerts", "center": "https://speedtest.example",
+		"count": "3", "failure_reason": "speed test timed out", "link": "https://speedtest.example/#/alerts", "center": "https://speedtest.example",
 	}
 }
 
@@ -74,6 +74,17 @@ func Validate(eventKey, body string) error {
 	return nil
 }
 
+// ValidateForChannel applies JSON structure rules to webhook templates as well as placeholder validation.
+func ValidateForChannel(eventKey, channel, body string) error {
+	if err := Validate(eventKey, body); err != nil {
+		return err
+	}
+	if channel == "webhook" && !validWebhookTemplate(body) {
+		return ErrInvalidTemplate
+	}
+	return nil
+}
+
 // PlaceholdersIn lists unique placeholder names in appearance order.
 func PlaceholdersIn(body string) []string {
 	seen := map[string]bool{}
@@ -90,12 +101,13 @@ func PlaceholdersIn(body string) []string {
 }
 
 // Render substitutes placeholders. Missing values become empty strings.
-// Channel selects formatting: telegram escapes HTML specials in values;
-// webhook keeps the JSON template body as text after substitution.
+// Channel selects formatting: Telegram values are HTML-escaped and webhook
+// values are JSON-string-escaped before they enter the configured payload.
 func Render(channel, body string, data Data) (string, error) {
 	if strings.TrimSpace(body) == "" {
 		return "", ErrInvalidTemplate
 	}
+	webhookJSON := channel == "webhook" && validWebhookTemplate(body)
 	out := tokenPattern.ReplaceAllStringFunc(body, func(tok string) string {
 		name := tok[1 : len(tok)-1]
 		val := ""
@@ -104,6 +116,9 @@ func Render(channel, body string, data Data) (string, error) {
 		}
 		if channel == "telegram" {
 			return escapeHTML(val)
+		}
+		if webhookJSON {
+			return escapeJSONString(val)
 		}
 		return val
 	})
@@ -118,6 +133,11 @@ func Render(channel, body string, data Data) (string, error) {
 		}
 	}
 	return out, nil
+}
+
+func validWebhookTemplate(body string) bool {
+	probe := tokenPattern.ReplaceAllString(body, "sample")
+	return json.Valid([]byte(probe))
 }
 
 // DefaultBody returns the catalog default for event/channel.
@@ -143,4 +163,9 @@ func FormatChannels() []string {
 func escapeHTML(s string) string {
 	r := strings.NewReplacer(`&`, "&amp;", `<`, "&lt;", `>`, "&gt;", `"`, "&quot;")
 	return r.Replace(s)
+}
+
+func escapeJSONString(s string) string {
+	raw, _ := json.Marshal(s)
+	return string(raw[1 : len(raw)-1])
 }

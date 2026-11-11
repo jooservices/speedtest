@@ -1,6 +1,6 @@
 export function nodesSuite(T, ctx) {
   const { page, assert } = T;
-  const { stack, startAgent, fetchAgentConfig } = ctx;
+  const { stack, startAgent, fetchAgentConfig, submitScheduledResult, receiver } = ctx;
   return {
     async publishedUpdate() {
       T.db("update nodes set agent='speedtest-agent/1.0.0 (linux/amd64)' where name='VM3'");
@@ -29,6 +29,17 @@ export function nodesSuite(T, ctx) {
 
     // The wizard with the one-line command, a real agent that enrols with the shown key, the first result, a manual run.
     async addWithCommandAndRunTest() {
+      T.db(`insert into notification_event_settings(event_key,enabled,severity,channels)
+        values ('test.success',true,'info',ARRAY['webhook']),('test.manual_finished',true,'info',ARRAY['webhook'])
+        on conflict (event_key) do update set enabled=excluded.enabled,severity=excluded.severity,channels=excluded.channels`);
+      await T.open('#/settings', 'Settings');
+      await T.tab('Notifications');
+      await T.fillAndLeave('URL for Webhook', receiver.url);
+      await T.toast('Saved').waitFor();
+      await T.settled();
+      await page.getByLabel('Enable Webhook').check({ force: true });
+      await T.settled();
+      const receivedBefore = receiver.bodies.length;
       await T.open('#/nodes', 'Nodes');
       await T.press('Add a node');
       const dialog = T.dialog('Add a node');
@@ -45,12 +56,30 @@ export function nodesSuite(T, ctx) {
       await T.press('I ran the command', dialog);
       await startAgent(stack, { name: 'E2E-1', token });
       await T.see('E2E-1 is online', dialog, 90000);
+      await submitScheduledResult(stack, { name: 'E2E-1' });
       await dialog.getByText(/First result: .* down, .* up, .* ping\./).waitFor({ timeout: 90000 });
       const schedules = T.db("select s.interval_minutes||':'||s.offset_minutes||':'||e.interval_minutes||':'||e.offset_minutes from schedules s join nodes n on n.id=s.node_id join engine_schedules e on e.node_id=n.id and e.engine='ookla' where n.name='E2E-1'");
       assert.equal(schedules, '60:0:60:0', 'both center schedule tables start at 60 minutes and offset 0');
       const agentConfig = await fetchAgentConfig(stack, 'E2E-1');
       assert.equal(agentConfig.schedule.interval, 60, 'the enrolled agent receives the 60-minute schedule');
       assert.equal(agentConfig.schedule.offset, 0, 'the enrolled agent receives offset 0');
+      const firstResultManual = T.db("select r.manual from results r join nodes n on n.id=r.node_id where n.name='E2E-1' order by r.ts asc limit 1") === 't';
+      const firstEventKey = firstResultManual ? 'test.manual_finished' : 'test.success';
+      await T.eventually(() => Number(T.db(`select count(*) from alert_events e join nodes n on n.id=e.node_id where n.name='E2E-1' and e.event_key='${firstEventKey}'`)) > 0, 'the first agent result creates its matching notification event');
+
+      await submitScheduledResult(stack, { name: 'E2E-1' });
+      await T.eventually(() => Number(T.db("select count(*) from alert_events e join nodes n on n.id=e.node_id where n.name='E2E-1' and e.event_key='test.success'")) > 0, 'a scheduled successful test creates a notification event');
+      const successPayload = JSON.parse(T.db("select e.payload::text from alert_events e join nodes n on n.id=e.node_id where n.name='E2E-1' and e.event_key='test.success' order by e.ts desc limit 1"));
+      for (const field of ['download', 'upload', 'ping', 'jitter', 'loss', 'download_limit', 'upload_limit', 'ping_limit', 'jitter_limit', 'loss_limit']) {
+        assert.ok(Object.hasOwn(successPayload, field), `success notification includes ${field}`);
+      }
+      await T.eventually(() => {
+        const deliveryStates = T.db("select coalesce(string_agg(d.status||':'||d.attempts,','),'none') from notification_deliveries d join alert_events e on e.id=d.event_id join nodes n on n.id=e.node_id where n.name='E2E-1' and e.event_key='test.success' and d.channel='webhook'");
+        const received = receiver.bodies.slice(receivedBefore).some(message => /Test success/.test(message.text || ''));
+        return received || `deliveries=${deliveryStates}; receiver=${receiver.bodies.length - receivedBefore}`;
+      }, 'success notification reaches the configured webhook', 75000);
+      const successMessage = receiver.bodies.slice(receivedBefore).map(message => message.text || '').find(message => message.includes('Test success'));
+      for (const metric of ['Download', 'upload', 'ping', 'jitter', 'loss']) assert.ok(successMessage.includes(metric), `webhook message lists ${metric}`);
       await T.press('Open node', dialog);
       await page.getByRole('heading', { name: /E2E-1/, level: 1 }).waitFor();
 
@@ -61,6 +90,8 @@ export function nodesSuite(T, ctx) {
       await T.press('Close', run.locator('.modal-foot'));
       const stored = T.db("select count(*) from results r join nodes n on n.id=r.node_id where n.name='E2E-1' and r.manual");
       assert.ok(Number(stored) >= 1, 'the manual result is stored on the center: ' + stored);
+      await T.eventually(() => Number(T.db("select count(*) from alert_events e join nodes n on n.id=e.node_id where n.name='E2E-1' and e.event_key='test.manual_finished'")) >= 1, 'manual result creates a finished-test event');
+      await T.eventually(() => receiver.bodies.slice(receivedBefore).some(message => /Manual test finished/.test(message.text || '')), 'manual completion notification reaches the configured webhook', 75000);
       await T.open('#/history', 'Results');
       await T.fill('Search results', 'E2E-1');
       await page.getByRole('row').nth(1).waitFor();

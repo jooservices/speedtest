@@ -24,7 +24,7 @@ func TestHTTPSenders(t *testing.T) {
 				body   string
 				ok     bool
 			}{{200, `{"ok":true}`, true}, {204, ``, channel != "telegram"}, {200, `{"ok":false}`, channel != "telegram"}, {200, `invalid`, channel != "telegram"}, {302, `secret`, false}, {429, `secret`, false}, {500, `secret`, false}} {
-				var got map[string]string
+				var got map[string]any
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Method != "POST" || r.Header.Get("Content-Type") != "application/json" {
 						t.Error("HTTP request contract")
@@ -49,11 +49,20 @@ func TestHTTPSenders(t *testing.T) {
 				if (err == nil) != result.ok {
 					t.Fatalf("status %d body %s: err=%v", result.status, result.body, err)
 				}
-				if got["text"] != "test message" {
-					t.Fatal("message payload")
-				}
-				if channel == "telegram" && got["chat_id"] != "123" {
-					t.Fatal("Telegram chat")
+				switch channel {
+				case "telegram":
+					if got["text"] != "test message" || got["chat_id"] != "123" || got["parse_mode"] != "HTML" {
+						t.Fatal("Telegram payload")
+					}
+				case "slack":
+					blocks, ok := got["blocks"].([]any)
+					if !ok || len(blocks) != 1 {
+						t.Fatal("Slack blocks payload")
+					}
+				case "webhook":
+					if got["text"] != "test message" {
+						t.Fatal("webhook fallback payload")
+					}
 				}
 				if err != nil && err.Error() != "notification transport failed" {
 					t.Fatal("unsafe transport error")
@@ -77,6 +86,24 @@ func TestHTTPFailureAndCancellation(t *testing.T) {
 	tr.TelegramURL = "://"
 	if tr.Send(t.Context(), "telegram", "", "secret", "message") == nil {
 		t.Fatal("malformed URL")
+	}
+}
+
+func TestWebhookSendsConfiguredJSONWithoutWrapping(t *testing.T) {
+	var received map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Error(err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	body := `{"event":"test.success","node":"quote \" slash \\\\ newline\\n","metrics":{"download":12}}`
+	if err := (&Transport{Client: srv.Client()}).Send(t.Context(), "webhook", "", srv.URL, body); err != nil {
+		t.Fatal(err)
+	}
+	if received["event"] != "test.success" || received["node"] != `quote " slash \\ newline\n` {
+		t.Fatalf("receiver got wrapped or altered JSON: %#v", received)
 	}
 }
 

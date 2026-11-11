@@ -15,6 +15,9 @@ import (
 type notificationStub struct {
 	err        error
 	event      string
+	nodeEvent  string
+	nodeID     string
+	nodeOn     bool
 	page, size int
 }
 
@@ -40,6 +43,14 @@ func (f *notificationStub) GetNotificationEvent(_ context.Context, key string) (
 func (f *notificationStub) UpdateNotificationEvent(_ context.Context, key string, _ notify.EventPatch) (notify.EventView, error) {
 	return notify.EventView{Key: key, Enabled: false, Severity: "warn", Channels: []string{"email"}, Customized: true}, f.err
 }
+func (f *notificationStub) SetNotificationNodeEnabled(_ context.Context, event, node string, enabled bool) error {
+	f.nodeEvent, f.nodeID, f.nodeOn = event, node, enabled
+	return f.err
+}
+func (f *notificationStub) NotificationNodeEnabled(_ context.Context, event, node string) (bool, error) {
+	f.nodeEvent, f.nodeID = event, node
+	return f.nodeOn, f.err
+}
 func (f *notificationStub) GetNotificationTemplate(_ context.Context, key, channel string) (notify.TemplateView, error) {
 	return notify.TemplateView{EventKey: key, Channel: channel, Body: "Hello {node}", IsDefault: true}, f.err
 }
@@ -54,6 +65,9 @@ func (f *notificationStub) ResetNotificationTemplate(_ context.Context, key, cha
 }
 func (f *notificationStub) PreviewNotificationTemplate(_ context.Context, key, channel, _ string) (notify.TemplatePreview, error) {
 	return notify.TemplatePreview{Channel: channel, Body: "preview", Sample: map[string]string{"node": "Fiber"}}, f.err
+}
+func (f *notificationStub) TestNotificationEvent(_ context.Context, _, channel string) (notify.Delivery, error) {
+	return notify.Delivery{ID: nodeID, Channel: channel, Status: "pending"}, f.err
 }
 func TestNotificationAPI(t *testing.T) {
 	f := &notificationStub{}
@@ -113,6 +127,22 @@ func TestNotificationAPI(t *testing.T) {
 	if rec := do(h, "PATCH", "/api/notifications/events/test.success", `{"enabled":false}`, ownerWriteWith(nil)); rec.Code != 200 {
 		t.Fatal("patch event", rec.Code, rec.Body.String())
 	}
+	nodeSetting := "/api/notifications/events/test.success/nodes/" + nodeID
+	f.nodeOn = true
+	if rec := do(h, "GET", nodeSetting, "", ownerRead); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"enabled":true`) || f.nodeEvent != "test.success" || f.nodeID != nodeID {
+		t.Fatal("get node event setting", rec.Code, rec.Body.String())
+	}
+	if rec := do(h, "PUT", nodeSetting, `{"enabled":false}`, ownerRead); rec.Code != 403 {
+		t.Fatal("node setting CSRF required", rec.Code)
+	}
+	if rec := do(h, "PUT", nodeSetting, `{"enabled":false}`, ownerWriteWith(nil)); rec.Code != 200 || f.nodeOn || !strings.Contains(rec.Body.String(), `"enabled":false`) {
+		t.Fatal("put node event setting", rec.Code, rec.Body.String())
+	}
+	for _, path := range []string{"/api/notifications/events/missing/nodes/" + nodeID, "/api/notifications/events/test.success/nodes/not-a-uuid"} {
+		if rec := do(h, "GET", path, "", ownerRead); rec.Code != 404 {
+			t.Errorf("invalid node event path %s = %d", path, rec.Code)
+		}
+	}
 	if rec := do(h, "GET", "/api/notifications/templates/test.success/telegram", "", ownerRead); rec.Code != 200 {
 		t.Fatal("get template", rec.Code)
 	}
@@ -145,6 +175,12 @@ func TestNotificationCatalogBranches(t *testing.T) {
 	}
 	if rec := do(h, "DELETE", "/api/notifications/events/test.success", "", ownerWriteWith(nil)); rec.Code != 405 {
 		t.Fatal("event method", rec.Code)
+	}
+	if rec := do(h, "POST", "/api/notifications/events/test.success/tests/webhook", "", ownerWriteWith(nil)); rec.Code != http.StatusAccepted || !strings.Contains(rec.Header().Get("Location"), nodeID) {
+		t.Fatal("event template test", rec.Code, rec.Body.String())
+	}
+	if rec := do(h, "GET", "/api/notifications/events/test.success/tests/webhook", "", ownerRead); rec.Code != http.StatusMethodNotAllowed {
+		t.Fatal("event template test method", rec.Code)
 	}
 	if rec := do(h, "PATCH", "/api/notifications/events/test.success", `{`, ownerWriteWith(nil)); rec.Code != 422 {
 		t.Fatal("bad json", rec.Code)

@@ -20,6 +20,16 @@ type ResultHook interface {
 	AfterResultStored(context.Context, pgx.Tx, string, Result) error
 }
 
+// ResultBatchPreparer attaches immutable request-scoped state shared by a batch.
+type ResultBatchPreparer interface {
+	PrepareResultBatch(context.Context, string, []Result) (context.Context, error)
+}
+
+// EventPublisher records agent lifecycle notifications in the supplied transaction.
+type EventPublisher interface {
+	PublishEventTx(context.Context, pgx.Tx, string, string, map[string]string) error
+}
+
 // ResultHookChain runs hooks in order within the ingestion transaction. A hook
 // failure prevents later hooks and rolls back the result and earlier hook work.
 type ResultHookChain []ResultHook
@@ -36,6 +46,19 @@ func (hooks ResultHookChain) AfterResultStored(ctx context.Context, tx pgx.Tx, n
 	return nil
 }
 
+func (hooks ResultHookChain) PrepareResultBatch(ctx context.Context, node string, results []Result) (context.Context, error) {
+	for _, hook := range hooks {
+		if preparer, ok := hook.(ResultBatchPreparer); ok {
+			prepared, err := preparer.PrepareResultBatch(ctx, node, results)
+			if err != nil {
+				return ctx, err
+			}
+			ctx = prepared
+		}
+	}
+	return ctx, nil
+}
+
 type Database interface {
 	Begin(context.Context) (pgx.Tx, error)
 	Query(context.Context, string, ...any) (pgx.Rows, error)
@@ -46,6 +69,14 @@ type Postgres struct {
 	Releases *release.Catalog
 	Pool     Database
 	Hook     ResultHook
+	Events   EventPublisher
+}
+
+func (s *Postgres) PrepareResultBatch(ctx context.Context, node string, results []Result) (context.Context, error) {
+	if preparer, ok := s.Hook.(ResultBatchPreparer); ok {
+		return preparer.PrepareResultBatch(ctx, node, results)
+	}
+	return ctx, nil
 }
 
 func jsonValue(value any) any {
@@ -157,12 +188,42 @@ func (s *Postgres) Config(ctx context.Context, node string) (map[string]any, err
 }
 
 func (s *Postgres) Heartbeat(ctx context.Context, node string, h Heartbeat) (time.Time, error) {
+	tx, err := s.Pool.Begin(ctx)
+	if err != nil {
+		return time.Time{}, err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
 	var received time.Time
-	err := s.Pool.QueryRow(ctx, `UPDATE nodes SET last_seen_at=clock_timestamp(),agent=$2,installed_engines=COALESCE($3::text[],installed_engines) WHERE id=$1 RETURNING last_seen_at`, node, h.Agent, h.Engines).Scan(&received)
+	err = tx.QueryRow(ctx, `UPDATE nodes SET last_seen_at=clock_timestamp(),agent=$2,installed_engines=COALESCE($3::text[],installed_engines) WHERE id=$1 RETURNING last_seen_at`, node, h.Agent, h.Engines).Scan(&received)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return received, ErrNotFound
 	}
-	return received, err
+	if err != nil {
+		return received, err
+	}
+	if err := s.publishReleaseEvents(ctx, tx, node, h.Agent); err != nil {
+		return time.Time{}, err
+	}
+	return received, tx.Commit(ctx)
+}
+
+func (s *Postgres) publishReleaseEvents(ctx context.Context, tx pgx.Tx, node, agent string) error {
+	if s.Events == nil || s.Releases == nil {
+		return nil
+	}
+	releaseInfo := s.Releases.Advertisement(agent)
+	if releaseInfo == nil {
+		return nil
+	}
+	version, _ := releaseInfo["version"].(string)
+	link, _ := releaseInfo["url"].(string)
+	payload := map[string]string{"version": version, "link": link}
+	for _, key := range []string{"agent.update_available", "agent.version_older"} {
+		if err := s.Events.PublishEventTx(ctx, tx, key, node, payload); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 const commandColumns = `id::text,node_id::text,type,version,status,created_at,acked_at,phase,pct,result_id::text,error`
@@ -222,6 +283,19 @@ func (s *Postgres) Ack(ctx context.Context, node, id string, a Ack) (Command, er
 			return Command{}, ErrInvalid
 		}
 		return Command{}, err
+	}
+	if s.Events != nil && next.Type == "update_agent" && (next.Status == "succeeded" || next.Status == "failed") {
+		key, reason := "agent.update_applied", ""
+		if next.Status == "failed" {
+			key, reason = "agent.update_failed", "Agent update command reported failure."
+		}
+		version := ""
+		if next.Version != nil {
+			version = *next.Version
+		}
+		if err := s.Events.PublishEventTx(ctx, tx, key, node, map[string]string{"version": version, "failure_reason": reason}); err != nil {
+			return Command{}, err
+		}
 	}
 	return next, tx.Commit(ctx)
 }

@@ -2,7 +2,6 @@ package alerts
 
 import (
 	"encoding/json"
-	"fmt"
 	"strconv"
 	"time"
 
@@ -18,11 +17,26 @@ type QualityLimits struct {
 	PingMS      float64
 	JitterMS    float64
 	LossPct     float64
+	DownloadSet bool
+	UploadSet   bool
+	PingSet     bool
+	JitterSet   bool
+	LossSet     bool
 }
 
 // DefaultQualityLimits matches the production owner defaults (JOOST-78).
 func DefaultQualityLimits() QualityLimits {
-	return QualityLimits{DownloadPct: 65, UploadPct: 40, PingMS: 30, JitterMS: 10, LossPct: 2}
+	return QualityLimits{DownloadPct: catalogLimit("down_pct"), UploadPct: catalogLimit("up_pct"),
+		PingMS: catalogLimit("ping"), JitterMS: catalogLimit("jitter"), LossPct: catalogLimit("loss"),
+		DownloadSet: true, UploadSet: true, PingSet: true, JitterSet: true, LossSet: true}
+}
+
+func catalogLimit(metric string) float64 {
+	event, ok := catalog.EventForAlertMetric(metric)
+	if !ok {
+		return 0
+	}
+	return event.Thresholds[metric]
 }
 
 // BuildPayload assembles template placeholders for one notification.
@@ -35,20 +49,24 @@ func BuildPayload(eventKey, nodeName, centerURL string, severity string, result 
 	if severity == "" {
 		severity = e.Severity
 	}
-	data := map[string]string{
-		"node": nodeName, "label": "", "event": title, "severity": severity,
-		"severity_icon":  template.SeverityIcon(severity),
-		"download_limit": fmt.Sprintf("%.0f%% of expected", limits.DownloadPct),
-		"upload_limit":   fmt.Sprintf("%.0f%% of expected", limits.UploadPct),
-		"ping_limit":     formatNum(limits.PingMS),
-		"jitter_limit":   formatNum(limits.JitterMS),
-		"loss_limit":     formatNum(limits.LossPct),
-		"link":           trimSlash(centerURL) + "/#/alerts",
-		"center":         trimSlash(centerURL),
-		"since":          time.Now().UTC().Format(time.RFC3339),
-		"count":          "", "duration": "", "value": "", "expected": "", "pct": "", "threshold": "",
-		"server": "", "isp": "", "ip": "", "old_ip": "", "city": "",
+	centerURL = trimSlash(centerURL)
+	since := result.TS
+	if since == "" {
+		since = time.Now().UTC().Format(time.RFC3339)
 	}
+	data := make(map[string]string, 32)
+	data["node"] = nodeName
+	data["event"] = title
+	data["severity"] = severity
+	data["severity_icon"] = template.SeverityIcon(severity)
+	data["download_limit"] = configuredLimit(limits.DownloadSet, strconv.FormatFloat(limits.DownloadPct, 'f', 0, 64)+"% of expected")
+	data["upload_limit"] = configuredLimit(limits.UploadSet, strconv.FormatFloat(limits.UploadPct, 'f', 0, 64)+"% of expected")
+	data["ping_limit"] = configuredLimit(limits.PingSet, formatNum(limits.PingMS))
+	data["jitter_limit"] = configuredLimit(limits.JitterSet, formatNum(limits.JitterMS))
+	data["loss_limit"] = configuredLimit(limits.LossSet, formatNum(limits.LossPct))
+	data["link"] = centerURL + "/#/alerts"
+	data["center"] = centerURL
+	data["since"] = since
 	fillResult(data, result, expectedDown, expectedUp, limits)
 	for k, v := range extra {
 		data[k] = v
@@ -65,11 +83,14 @@ func fillResult(data map[string]string, result agentapi.Result, expectedDown, ex
 	data["ping"] = optNum(result.Ping)
 	data["jitter"] = optNum(result.Jitter)
 	data["loss"] = optNum(result.Loss)
-	data["download_ok"] = okFlag(result.Down != nil && expectedDown > 0 && *result.Down/expectedDown*100 >= limits.DownloadPct)
-	data["upload_ok"] = okFlag(result.Up != nil && expectedUp > 0 && *result.Up/expectedUp*100 >= limits.UploadPct)
-	data["ping_ok"] = okFlag(result.Ping != nil && *result.Ping <= limits.PingMS)
-	data["jitter_ok"] = okFlag(result.Jitter != nil && *result.Jitter <= limits.JitterMS)
-	data["loss_ok"] = okFlag(result.Loss != nil && *result.Loss <= limits.LossPct)
+	data["download_ok"] = configuredOK(limits.DownloadSet, result.Down != nil && expectedDown > 0 && *result.Down/expectedDown*100 >= limits.DownloadPct)
+	data["upload_ok"] = configuredOK(limits.UploadSet, result.Up != nil && expectedUp > 0 && *result.Up/expectedUp*100 >= limits.UploadPct)
+	data["ping_ok"] = configuredOK(limits.PingSet, result.Ping != nil && *result.Ping <= limits.PingMS)
+	data["jitter_ok"] = configuredOK(limits.JitterSet, result.Jitter != nil && *result.Jitter <= limits.JitterMS)
+	data["loss_ok"] = configuredOK(limits.LossSet, result.Loss != nil && *result.Loss <= limits.LossPct)
+	if result.Down != nil && expectedDown > 0 {
+		data["pct"] = formatNum(*result.Down / expectedDown * 100)
+	}
 	if result.IP != nil {
 		data["ip"] = *result.IP
 	}
@@ -116,6 +137,20 @@ func okFlag(ok bool) string {
 		return "yes"
 	}
 	return "no"
+}
+
+func configuredLimit(configured bool, value string) string {
+	if !configured {
+		return ""
+	}
+	return value
+}
+
+func configuredOK(configured, ok bool) string {
+	if !configured {
+		return ""
+	}
+	return okFlag(ok)
 }
 
 func trimSlash(s string) string {

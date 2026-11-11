@@ -42,14 +42,13 @@ func (s *Store) AfterResultStored(ctx context.Context, tx pgx.Tx, node string, r
 			return err
 		}
 	}
-	var expectedDown, expectedUp float64
-	if err := tx.QueryRow(ctx, `SELECT expected_down_mbps,expected_up_mbps FROM nodes WHERE id=$1`, node).Scan(&expectedDown, &expectedUp); err != nil {
-		return err
-	}
 	if err := s.evaluateResult(ctx, tx, node, result, ts); err != nil {
 		return err
 	}
-	if err := s.emitTestOutcome(ctx, tx, node, result, ts, expectedDown, expectedUp); err != nil {
+	if err := s.emitTestOutcome(ctx, tx, node, result, ts); err != nil {
+		return err
+	}
+	if err := s.emitObservedEvents(ctx, tx, node, result, ts); err != nil {
 		return err
 	}
 	if result.IP != nil {
@@ -61,12 +60,19 @@ func (s *Store) AfterResultStored(ctx context.Context, tx pgx.Tx, node string, r
 }
 
 func (s *Store) evaluateResult(ctx context.Context, tx pgx.Tx, node string, result agentapi.Result, ts time.Time) error {
-	rows, err := tx.Query(ctx, `SELECT r.id::text,r.name,r.metric,r.op,r.value,r.for_tests,r.node_ids IS NULL,
+	rows, err := tx.Query(ctx, `SELECT r.id::text,r.name,r.metric,r.op,
+		COALESCE((es.thresholds->>CASE WHEN r.metric='failed' THEN 'for_tests' ELSE r.metric END)::float8,r.value),
+		COALESCE((es.thresholds->>'for_tests')::integer,r.for_tests),r.node_ids IS NULL,
 		COALESCE(r.node_ids::text[],ARRAY[]::text[]),r.severity,r.channels,r.enabled,r.revision,
 		n.expected_down_mbps,n.expected_up_mbps
 		FROM alert_rules r JOIN nodes n ON n.id=$1
+		LEFT JOIN notification_event_settings es ON es.event_key=CASE r.metric
+			WHEN 'failed' THEN 'test.failed' WHEN 'down_pct' THEN 'quality.download_low'
+			WHEN 'up_pct' THEN 'quality.upload_low' WHEN 'ping' THEN 'quality.ping_high'
+			WHEN 'jitter' THEN 'quality.jitter_high' WHEN 'loss' THEN 'quality.loss_high' ELSE '' END
 		WHERE r.enabled AND COALESCE(r.engine,n.primary_engine)=$2 AND r.metric NOT IN ('ip_changed','offline')
-		AND (r.node_ids IS NULL OR $1=ANY(r.node_ids)) ORDER BY r.id`, node, measurementEngine(result.Engine))
+		AND (r.node_ids IS NULL OR $1=ANY(r.node_ids))
+		ORDER BY (r.node_ids IS NULL),(r.engine IS NULL),r.id`, node, measurementEngine(result.Engine))
 	if err != nil {
 		return err
 	}
@@ -89,8 +95,8 @@ func (s *Store) evaluateResult(ctx context.Context, tx pgx.Tx, node string, resu
 	}
 	rows.Close()
 	for _, rule := range rules {
-		hit := metricMatches(rule.Rule, result, rule.ExpectedDown, rule.ExpectedUp)
-		if err := s.advanceRule(ctx, tx, rule.Rule, node, ts, result.ID, hit); err != nil {
+		hit, observed := metricObservation(rule.Rule, result, rule.ExpectedDown, rule.ExpectedUp)
+		if err := s.advanceRule(ctx, tx, rule.Rule, node, ts, result.ID, hit, observed); err != nil {
 			return err
 		}
 	}
@@ -98,98 +104,195 @@ func (s *Store) evaluateResult(ctx context.Context, tx pgx.Tx, node string, resu
 }
 
 func metricMatches(rule Rule, result agentapi.Result, expectedDown, expectedUp float64) bool {
+	hit, _ := metricObservation(rule, result, expectedDown, expectedUp)
+	return hit
+}
+
+func metricObservation(rule Rule, result agentapi.Result, expectedDown, expectedUp float64) (hit, observed bool) {
 	if rule.Metric == "failed" {
-		return result.Status == "failed"
+		switch result.Status {
+		case "failed":
+			return true, true
+		case "ok":
+			return false, true
+		default:
+			return false, false
+		}
 	}
-	if result.Status == "failed" {
-		return false
+	if result.Status != "ok" && result.Status != "degraded" {
+		return false, false
 	}
 	var value float64
 	switch rule.Metric {
 	case "down_pct":
 		if result.Down == nil || expectedDown <= 0 {
-			return false
+			return false, false
 		}
 		value = *result.Down / expectedDown * 100
 	case "up_pct":
 		if result.Up == nil || expectedUp <= 0 {
-			return false
+			return false, false
 		}
 		value = *result.Up / expectedUp * 100
 	case "ping":
 		if result.Ping == nil {
-			return false
+			return false, false
 		}
 		value = *result.Ping
 	case "jitter":
 		if result.Jitter == nil {
-			return false
+			return false, false
 		}
 		value = *result.Jitter
 	case "loss":
 		if result.Loss == nil {
-			return false
+			return false, false
 		}
 		value = *result.Loss
 	default:
-		return false
+		return false, false
 	}
-	return compare(value, rule.Op, rule.Value)
+	return compare(value, rule.Op, rule.Value), true
 }
 
-func (s *Store) advanceRule(ctx context.Context, tx pgx.Tx, rule Rule, node string, ts time.Time, resultID string, hit bool) error {
-	if _, err := tx.Exec(ctx, `INSERT INTO alert_state(rule_id,node_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, rule.ID, node); err != nil {
+type ruleState struct {
+	count           int
+	active          bool
+	eventID         *string
+	streakStartedAt *time.Time
+	lastEvaluatedAt *time.Time
+	lastNotifiedAt  *time.Time
+}
+
+func (s *Store) advanceRule(ctx context.Context, tx pgx.Tx, rule Rule, node string, ts time.Time, resultID string, hit, observed bool) error {
+	state, err := s.lockRuleState(ctx, tx, rule.ID, node)
+	if err != nil {
 		return err
 	}
-	var count int
-	var active bool
-	var activeEventID *string
-	if err := tx.QueryRow(ctx, `SELECT consecutive_count,active,active_event_id::text FROM alert_state WHERE rule_id=$1 AND node_id=$2 FOR UPDATE`, rule.ID, node).
-		Scan(&count, &active, &activeEventID); err != nil {
+	if state.lastEvaluatedAt != nil && !ts.After(*state.lastEvaluatedAt) {
+		return nil
+	}
+	if !observed {
+		return s.saveRuleState(ctx, tx, rule.ID, node, ts, streakTransition{count: state.count, active: state.active}, state)
+	}
+	change := advanceStreak(state.count, state.active, hit, rule.ForTests)
+	if hit && state.count == 0 {
+		started := ts
+		state.streakStartedAt = &started
+	}
+	state.eventID, state.lastNotifiedAt, err = s.emitRuleTransition(ctx, tx, rule, node, ts, resultID, state, change, hit)
+	if err != nil {
 		return err
-	}
-	change := advanceStreak(count, active, hit, rule.ForTests)
-	eventID := activeEventID
-	if change.opened {
-		createdID, err := s.insertEvent(ctx, tx, rule, node, ts, resultID, ruleText(rule))
-		if err != nil {
-			return err
-		}
-		eventID = &createdID
-	}
-	if change.resolved && eventID != nil {
-		var openedAt time.Time
-		if err := tx.QueryRow(ctx, `SELECT ts FROM alert_events WHERE id=$1`, *eventID).Scan(&openedAt); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(ctx, `UPDATE alert_events SET resolved_at=GREATEST(ts,$2) WHERE id=$1 AND resolved_at IS NULL`, *eventID, ts); err != nil {
-			return err
-		}
-		if err := s.emitRecovery(ctx, tx, rule, node, openedAt, ts, resultID); err != nil {
-			return err
-		}
-		eventID = nil
 	}
 	if !change.active {
-		eventID = nil
+		state.eventID = nil
 	}
-	_, err := tx.Exec(ctx, `UPDATE alert_state SET consecutive_count=$3,active=$4,active_event_id=$5,last_evaluated_at=$6
-		WHERE rule_id=$1 AND node_id=$2`, rule.ID, node, change.count, change.active, eventID, ts)
+	if !hit {
+		state.streakStartedAt = nil
+	}
+	return s.saveRuleState(ctx, tx, rule.ID, node, ts, change, state)
+}
+
+func (s *Store) lockRuleState(ctx context.Context, tx pgx.Tx, ruleID, node string) (ruleState, error) {
+	var state ruleState
+	if _, err := tx.Exec(ctx, `INSERT INTO alert_state(rule_id,node_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, ruleID, node); err != nil {
+		return state, err
+	}
+	err := tx.QueryRow(ctx, `SELECT consecutive_count,active,active_event_id::text,streak_started_at,last_evaluated_at,last_notified_at
+		FROM alert_state WHERE rule_id=$1 AND node_id=$2 FOR UPDATE`, ruleID, node).
+		Scan(&state.count, &state.active, &state.eventID, &state.streakStartedAt, &state.lastEvaluatedAt, &state.lastNotifiedAt)
+	return state, err
+}
+
+func (s *Store) saveRuleState(ctx context.Context, tx pgx.Tx, ruleID, node string, ts time.Time, change streakTransition, state ruleState) error {
+	_, err := tx.Exec(ctx, `UPDATE alert_state SET consecutive_count=$3,active=$4,active_event_id=$5,last_evaluated_at=$6,streak_started_at=$7,last_notified_at=$8
+		WHERE rule_id=$1 AND node_id=$2`, ruleID, node, change.count, change.active, state.eventID, ts, state.streakStartedAt, state.lastNotifiedAt)
 	return err
 }
 
-func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, rule Rule, node string, ts time.Time, resultID, detail string) (string, error) {
+func (s *Store) emitRuleTransition(ctx context.Context, tx pgx.Tx, rule Rule, node string, ts time.Time, resultID string, state ruleState, change streakTransition, hit bool) (*string, *time.Time, error) {
+	config := effectiveEventSettings{Enabled: true, CooldownSeconds: 0}
+	if cat, ok := catalog.EventForAlertMetric(rule.Metric); ok {
+		var err error
+		config, err = resolveEventSettings(ctx, tx, cat.Key, node, rule.Severity, rule.Channels)
+		if err != nil {
+			return state.eventID, state.lastNotifiedAt, err
+		}
+	}
+	eventID, lastNotified := state.eventID, state.lastNotifiedAt
+	if change.opened && shouldOpenNotification(ts, lastNotified, config.CooldownSeconds) {
+		created, sent, err := s.insertEvent(ctx, tx, rule, node, ts, resultID, ruleText(rule), state.streakStartedAt, true)
+		if err != nil {
+			return eventID, lastNotified, err
+		}
+		eventID = &created
+		if sent {
+			lastNotified = timePointer(ts)
+		}
+	} else if state.active && hit && config.RepeatSeconds > 0 && shouldRepeatNotification(ts, lastNotified, config.RepeatSeconds) {
+		created, sent, err := s.insertEvent(ctx, tx, rule, node, ts, resultID, ruleText(rule), state.streakStartedAt, true)
+		if err != nil {
+			return eventID, lastNotified, err
+		}
+		_ = created
+		if sent {
+			lastNotified = timePointer(ts)
+		}
+	}
+	if change.resolved && eventID != nil {
+		if _, err := tx.Exec(ctx, `UPDATE alert_events SET resolved_at=GREATEST(ts,$2) WHERE id=$1 AND resolved_at IS NULL`, *eventID, ts); err != nil {
+			return eventID, lastNotified, err
+		}
+		onset := ts
+		if state.streakStartedAt != nil {
+			onset = *state.streakStartedAt
+		} else if err := tx.QueryRow(ctx, `SELECT ts FROM alert_events WHERE id=$1`, *eventID).Scan(&onset); err != nil {
+			return eventID, lastNotified, err
+		}
+		if err := s.emitRecovery(ctx, tx, rule, node, onset, ts, resultID); err != nil {
+			return eventID, lastNotified, err
+		}
+		eventID = nil
+	} else if change.recovered && state.streakStartedAt != nil {
+		if err := s.emitRecovery(ctx, tx, rule, node, *state.streakStartedAt, ts, resultID); err != nil {
+			return eventID, lastNotified, err
+		}
+	}
+	return eventID, lastNotified, nil
+}
+
+func timePointer(value time.Time) *time.Time { return &value }
+
+func shouldOpenNotification(ts time.Time, last *time.Time, cooldownSeconds int) bool {
+	return last == nil || cooldownSeconds <= 0 || ts.Sub(*last) >= time.Duration(cooldownSeconds)*time.Second
+}
+
+func shouldRepeatNotification(ts time.Time, last *time.Time, repeatSeconds int) bool {
+	return last != nil && ts.Sub(*last) >= time.Duration(repeatSeconds)*time.Second
+}
+
+func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, rule Rule, node string, ts time.Time, resultID, detail string, onset *time.Time, allowDelivery bool) (string, bool, error) {
 	id, err := s.newUUID()
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	eventKey := ""
 	if cat, ok := catalog.EventForAlertMetric(rule.Metric); ok {
 		eventKey = cat.Key
 	}
-	payload, err := s.rulePayload(ctx, tx, eventKey, rule, node, resultID, detail)
+	channels := rule.Channels
+	config := effectiveEventSettings{Enabled: true, Severity: rule.Severity, Channels: channels, MaintenanceTimezone: "UTC"}
+	if eventKey != "" {
+		resolved, configErr := resolveEventSettings(ctx, tx, eventKey, node, rule.Severity, rule.Channels)
+		if configErr != nil {
+			return "", false, configErr
+		}
+		config = resolved
+		rule.Severity, channels = config.Severity, config.Channels
+	}
+	payload, err := s.rulePayload(ctx, tx, eventKey, rule, node, resultID, detail, onset)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
 	raw := PayloadJSON(payload)
 	var created string
@@ -203,21 +306,24 @@ func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, rule Rule, node stri
 			RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail, resultID, eventKey, raw).Scan(&created)
 		if errors.Is(err, pgx.ErrNoRows) {
 			if err = tx.QueryRow(ctx, `SELECT id::text FROM alert_events WHERE rule_id=$1 AND node_id=$2 AND trigger_result_id=$3`, rule.ID, node, resultID).Scan(&created); err != nil {
-				return "", err
+				return "", false, err
 			}
-			return created, nil
+			return created, false, nil
 		}
 	}
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	if err = s.enqueueNotification(ctx, tx, created, rule.Channels); err != nil {
-		return "", err
+	send := config.Enabled && allowDelivery && eventDeliveryAllowed(config, rule.Severity, payload, ts)
+	if send {
+		if err = s.enqueueNotification(ctx, tx, created, channels); err != nil {
+			return "", false, err
+		}
 	}
-	return created, nil
+	return created, send, nil
 }
 
-func (s *Store) rulePayload(ctx context.Context, tx pgx.Tx, eventKey string, rule Rule, node, resultID, detail string) (map[string]string, error) {
+func (s *Store) rulePayload(ctx context.Context, tx pgx.Tx, eventKey string, rule Rule, node, resultID, detail string, onset *time.Time) (map[string]string, error) {
 	var nodeName string
 	var expectedDown, expectedUp float64
 	if err := tx.QueryRow(ctx, `SELECT name,expected_down_mbps,expected_up_mbps FROM nodes WHERE id=$1`, node).Scan(&nodeName, &expectedDown, &expectedUp); err != nil {
@@ -231,12 +337,27 @@ func (s *Store) rulePayload(ctx context.Context, tx pgx.Tx, eventKey string, rul
 			return nil, loadErr
 		}
 	}
-	limits, err := s.qualityLimits(ctx, tx, node)
+	limits, err := s.qualityLimits(ctx, tx, node, result.Engine)
 	if err != nil {
 		return nil, err
 	}
 	value, expected, pct := metricValue(rule, result, expectedDown, expectedUp)
+	zone, err := ownerTimezone(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	extra := map[string]string{"value": value, "expected": expected, "pct": pct, "threshold": formatNum(rule.Value), "count": strconv.Itoa(rule.ForTests)}
+	if onset != nil {
+		extra["since"] = formatOwnerTime(*onset, zone)
+	}
+	if result.TS != "" {
+		if parsed, parseErr := time.Parse(time.RFC3339Nano, result.TS); parseErr == nil {
+			extra["since"] = formatOwnerTime(parsed, zone)
+		}
+	}
+	if result.Error != nil {
+		extra["failure_reason"] = *result.Error
+	}
 	_ = detail
 	url, err := s.centerURL(ctx, tx)
 	if err != nil {
@@ -298,7 +419,7 @@ func (s *Store) processSignal(ctx context.Context, tx pgx.Tx, item signal) error
 		detail += " (" + item.City + ")"
 	}
 	for _, rule := range matched {
-		id, err := s.insertEvent(ctx, tx, rule, item.NodeID, item.TS, item.ResultID, detail)
+		id, _, err := s.insertEvent(ctx, tx, rule, item.NodeID, item.TS, item.ResultID, detail, &item.TS, true)
 		if err != nil {
 			return err
 		}
@@ -396,52 +517,72 @@ func (s *Store) EvaluateOffline(ctx context.Context) error {
 	}
 	rows.Close()
 	for _, item := range items {
+		if !item.nodeEnabled || !item.schedOn {
+			continue
+		}
 		threshold := item.anchor.Add(time.Duration(item.interval*3) * time.Minute)
-		hit := item.nodeEnabled && item.schedOn && !now.Before(threshold)
-		if err := s.advanceOffline(ctx, tx, item.rule, item.node, threshold, now, hit); err != nil {
+		hit := !now.Before(threshold)
+		if err := s.advanceOffline(ctx, tx, item.rule, item.node, item.anchor, threshold, now, hit); err != nil {
 			return err
 		}
 	}
 	return tx.Commit(ctx)
 }
 
-func (s *Store) advanceOffline(ctx context.Context, tx pgx.Tx, rule Rule, node string, threshold, now time.Time, hit bool) error {
+func (s *Store) advanceOffline(ctx context.Context, tx pgx.Tx, rule Rule, node string, anchor, threshold, now time.Time, hit bool) error {
 	if _, err := tx.Exec(ctx, `INSERT INTO alert_state(rule_id,node_id) VALUES ($1,$2) ON CONFLICT DO NOTHING`, rule.ID, node); err != nil {
 		return err
 	}
 	var count int
 	var active bool
 	var eventID *string
-	if err := tx.QueryRow(ctx, `SELECT consecutive_count,active,active_event_id::text FROM alert_state WHERE rule_id=$1 AND node_id=$2 FOR UPDATE`, rule.ID, node).
-		Scan(&count, &active, &eventID); err != nil {
+	var onset, lastNotified *time.Time
+	if err := tx.QueryRow(ctx, `SELECT consecutive_count,active,active_event_id::text,streak_started_at,last_notified_at
+		FROM alert_state WHERE rule_id=$1 AND node_id=$2 FOR UPDATE`, rule.ID, node).
+		Scan(&count, &active, &eventID, &onset, &lastNotified); err != nil {
 		return err
 	}
 	change := advanceStreak(count, active, hit, 1)
 	if change.opened {
-		created, err := s.insertEvent(ctx, tx, rule, node, threshold, "", "No heartbeat for three scheduled intervals.")
+		started := anchor
+		onset = &started
+		created, sent, err := s.insertEvent(ctx, tx, rule, node, threshold, "", "No heartbeat for three scheduled intervals.", onset, true)
 		if err != nil {
 			return err
 		}
 		eventID = &created
+		if sent {
+			lastNotified = timePointer(threshold)
+		}
 	}
 	if change.resolved && eventID != nil {
-		var openedAt time.Time
-		if err := tx.QueryRow(ctx, `SELECT ts FROM alert_events WHERE id=$1`, *eventID).Scan(&openedAt); err != nil {
-			return err
-		}
 		if _, err := tx.Exec(ctx, `UPDATE alert_events SET resolved_at=GREATEST(ts,$2) WHERE id=$1 AND resolved_at IS NULL`, *eventID, now); err != nil {
 			return err
 		}
-		if err := s.emitRecovery(ctx, tx, rule, node, openedAt, now, ""); err != nil {
+		recoveredAt := threshold
+		if onset != nil {
+			recoveredAt = *onset
+		} else if err := tx.QueryRow(ctx, `SELECT ts FROM alert_events WHERE id=$1`, *eventID).Scan(&recoveredAt); err != nil {
+			return err
+		}
+		if err := s.emitRecovery(ctx, tx, rule, node, recoveredAt, now, ""); err != nil {
 			return err
 		}
 		eventID = nil
+	}
+	if change.recovered && onset != nil && !change.resolved {
+		if err := s.emitRecovery(ctx, tx, rule, node, *onset, now, ""); err != nil {
+			return err
+		}
 	}
 	if !change.active {
 		eventID = nil
 	}
-	_, err := tx.Exec(ctx, `UPDATE alert_state SET consecutive_count=$3,active=$4,active_event_id=$5,last_evaluated_at=$6
-		WHERE rule_id=$1 AND node_id=$2`, rule.ID, node, change.count, change.active, eventID, now)
+	if !hit {
+		onset = nil
+	}
+	_, err := tx.Exec(ctx, `UPDATE alert_state SET consecutive_count=$3,active=$4,active_event_id=$5,last_evaluated_at=$6,streak_started_at=$7,last_notified_at=$8
+		WHERE rule_id=$1 AND node_id=$2`, rule.ID, node, change.count, change.active, eventID, now, onset, lastNotified)
 	return err
 }
 

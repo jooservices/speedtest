@@ -45,13 +45,13 @@ export function scenarios({ T, S }) {
     { id: 'SC-SET-02', area: 'settings', title: 'speed test and location settings are kept; the licence key is write-only', covers: 'engine, location', run: S.settings.engineAndLocation },
     { id: 'SC-SET-03', area: 'settings', title: 'notification secrets are write-only and encrypted', covers: 'secrets', run: S.settings.notificationSecrets },
     { id: 'SC-SET-04', area: 'settings', title: 'a test notification reaches the configured channel', covers: 'webhook test, unset channel refused', run: S.settings.notificationTest },
-    { id: 'SC-SET-09', area: 'settings', title: 'notification event templates can be edited, previewed and reset', covers: 'event catalog toggles, template editor, live preview', run: S.settings.notificationEventCatalog },
+    { id: 'SC-SET-09', area: 'settings', title: 'notification events and templates can be configured globally and per node', covers: 'event catalog toggles, per-node override, template editor, live preview and reset', run: S.settings.notificationEventCatalog },
     { id: 'SC-SET-07', area: 'settings', title: 'notification quiet hours are saved as a complete window', covers: 'quiet hours for messages, critical exemption', run: S.settings.notificationQuietHours },
     { id: 'SC-SET-05', area: 'settings', title: 'retention and the full exports work', covers: 'retention, CSV and JSON export', run: S.settings.dataRetentionAndExport },
     { id: 'SC-SET-06', area: 'settings', title: 'the enrolment key is shown once', covers: 'enrolment key rotation', run: S.settings.enrolmentKeyShownOnce },
 
     // Adds a real agent and a node; the removal scenario below deletes it again.
-    { id: 'SC-NODE-05', area: 'nodes', title: 'a node is added with the install command and reports', covers: 'wizard, 60-minute default, real agent enrolment/sync, matching schedules, first result, run test', run: S.nodes.addWithCommandAndRunTest },
+    { id: 'SC-NODE-05', area: 'nodes', title: 'a node is added with the install command and reports', covers: 'wizard, 60-minute default, real agent enrolment/sync, matching schedules, first result notification, scheduled success delivery, manual test notification', run: S.nodes.addWithCommandAndRunTest },
     { id: 'SC-NODE-06', area: 'nodes', title: 'a node can be removed from the dashboard', covers: 'node removal', run: () => S.nodes.removeFromDashboard('E2E-1') },
 
     { id: 'SC-SET-08', area: 'settings', title: 'the activity log lists owner changes without secrets', covers: 'audit log, filter, no secrets', run: S.settings.activityLog },

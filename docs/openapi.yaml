@@ -2437,6 +2437,143 @@ paths:
           schema:
             type: string
         - $ref: "#/components/parameters/CSRF"
+  /api/notifications/events/{key}/tests/{channel}:
+    post:
+      operationId: testNotificationEventTemplate
+      tags:
+        - Notifications
+      summary: Send a sample through an event template
+      description: Queues the selected event's saved template with sample placeholder values through the configured channel. Poll the returned delivery resource.
+      security:
+        - SessionCookie: []
+      responses:
+        "202":
+          description: Accepted; poll Location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/testNotificationResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/events/{key}/nodes/{id}:
+    get:
+      operationId: getNotificationNodeEventSetting
+      tags:
+        - Notifications
+      summary: Read a node notification override
+      description: Read effective enablement for a node-scoped event.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      code:
+                        const: 200
+                      data:
+                        $ref: "#/components/schemas/NotificationNodeEventSetting"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+    put:
+      operationId: updateNotificationNodeEventSetting
+      tags:
+        - Notifications
+      summary: Update a node notification override
+      description: Set node-scoped event enablement. Requires CSRF.
+      security:
+        - SessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationNodeEventPatch"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      code:
+                        const: 200
+                      data:
+                        $ref: "#/components/schemas/NotificationNodeEventSetting"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
   /api/notifications/templates/{key}/{channel}:
     get:
       operationId: getNotificationTemplate
@@ -5506,7 +5643,9 @@ components:
             - $ref: "#/components/schemas/ID"
             - type: "null"
         nodeId:
-          $ref: "#/components/schemas/ID"
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
         severity:
           $ref: "#/components/schemas/Severity"
         ts:
@@ -5532,7 +5671,7 @@ components:
         - detail
         - acked
       description: Acknowledgement is independent of resolution. Setting acked=false reopens attention,
-        not the underlying streak. One event per streak; system offline events may have ruleId=null.
+        not the underlying streak. One event per streak; system events may have null ruleId or nodeId.
     Acknowledgement:
       type: object
       additionalProperties: false
@@ -5999,6 +6138,32 @@ components:
           type: boolean
         engineScoped:
           type: boolean
+        alertMetric:
+          type: string
+        thresholds:
+          type: object
+          additionalProperties:
+            type: number
+        cooldownSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+        repeatSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+        maintenanceStart:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$|^$'
+        maintenanceEnd:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$|^$'
+        maintenanceTimezone:
+          type: string
+        ispScopes:
+          type: array
+          items:
+            type: string
         placeholders:
           type: array
           items:
@@ -6015,6 +6180,13 @@ components:
         - channels
         - nodeScoped
         - engineScoped
+        - thresholds
+        - cooldownSeconds
+        - repeatSeconds
+        - maintenanceStart
+        - maintenanceEnd
+        - maintenanceTimezone
+        - ispScopes
         - placeholders
         - customized
     NotificationEventPatch:
@@ -6031,6 +6203,46 @@ components:
             $ref: "#/components/schemas/Channel"
           minItems: 1
           maxItems: 4
+        thresholds:
+          type: object
+          additionalProperties:
+            type: number
+        cooldownSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+        repeatSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+        maintenanceStart:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$|^$'
+        maintenanceEnd:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$|^$'
+        maintenanceTimezone:
+          type: string
+        ispScopes:
+          type: array
+          items:
+            type: string
+    NotificationNodeEventPatch:
+      type: object
+      additionalProperties: false
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+    NotificationNodeEventSetting:
+      type: object
+      additionalProperties: false
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
     NotificationTemplate:
       type: object
       additionalProperties: false

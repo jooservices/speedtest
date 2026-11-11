@@ -19,6 +19,28 @@ type fakeStore struct {
 	saved     int
 }
 
+type batchMarkerKey struct{}
+
+type batchFakeStore struct {
+	*fakeStore
+	prepared int
+	items    int
+	missing  bool
+}
+
+func (s *batchFakeStore) PrepareResultBatch(ctx context.Context, _ string, results []Result) (context.Context, error) {
+	s.prepared++
+	s.items = len(results)
+	return context.WithValue(ctx, batchMarkerKey{}, true), nil
+}
+
+func (s *batchFakeStore) SaveResult(ctx context.Context, node string, result Result) (bool, error) {
+	if ctx.Value(batchMarkerKey{}) != true {
+		s.missing = true
+	}
+	return s.fakeStore.SaveResult(ctx, node, result)
+}
+
 func (s *fakeStore) SaveResult(context.Context, string, Result) (bool, error) {
 	s.saved++
 	return s.duplicate, s.err
@@ -93,6 +115,14 @@ func TestBatchOutcomes(t *testing.T) {
 	}
 	if w = request(store, "/api/agent/results", `{"results":["`+strings.Repeat("x", 8<<20)+`"]}`, nil); w.Code != 413 {
 		t.Fatal(w.Code)
+	}
+}
+
+func TestBatchPreparerReceivesOnlyParsedResults(t *testing.T) {
+	store := &batchFakeStore{fakeStore: &fakeStore{}}
+	w := request(store, "/api/agent/results", `{"results":[`+validResult+`,{"id":"00000000-0000-4000-8000-000000000002"}]}`, nil)
+	if w.Code != 207 || store.prepared != 1 || store.items != 1 || store.saved != 1 || store.missing {
+		t.Fatalf("batch prepare: status=%d calls=%d items=%d saved=%d missingContext=%t", w.Code, store.prepared, store.items, store.saved, store.missing)
 	}
 }
 func TestConfigConditionalRequests(t *testing.T) {

@@ -3,6 +3,7 @@ package notify
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -21,8 +22,8 @@ func (s *Store) renderDelivery(ctx context.Context, q rowQuerier, d Delivery, ce
 	var title, nodeName, eventKey string
 	var since time.Time
 	var payload []byte
-	err := q.QueryRow(ctx, `SELECT e.title,n.name,e.ts,COALESCE(e.event_key,''),COALESCE(e.payload,'{}'::jsonb)
-		FROM alert_events e JOIN nodes n ON n.id=e.node_id WHERE e.id=$1`, *d.EventID).
+	err := q.QueryRow(ctx, `SELECT e.title,COALESCE(n.name,e.payload->>'node','Command center'),e.ts,COALESCE(e.event_key,''),COALESCE(e.payload,'{}'::jsonb)
+		FROM alert_events e LEFT JOIN nodes n ON n.id=e.node_id WHERE e.id=$1`, *d.EventID).
 		Scan(&title, &nodeName, &since, &eventKey, &payload)
 	if err != nil {
 		return "", err
@@ -47,31 +48,40 @@ func (s *Store) renderDelivery(ctx context.Context, q rowQuerier, d Delivery, ce
 	if data["severity_icon"] == "" {
 		data["severity_icon"] = template.SeverityIcon(data["severity"])
 	}
-	body, ok := "", false
+	body := ""
 	if eventKey != "" {
-		body, ok = s.templateBody(ctx, q, eventKey, d.Channel)
+		body, err = s.templateBody(ctx, q, eventKey, d.Channel)
+		if err != nil {
+			return "", err
+		}
 	}
-	if !ok || body == "" {
+	if body == "" {
 		return Message(title, nodeName, since, centerURL), nil
 	}
 	return template.Render(d.Channel, body, data)
 }
 
-func (s *Store) templateBody(ctx context.Context, q rowQuerier, eventKey, channel string) (string, bool) {
+func (s *Store) templateBody(ctx context.Context, q rowQuerier, eventKey, channel string) (string, error) {
 	var body string
 	err := q.QueryRow(ctx, `SELECT body FROM notification_templates WHERE event_key=$1 AND channel=$2`, eventKey, channel).Scan(&body)
-	if err == nil && body != "" {
-		return body, true
+	if err == nil {
+		if body == "" {
+			return "", template.ErrInvalidTemplate
+		}
+		return body, nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return "", err
 	}
 	if def, ok := template.DefaultBody(eventKey, channel); ok {
-		return def, true
+		return def, nil
 	}
 	if _, ok := catalog.LookupEvent(eventKey); ok {
 		if def, ok := template.DefaultBody(eventKey, "email"); ok {
-			return def, true
+			return def, nil
 		}
 	}
-	return "", false
+	return "", nil
 }
 
 func trimRightSlash(s string) string {

@@ -12,7 +12,7 @@ func TestMergeAndValidateEventWrite(t *testing.T) {
 		t.Fatal("missing catalog event")
 	}
 	view := mergeEvent(base, eventOverride{})
-	if view.Customized || !view.Enabled || view.Key != "test.success" || !view.NodeScoped {
+	if view.Customized || !view.Enabled || view.Key != "test.success" || !view.NodeScoped || view.ISPScope == nil {
 		t.Fatalf("defaults: %+v", view)
 	}
 	view = mergeEvent(base, eventOverride{Present: true, Enabled: false, Severity: "warn", Channels: []string{"email"}})

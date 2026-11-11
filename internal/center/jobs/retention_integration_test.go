@@ -222,9 +222,16 @@ func TestRetentionAlsoPrunesTheAuditLog(t *testing.T) {
 func TestRetentionObserverIntegration(t *testing.T) {
 	pool, ctx := openPool(t)
 	var outcomes []bool
-	r := &Retention{DB: pool, ObserveRun: func(ok bool) { outcomes = append(outcomes, ok) }}
+	var completed []Result
+	r := &Retention{DB: pool, ObserveRun: func(ok bool) { outcomes = append(outcomes, ok) }, OnComplete: func(_ context.Context, result Result) error {
+		completed = append(completed, result)
+		return nil
+	}}
 	if _, err := r.Run(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if len(completed) != 1 || completed[0].RetentionDays != DefaultRetentionDays {
+		t.Fatalf("retention completion events = %+v", completed)
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()

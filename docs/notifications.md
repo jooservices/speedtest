@@ -10,7 +10,8 @@ owner overrides and custom templates live in PostgreSQL.
 Every event has: key, category, default on/off, severity, channels, placeholders
 and one default body per channel. The Settings → Notifications page lists them
 and can turn each event on or off. Node-scoped events (`test.success`) also
-accept a per-node enable override.
+show a node picker and an enable switch for each node; the node override takes
+effect only while the global event is enabled.
 
 | Category | Keys (examples) |
 | --- | --- |
@@ -46,6 +47,7 @@ API (session + CSRF on writes):
 
 - `GET /api/notifications/events`
 - `GET|PATCH /api/notifications/events/{key}`
+- `GET|PUT /api/notifications/events/{key}/nodes/{id}` for node-scoped enablement
 - `GET|PUT /api/notifications/templates/{key}/{channel}`
 - `POST /api/notifications/templates/{key}/{channel}/previews`
 - `POST /api/notifications/templates/{key}/{channel}/resets`
@@ -70,6 +72,10 @@ Quiet hours, retries and test messages behave as before (see delivery worker in
 - `00010_engine_schedules.sql` (JOOST-71) — per-engine node schedules and result identity.
 - `00011_alert_event_payload.sql` — additive `event_key` / `payload` columns on `alert_events`.
 - `00012_notification_events.sql` — event, per-node enable and template overrides.
+- `00016_alert_streak_timestamps.sql` — alert streak timing, configurable event thresholds, cooldowns, repeat intervals and maintenance windows.
+- `00017_notification_defaults.sql` — preserves existing global rule settings and fills missing quiet-hour defaults.
+- `00018_system_notification_events.sql` — supports platform events that do not belong to a node.
+- `00019_notification_escalation.sql` — records when a delivery was escalated.
 
 The notification migrations add columns and tables. The running 1.0.0 binary can
 continue writing alerts and results because the new fields have defaults and
@@ -84,5 +90,5 @@ go test -tags integration -p 1 -parallel 1 -race ./internal/center/notify ./inte
 node scripts/test-matrix.mjs --write
 ```
 
-E2E: `SC-SET-09` edits a template, previews it and resets; `SC-SET-04` still
-covers a delivered test message on a configured channel.
+E2E: `SC-SET-09` toggles global and per-node events, edits a template, previews
+it and resets; `SC-SET-04` covers a delivered test message on a configured channel.

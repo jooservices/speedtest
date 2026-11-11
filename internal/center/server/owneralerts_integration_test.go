@@ -80,7 +80,7 @@ func TestAlertRuleToAgentEventHTTPFlowIntegration(t *testing.T) {
 		t.Fatalf("open alert activity = %d %s", listResponse.Code, listResponse.Body.String())
 	}
 	event := eventList.Data[0]
-	if event.RuleID == nil || *event.RuleID != ruleID || event.NodeID != nodeID || event.Acked || event.ResolvedAt != nil {
+	if event.RuleID == nil || *event.RuleID != ruleID || event.NodeID == nil || *event.NodeID != nodeID || event.Acked || event.ResolvedAt != nil {
 		t.Fatalf("opened alert event = %+v", event)
 	}
 

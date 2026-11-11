@@ -15,9 +15,20 @@ import (
 const maxNotificationEventBody = 1 << 16
 
 type notificationEventPatch struct {
-	Enabled  *bool    `json:"enabled"`
-	Severity *string  `json:"severity"`
-	Channels []string `json:"channels"`
+	Enabled             *bool              `json:"enabled"`
+	Severity            *string            `json:"severity"`
+	Channels            []string           `json:"channels"`
+	Thresholds          map[string]float64 `json:"thresholds"`
+	CooldownSeconds     *int               `json:"cooldownSeconds"`
+	RepeatSeconds       *int               `json:"repeatSeconds"`
+	MaintenanceStart    *string            `json:"maintenanceStart"`
+	MaintenanceEnd      *string            `json:"maintenanceEnd"`
+	MaintenanceTimezone *string            `json:"maintenanceTimezone"`
+	ISPScope            []string           `json:"ispScopes"`
+}
+
+type notificationNodeEventBody struct {
+	Enabled *bool `json:"enabled"`
 }
 
 type notificationTemplateBody struct {
@@ -33,12 +44,39 @@ func (h *ownerNotifications) serveCatalog(w http.ResponseWriter, r *http.Request
 	case rest == "events" && r.Method == http.MethodGet:
 		h.listEvents(w, r)
 	case strings.HasPrefix(rest, "events/"):
+		parts := strings.Split(strings.Trim(strings.TrimPrefix(rest, "events/"), "/"), "/")
+		if len(parts) == 3 && parts[1] == "tests" {
+			h.testEvent(w, r, parts[0], parts[2])
+			return
+		}
+		if len(parts) == 3 && parts[1] == "nodes" {
+			h.serveNodeEvent(w, r, parts[0], parts[2])
+			return
+		}
 		h.serveEvent(w, r, strings.TrimPrefix(rest, "events/"))
 	case strings.HasPrefix(rest, "templates/"):
 		h.serveTemplate(w, r, strings.TrimPrefix(rest, "templates/"))
 	default:
 		writeNotFoundProblem(w, r)
 	}
+}
+
+func (h *ownerNotifications) testEvent(w http.ResponseWriter, r *http.Request, eventKey, channel string) {
+	if r.Method != http.MethodPost {
+		methodNotAllowed(w, r, http.MethodPost)
+		return
+	}
+	if !catalog.ValidEventKey(eventKey) {
+		writeNotFoundProblem(w, r)
+		return
+	}
+	delivery, err := h.store.TestNotificationEvent(r.Context(), eventKey, channel)
+	if err != nil {
+		notificationError(w, r, err)
+		return
+	}
+	w.Header().Set("Location", "/api/notifications/deliveries/"+delivery.ID)
+	writeEnvelope(w, http.StatusAccepted, "Event test queued", delivery)
 }
 
 func (h *ownerNotifications) listEvents(w http.ResponseWriter, r *http.Request) {
@@ -69,8 +107,11 @@ func (h *ownerNotifications) serveEvent(w http.ResponseWriter, r *http.Request, 
 		if !decodeNotificationJSON(w, r, &body) {
 			return
 		}
-		view, err := h.store.UpdateNotificationEvent(r.Context(), key, notify.EventPatch{
-			Enabled: body.Enabled, Severity: body.Severity, Channels: body.Channels,
+		view, err := h.updateEvent(r, key, notify.EventPatch{
+			Enabled: body.Enabled, Severity: body.Severity, Channels: body.Channels, Thresholds: body.Thresholds,
+			CooldownSeconds: body.CooldownSeconds, RepeatSeconds: body.RepeatSeconds,
+			MaintenanceStart: body.MaintenanceStart, MaintenanceEnd: body.MaintenanceEnd,
+			MaintenanceTimezone: body.MaintenanceTimezone, ISPScope: body.ISPScope,
 		})
 		if err != nil {
 			notificationError(w, r, err)
@@ -79,6 +120,38 @@ func (h *ownerNotifications) serveEvent(w http.ResponseWriter, r *http.Request, 
 		writeEnvelope(w, http.StatusOK, "Notification event updated", view)
 	default:
 		methodNotAllowed(w, r, http.MethodGet+", "+http.MethodPatch)
+	}
+}
+
+func (h *ownerNotifications) serveNodeEvent(w http.ResponseWriter, r *http.Request, eventKey, nodeID string) {
+	if !catalog.ValidEventKey(eventKey) || !uuidPattern.MatchString(nodeID) {
+		writeNotFoundProblem(w, r)
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		enabled, err := h.store.NotificationNodeEnabled(r.Context(), eventKey, nodeID)
+		if err != nil {
+			notificationError(w, r, err)
+			return
+		}
+		writeEnvelope(w, http.StatusOK, "Success", map[string]bool{"enabled": enabled})
+	case http.MethodPut:
+		var body notificationNodeEventBody
+		if !decodeNotificationJSON(w, r, &body) {
+			return
+		}
+		if body.Enabled == nil {
+			invalid(w, r, "enabled is required.")
+			return
+		}
+		if err := h.setNodeEvent(r, eventKey, nodeID, *body.Enabled); err != nil {
+			notificationError(w, r, err)
+			return
+		}
+		writeEnvelope(w, http.StatusOK, "Node notification setting updated", map[string]bool{"enabled": *body.Enabled})
+	default:
+		methodNotAllowed(w, r, http.MethodGet+", "+http.MethodPut)
 	}
 }
 
@@ -118,7 +191,7 @@ func (h *ownerNotifications) serveTemplate(w http.ResponseWriter, r *http.Reques
 		if !decodeNotificationJSON(w, r, &body) {
 			return
 		}
-		view, err := h.store.PutNotificationTemplate(r.Context(), eventKey, channel, body.Body)
+		view, err := h.putTemplate(r, eventKey, channel, body.Body)
 		if err != nil {
 			notificationError(w, r, err)
 			return
@@ -151,7 +224,7 @@ func (h *ownerNotifications) resetTemplate(w http.ResponseWriter, r *http.Reques
 		methodNotAllowed(w, r, http.MethodPost)
 		return
 	}
-	view, err := h.store.ResetNotificationTemplate(r.Context(), eventKey, channel)
+	view, err := h.storeResetTemplate(r, eventKey, channel)
 	if err != nil {
 		notificationError(w, r, err)
 		return
