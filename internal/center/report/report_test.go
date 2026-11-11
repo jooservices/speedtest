@@ -7,7 +7,10 @@ import (
 	"encoding/csv"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf16"
@@ -267,10 +270,12 @@ func pdfHasText(pdf []byte, value string) bool {
 }
 
 type claimDB struct {
+	mu         sync.Mutex
 	runs       map[string]*claimRun
 	err        error
 	releaseErr error
 	sentErr    error
+	renewed    chan struct{}
 }
 
 type claimRun struct {
@@ -282,6 +287,8 @@ type claimRun struct {
 }
 
 func (c *claimDB) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.err != nil {
 		return pgconn.CommandTag{}, c.err
 	}
@@ -298,6 +305,19 @@ func (c *claimDB) Exec(_ context.Context, sql string, args ...any) (pgconn.Comma
 		}
 		run.leaseID, run.leaseUntil, run.attempts = id, until, run.attempts+1
 		return pgconn.NewCommandTag("INSERT 0 1"), nil
+	case strings.Contains(sql, "SET lease_until = $3"):
+		run := c.runs[args[0].(string)]
+		if run == nil || run.leaseID != args[1].(string) || run.sent {
+			return pgconn.NewCommandTag("UPDATE 0"), nil
+		}
+		run.leaseUntil = args[2].(time.Time)
+		if c.renewed != nil {
+			select {
+			case c.renewed <- struct{}{}:
+			default:
+			}
+		}
+		return pgconn.NewCommandTag("UPDATE 1"), nil
 	case strings.Contains(sql, "SET lease_id = NULL"):
 		if c.releaseErr != nil {
 			return pgconn.CommandTag{}, c.releaseErr
@@ -321,6 +341,40 @@ func (c *claimDB) Exec(_ context.Context, sql string, args ...any) (pgconn.Comma
 	default:
 		return pgconn.CommandTag{}, fmt.Errorf("unexpected claim query")
 	}
+}
+
+func (c *claimDB) QueryRow(_ context.Context, _ string, args ...any) pgx.Row {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.err != nil {
+		return claimRow{err: c.err}
+	}
+	var months []string
+	for month, run := range c.runs {
+		if !run.sent {
+			months = append(months, month)
+		}
+	}
+	sort.Strings(months)
+	if len(months) == 0 {
+		return claimRow{err: pgx.ErrNoRows}
+	}
+	month, run, at := months[0], c.runs[months[0]], args[0].(time.Time)
+	return claimRow{month: month, expired: !run.leaseUntil.IsZero() && !run.leaseUntil.After(at), ready: !run.nextTry.After(at)}
+}
+
+type claimRow struct {
+	month          string
+	expired, ready bool
+	err            error
+}
+
+func (r claimRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	*dest[0].(*string), *dest[1].(*bool), *dest[2].(*bool) = r.month, r.expired, r.ready
+	return nil
 }
 
 func TestDueWindow(t *testing.T) {
@@ -416,6 +470,43 @@ func TestMailerRecoversWhenSentStateWriteFails(t *testing.T) {
 	at = now.Add(claimLease)
 	if err := m.RunOnce(t.Context()); err != nil || !db.runs["2026-10"].sent || sends != 2 {
 		t.Fatalf("expired lease did not recover: %d %+v %v", sends, db.runs["2026-10"], err)
+	}
+}
+
+func TestMailerRenewsLeaseWhileSending(t *testing.T) {
+	base := time.Date(2026, 12, 1, 2, 0, 0, 0, time.UTC)
+	started := time.Now()
+	nowFn := func() time.Time { return base.Add(time.Since(started)) }
+	lease := 300 * time.Millisecond
+	db := &claimDB{runs: map[string]*claimRun{}, renewed: make(chan struct{}, 1)}
+	entered, release := make(chan struct{}, 1), make(chan struct{})
+	var sends atomic.Int32
+	m := &Mailer{Reports: &Store{DB: &fakePool{}, Now: nowFn}, DB: db, Now: nowFn, leaseDuration: lease,
+		Send: func(context.Context, func(string) string) error {
+			sends.Add(1)
+			entered <- struct{}{}
+			<-release
+			return nil
+		}}
+	first := make(chan error, 1)
+	go func() { first <- m.RunOnce(t.Context()) }()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("monthly report did not start sending")
+	}
+	select {
+	case <-db.renewed:
+	case <-time.After(time.Second):
+		t.Fatal("active send did not renew its lease")
+	}
+	time.Sleep(lease + 50*time.Millisecond)
+	if err := m.RunOnce(t.Context()); err != nil || sends.Load() != 1 {
+		t.Fatalf("live delivery lease allowed a second sender: sends=%d err=%v", sends.Load(), err)
+	}
+	close(release)
+	if err := <-first; err != nil || sends.Load() != 1 {
+		t.Fatalf("first send did not complete once: sends=%d err=%v", sends.Load(), err)
 	}
 }
 

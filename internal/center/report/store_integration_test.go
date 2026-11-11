@@ -87,7 +87,7 @@ func reportResult(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id int,
 	}
 }
 
-func reportFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (string, string, string, string, string) {
+func reportFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (string, string, string, string, string, string) {
 	t.Helper()
 	a, err := isp.Ensure(ctx, pool, 7552, "Viettel Network")
 	if err != nil {
@@ -97,8 +97,8 @@ func reportFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (strin
 	if err != nil {
 		t.Fatal("ISP fixture failed")
 	}
-	node, outage, unknown := "00000000-0000-4000-8000-0000000000c1", "00000000-0000-4000-8000-0000000000c2", "00000000-0000-4000-8000-0000000000c3"
-	for _, item := range []struct{ id, name string }{{node, "moving-node"}, {outage, "outage-node"}, {unknown, "unknown-node"}} {
+	node, outage, unknown, changesOnly := "00000000-0000-4000-8000-0000000000c1", "00000000-0000-4000-8000-0000000000c2", "00000000-0000-4000-8000-0000000000c3", "00000000-0000-4000-8000-0000000000c4"
+	for _, item := range []struct{ id, name string }{{node, "moving-node"}, {outage, "outage-node"}, {unknown, "unknown-node"}, {changesOnly, "changes-only-node"}} {
 		reportNode(t, ctx, pool, item.id, item.name)
 	}
 	plan, err := (&isp.Store{DB: pool}).CreatePlan(ctx, b.ID, "FPT 300", 300, 100)
@@ -108,9 +108,14 @@ func reportFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (strin
 	mustExec(t, ctx, pool, `UPDATE nodes SET isp_plan_id=$2::uuid WHERE id=$1::uuid`, node, plan["id"])
 	reportIP(t, ctx, pool, "203.0.113.90", a.ID)
 	reportIP(t, ctx, pool, "203.0.113.91", b.ID)
+	mustExec(t, ctx, pool, `INSERT INTO ip_addresses(ip) VALUES ('198.51.100.99'::inet),('198.51.100.98'::inet)`)
 	reportHistory(t, ctx, pool, node, "2026-09-20T00:00:00Z", nil, "203.0.113.90", nil, a.ID)
 	reportHistory(t, ctx, pool, node, "2026-10-10T00:00:00Z", "203.0.113.90", "203.0.113.91", a.ID, b.ID)
 	reportHistory(t, ctx, pool, outage, "2026-09-20T00:00:00Z", nil, "203.0.113.90", nil, a.ID)
+	reportHistory(t, ctx, pool, unknown, "2026-09-20T00:00:00Z", nil, "203.0.113.90", nil, a.ID)
+	reportHistory(t, ctx, pool, unknown, "2026-10-18T00:00:00Z", "203.0.113.90", "198.51.100.99", a.ID, nil)
+	reportHistory(t, ctx, pool, changesOnly, "2026-09-20T00:00:00Z", nil, "203.0.113.90", nil, a.ID)
+	reportHistory(t, ctx, pool, changesOnly, "2026-10-19T00:00:00Z", "203.0.113.90", "198.51.100.98", a.ID, nil)
 	reportResult(t, ctx, pool, 1001, node, "2026-10-05T03:10:00Z", "ok", "203.0.113.90", "203.0.113.90", 100.0)
 	reportResult(t, ctx, pool, 1002, node, "2026-10-07T09:00:00Z", "failed", nil, "", nil)
 	reportResult(t, ctx, pool, 1003, node, "2026-10-07T10:00:00Z", "ok", "203.0.113.90", "203.0.113.90", 200.0)
@@ -119,7 +124,7 @@ func reportFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (strin
 	reportResult(t, ctx, pool, 1006, node, "2026-10-11T10:00:00Z", "ok", "203.0.113.91", "203.0.113.91", 400.0)
 	reportResult(t, ctx, pool, 2001, outage, "2026-10-20T10:00:00Z", "failed", nil, "", nil)
 	reportResult(t, ctx, pool, 3001, unknown, "2026-10-21T10:00:00Z", "failed", nil, "", nil)
-	return node, outage, unknown, a.ID, b.ID
+	return node, outage, unknown, changesOnly, a.ID, b.ID
 }
 
 func rowFor(t *testing.T, got report.Report, ispID *string, node string) report.Row {
@@ -142,9 +147,9 @@ func stringPtrEqual(a, b *string) bool {
 
 func TestMonthlyReportMetricsIntegration(t *testing.T) {
 	pool, ctx := openPool(t)
-	node, outage, unknown, aID, bID := reportFixture(t, ctx, pool)
+	node, outage, unknown, changesOnly, aID, bID := reportFixture(t, ctx, pool)
 	got, err := (&report.Store{DB: pool, Now: func() time.Time { return time.Date(2026, 11, 1, 2, 0, 0, 0, time.UTC) }}).Build(ctx, "2026-10", "", "")
-	if err != nil || len(got.Rows) != 4 {
+	if err != nil || len(got.Rows) != 5 {
 		t.Fatalf("build: %v rows=%d", err, len(got.Rows))
 	}
 	a, b := &aID, &bID
@@ -159,8 +164,12 @@ func TestMonthlyReportMetricsIntegration(t *testing.T) {
 	if outageRow.Tests != 1 || outageRow.Failures != 1 || outageRow.AvgDown != nil || outageRow.DowntimeMin != 1440 {
 		t.Fatalf("outage-only row: %+v", outageRow)
 	}
-	if unknownRow.ISP != "Unknown ISP" || unknownRow.ASN != 0 || unknownRow.Tests != 1 || unknownRow.Failures != 1 {
+	if unknownRow.ISP != "Unknown ISP" || unknownRow.ASN != 0 || unknownRow.Tests != 1 || unknownRow.Failures != 1 || unknownRow.IPChanges != 1 {
 		t.Fatalf("unknown attribution: %+v", unknownRow)
+	}
+	unknownChange := rowFor(t, got, nil, changesOnly)
+	if unknownChange.ISP != "Unknown ISP" || unknownChange.Tests != 0 || unknownChange.IPChanges != 1 {
+		t.Fatalf("unresolved transition without a test: %+v", unknownChange)
 	}
 	if filtered, err := (&report.Store{DB: pool, Now: func() time.Time { return got.Generated }}).Build(ctx, "2026-10", "", aID); err != nil || len(filtered.Rows) != 2 || filtered.Rows[0].IPChanges != 0 {
 		t.Fatalf("ISP-filtered report: %v %+v", err, filtered.Rows)
@@ -189,11 +198,11 @@ func TestMonthlyReportBoundsCurrentDowntimeIntegration(t *testing.T) {
 	}
 }
 
-func TestMonthlyReportMailerRecoversLeaseWithoutConcurrentSendIntegration(t *testing.T) {
+func TestMonthlyReportMailerRecoversExpiredLeaseOutsideWindowIntegration(t *testing.T) {
 	pool, ctx := openPool(t)
 	mustExec(t, ctx, pool, `INSERT INTO monthly_report_runs(month,lease_id,lease_until,attempt_count,next_attempt_at)
 		VALUES ('2026-11',gen_random_uuid(),now()-interval '1 minute',1,now()-interval '1 minute')`)
-	now := time.Date(2026, 12, 1, 2, 0, 0, 0, time.UTC)
+	now := time.Date(2026, 12, 4, 2, 0, 0, 0, time.UTC)
 	var sends atomic.Int32
 	entered, release := make(chan struct{}, 1), make(chan struct{})
 	mailer := &report.Mailer{Reports: &report.Store{DB: pool, Now: func() time.Time { return now }}, DB: pool, Now: func() time.Time { return now },

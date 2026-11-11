@@ -9,12 +9,14 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// ClaimDB claims a month so only one center sends it, once.
+// ClaimDB coordinates monthly report claims across center instances.
 type ClaimDB interface {
 	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
 }
 
 // Mailer sends the previous month's report on the first days of each month through a notification channel.
@@ -26,6 +28,8 @@ type Mailer struct {
 	Log   *slog.Logger
 	Now   func() time.Time
 	Every time.Duration
+
+	leaseDuration time.Duration
 }
 
 const (
@@ -49,29 +53,118 @@ func Due(now time.Time) bool {
 	return now.Day() <= 3 && (now.Day() > 1 || now.Hour() >= 1)
 }
 
-// RunOnce sends the previous month's report if it is due and claims are available.
+// RunOnce sends an eligible queued report, or the previous month when the send window is open.
 func (m *Mailer) RunOnce(ctx context.Context) error {
 	now := m.now()
-	if !Due(now) {
+	month, found, leaseExpired, retryReady, err := m.pendingMonth(ctx, now)
+	if err != nil {
+		return err
+	}
+	if found && (!retryReady || (!Due(now) && !leaseExpired)) {
 		return nil
 	}
-	month := PreviousMonth(now)
+	if !found {
+		if !Due(now) {
+			return nil
+		}
+		month = PreviousMonth(now)
+	}
 	leaseID := uuid.NewString()
-	tag, err := m.DB.Exec(ctx, claimSQL, month, leaseID, now.Add(claimLease), now)
+	ttl := m.leaseTTL()
+	tag, err := m.DB.Exec(ctx, claimSQL, month, leaseID, now.Add(ttl), now)
 	if err != nil {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
 		return nil
 	}
-	data, err := m.Reports.Build(ctx, month, "", "")
+	workCtx, finishLease := m.maintainLease(ctx, month, leaseID, ttl)
+	data, err := m.Reports.Build(workCtx, month, "", "")
 	if err == nil {
-		err = m.Send(ctx, func(centerURL string) string { return Summary(data, centerURL) })
+		err = m.Send(workCtx, func(centerURL string) string { return Summary(data, centerURL) })
+	}
+	if leaseErr := finishLease(); leaseErr != nil {
+		return errors.Join(err, leaseErr)
 	}
 	if err != nil {
-		return m.release(ctx, month, leaseID, now.Add(retryDelay), err)
+		return m.release(ctx, month, leaseID, m.now().Add(retryDelay), err)
 	}
-	return m.markSent(ctx, month, leaseID, now)
+	return m.markSent(ctx, month, leaseID, m.now())
+}
+
+const pendingSQL = `SELECT month,
+	lease_until IS NOT NULL AND lease_until <= $1,
+	next_attempt_at <= $1
+FROM monthly_report_runs WHERE sent_at IS NULL ORDER BY month LIMIT 1`
+
+func (m *Mailer) pendingMonth(ctx context.Context, now time.Time) (string, bool, bool, bool, error) {
+	var month string
+	var expired, ready bool
+	err := m.DB.QueryRow(ctx, pendingSQL, now).Scan(&month, &expired, &ready)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", false, false, false, nil
+	}
+	if err != nil {
+		return "", false, false, false, err
+	}
+	return month, true, expired, ready, nil
+}
+
+func (m *Mailer) leaseTTL() time.Duration {
+	if m.leaseDuration > 0 {
+		return m.leaseDuration
+	}
+	return claimLease
+}
+
+func (m *Mailer) maintainLease(ctx context.Context, month, leaseID string, ttl time.Duration) (context.Context, func() error) {
+	workCtx, cancel := context.WithCancel(ctx)
+	interval := ttl / 3
+	if interval <= 0 {
+		interval = time.Second
+	}
+	done, failures := make(chan struct{}), make(chan error, 1)
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-workCtx.Done():
+				return
+			case <-ticker.C:
+				err := m.renewLease(ctx, month, leaseID, m.now().Add(ttl))
+				if err != nil {
+					failures <- err
+					cancel()
+					return
+				}
+			}
+		}
+	}()
+	return workCtx, func() error {
+		cancel()
+		<-done
+		select {
+		case err := <-failures:
+			return err
+		default:
+			return nil
+		}
+	}
+}
+
+func (m *Mailer) renewLease(ctx context.Context, month, leaseID string, until time.Time) error {
+	renewCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTime)
+	defer cancel()
+	tag, err := m.DB.Exec(renewCtx, renewSQL, month, leaseID, until)
+	if err != nil {
+		return fmt.Errorf("could not renew monthly report lease: %w", err)
+	}
+	if tag.RowsAffected() != 1 {
+		return errLeaseLost
+	}
+	return nil
 }
 
 const claimSQL = `INSERT INTO monthly_report_runs (month, claimed_at, lease_id, lease_until, attempt_count, next_attempt_at)
@@ -80,6 +173,9 @@ ON CONFLICT (month) DO UPDATE SET claimed_at = EXCLUDED.claimed_at, lease_id = E
 	lease_until = EXCLUDED.lease_until, attempt_count = monthly_report_runs.attempt_count + 1
 WHERE monthly_report_runs.sent_at IS NULL AND monthly_report_runs.next_attempt_at <= EXCLUDED.claimed_at
 	AND (monthly_report_runs.lease_until IS NULL OR monthly_report_runs.lease_until <= EXCLUDED.claimed_at)`
+
+const renewSQL = `UPDATE monthly_report_runs SET lease_until = $3
+	WHERE month = $1 AND lease_id = $2 AND sent_at IS NULL`
 
 func (m *Mailer) release(ctx context.Context, month, leaseID string, retryAt time.Time, cause error) error {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), cleanupTime)

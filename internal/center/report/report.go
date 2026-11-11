@@ -98,11 +98,11 @@ func engineClause(engine string) (string, []any) {
 }
 
 const attributedSQL = `WITH attributed AS (
-	SELECT r.*, COALESCE(r.isp_id, history.isp_id, prior.isp_id) AS report_isp_id
+	SELECT r.*, COALESCE(r.isp_id, CASE WHEN history.found THEN history.isp_id ELSE prior.isp_id END) AS report_isp_id
 	FROM results r JOIN nodes n ON n.id = r.node_id
 	LEFT JOIN LATERAL (
-		SELECT h.to_isp_id AS isp_id FROM node_ip_history h
-		WHERE h.node_id = r.node_id AND h.ts <= r.ts AND h.to_isp_id IS NOT NULL
+		SELECT h.to_isp_id AS isp_id, true AS found FROM node_ip_history h
+		WHERE h.node_id = r.node_id AND h.ts <= r.ts
 		ORDER BY h.ts DESC, h.id DESC LIMIT 1
 	) history ON true
 	LEFT JOIN LATERAL (
@@ -113,15 +113,22 @@ const attributedSQL = `WITH attributed AS (
 	WHERE r.ts >= $1 AND r.ts < $2 AND %s
 )`
 
-const rowsSQL = `SELECT i.id::text, COALESCE(i.name, 'Unknown ISP'), COALESCE(i.asn, 0), n.id::text, n.name, p.name, p.advertised_down_mbps, p.advertised_up_mbps,
-	COUNT(*)::int, COUNT(*) FILTER (WHERE r.status = 'failed')::int,
+const rowsSQL = `, report_groups AS (
+	SELECT report_isp_id, node_id FROM attributed
+	UNION
+	SELECT to_isp_id, node_id FROM node_ip_history
+	WHERE ts >= $1 AND ts < $2 AND from_ip IS NOT NULL
+)
+SELECT i.id::text, COALESCE(i.name, 'Unknown ISP'), COALESCE(i.asn, 0), n.id::text, n.name, p.name, p.advertised_down_mbps, p.advertised_up_mbps,
+	COUNT(r.id)::int, COUNT(r.id) FILTER (WHERE r.status = 'failed')::int,
 	AVG(r.down_mbps) FILTER (WHERE r.status <> 'failed'),
 	percentile_cont(0.95) WITHIN GROUP (ORDER BY r.down_mbps) FILTER (WHERE r.status <> 'failed'),
 	AVG(r.up_mbps) FILTER (WHERE r.status <> 'failed'),
 	percentile_cont(0.95) WITHIN GROUP (ORDER BY r.up_mbps) FILTER (WHERE r.status <> 'failed')
-FROM attributed r JOIN nodes n ON n.id = r.node_id
-LEFT JOIN isps i ON i.id = r.report_isp_id
-LEFT JOIN isp_plans p ON p.id = n.isp_plan_id AND p.isp_id = r.report_isp_id
+FROM report_groups g JOIN nodes n ON n.id = g.node_id
+LEFT JOIN isps i ON i.id = g.report_isp_id
+LEFT JOIN isp_plans p ON p.id = n.isp_plan_id AND p.isp_id = g.report_isp_id
+LEFT JOIN attributed r ON r.node_id = g.node_id AND r.report_isp_id IS NOT DISTINCT FROM g.report_isp_id
 WHERE true %s
 GROUP BY i.id, n.id, p.id
 ORDER BY lower(COALESCE(i.name, 'Unknown ISP')), COALESCE(i.asn, 0), lower(n.name)`
@@ -140,8 +147,8 @@ FROM (
 	FROM attributed
 	) t WHERE status = 'failed' GROUP BY report_isp_id, node_id`
 
-const changesSQL = `SELECT COALESCE(COALESCE(to_isp_id, from_isp_id)::text, ''), node_id::text, COUNT(*)::int FROM node_ip_history
-WHERE ts >= $1 AND ts < $2 AND from_ip IS NOT NULL %s GROUP BY COALESCE(to_isp_id, from_isp_id), node_id`
+const changesSQL = `SELECT COALESCE(to_isp_id::text, ''), node_id::text, COUNT(*)::int FROM node_ip_history
+WHERE ts >= $1 AND ts < $2 AND from_ip IS NOT NULL %s GROUP BY to_isp_id, node_id`
 
 type metricKey struct{ isp, node string }
 
@@ -157,7 +164,7 @@ func (s *Store) Build(ctx context.Context, month, engine, ispID string) (Report,
 	rowArgs, filter := args, ""
 	if ispID != "" {
 		rowArgs = append(append([]any{}, args...), ispID)
-		filter = fmt.Sprintf("AND r.report_isp_id = $%d::uuid", len(rowArgs))
+		filter = fmt.Sprintf("AND g.report_isp_id = $%d::uuid", len(rowArgs))
 	}
 	out := Report{Month: month, From: from, To: to, Partial: to.After(now), Engine: engine, Generated: now, Rows: []Row{}}
 	if err := s.scanRows(ctx, &out, fmt.Sprintf(attributedSQL, clause)+fmt.Sprintf(rowsSQL, filter), rowArgs); err != nil {
@@ -186,7 +193,7 @@ func (s *Store) Build(ctx context.Context, month, engine, ispID string) (Report,
 	changeFilter, changeArgs := "", []any{from, to}
 	if ispID != "" {
 		changeArgs = append(changeArgs, ispID)
-		changeFilter = fmt.Sprintf("AND COALESCE(to_isp_id, from_isp_id) = $%d::uuid", len(changeArgs))
+		changeFilter = fmt.Sprintf("AND to_isp_id = $%d::uuid", len(changeArgs))
 	}
 	if err := s.collect(ctx, fmt.Sprintf(changesSQL, changeFilter), changeArgs, scanCount(changes)); err != nil {
 		return Report{}, err

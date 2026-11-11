@@ -12,7 +12,7 @@ For one UTC month, one row per ISP and node:
 | Downtime minutes | From each failed test to the next test of the node, or the report boundary for an open interval, at most 24 hours per failure |
 | IP changes | Actual address transitions for this ISP and node; an initial observation is not a change, and a transition belongs to its destination ISP |
 
-An unlinked result inherits the most recent known ISP from the node's IP history at the measurement time, then from an earlier ISP-linked result. If neither identifies an ISP, the report includes an `Unknown ISP` row with `ispId: null`, ASN `0`, and no plan.
+An unlinked result inherits the ISP from the latest IP-history event at the measurement time, then from an earlier ISP-linked result only when no IP-history event exists. If the latest event has no ISP, or neither source identifies an ISP, the report includes an `Unknown ISP` row with `ispId: null`, ASN `0`, and no plan. IP-only transitions also create a row, even when the node has no test in that ISP during the month. A transition with no destination ISP belongs to `Unknown ISP`, never to its previous provider.
 
 Engines are never blended: without `engine` each node uses its primary engine (JOOST-71).
 
@@ -23,4 +23,4 @@ Engines are never blended: without `engine` each node uses its primary engine (J
 - The PDF uses an embedded Noto Sans font, keeps Unicode names intact, wraps long values, and paginates the A4 landscape table.
 
 ## Scheduled e-mail
-Set `SPEEDTEST_MONTHLY_REPORT_EMAIL=true` (default off) and configure the e-mail channel in Settings. On the first three days of each month (from 01:00 UTC on day 1) the centre sends a plain-text summary of the previous month with a sign-in link to the PDF. A 15-minute lease prevents concurrent sends and makes an interrupted claim recoverable after expiry. Failed attempts are recorded and become eligible for retry after five minutes while the send window remains open. A failure to persist the final sent state leaves the lease to expire, so an uncertain provider response can result in a later duplicate delivery. Sending does not use the alert queue, so quiet hours do not delay it.
+Set `SPEEDTEST_MONTHLY_REPORT_EMAIL=true` (default off) and configure the e-mail channel in Settings. On the first three days of each month (from 01:00 UTC on day 1) the centre sends a plain-text summary of the previous month with a sign-in link to the PDF. A 15-minute lease is renewed while a report is built and sent. Unsent months are kept oldest-first; an expired interrupted claim can be recovered after the send window, while ordinary failed attempts retry after five minutes only while the window remains open. A failure to persist the final sent state leaves the lease to expire, so an uncertain provider response can result in a later duplicate delivery. Sending does not use the alert queue, so quiet hours do not delay it.
