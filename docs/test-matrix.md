@@ -25,7 +25,7 @@ Operations: 76. Without a test: 0.
 | updateNode | PATCH | `/api/nodes/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>+2 more |
 | deleteNode | DELETE | `/api/nodes/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/installer_test.go`<br>`internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>+2 more |
 | runNode | POST | `/api/nodes/{id}/run` | `internal/center/audit/audit_test.go`<br>`internal/center/server/access_token_auth_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>+2 more |
-| getNodeServerCatalog | GET | `/api/nodes/{id}/servers` | `internal/center/server/ownerservers_test.go` |
+| getNodeServerCatalog | GET | `/api/nodes/{id}/servers` | `internal/center/server/httpx_test.go`<br>`internal/center/server/ownerservers_test.go` |
 | refreshNodeServerCatalog | POST | `/api/nodes/{id}/servers` | `internal/center/server/ownerservers_test.go` |
 | setNodeServerSelection | PUT | `/api/nodes/{id}/server-selection` | `internal/center/server/ownerservers_test.go` |
 | createCommand | POST | `/api/nodes/{id}/commands` | `internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>`internal/center/server/ownerservers_test.go` |
