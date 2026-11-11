@@ -9,8 +9,14 @@ PORT="${STAGING_PORT:-18090}"
 # shellcheck source=deploy/docker/schedule-defaults.sh
 source "$(dirname "$0")/schedule-defaults.sh"
 INTERVAL="$(staging_interval)"
-require_schedule_interval STAGING_INTERVAL_MINUTES "$INTERVAL"
-NODES="${STAGING_NODES:-VM1:0 VM2:10 VM3:20}"          # name:startMinuteOffset ...
+DEFAULT_NODES='VM1:0 VM2:10 VM3:20'
+if [ -n "${STAGING_NODES:-}" ]; then
+  NODES="$STAGING_NODES"                              # name:startMinuteOffset ...
+  USE_DEFAULT_NODES=0
+else
+  NODES="$DEFAULT_NODES"
+  USE_DEFAULT_NODES=1
+fi
 EXPECTED_DOWN="${STAGING_EXPECTED_DOWN_MBPS:-500}"
 EXPECTED_UP="${STAGING_EXPECTED_UP_MBPS:-500}"
 CENTER="http://127.0.0.1:${PORT}"
@@ -19,6 +25,38 @@ export APP_ENV="${APP_ENV:-local}" SPEEDTEST_HTTP_ADDR="${BIND}:${PORT}"
 
 log() { printf '%s entrypoint: %s\n' "$(date -u +%FT%TZ)" "$*"; }
 die() { log "ERROR: $*"; exit 1; }
+validate_staging_nodes() {
+  local spec name offset candidate prior used
+  local -a nodes=() used_offsets=()
+  for spec in $NODES; do
+    [[ "$spec" == *:* && "${spec#*:}" != *:* ]] || die "invalid staging node specification: $spec"
+    name="${spec%%:*}"
+    offset="${spec#*:}"
+    [[ -n "$name" && "$offset" =~ ^[0-9]{1,2}$ ]] || die "node ${name:-<empty>} offset must be a minute from 0 through 59"
+    offset=$((10#$offset))
+    (( offset < 60 )) || die "node ${name} offset must be a minute from 0 through 59"
+    if (( offset >= INTERVAL )); then
+      (( USE_DEFAULT_NODES == 1 )) || die "node ${name} offset ${offset} must be less than interval ${INTERVAL}"
+      candidate=0
+      while (( candidate < INTERVAL )); do
+        used=0
+        for prior in "${used_offsets[@]}"; do
+          if (( prior == candidate )); then used=1; break; fi
+        done
+        (( used == 0 )) && break
+        candidate=$((candidate + 1))
+      done
+      (( candidate < INTERVAL )) || die "no valid start-minute offset remains for node ${name}"
+      offset="$candidate"
+    fi
+    nodes+=("${name}:${offset}")
+    used_offsets+=("$offset")
+  done
+  (( ${#nodes[@]} > 0 )) || die "STAGING_NODES must contain at least one node"
+  NODES="${nodes[*]}"
+}
+require_schedule_interval STAGING_INTERVAL_MINUTES "$INTERVAL" || exit 1
+validate_staging_nodes
 : "${SPEEDTEST_DB_HOST:?}" "${SPEEDTEST_DB_PORT:?}" "${SPEEDTEST_DB_NAME:?}" "${SPEEDTEST_DB_USER:?}" "${SPEEDTEST_DB_PASSWORD:?}"
 : "${STAGING_OWNER_EMAIL:?}" "${STAGING_OWNER_PASSWORD:?}" "${APP_KEY:?}"
 mkdir -p "$STATE/agents"
@@ -86,7 +124,7 @@ for spec in $NODES; do
     creation_key="staging-node-$(printf '%s' "$name" | sha256sum | cut -c1-64)"
     created="$(api POST /api/nodes "$(jq -nc --arg n "$name" --arg l "Staging ${name}" --argjson d "$EXPECTED_DOWN" --argjson u "$EXPECTED_UP" '{name:$n,label:$l,expectedDown:$d,expectedUp:$u}')" "$creation_key")"
     token="$(printf '%s' "$created" | jq -r '.data.token // empty')"; node_id="$(printf '%s' "$created" | jq -r '.data.node.id // empty')"
-    if [ -z "$token" ] || [ -z "$node_id" ]; then die "node ${name} was not created: $(printf '%s' "$created" | head -c 300)"; fi
+    if [ -z "$token" ] || [ -z "$node_id" ]; then die "node ${name} creation returned no enrollment data"; fi
     psql_run -c "BEGIN;
 UPDATE schedules SET interval_minutes=${INTERVAL}, offset_minutes=${offset}, revision=revision+1 WHERE node_id='${node_id}';
 UPDATE engine_schedules SET interval_minutes=${INTERVAL}, offset_minutes=${offset}, revision=revision+1 WHERE node_id='${node_id}' AND engine='ookla';
