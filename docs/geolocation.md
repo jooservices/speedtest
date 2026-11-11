@@ -125,8 +125,8 @@ path permissions and capacity, then call `Update` to retry. Archive and checksum
 can refer to different releases during a vendor release: the checksum mismatch
 safely retains that edition's old file; retry later. For rollback, stop/join the
 updater, restore previously backed-up MMDBs to configured paths, then reopen the
-reader. Migration `00023_geo_provider_usage.sql` adds durable provider budget
-and resumable backfill state; `00024_geo_provider_rolling_window.sql` adds the
+reader. Migration `00034_geo_provider_usage.sql` adds durable provider budget
+and resumable backfill state; `00035_geo_provider_rolling_window.sql` adds the
 persistent next-request timestamp used to pace ip-api batch requests across
 minute boundaries. Their Down sections remove only these additions and tables.
 

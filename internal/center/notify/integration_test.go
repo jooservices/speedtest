@@ -293,7 +293,7 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	// Roll back to the version immediately before notification deliveries.
 	var exists bool
 	if err := db.MigrateDownTo(ctx, p, 5); err != nil {
-		t.Fatal("rollback to pre-delivery schema", err)
+		t.Fatal("roll back through notification deliveries migration", err)
 	}
 	if err := p.QueryRow(ctx, `SELECT to_regclass('notification_deliveries') IS NOT NULL`).Scan(&exists); err != nil {
 		t.Fatal(err)
