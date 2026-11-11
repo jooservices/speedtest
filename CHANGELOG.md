@@ -14,6 +14,7 @@ All notable changes to Speedtest are recorded here. The format follows
 
 ### Changed
 - New nodes, missing agent intervals, and newly enabled engine schedules default to 60 minutes; existing schedules retain their configured values. Docker staging scripts keep their current default until JOOST-89.
+- Results and Alerts ISP filters stay page-scoped; rolling ISP trends use in-range hourly samples, and plan edits preserve explicitly chosen expected speeds.
 
 ### Fixed
 - Installation event streams revalidate the bearer token that opened them, so expiry and revocation stop the stream at its next 10-second check.

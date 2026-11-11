@@ -53,7 +53,7 @@ export function settingsSuite(T, ctx) {
     async preferences() {
       await T.open('#/settings', 'Settings');
       await T.choose(setting('Decimal places').locator('select'), '2');
-      await T.toast('Saved').waitFor();
+      await T.eventually(() => T.db("select value->>'decimals' from settings where key='display'") === '2', 'the selected decimal precision is saved');
       assert.equal(T.db("select value->>'decimals' from settings where key='display'"), '2');
       await T.settled();
       await T.choose(setting('Speed units').locator('select'), 'Mbps');
@@ -168,6 +168,7 @@ export function settingsSuite(T, ctx) {
       await T.choose(setting('Keep results for').locator('select'), '90');
       await T.settled();
       await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '90', 'the retention period is stored');
+      assert.equal((await T.api('/api/settings')).body.data.retentionDays, 90, 'the settings API returns the saved retention period');
       const csv = await T.download(() => T.press('CSV', setting('Export all results')));
       assert.ok(csv.startsWith('time,node,status,download_mbps'), 'the CSV export has its header');
       const json = await T.download(() => T.press('JSON', setting('Export all results')));

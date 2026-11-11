@@ -84,13 +84,13 @@
       return;
     }
     var from = Date.now() - ST.ranges[ST.settings().range];
-    var buckets = {}, order = [];
+    var buckets = {}, order = [], hourly = ST.ranges[ST.settings().range] <= 24 * ST.HOUR;
     ST.results({ from: from, status: 'all' }).forEach(function (r) {
       var g = ST.geo(r.ip);
       if (!g || g.asn !== row.asn || r.status === 'failed' || r.down == null) return;
-      var day = F.parts(r.ts).key;
-      if (!buckets[day]) { buckets[day] = { t: 0, n: 0, v: 0 }; order.push(day); }
-      buckets[day].t += r.ts; buckets[day].n++; buckets[day].v += r.down;
+      var key = hourly ? Math.floor(r.ts / ST.HOUR) : F.parts(r.ts).key;
+      if (!buckets[key]) { buckets[key] = { t: 0, n: 0, v: 0 }; order.push(key); }
+      buckets[key].t += r.ts; buckets[key].n++; buckets[key].v += r.down;
     });
     paint(order.map(function (k) { return [buckets[k].t / buckets[k].n, buckets[k].v / buckets[k].n]; }));
   }

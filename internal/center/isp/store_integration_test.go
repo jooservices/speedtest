@@ -140,7 +140,7 @@ func TestISPMigrationAndQueriesIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	planID, _ := plan["id"].(string)
-	if _, err := pool.Exec(ctx, `UPDATE nodes SET isp_plan_id=$2::uuid WHERE id=$1`, node, planID); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE nodes SET isp_plan_id=$2::uuid,expected_down_isp_default=true,expected_up_isp_default=true WHERE id=$1`, node, planID); err != nil {
 		t.Fatal("assign node ISP plan:", err)
 	}
 	if _, err = store.UpdatePlan(ctx, e.ID, planID, "Fast 50", 350, 100); err != nil {
@@ -150,7 +150,7 @@ func TestISPMigrationAndQueriesIntegration(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT expected_down_mbps,expected_up_mbps FROM nodes WHERE id=$1`, node).Scan(&down, &up); err != nil || down != 350 || up != 100 {
 		t.Fatalf("plan default speeds=%v/%v: %v", down, up, err)
 	}
-	if _, err := pool.Exec(ctx, `UPDATE nodes SET expected_down_mbps=500 WHERE id=$1`, node); err != nil {
+	if _, err := pool.Exec(ctx, `UPDATE nodes SET expected_down_mbps=500,expected_down_isp_default=false WHERE id=$1`, node); err != nil {
 		t.Fatal("set explicit speed override:", err)
 	}
 	if _, err = store.UpdatePlan(ctx, e.ID, planID, "Fast 50", 400, 200); err != nil {
@@ -175,6 +175,101 @@ func TestISPMigrationAndQueriesIntegration(t *testing.T) {
 	}
 	if err = db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal("up again", err)
+	}
+}
+
+func TestPlanUpdatesPreserveExplicitEqualAndDifferentSpeedsIntegration(t *testing.T) {
+	pool, ctx, store := openISPStore(t)
+	entity, err := isp.Ensure(ctx, pool, 64501, "Plan Provenance ISP")
+	if err != nil || entity == nil {
+		t.Fatal("create ISP:", err)
+	}
+	plan, err := store.CreatePlan(ctx, entity.ID, "Fiber", 300, 100)
+	if err != nil {
+		t.Fatal("create plan:", err)
+	}
+	planID := plan["id"].(string)
+	seedPlanProvenanceNodes(t, ctx, pool, planID)
+	if _, err := store.UpdatePlan(ctx, entity.ID, planID, "Fiber", 350, 120); err != nil {
+		t.Fatal("update plan:", err)
+	}
+	assertPlanProvenance(t, ctx, pool)
+}
+
+func seedPlanProvenanceNodes(t *testing.T, ctx context.Context, pool *pgxpool.Pool, planID string) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `INSERT INTO nodes(id,name,isp_plan_id,expected_down_mbps,expected_up_mbps,expected_down_isp_default,expected_up_isp_default) VALUES
+	('00000000-0000-4000-8000-0000000000d1','default speeds',$1,300,100,true,true),
+	('00000000-0000-4000-8000-0000000000d2','explicit equal speeds',$1,300,100,false,false),
+	('00000000-0000-4000-8000-0000000000d3','explicit different speeds',$1,500,150,false,false)`, planID)
+	if err != nil {
+		t.Fatal("seed plan provenance nodes:", err)
+	}
+}
+
+func assertPlanProvenance(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	rows, err := pool.Query(ctx, `SELECT name,expected_down_mbps,expected_up_mbps FROM nodes WHERE id IN (
+	'00000000-0000-4000-8000-0000000000d1','00000000-0000-4000-8000-0000000000d2','00000000-0000-4000-8000-0000000000d3') ORDER BY id`)
+	if err != nil {
+		t.Fatal("read expected plan values:", err)
+	}
+	defer rows.Close()
+	want := [][3]any{{"default speeds", 350.0, 120.0}, {"explicit equal speeds", 300.0, 100.0}, {"explicit different speeds", 500.0, 150.0}}
+	for i := range want {
+		var name string
+		var down, up float64
+		if !rows.Next() || rows.Scan(&name, &down, &up) != nil || name != want[i][0] || down != want[i][1] || up != want[i][2] {
+			t.Fatalf("plan value[%d]=%q %.0f/%.0f want %v", i, name, down, up, want[i])
+		}
+	}
+	if rows.Next() || rows.Err() != nil {
+		t.Fatalf("unexpected plan provenance rows: %v", rows.Err())
+	}
+}
+
+func TestSixHourTrendUsesInRangeHourlyPointsAcrossUTCDateIntegration(t *testing.T) {
+	pool, ctx, store := openISPStore(t)
+	const node = "00000000-0000-4000-8000-0000000000f1"
+	const ispID = "00000000-0000-4000-8000-0000000000f2"
+	from := time.Date(2026, 11, 10, 21, 0, 0, 0, time.UTC)
+	to := from.Add(6 * time.Hour)
+	if _, err := pool.Exec(ctx, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES ($1,'trend-node',100,50)`, node); err != nil {
+		t.Fatal("seed trend node:", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO isps(id,asn,organisation,name) VALUES ($1,64520,'Trend Network','Trend Network')`, ispID); err != nil {
+		t.Fatal("seed trend ISP:", err)
+	}
+	seedSixHourTrendSamples(t, ctx, pool, node, ispID, from)
+	points, err := store.Trend(ctx, ispID, isp.Query{From: from, To: to})
+	if err != nil || len(points) != 4 {
+		t.Fatalf("hourly trend points=%v error=%v", points, err)
+	}
+	assertTrendPointsInsideWindow(t, points, from, to)
+}
+
+func seedSixHourTrendSamples(t *testing.T, ctx context.Context, pool *pgxpool.Pool, node, ispID string, from time.Time) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `INSERT INTO ip_addresses(ip,isp_id) VALUES ('203.0.113.220',$1)`, ispID); err != nil {
+		t.Fatal("seed trend IP:", err)
+	}
+	for i, offset := range []time.Duration{10 * time.Minute, 40 * time.Minute, time.Hour + 20*time.Minute, 3*time.Hour + 10*time.Minute, 5*time.Hour + 45*time.Minute} {
+		_, err := pool.Exec(ctx, `INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,isp_id)
+			VALUES ($1,$2,$3,'ok',100,50,10,1,'{"id":1,"name":"fixture"}'::jsonb,'203.0.113.220',4,$4)`, fmt.Sprintf("00000000-0000-4000-8000-%012x", 0xf3+i), node, from.Add(offset), ispID)
+		if err != nil {
+			t.Fatal("seed trend result:", err)
+		}
+	}
+}
+
+func assertTrendPointsInsideWindow(t *testing.T, points []map[string]any, from, to time.Time) {
+	t.Helper()
+	for _, point := range points {
+		raw, ok := point["ts"].(string)
+		parsed, err := time.Parse(time.RFC3339Nano, raw)
+		if !ok || err != nil || parsed.Before(from) || !parsed.Before(to) {
+			t.Fatalf("trend timestamp %v is outside [%s,%s): %v", raw, from, to, err)
+		}
 	}
 }
 
@@ -244,21 +339,26 @@ FROM ip_addresses WHERE ip BETWEEN '203.0.113.100'::inet AND '203.0.113.131'::in
 func TestISPMigrationBackfillsASNAndSurvivesRollbackIntegration(t *testing.T) {
 	pool, ctx, _ := openISPStore(t)
 	node, result := seedLegacyISPData(t, ctx, pool)
-	if err := db.Migrate(ctx, pool, "down"); err != nil {
-		t.Fatal("down", err)
-	}
+	rollbackThroughISPEntities(t, ctx, pool)
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal("up", err)
 	}
 	assertISPBackfill(t, ctx, pool, node, result)
-	if err := db.Migrate(ctx, pool, "down"); err != nil {
-		t.Fatal("populated down", err)
-	}
+	rollbackThroughISPEntities(t, ctx, pool)
 	assertISPRollbackPreservesData(t, ctx, pool, result)
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal("reapply", err)
 	}
 	assertISPBackfill(t, ctx, pool, node, result)
+}
+
+func rollbackThroughISPEntities(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	for _, name := range []string{"audit authentication source", "API access tokens", "ISP plan provenance", "ISP entities"} {
+		if err := db.Migrate(ctx, pool, "down"); err != nil {
+			t.Fatalf("down %s: %v", name, err)
+		}
+	}
 }
 
 func seedLegacyISPData(t *testing.T, ctx context.Context, pool *pgxpool.Pool) (string, string) {
