@@ -290,6 +290,78 @@ func assertAgentPinCompatible(t *testing.T, ctx context.Context, pool *pgxpool.P
 	}
 }
 
+func TestNodeISPPlanDefaultsAndOverridesIntegration(t *testing.T) {
+	pool, ctx := openPool(t)
+	s := &Store{DB: pool}
+	first := seedNode(t, ctx, pool, 1, "plan-defaults", nil)
+	second := seedNode(t, ctx, pool, 2, "plan-isp-mismatch", nil)
+	ispA, ispB := uid(5101), uid(5102)
+	planA, planB := uid(5201), uid(5202)
+	seedNodePlans(t, ctx, pool, ispA, ispB, planA, planB)
+
+	view, etag, err := s.Update(ctx, first, raw(map[string]string{"ispPlanId": `"` + planA + `"`}), ETag(1))
+	if err != nil || view["expectedDown"] != float64(500) || view["expectedUp"] != float64(100) {
+		t.Fatalf("assign plan defaults: view=%v err=%v", view, err)
+	}
+	assertNodePlanState(t, ctx, pool, first, 500, 100, true, true)
+	_, etag, err = s.Update(ctx, first, raw(map[string]string{"expectedDown": `500`}), etag)
+	if err != nil {
+		t.Fatal("set explicit speed equal to old plan:", err)
+	}
+	assertNodePlanState(t, ctx, pool, first, 500, 100, false, true)
+	_, etag, err = s.Update(ctx, first, raw(map[string]string{"label": `"same plan"`}), etag)
+	if err != nil {
+		t.Fatal("save an unrelated edit on the same plan:", err)
+	}
+	assertNodePlanState(t, ctx, pool, first, 500, 100, false, true)
+	_, etag, err = s.Update(ctx, first, raw(map[string]string{"ispPlanId": `"` + planB + `"`}), etag)
+	if err != nil {
+		t.Fatal("switch plans:", err)
+	}
+	assertNodePlanState(t, ctx, pool, first, 500, 120, false, true)
+	_, _, err = s.Update(ctx, first, raw(map[string]string{"ispPlanId": `null`}), etag)
+	if err != nil {
+		t.Fatal("clear plan:", err)
+	}
+	assertNodePlanState(t, ctx, pool, first, 500, 120, false, false)
+	assertNodePlanISPMatch(t, ctx, pool, s, second, ispA, planB)
+}
+
+func seedNodePlans(t *testing.T, ctx context.Context, pool *pgxpool.Pool, ispA, ispB, planA, planB string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `INSERT INTO isps(id,asn,organisation,name) VALUES ($1,64501,'Plan A','Plan A'),($2,64502,'Plan B','Plan B')`, ispA, ispB); err != nil {
+		t.Fatal("seed ISPs:", err)
+	}
+	_, err := pool.Exec(ctx, `INSERT INTO isp_plans(id,isp_id,name,advertised_down_mbps,advertised_up_mbps) VALUES ($1,$2,'Fiber A',500,100),($3,$4,'Fiber B',600,120)`, planA, ispA, planB, ispB)
+	if err != nil {
+		t.Fatal("seed ISP plans:", err)
+	}
+}
+
+func assertNodePlanState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, node string, down, up float64, downDefault, upDefault bool) {
+	t.Helper()
+	var gotDown, gotUp float64
+	var gotDownDefault, gotUpDefault bool
+	err := pool.QueryRow(ctx, `SELECT expected_down_mbps,expected_up_mbps,expected_down_isp_default,expected_up_isp_default FROM nodes WHERE id=$1`, node).Scan(&gotDown, &gotUp, &gotDownDefault, &gotUpDefault)
+	if err != nil || gotDown != down || gotUp != up || gotDownDefault != downDefault || gotUpDefault != upDefault {
+		t.Fatalf("plan state=%v/%v:%v/%v want %v/%v:%v/%v err=%v", gotDown, gotUp, gotDownDefault, gotUpDefault, down, up, downDefault, upDefault, err)
+	}
+}
+
+func assertNodePlanISPMatch(t *testing.T, ctx context.Context, pool *pgxpool.Pool, s *Store, node, ispID, planID string) {
+	seedResult(t, ctx, pool, 2, node, time.Now().UTC(), "ok", "203.0.113.22")
+	if _, err := pool.Exec(ctx, `UPDATE ip_addresses SET isp_id=$1 WHERE ip='203.0.113.22'`, ispID); err != nil {
+		t.Fatal("assign current ISP to address:", err)
+	}
+	_, etag, err := s.Get(ctx, node)
+	if err != nil {
+		t.Fatal("read node before ISP mismatch:", err)
+	}
+	if _, _, err := s.Update(ctx, node, raw(map[string]string{"ispPlanId": `"` + planID + `"`}), etag); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("different ISP plan error=%v, want ErrInvalid", err)
+	}
+}
+
 func TestStoreDeleteCascadesAndIsRepeatable(t *testing.T) {
 	pool, ctx := openPool(t)
 	s := &Store{DB: pool}

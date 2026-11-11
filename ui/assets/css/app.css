@@ -345,6 +345,8 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
 .callout.crit { background: var(--crit-soft); }
 .setting { display: flex; justify-content: space-between; gap: 20px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .setting:last-child { border-bottom: 0; }
+.setting.engine-setting { flex-wrap: wrap; }
+.setting.engine-setting > .server-picker { flex: 1 0 100%; min-width: 0; }
 .setting .s-ctl { width: 260px; flex: none; }
 .setting .s-ctl .switch { float: right; }
 .list-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line); }
@@ -383,6 +385,7 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
   .field-row { grid-template-columns: 1fr; }
   .setting { min-width: 0; flex-direction: column; align-items: stretch; gap: 8px; }
   .setting > * { min-width: 0; max-width: 100%; }
+  .setting.engine-setting > .server-picker { flex: none; width: 100%; }
   .setting .s-ctl { width: 100%; }
 }
 @media (max-width: 560px) {

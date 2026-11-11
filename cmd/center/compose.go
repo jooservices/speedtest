@@ -18,6 +18,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/installer"
 	"github.com/jooservices/speedtest/internal/center/ipapi"
 	"github.com/jooservices/speedtest/internal/center/ipwatch"
+	"github.com/jooservices/speedtest/internal/center/isp"
 	"github.com/jooservices/speedtest/internal/center/jobs"
 	"github.com/jooservices/speedtest/internal/center/metrics"
 	"github.com/jooservices/speedtest/internal/center/nodes"
@@ -48,6 +49,7 @@ type services struct {
 	OwnerResults       server.OwnerResultsStore
 	OwnerSchedules     server.OwnerSchedulesStore
 	OwnerStats         server.OwnerStatsStore
+	OwnerISP           server.OwnerISPStore
 	Settings           settings.Store
 	OwnerIP            server.OwnerIPStore
 	OwnerNotifications server.OwnerNotificationsStore
@@ -154,6 +156,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		OwnerResults:       owner,
 		OwnerSchedules:     owner,
 		OwnerStats:         statsStore,
+		OwnerISP:           &isp.Store{DB: pool},
 		Settings:           preferences,
 		OwnerIP:            &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...).WithConsensus(watcher.Consensus, logger)},
 		OwnerDashboard:     &dashboard.Cached{Source: &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore}, TTL: 5 * time.Second},

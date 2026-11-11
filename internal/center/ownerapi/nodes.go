@@ -53,7 +53,7 @@ func (s *Store) now() time.Time {
 	return time.Now().UTC()
 }
 
-const nodeColumns = `n.id::text, n.name, n.label, n.provider, n.plan, n.expected_down_mbps, n.expected_up_mbps, n.threads,
+const nodeColumns = `n.id::text, n.name, n.label, n.provider, n.plan, n.isp_plan_id::text, n.expected_down_mbps, n.expected_up_mbps, n.expected_down_isp_default, n.expected_up_isp_default, n.threads,
 	n.server_id, n.color_slot, n.enabled, n.auto_update, n.binding_interface, host(n.binding_source_ip), n.note,
 	n.config_revision, s.interval_minutes, s.offset_minutes, s.enabled, n.host, n.agent, n.created_at, n.last_seen_at,n.installed_engines,n.primary_engine`
 
@@ -61,10 +61,12 @@ type nodeRow struct {
 	Engines                                                   []string
 	PrimaryEngine                                             string
 	ID, Name, Label, Provider, Plan, Iface, Note, Host, Agent string
+	ISPPlanID                                                 *string
 	Down, Up                                                  float64
 	Threads, ColorSlot, Interval, Offset                      int32
 	ServerID                                                  *int32
 	Enabled, AutoUpdate, ScheduleOn                           bool
+	DownPlanDefault, UpPlanDefault                            bool
 	SourceIP                                                  *string
 	Revision                                                  int64
 	CreatedAt                                                 time.Time
@@ -73,7 +75,7 @@ type nodeRow struct {
 
 func scanNode(row pgx.Row) (nodeRow, error) {
 	var n nodeRow
-	err := row.Scan(&n.ID, &n.Name, &n.Label, &n.Provider, &n.Plan, &n.Down, &n.Up, &n.Threads, &n.ServerID, &n.ColorSlot,
+	err := row.Scan(&n.ID, &n.Name, &n.Label, &n.Provider, &n.Plan, &n.ISPPlanID, &n.Down, &n.Up, &n.DownPlanDefault, &n.UpPlanDefault, &n.Threads, &n.ServerID, &n.ColorSlot,
 		&n.Enabled, &n.AutoUpdate, &n.Iface, &n.SourceIP, &n.Note, &n.Revision, &n.Interval, &n.Offset, &n.ScheduleOn,
 		&n.Host, &n.Agent, &n.CreatedAt, &n.LastSeen, &n.Engines, &n.PrimaryEngine)
 	return n, err
@@ -83,8 +85,9 @@ func scanNode(row pgx.Row) (nodeRow, error) {
 func ETag(revision int64) string { return fmt.Sprintf(`"node-%d"`, revision) }
 
 func (n nodeRow) input() nodes.Input {
-	in := nodes.Input{Name: n.Name, Label: n.Label, Provider: n.Provider, Plan: n.Plan, ExpectedDown: n.Down,
-		ExpectedUp: n.Up, Threads: int(n.Threads), Note: n.Note, Enabled: n.Enabled, AutoUpdate: n.AutoUpdate,
+	in := nodes.Input{Name: n.Name, Label: n.Label, Provider: n.Provider, Plan: n.Plan, ISPPlanID: n.ISPPlanID, ExpectedDown: n.Down,
+		ExpectedUp: n.Up, ExpectedDownPlanDefault: n.DownPlanDefault, ExpectedUpPlanDefault: n.UpPlanDefault,
+		Threads: int(n.Threads), Note: n.Note, Enabled: n.Enabled, AutoUpdate: n.AutoUpdate,
 		Binding: nodes.Binding{Iface: n.Iface, SourceIP: n.SourceIP}}
 	if n.ServerID != nil {
 		id := int(*n.ServerID)
@@ -109,7 +112,7 @@ func (n nodeRow) status(now time.Time, latest map[string]any) string {
 	return "online"
 }
 
-func (n nodeRow) view(now time.Time, latest, latestGood map[string]any, currentIP string, geo map[string]any) map[string]any {
+func (n nodeRow) view(now time.Time, latest, latestGood map[string]any, currentIP string, geo, currentISP map[string]any) map[string]any {
 	var server any = "auto"
 	if n.ServerID != nil {
 		server = int64(*n.ServerID)
@@ -122,14 +125,14 @@ func (n nodeRow) view(now time.Time, latest, latestGood map[string]any, currentI
 		ip = currentIP
 	}
 	obj := map[string]any{
-		"id": n.ID, "name": n.Name, "label": n.Label, "provider": n.Provider, "plan": n.Plan,
+		"id": n.ID, "name": n.Name, "label": n.Label, "provider": n.Provider, "plan": n.Plan, "ispPlanId": nullable(n.ISPPlanID),
 		"expectedDown": n.Down, "expectedUp": n.Up, "threads": int64(n.Threads), "server": server, "note": n.Note,
 		"engines": n.Engines, "primaryEngine": n.PrimaryEngine, "enabled": n.Enabled, "autoUpdate": n.AutoUpdate,
 		"binding":   map[string]any{"iface": n.Iface, "sourceIp": nullable(n.SourceIP)},
 		"colorSlot": int64(n.ColorSlot), "interval": int64(n.Interval), "offset": int64(n.Offset), "host": n.Host, "agent": displayAgent(n.Agent),
 		"createdAt": n.CreatedAt.UTC().Format(time.RFC3339Nano), "lastSeen": lastSeen,
 		"status": n.status(now, latest), "latest": nilMap(latest), "latestGood": nilMap(latestGood),
-		"currentIp": ip, "geo": nilMap(geo), "updateVersion": nil,
+		"currentIp": ip, "geo": nilMap(geo), "isp": nilMap(currentISP), "updateVersion": nil,
 	}
 	return obj
 }
@@ -147,12 +150,13 @@ type extras struct {
 	latest, latestGood map[string]map[string]any
 	ip                 map[string]string
 	geo                map[string]map[string]any
+	isp                map[string]map[string]any
 }
 
 func (s *Store) loadExtras(ctx context.Context, q interface {
 	Query(context.Context, string, ...any) (pgx.Rows, error)
 }, ids []string) (extras, error) {
-	ex := extras{latest: map[string]map[string]any{}, latestGood: map[string]map[string]any{}, ip: map[string]string{}, geo: map[string]map[string]any{}}
+	ex := extras{latest: map[string]map[string]any{}, latestGood: map[string]map[string]any{}, ip: map[string]string{}, geo: map[string]map[string]any{}, isp: map[string]map[string]any{}}
 	if len(ids) == 0 {
 		return ex, nil
 	}
@@ -177,8 +181,11 @@ func (s *Store) loadExtras(ctx context.Context, q interface {
 			return ex, err
 		}
 	}
-	rows, err := q.Query(ctx, `SELECT DISTINCT ON (r.node_id) r.node_id::text, host(r.ip), a.source, a.geo
-		FROM results r LEFT JOIN ip_addresses a ON a.ip = r.ip
+	rows, err := q.Query(ctx, `SELECT DISTINCT ON (r.node_id) r.node_id::text, host(r.ip), a.source, a.geo,
+		i.id::text, i.asn, i.organisation, i.name
+		FROM results r
+		LEFT JOIN ip_addresses a ON a.ip = r.ip
+		LEFT JOIN isps i ON i.id = COALESCE(r.isp_id, a.isp_id)
 		WHERE r.node_id = ANY($1::uuid[]) AND r.ip IS NOT NULL ORDER BY r.node_id, r.ts DESC, r.id DESC`, ids)
 	if err != nil {
 		return ex, err
@@ -186,9 +193,10 @@ func (s *Store) loadExtras(ctx context.Context, q interface {
 	defer rows.Close()
 	for rows.Next() {
 		var node, ip string
-		var source *string
+		var source, ispID, org, name *string
+		var asn *uint
 		var geo []byte
-		if err := rows.Scan(&node, &ip, &source, &geo); err != nil {
+		if err := rows.Scan(&node, &ip, &source, &geo, &ispID, &asn, &org, &name); err != nil {
 			return ex, err
 		}
 		ex.ip[node] = ip
@@ -198,6 +206,9 @@ func (s *Store) loadExtras(ctx context.Context, q interface {
 		}
 		if g := GeoObject(ip, src, geo); g != nil {
 			ex.geo[node] = g
+		}
+		if ispID != nil && asn != nil && org != nil && name != nil {
+			ex.isp[node] = map[string]any{"id": *ispID, "asn": *asn, "organisation": *org, "name": *name}
 		}
 	}
 	return ex, rows.Err()
@@ -237,7 +248,7 @@ func (s *Store) List(ctx context.Context, page, size int) ([]map[string]any, int
 	now := s.now()
 	out := make([]map[string]any, 0, len(list))
 	for _, n := range list {
-		out = append(out, s.nodeView(ctx, s.DB, n, now, ex.latest[n.ID], ex.latestGood[n.ID], ex.ip[n.ID], ex.geo[n.ID]))
+		out = append(out, s.nodeView(ctx, s.DB, n, now, ex.latest[n.ID], ex.latestGood[n.ID], ex.ip[n.ID], ex.geo[n.ID], ex.isp[n.ID]))
 	}
 	return out, total, nil
 }
@@ -261,7 +272,7 @@ func (s *Store) one(ctx context.Context, q interface {
 	if err != nil {
 		return nil, nodeRow{}, err
 	}
-	return s.nodeView(ctx, q, n, s.now(), ex.latest[id], ex.latestGood[id], ex.ip[id], ex.geo[id]), n, nil
+	return s.nodeView(ctx, q, n, s.now(), ex.latest[id], ex.latestGood[id], ex.ip[id], ex.geo[id], ex.isp[id]), n, nil
 }
 
 // Get returns one node and its strong entity tag.
@@ -288,14 +299,18 @@ func (s *Store) Update(ctx context.Context, id string, patch map[string]json.Raw
 	if err := applyPatch(&in, patch); err != nil {
 		return nil, "", err
 	}
+	downDefault, upDefault, err := applyISPPlanUpdate(ctx, tx, n, &in, patch)
+	if err != nil {
+		return nil, "", err
+	}
 	in, err = in.Normalize()
 	if err != nil {
 		return nil, "", ErrInvalid
 	}
-	_, err = tx.Exec(ctx, `UPDATE nodes SET name=$2,label=$3,provider=$4,plan=$5,expected_down_mbps=$6,expected_up_mbps=$7,threads=$8,
-		server_id=$9,enabled=$10,auto_update=$11,binding_interface=$12,binding_source_ip=$13,note=$14,
+	_, err = tx.Exec(ctx, `UPDATE nodes SET name=$2,label=$3,provider=$4,plan=$5,isp_plan_id=$6::uuid,expected_down_mbps=$7,expected_up_mbps=$8,expected_down_isp_default=$9,expected_up_isp_default=$10,threads=$11,
+		server_id=$12,enabled=$13,auto_update=$14,binding_interface=$15,binding_source_ip=$16,note=$17,
 		config_revision=config_revision+1,updated_at=now() WHERE id=$1`,
-		id, in.Name, in.Label, in.Provider, in.Plan, in.ExpectedDown, in.ExpectedUp, in.Threads, in.ServerID,
+		id, in.Name, in.Label, in.Provider, in.Plan, in.ISPPlanID, in.ExpectedDown, in.ExpectedUp, downDefault, upDefault, in.Threads, in.ServerID,
 		in.Enabled, in.AutoUpdate, in.Binding.Iface, in.Binding.SourceIP, in.Note)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -303,6 +318,11 @@ func (s *Store) Update(ctx context.Context, id string, patch map[string]json.Raw
 			return nil, "", ErrConflict
 		}
 		return nil, "", err
+	}
+	if _, changed := patch["server"]; changed {
+		if err := syncPrimaryServerPin(ctx, tx, id, n.PrimaryEngine, in.ServerID); err != nil {
+			return nil, "", err
+		}
 	}
 	if _, changed := patch["server"]; changed {
 		if err := syncPrimaryServerPin(ctx, tx, id, n.PrimaryEngine, in.ServerID); err != nil {
@@ -325,6 +345,72 @@ func syncPrimaryServerPin(ctx context.Context, tx pgx.Tx, nodeID, engine string,
 	return err
 }
 
+func applyISPPlanUpdate(ctx context.Context, tx interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, current nodeRow, input *nodes.Input, patch map[string]json.RawMessage) (bool, bool, error) {
+	downDefault, upDefault := current.DownPlanDefault, current.UpPlanDefault
+	planChanged := !sameNullable(current.ISPPlanID, input.ISPPlanID)
+	switch {
+	case planChanged && input.ISPPlanID != nil:
+		down, up, err := planDefaultsForNode(ctx, tx, current.ID, *input.ISPPlanID)
+		if err != nil {
+			return false, false, err
+		}
+		downDefault = applyOnePlanDefault(patch, "expectedDown", current.ISPPlanID == nil || downDefault, &input.ExpectedDown, down)
+		upDefault = applyOnePlanDefault(patch, "expectedUp", current.ISPPlanID == nil || upDefault, &input.ExpectedUp, up)
+	case planChanged:
+		downDefault, upDefault = false, false
+	default:
+		if _, explicit := patch["expectedDown"]; explicit {
+			downDefault = false
+		}
+		if _, explicit := patch["expectedUp"]; explicit {
+			upDefault = false
+		}
+	}
+	return downDefault, upDefault, nil
+}
+
+func applyOnePlanDefault(patch map[string]json.RawMessage, key string, wasDefault bool, value *float64, planValue float64) bool {
+	if _, explicit := patch[key]; explicit {
+		return false
+	}
+	if wasDefault {
+		*value = planValue
+	}
+	return wasDefault
+}
+
+func sameNullable(a, b *string) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	return *a == *b
+}
+
+func planDefaultsForNode(ctx context.Context, tx interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, nodeID, planID string) (float64, float64, error) {
+	var planISP string
+	var down, up float64
+	if err := tx.QueryRow(ctx, `SELECT isp_id::text,advertised_down_mbps,advertised_up_mbps FROM isp_plans WHERE id=$1::uuid`, planID).Scan(&planISP, &down, &up); errors.Is(err, pgx.ErrNoRows) {
+		return 0, 0, ErrInvalid
+	} else if err != nil {
+		return 0, 0, err
+	}
+	var currentISP *string
+	err := tx.QueryRow(ctx, `SELECT (SELECT COALESCE(r.isp_id,a.isp_id)::text FROM results r
+		LEFT JOIN ip_addresses a ON a.ip=r.ip WHERE r.node_id=$1::uuid AND r.ip IS NOT NULL
+		ORDER BY r.ts DESC,r.id DESC LIMIT 1)`, nodeID).Scan(&currentISP)
+	if err != nil {
+		return 0, 0, err
+	}
+	if currentISP != nil && *currentISP != planISP {
+		return 0, 0, ErrInvalid
+	}
+	return down, up, nil
+}
+
 func applyPatch(in *nodes.Input, patch map[string]json.RawMessage) error {
 	text := func(key string, dest *string) error {
 		raw, ok := patch[key]
@@ -334,13 +420,24 @@ func applyPatch(in *nodes.Input, patch map[string]json.RawMessage) error {
 		return json.Unmarshal(raw, dest)
 	}
 	for key, raw := range patch {
-		if string(raw) == "null" && key != "binding" {
+		if string(raw) == "null" && key != "binding" && key != "ispPlanId" {
 			return ErrInvalid // merge-patch null would remove a required property
 		}
 	}
 	for key, dest := range map[string]*string{"name": &in.Name, "label": &in.Label, "provider": &in.Provider, "plan": &in.Plan, "note": &in.Note} {
 		if err := text(key, dest); err != nil {
 			return ErrInvalid
+		}
+	}
+	if raw, ok := patch["ispPlanId"]; ok {
+		if string(raw) == "null" {
+			in.ISPPlanID = nil
+		} else {
+			var planID string
+			if json.Unmarshal(raw, &planID) != nil || !validUUID(planID) {
+				return ErrInvalid
+			}
+			in.ISPPlanID = &planID
 		}
 	}
 	for key, dest := range map[string]*float64{"expectedDown": &in.ExpectedDown, "expectedUp": &in.ExpectedUp} {
@@ -491,8 +588,8 @@ func displayAgent(agent string) string { display, _ := agentid.Parse(agent); ret
 
 func (s *Store) nodeView(ctx context.Context, q interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
-}, n nodeRow, now time.Time, latest, latestGood map[string]any, ip string, geo map[string]any) map[string]any {
-	view := n.view(now, latest, latestGood, ip, geo)
+}, n nodeRow, now time.Time, latest, latestGood map[string]any, ip string, geo, currentISP map[string]any) map[string]any {
+	view := n.view(now, latest, latestGood, ip, geo, currentISP)
 	if s.Releases != nil {
 		var raw []byte
 		err := q.QueryRow(ctx, `SELECT value FROM settings WHERE key='agentRelease'`).Scan(&raw)
