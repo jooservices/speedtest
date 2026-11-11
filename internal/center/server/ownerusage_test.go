@@ -63,7 +63,8 @@ func TestOwnerUsageAuthenticationAndRoutes(t *testing.T) {
 	if ownerUsageRoute("/api/usage/budgets/global/extra") || ownerUsageRoute("/api/usage/unknown") {
 		t.Fatal("invalid path matched usage area")
 	}
-	if rec := do(h, http.MethodGet, "/api/usage?engine=librespeed&group=week&node="+nodeID+"&from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z", "", ownerRead); rec.Code != http.StatusOK || store.query.Group != "week" || store.query.Engine != "librespeed" || store.query.NodeID != nodeID {
+	ispID := "00000000-0000-4000-8000-000000000001"
+	if rec := do(h, http.MethodGet, "/api/usage?engine=librespeed&group=week&node="+nodeID+"&isp="+ispID+"&from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z", "", ownerRead); rec.Code != http.StatusOK || store.query.Group != "week" || store.query.Engine != "librespeed" || store.query.NodeID != nodeID || store.query.ISPID != ispID {
 		t.Fatalf("usage filters = %d %+v", rec.Code, store.query)
 	}
 	if rec := do(h, http.MethodGet, "/api/usage/budgets", "", ownerRead); rec.Code != http.StatusOK || rec.Header().Get("ETag") != `"usage-budgets-test"` {
@@ -78,7 +79,7 @@ func TestOwnerUsageFilterAndAdviceValidation(t *testing.T) {
 	store := &fakeOwnerUsage{}
 	h := usageHandlerFor(store)
 	for _, path := range []string{
-		"/api/usage?node=invalid", "/api/usage?engine=ookla&engine=librespeed", "/api/usage?from=2026-11-01T00:00:00Z",
+		"/api/usage?node=invalid", "/api/usage?isp=invalid", "/api/usage?engine=ookla&engine=librespeed", "/api/usage?from=2026-11-01T00:00:00Z",
 		"/api/usage?from=bad&to=2026-11-02T00:00:00Z", "/api/usage?from=2026-11-02T00:00:00Z&to=2026-11-01T00:00:00Z",
 		"/api/usage?group=year", "/api/usage?to=2026-11-02T00:00:00Z&to=2026-11-03T00:00:00Z",
 		"/api/usage/advice?node=" + nodeID + "&engine=ookla&interval=x", "/api/usage/advice?node=" + nodeID + "&engine=ookla&interval=60&budgetBytes=-1",

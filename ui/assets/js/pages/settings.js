@@ -318,7 +318,7 @@
         U.btn('CSV', { icon: 'download', onClick: function () { U.download('speedtest-all.csv', ST.csv(ST.results({})), 'text/csv'); U.toast('Exported'); } }),
         U.btn('JSON', { icon: 'download', onClick: function () { U.download('speedtest-all.json', JSON.stringify(ST.results({}), null, 1), 'application/json'); U.toast('Exported'); } }))));
       body.appendChild(row('Reset the demo', 'Clears everything you changed in this preview.', U.btn('Reset demo data', { variant: 'danger', icon: 'refresh', onClick: function () {
-        U.confirm({ title: 'Reset demo data?', text: 'Nodes, rules, settings and manual tests you created here are cleared and the sample data returns.', confirm: 'Reset', danger: true }).then(function (ok) { if (ok) ST.resetDemo(); });
+        U.confirm({ title: 'Reset demo data?', text: 'Nodes, rules, budgets, settings and manual tests you created here are cleared and the sample data returns.', confirm: 'Reset', danger: true }).then(function (ok) { if (ok) ST.resetDemo(); });
       } })));
     }
 

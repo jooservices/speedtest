@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt;
-  var usageCache = {}, adviceCache = {}, adviceDrafts = {}, budgets = { items: null, etag: null, pending: null, error: null }, demoBudgets = [], usageGroup = 'day';
+  var usageCache = {}, adviceCache = {}, adviceDrafts = {}, budgets = { items: null, etag: null, pending: null, error: null }, demoBudgets = ST.demo ? ST.demoBandwidthBudgets() : [], usageGroup = 'day', usageISP = '';
   var engines = ['ookla', 'librespeed'];
 
   function utcMonth(now, offset) {
@@ -18,6 +18,14 @@
     }
     return Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate());
   }
+  function utcBucketLabel(ts, group) {
+    var d = new Date(ts), year = String(d.getUTCFullYear()), month = String(d.getUTCMonth() + 1).padStart(2, '0');
+    return group === 'month' ? year + '-' + month + ' UTC' : year + '-' + month + '-' + String(d.getUTCDate()).padStart(2, '0') + ' UTC';
+  }
+  function ispName(id) {
+    var matches = ST.isps().filter(function (isp) { return isp.id === id; });
+    return matches.length ? matches[0].name : id || 'Unassigned';
+  }
   function emptyBytes() { return { bytesDown: 0, bytesUp: 0, totalBytes: 0 }; }
   function addBytes(target, down, up) {
     target.bytesDown += Number(down) || 0;
@@ -26,27 +34,33 @@
   }
   function localUsage(group, now) {
     var month = utcMonth(now, 0), previous = utcMonth(now, -1), from = now - 365 * 86400000;
-    var totals = emptyBytes(), mtd = emptyBytes(), prior = emptyBytes(), by = {}, mtdByNode = {}, series = {}, results = [];
+    var totals = emptyBytes(), mtd = emptyBytes(), prior = emptyBytes(), budgetMtd = emptyBytes(), by = {}, mtdByNode = {}, series = {}, results = [];
     ST.nodes().forEach(function (node) {
       (ST.selectedEngine ? [ST.selectedEngine] : engines).forEach(function (engine) {
         results = results.concat(ST.results({ nodeIds: [node.id], engine: engine, from: from, to: now }));
       });
     });
     results.forEach(function (r) {
-      var down = r.bytesDown || 0, up = r.bytesUp || 0, key = r.nodeId + '|' + (r.engine || 'ookla');
+      var resultISP = ST.resultISP(r) || '';
+      if (r.bytesDown == null && r.bytesUp == null) return;
+      var down = r.bytesDown || 0, up = r.bytesUp || 0, engine = r.engine || 'ookla', key = r.nodeId + '|' + engine + '|' + resultISP;
+      if (r.ts >= month) {
+        addBytes(budgetMtd, down, up);
+        mtdByNode[r.nodeId] = mtdByNode[r.nodeId] || emptyBytes();
+        addBytes(mtdByNode[r.nodeId], down, up);
+      }
+      if (usageISP && resultISP !== usageISP) return;
       by[key] = by[key] || { nodeId: r.nodeId, nodeName: (ST.node(r.nodeId) || {}).name || r.nodeId, engine: r.engine || 'ookla', bytesDown: 0, bytesUp: 0, totalBytes: 0,
-        monthToDate: emptyBytes(), projectedMonthEnd: emptyBytes(), previousMonth: emptyBytes() };
+        ispId: resultISP, ispName: ispName(resultISP), monthToDate: emptyBytes(), projectedMonthEnd: emptyBytes(), previousMonth: emptyBytes() };
       addBytes(totals, down, up);
       if (r.ts >= month) {
         addBytes(mtd, down, up);
         addBytes(by[key].monthToDate, down, up);
-        mtdByNode[r.nodeId] = mtdByNode[r.nodeId] || emptyBytes();
-        addBytes(mtdByNode[r.nodeId], down, up);
       }
       else if (r.ts >= previous && r.ts < month) { addBytes(prior, down, up); addBytes(by[key].previousMonth, down, up); }
       addBytes(by[key], down, up);
       var start = bucketStart(r.ts, group), skey = key + '|' + start;
-      series[skey] = series[skey] || { nodeId: r.nodeId, engine: r.engine || 'ookla', start: new Date(start).toISOString(), bytesDown: 0, bytesUp: 0, totalBytes: 0 };
+      series[skey] = series[skey] || { nodeId: r.nodeId, engine: engine, ispId: resultISP, ispName: ispName(resultISP), start: new Date(start).toISOString(), bytesDown: 0, bytesUp: 0, totalBytes: 0 };
       addBytes(series[skey], down, up);
     });
     var elapsed = Math.max(now - month, 1), monthDays = (utcMonth(now, 1) - month) / 86400000;
@@ -55,9 +69,9 @@
       by[key].projectedMonthEnd = { bytesDown: projected(by[key].monthToDate.bytesDown), bytesUp: projected(by[key].monthToDate.bytesUp), totalBytes: projected(by[key].monthToDate.totalBytes) };
     });
     var statuses = demoBudgets.map(function (b) {
-      var used = b.scopeKey === 'global' ? mtd.totalBytes : (mtdByNode[b.scopeKey] || emptyBytes()).totalBytes;
+      var used = b.scopeKey === 'global' ? budgetMtd.totalBytes : (mtdByNode[b.scopeKey] || emptyBytes()).totalBytes;
       var ratio = used / b.monthlyBytes;
-      return { scopeKey: b.scopeKey, monthlyBytes: b.monthlyBytes, usedBytes: used, ratio: ratio, alert: ratio >= 0.8, action: b.action };
+      return { scopeKey: b.scopeKey, monthlyBytes: b.monthlyBytes, usedBytes: used, ratio: ratio, alert: ratio >= 0.8, action: b.action, atMaximumInterval: false };
     });
     return { totals: totals, monthToDate: mtd, projectedMonthEnd: { bytesDown: projected(mtd.bytesDown), bytesUp: projected(mtd.bytesUp), totalBytes: projected(mtd.totalBytes) }, previousMonth: prior,
       comparison: { currentMonthToDateBytes: mtd.totalBytes, previousMonthBytes: prior.totalBytes, projectedMonthEndBytes: projected(mtd.totalBytes), changePercent: prior.totalBytes ? (projected(mtd.totalBytes) - prior.totalBytes) / prior.totalBytes * 100 : null },
@@ -67,10 +81,13 @@
     var now = Date.now();
     if (ST.demo) return { data: localUsage('day', now) };
     var from = new Date(now - 365 * 86400000).toISOString(), to = new Date(now).toISOString();
-    var key = [ST.selectedEngine, Math.floor(now / 60000)].join('|');
+    var key = [ST.selectedEngine, usageISP, Math.floor(now / 60000)].join('|');
+    Object.keys(usageCache).forEach(function (cached) { if (cached !== key) delete usageCache[cached]; });
     if (usageCache[key]) return usageCache[key];
     var result = usageCache[key] = { loading: true };
-    ST.api.request('/api/usage?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + '&group=day' + ST.engineQuery())
+    var path = '/api/usage?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + '&group=day' + ST.engineQuery();
+    if (usageISP) path += '&isp=' + encodeURIComponent(usageISP);
+    ST.api.request(path)
       .then(function (response) { result.loading = false; result.data = response.data; ST.refresh(); }, function (error) { result.loading = false; result.error = error; ST.refresh(); });
     return result;
   }
@@ -80,18 +97,18 @@
   function groupedSeries(series, group) {
     var buckets = {};
     (series || []).forEach(function (item) {
-      var start = bucketStart(Date.parse(item.start), group), key = item.nodeId + '|' + item.engine + '|' + start;
-      buckets[key] = buckets[key] || { nodeId: item.nodeId, engine: item.engine, start: new Date(start).toISOString(), bytesDown: 0, bytesUp: 0, totalBytes: 0 };
+      var start = bucketStart(Date.parse(item.start), group), key = item.nodeId + '|' + item.engine + '|' + (item.ispId || '') + '|' + start;
+      buckets[key] = buckets[key] || { nodeId: item.nodeId, engine: item.engine, ispId: item.ispId || '', ispName: item.ispName || 'Unassigned', start: new Date(start).toISOString(), bytesDown: 0, bytesUp: 0, totalBytes: 0 };
       addBytes(buckets[key], item.bytesDown, item.bytesUp);
     });
-    return Object.keys(buckets).map(function (key) { return buckets[key]; }).sort(function (a, b) { return b.start.localeCompare(a.start) || a.nodeId.localeCompare(b.nodeId) || a.engine.localeCompare(b.engine); });
+    return Object.keys(buckets).map(function (key) { return buckets[key]; }).sort(function (a, b) { return b.start.localeCompare(a.start) || a.nodeId.localeCompare(b.nodeId) || a.engine.localeCompare(b.engine) || a.ispId.localeCompare(b.ispId); });
   }
 
   function dailyChart(host, series) {
     var grouped = {};
     (series || []).forEach(function (item) {
-      var key = item.nodeId + '|' + item.engine, node = ST.node(item.nodeId);
-      grouped[key] = grouped[key] || { name: nodeName(item.nodeId) + ' · ' + item.engine, color: node ? ST.nodeColor(node) : 'var(--accent)', dashed: item.engine === 'librespeed', points: [] };
+      var key = item.nodeId + '|' + item.engine + '|' + (item.ispId || ''), node = ST.node(item.nodeId);
+      grouped[key] = grouped[key] || { name: nodeName(item.nodeId) + ' · ' + item.engine + ' · ' + (item.ispName || 'Unassigned'), color: node ? ST.nodeColor(node) : 'var(--accent)', dashed: item.engine === 'librespeed', points: [] };
       grouped[key].points.push([Date.parse(item.start), item.totalBytes]);
     });
     var lines = Object.keys(grouped).sort().map(function (key) { return grouped[key]; });
@@ -108,7 +125,7 @@
   }
 
   function recommendInDemo(avg, budget) {
-    if (!(avg > 0) || !(budget > 0)) return { interval: null, status: 'unavailable' };
+    if (!(avg >= 0) || !(budget > 0)) return { interval: null, status: 'unavailable' };
     var needed = Math.ceil(avg * 30 * 24 * 60 / budget);
     return needed > 1440 ? { interval: null, status: 'infeasible' } : { interval: Math.max(5, needed), status: 'feasible' };
   }
@@ -136,13 +153,14 @@
       host.appendChild(h('div', { class: 'hint' }, moneylessComparison(data.comparison.changePercent)));
       (data.budgets || []).filter(function (b) { return b.alert; }).forEach(function (b) {
         var atLimit = b.ratio >= 1;
-        var policy = atLimit ? (b.action === 'pause' ? 'Tests are paused until the budget resets.' : 'The test interval is widened until the budget resets.') : 'The configured schedule policy applies when the budget is reached.';
+        var policy = atLimit ? (b.action === 'pause' ? 'Tests are paused until the budget resets.' : b.atMaximumInterval ? 'Schedules already at 24 hours are paused; shorter schedules are widened.' : 'The test interval is widened until the budget resets.') : 'The configured schedule policy applies when the budget is reached.';
         host.appendChild(U.callout((atLimit ? 'Monthly bandwidth budget reached' : 'Monthly bandwidth budget is at least 80% used') + ' · ' + (b.scopeKey === 'global' ? 'Global' : nodeName(b.nodeId || b.scopeKey)) + ': ' + F.bytes(b.usedBytes) + ' of ' + F.bytes(b.monthlyBytes) + '. ' + policy, atLimit ? 'crit' : 'warn', 'alert'));
       });
       var rows = data.byNodeEngine || [];
       host.appendChild(U.table({ columns: [
         { key: 'node', label: 'Node', render: function (r) { return nodeName(r.nodeId); } },
         { key: 'engine', label: 'Engine' },
+        { key: 'isp', label: 'ISP', render: function (r) { return r.ispName || 'Unassigned'; } },
         { key: 'down', label: 'Download', num: true, render: function (r) { return F.bytes(r.bytesDown); } },
         { key: 'up', label: 'Upload', num: true, render: function (r) { return F.bytes(r.bytesUp); } },
         { key: 'total', label: 'Range total', num: true, render: function (r) { return F.bytes(r.totalBytes); } },
@@ -151,25 +169,26 @@
         { key: 'previous', label: 'Previous month', num: true, render: function (r) { return F.bytes(r.previousMonth.totalBytes); } }], rows: rows }));
       var chartHost = h('div'), legend = h('div', { class: 'row wrap gap-sm mb' });
       (data.series || []).reduce(function (seen, item) {
-        var key = item.nodeId + '|' + item.engine;
+        var key = item.nodeId + '|' + item.engine + '|' + (item.ispId || '');
         if (seen[key]) return seen;
         seen[key] = true;
         var node = ST.node(item.nodeId);
-        legend.appendChild(h('span', { class: 'row gap-sm' }, U.dot(node ? ST.nodeColor(node) : 'var(--accent)'), h('span', null, nodeName(item.nodeId) + ' · ' + item.engine)));
+        legend.appendChild(h('span', { class: 'row gap-sm' }, U.dot(node ? ST.nodeColor(node) : 'var(--accent)'), h('span', null, nodeName(item.nodeId) + ' · ' + item.engine + ' · ' + (item.ispName || 'Unassigned'))));
         return seen;
       }, {});
       host.appendChild(U.card('Daily usage', 'Download and upload bytes summed per day for each node and engine. Hover or touch the chart for exact values.', h('div', null, legend, chartHost)));
       dailyChart(chartHost, data.series || []);
       var series = groupedSeries(data.series || [], group);
       host.appendChild(U.table({ columns: [
-        { key: 'start', label: group === 'month' ? 'Month' : group === 'week' ? 'Week starting' : 'Day', render: function (r) { return F.date(Date.parse(r.start), 'dayfull'); } },
-        { key: 'node', label: 'Node', render: function (r) { return nodeName(r.nodeId); } }, { key: 'engine', label: 'Engine' },
+        { key: 'start', label: group === 'month' ? 'Month (UTC)' : group === 'week' ? 'Week starting (UTC)' : 'Day (UTC)', render: function (r) { return utcBucketLabel(Date.parse(r.start), group); } },
+        { key: 'node', label: 'Node', render: function (r) { return nodeName(r.nodeId); } }, { key: 'engine', label: 'Engine' }, { key: 'isp', label: 'ISP', render: function (r) { return r.ispName || 'Unassigned'; } },
         { key: 'down', label: 'Down', num: true, render: function (r) { return F.bytes(r.bytesDown); } },
         { key: 'up', label: 'Up', num: true, render: function (r) { return F.bytes(r.bytesUp); } },
         { key: 'total', label: 'Total', num: true, render: function (r) { return F.bytes(r.totalBytes); } }], rows: series }));
     }
-    root.appendChild(U.card('Bandwidth', 'Measured download and upload bytes remain separate by node and engine. Month projection uses current month-to-date traffic.', host,
-      [U.select([{ value: 'day', label: 'By day' }, { value: 'week', label: 'By week' }, { value: 'month', label: 'By month' }], group, function (v) { usageGroup = v; ST.refresh(); })]));
+    root.appendChild(U.card('Bandwidth', 'Measured download and upload bytes remain separate by node, engine and recorded ISP. Calendar buckets use UTC.', host,
+      [U.select([{ value: 'day', label: 'By day' }, { value: 'week', label: 'By week' }, { value: 'month', label: 'By month' }], group, function (v) { usageGroup = v; ST.refresh(); }),
+        U.select([{ value: '', label: 'Any ISP' }].concat(ST.ispOptions()), usageISP, function (value) { usageISP = value; usageCache = {}; ST.refresh(); })]));
   };
 
   function readBudgets(done) {
@@ -192,6 +211,7 @@
       if (ST.demo) {
         if (method === 'DELETE') demoBudgets = demoBudgets.filter(function (b) { return b.scopeKey !== scope; });
         else { demoBudgets = demoBudgets.filter(function (b) { return b.scopeKey !== scope; }); demoBudgets.push(Object.assign({}, body, { scopeKey: scope, nodeId: scope === 'global' ? '' : scope, revision: 1 })); }
+        ST.setDemoBandwidthBudgets(demoBudgets);
       } else if (method === 'DELETE') { budgets.items = null; budgets.etag = null; }
       else { budgets.items = response.data || budgets.items; budgets.etag = response.etag || budgets.etag; }
       usageCache = {}; adviceCache = {};
@@ -234,11 +254,14 @@
     if (adviceCache[key]) return adviceCache[key];
     var result = adviceCache[key] = { loading: true };
     if (ST.demo) {
-      var since = Date.now() - 30 * 86400000, values = ST.results({ nodeIds: [node.id], engine: engine, from: since }).map(function (r) { return (r.bytesDown || 0) + (r.bytesUp || 0); });
-      var avg = values.length ? ST.stats.mean(values) : 0, perDay = avg * 1440 / interval, perMonth = perDay * 30, budget = budgetBytes || configuredBudget(node.id);
-      var recommendation = recommendInDemo(avg, budget);
+      var since = Date.now() - 30 * 86400000, values = ST.results({ nodeIds: [node.id], engine: engine, from: since }).filter(function (r) {
+        return (r.status === 'ok' || r.status === 'degraded') && r.bytesDown != null && r.bytesUp != null;
+      }).map(function (r) { return r.bytesDown + r.bytesUp; });
+      var budget = budgetBytes || configuredBudget(node.id), available = values.length > 0, avg = available ? ST.stats.mean(values) : null;
+      var perDay = available ? avg * 1440 / interval : null, perMonth = available ? perDay * 30 : null;
+      var recommendation = available ? recommendInDemo(avg, budget) : { interval: null, status: 'unavailable' };
       result.loading = false; result.data = { averageBytesPerTest: avg, estimatedBytesPerDay: perDay, estimatedBytesPerMonth: perMonth, budgetBytes: budget,
-        recommendedIntervalMinutes: recommendation.interval, recommendationStatus: recommendation.status };
+        measurementAvailable: available, sharedMeasurementsAvailable: true, recommendedIntervalMinutes: recommendation.interval, recommendationStatus: recommendation.status };
     } else {
       var path = '/api/usage/advice?node=' + encodeURIComponent(node.id) + '&engine=' + engine + '&interval=' + interval;
       if (budgetBytes > 0) path += '&budgetBytes=' + encodeURIComponent(budgetBytes);
@@ -273,7 +296,7 @@
       var interval = Math.max(5, Math.min(1440, Math.round(Number(draft.interval) || 60)));
       var budget = Math.max(0, Math.round(Number(draft.budgetGiB) * 1024 * 1024 * 1024) || 0);
       var state = ST.bandwidth.advice(node, engine, interval, budget);
-      var text = state.loading ? 'Calculating estimate…' : state.error ? 'Advice is unavailable. Check the connection and try again.' : F.bytes(state.data.estimatedBytesPerDay) + ' per day · ' + F.bytes(state.data.estimatedBytesPerMonth) + ' per month';
+      var text = state.loading ? 'Calculating estimate…' : state.error ? 'Advice is unavailable. Check the connection and try again.' : !state.data.measurementAvailable ? 'Unavailable — no complete byte measurements.' : F.bytes(state.data.estimatedBytesPerDay) + ' per day · ' + F.bytes(state.data.estimatedBytesPerMonth) + ' per month';
       detail.textContent = 'Estimate for every ' + interval + ' minutes: ' + text;
       U.clear(recommendation);
       var message = adviceRecommendation(state);
@@ -290,6 +313,8 @@
 
   function adviceRecommendation(state) {
     if (state.loading || state.error || !state.data) return '';
+    if (!state.data.measurementAvailable) return state.data.budgetBytes > 0 ? 'A budget is set, but there are no complete byte measurements yet. Run tests that report both download and upload byte counters.' : 'Run tests with both byte counters to get estimates and interval advice.';
+    if (!state.data.sharedMeasurementsAvailable) return 'Some enabled schedules sharing this budget lack complete byte measurements, so interval advice is unavailable.';
     if (state.data.recommendationStatus === 'feasible' && state.data.recommendedIntervalMinutes) return 'Recommended minimum interval for this budget: ' + state.data.recommendedIntervalMinutes + ' minutes.';
     if (state.data.recommendationStatus === 'infeasible') return 'This budget cannot be met even at a 24-hour interval. Increase the budget or reduce test volume.';
     return 'Enter a monthly budget to get an interval recommendation.';

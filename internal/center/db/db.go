@@ -74,3 +74,19 @@ func Migrate(ctx context.Context, pool *pgxpool.Pool, direction string) error {
 	}
 	return nil
 }
+
+// MigrateDownTo rolls back every applied migration above version (0 rolls back all of them) in one call. Tests use it to return
+// to a named schema version, so adding a migration never changes a rollback count in a test.
+func MigrateDownTo(ctx context.Context, pool *pgxpool.Pool, version int64) error {
+	sqlDB := stdlib.OpenDBFromPool(pool)
+	defer func() { _ = sqlDB.Close() }()
+	locker, lockErr := lock.NewPostgresSessionLocker()
+	provider, err := goose.NewProvider(goose.DialectPostgres, sqlDB, migrations.Files, goose.WithSessionLocker(locker))
+	if lockErr != nil || err != nil {
+		return errors.New("cannot initialize embedded migrations")
+	}
+	if _, err = provider.DownTo(ctx, version); err != nil {
+		return errors.New("PostgreSQL migration failed; verify database state and dependencies")
+	}
+	return nil
+}

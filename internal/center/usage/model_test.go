@@ -61,10 +61,10 @@ func TestRecommendationsAndBudgetValidation(t *testing.T) {
 	if RecommendedInterval(1e12, 1) != nil || recommendationStatus(1e12, 1, nil) != "infeasible" {
 		t.Fatal("an impossible monthly budget must not receive a false feasible interval")
 	}
-	if recommendationStatus(0, 1, nil) != "unavailable" || recommendationStatus(1, 1000, RecommendedInterval(1, 1000)) != "feasible" {
+	if got := RecommendedInterval(0, 100); got == nil || *got != 5 || recommendationStatus(0, 100, got) != "feasible" || recommendationStatus(1, 1000, RecommendedInterval(1, 1000)) != "feasible" {
 		t.Fatal("recommendation status boundary failed")
 	}
-	for _, average := range []float64{0, -1, math.NaN(), math.Inf(1)} {
+	for _, average := range []float64{-1, math.NaN(), math.Inf(1)} {
 		if RecommendedInterval(average, 100) != nil {
 			t.Fatalf("invalid average %v received a recommendation", average)
 		}

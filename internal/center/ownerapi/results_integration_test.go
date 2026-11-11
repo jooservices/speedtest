@@ -55,9 +55,10 @@ func ids(items []map[string]any) []string {
 }
 
 func TestListResultsFiltersSortsAndPaginates(t *testing.T) {
-	ctx, _, fx := seedFixture(t)
+	ctx, pool, fx := seedFixture(t)
 	s := fx.store
 	all := ResultFilter{From: fx.now.Add(-24 * time.Hour), To: fx.now.Add(time.Second)}
+	seedResultISPs(t, ctx, pool)
 
 	items, total, err := s.ListResults(ctx, all, 1, 2)
 	if err != nil || total != 4 || len(items) != 2 || items[0]["id"] != uid(1003) || items[1]["id"] != uid(1002) {
@@ -77,6 +78,8 @@ func TestListResultsFiltersSortsAndPaginates(t *testing.T) {
 	}{
 		{"one node", func(f ResultFilter) ResultFilter { f.NodesSet, f.Nodes = true, []string{fx.alpha}; return f }, []string{uid(1002), uid(1001)}},
 		{"no node selected", func(f ResultFilter) ResultFilter { f.NodesSet = true; return f }, nil},
+		{"one ISP", func(f ResultFilter) ResultFilter { f.ISPsSet, f.ISPs = true, []string{uid(5001)}; return f }, []string{uid(1002), uid(1001), uid(1004)}},
+		{"another ISP", func(f ResultFilter) ResultFilter { f.ISPsSet, f.ISPs = true, []string{uid(5002)}; return f }, []string{uid(1003)}},
 		{"status failed", func(f ResultFilter) ResultFilter { f.Status = "failed"; return f }, []string{uid(1002)}},
 		{"status all", func(f ResultFilter) ResultFilter { f.Status = "all"; return f }, []string{uid(1003), uid(1002), uid(1001), uid(1004)}},
 		{"time range excludes older", func(f ResultFilter) ResultFilter { f.From = fx.now.Add(-30 * time.Minute); return f }, []string{uid(1003), uid(1002), uid(1001)}},
@@ -112,6 +115,19 @@ func TestListResultsFiltersSortsAndPaginates(t *testing.T) {
 	}
 	if _, _, err := s.ListResults(ctx, ResultFilter{Sort: "bogus"}, 1, 10); !errors.Is(err, ErrInvalid) {
 		t.Fatalf("bad sort = %v", err)
+	}
+}
+
+func seedResultISPs(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	for _, query := range []string{
+		`INSERT INTO isps(id,asn,organisation,name) VALUES ('` + uid(5001) + `',64501,'Results ISP A','Results ISP A'),('` + uid(5002) + `',64502,'Results ISP B','Results ISP B')`,
+		`UPDATE results SET isp_id='` + uid(5001) + `' WHERE id IN ('` + uid(1001) + `','` + uid(1002) + `','` + uid(1004) + `')`,
+		`UPDATE results SET isp_id='` + uid(5002) + `' WHERE id='` + uid(1003) + `'`,
+	} {
+		if _, err := pool.Exec(ctx, query); err != nil {
+			t.Fatal("seed result ISP filter:", err)
+		}
 	}
 }
 

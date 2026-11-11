@@ -326,7 +326,7 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	}
 	// Roll back later migrations and the notification migration that owns the delivery table.
 	var exists bool
-	for step := 0; step < 10; step++ {
+	for step := 0; step < 30; step++ {
 		if err := db.Migrate(ctx, p, "down"); err != nil {
 			t.Fatal("rollback step", step, err)
 		}
