@@ -50,16 +50,31 @@ func TestRunMigration(t *testing.T) {
 	}
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
-	for _, direction := range []string{"up", "up", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down", "down"} {
+	for _, direction := range []string{"up", "up"} {
 		var out bytes.Buffer
 		if code := run([]string{direction}, &out); code != 0 || !strings.Contains(out.String(), "complete") {
 			t.Fatalf("%s: code %d: %s", direction, code, out.String())
 		}
 	}
+	// Roll back one migration at a time until none is left (however many migrations exist), then down must fail safely.
+	downs := 0
 	var out bytes.Buffer
-	// At version zero down must fail, with a safe error, rather than claim success.
-	if code := run([]string{"down"}, &out); code != 1 || !strings.Contains(out.String(), "migration failed") {
-		t.Fatalf("expected no-version error: %d %s", code, out.String())
+	for ; downs < 200; downs++ {
+		out.Reset()
+		code := run([]string{"down"}, &out)
+		if code != 0 {
+			// At version zero down must fail, with a safe error, rather than claim success.
+			if code != 1 || !strings.Contains(out.String(), "migration failed") {
+				t.Fatalf("expected no-version error: %d %s", code, out.String())
+			}
+			break
+		}
+		if !strings.Contains(out.String(), "complete") {
+			t.Fatalf("down: %s", out.String())
+		}
+	}
+	if downs < 10 || downs >= 200 {
+		t.Fatalf("rolled back %d migrations before the empty down", downs)
 	}
 	t.Setenv("SPEEDTEST_DB_PORT", "1")
 	out.Reset()
