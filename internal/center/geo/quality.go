@@ -107,7 +107,7 @@ func mergeCoordinates(target *Location, incoming Location, sources map[string]st
 }
 
 func mergeRadius(target *uint16, incoming uint16, sources map[string]string, incomingSource string) {
-	if incoming > 0 && (*target == 0 || incoming < *target || sourceRank(incomingSource) > sourceRank(sources["accuracy_radius"])) {
+	if incoming > 0 && (*target == 0 || incoming < *target) {
 		*target = incoming
 		sources["accuracy_radius"] = incomingSource
 	}

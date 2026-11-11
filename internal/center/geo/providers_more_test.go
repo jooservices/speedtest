@@ -282,6 +282,19 @@ type memoryCache struct {
 	loc    Location
 }
 
+type countedProvider struct {
+	name     string
+	location Location
+	err      error
+	calls    int
+}
+
+func (p *countedProvider) Source() string { return p.name }
+func (p *countedProvider) Lookup(context.Context, string) (Location, error) {
+	p.calls++
+	return p.location, p.err
+}
+
 func (m *memoryCache) Get(context.Context, string) (Location, string, bool, error) {
 	return Location{}, "", false, nil
 }
@@ -362,6 +375,34 @@ func TestConsensusDefersAllExhaustedProvidersButKeepsAvailableAnswers(t *testing
 	).WithConsensus(true, nil)
 	if got, err := available.Lookup(context.Background(), "1.2.3.4"); err != nil || got.Country != "US" {
 		t.Fatalf("available provider after exhaustion = (%+v,%v)", got, err)
+	}
+}
+
+func TestConsensusUsesIPGeoOnlyForUnresolvedAgreementOrTie(t *testing.T) {
+	cheapA := &countedProvider{name: "ipwho", location: Location{Country: "US", ASN: 64500}}
+	cheapB := &countedProvider{name: "freeipapi", location: Location{Country: "us", City: "Seattle"}}
+	ipgeo := &countedProvider{name: "ipgeolocation", location: Location{Country: "US", AccuracyRadius: 5}}
+	resolver := NewResolver(nil, nil, cheapA, cheapB, ipgeo).WithHighValue(true).WithConsensus(true, nil)
+	if _, err := resolver.Lookup(context.Background(), "8.8.8.8"); err != nil || ipgeo.calls != 0 {
+		t.Fatalf("agreeing cheap providers used ipgeolocation: calls=%d err=%v", ipgeo.calls, err)
+	}
+
+	first := &countedProvider{name: "ipwho", location: Location{Country: "US"}}
+	second := &countedProvider{name: "freeipapi", location: Location{Country: "GB"}}
+	tieResolver := NewResolver(nil, nil, first, second, ipgeo).WithHighValue(true).WithConsensus(true, nil)
+	if _, err := tieResolver.Lookup(context.Background(), "8.8.4.4"); err != nil || ipgeo.calls != 1 {
+		t.Fatalf("unresolved tie did not use ipgeolocation: calls=%d err=%v", ipgeo.calls, err)
+	}
+
+	cheapMiss := &countedProvider{name: "ipwho", err: ErrNotFound}
+	reservedIPGeo := &countedProvider{name: "ipgeolocation", location: Location{Country: "US"}}
+	lowValue := NewResolver(nil, nil, cheapMiss, reservedIPGeo)
+	if _, err := lowValue.Lookup(context.Background(), "8.8.8.8"); !errors.Is(err, ErrNotFound) || reservedIPGeo.calls != 0 {
+		t.Fatalf("lookup-only address spent the ipgeolocation allocation: calls=%d err=%v", reservedIPGeo.calls, err)
+	}
+	highValue := NewResolver(nil, nil, cheapMiss, reservedIPGeo).WithHighValue(true)
+	if _, err := highValue.Lookup(context.Background(), "8.8.8.8"); err != nil || reservedIPGeo.calls != 1 {
+		t.Fatalf("high-value address did not use ipgeolocation after cheap misses: calls=%d err=%v", reservedIPGeo.calls, err)
 	}
 }
 

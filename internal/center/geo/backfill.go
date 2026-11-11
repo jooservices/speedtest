@@ -31,17 +31,19 @@ type BatchLookup interface {
 type Backfill struct {
 	DB    BackfillDB
 	Cache interface {
+		Get(context.Context, string) (Location, string, bool, error)
 		Merge(context.Context, string, Location, string) (Location, string, error)
 	}
-	Resolver   *Resolver
-	Batch      BatchLookup
-	MaxPerRun  int
-	BatchSize  int
-	Pause      time.Duration
-	HourUTC    int
-	Now        func() time.Time
-	Logger     *slog.Logger
-	ObserveRun func(bool)
+	Resolver     *Resolver
+	NodeResolver *Resolver
+	Batch        BatchLookup
+	MaxPerRun    int
+	BatchSize    int
+	Pause        time.Duration
+	HourUTC      int
+	Now          func() time.Time
+	Logger       *slog.Logger
+	ObserveRun   func(bool)
 }
 
 type backfillCandidate struct {
@@ -133,7 +135,7 @@ func (b *Backfill) RunOnce(ctx context.Context) (int, error) {
 }
 
 func (b *Backfill) processNextBatch(ctx context.Context, now time.Time, cursor backfillCandidate, limit int) (int, bool, backfillCandidate, error) {
-	candidates, err := b.candidates(ctx, cursor.nodePriority, cursor.address, limit)
+	candidates, err := b.candidates(ctx, now, cursor.nodePriority, cursor.address, limit)
 	if err != nil {
 		return 0, false, cursor, err
 	}
@@ -145,8 +147,7 @@ func (b *Backfill) processNextBatch(ctx context.Context, now time.Time, cursor b
 		}
 		return 0, true, backfillCandidate{nodePriority: true}, nil
 	}
-	addresses := candidateAddresses(candidates)
-	completed, err := b.refresh(ctx, addresses)
+	completed, err := b.refresh(ctx, candidates)
 	if errors.Is(err, ErrBudgetExhausted) {
 		if completed == 0 {
 			return 0, true, cursor, nil
@@ -167,11 +168,11 @@ func (b *Backfill) processNextBatch(ctx context.Context, now time.Time, cursor b
 	return len(candidates), false, last, nil
 }
 
-func (b *Backfill) refresh(ctx context.Context, addresses []string) (int, error) {
+func (b *Backfill) refresh(ctx context.Context, candidates []backfillCandidate) (int, error) {
 	if b.Batch != nil {
-		return b.refreshBatch(ctx, addresses)
+		return b.refreshBatch(ctx, candidates)
 	}
-	return b.refreshIndividually(ctx, addresses)
+	return b.refreshIndividually(ctx, candidates)
 }
 
 // Loop waits for the next configured UTC hour and runs one bounded nightly pass.
@@ -196,6 +197,9 @@ func (b *Backfill) Loop(ctx context.Context) {
 		}
 		if err != nil && !errors.Is(err, ErrBudgetExhausted) && ctx.Err() == nil {
 			logger.Error("geolocation backfill failed; cursor retained", "error", err)
+		}
+		if ctx.Err() != nil {
+			return
 		}
 	}
 }
@@ -240,21 +244,35 @@ func (b *Backfill) loadCursor(ctx context.Context, now time.Time) (bool, string,
 	return nodePriority, *cursor, nil
 }
 
-func (b *Backfill) candidates(ctx context.Context, cursorNodePriority bool, cursor string, limit int) ([]backfillCandidate, error) {
+// candidateAgeScoreSQL mirrors QualityScore's field weights and applies the age penalty once.
+const candidateAgeScoreSQL = `LEAST(100,
+ CASE WHEN NULLIF(geo->>'country','') IS NOT NULL THEN 10 ELSE 0 END +
+ CASE WHEN NULLIF(geo->>'city','') IS NOT NULL THEN 15 ELSE 0 END +
+	 CASE WHEN jsonb_typeof(geo->'latitude')='number' AND jsonb_typeof(geo->'longitude')='number' THEN
+	   CASE WHEN (geo->>'latitude')::numeric BETWEEN -90 AND 90 AND (geo->>'longitude')::numeric BETWEEN -180 AND 180 AND
+	     ((geo->>'latitude')::numeric<>0 OR (geo->>'longitude')::numeric<>0) THEN 20 ELSE 0 END ELSE 0 END +
+	 CASE WHEN jsonb_typeof(geo->'asn')='number' THEN CASE WHEN (geo->>'asn')::numeric>0 THEN 15 ELSE 0 END ELSE 0 END +
+ CASE WHEN NULLIF(btrim(geo->>'organisation'),'') IS NOT NULL THEN 15 ELSE 0 END +
+	 CASE WHEN jsonb_typeof(geo->'accuracy_radius')='number' THEN CASE WHEN (geo->>'accuracy_radius')::numeric>0 THEN 10 ELSE 0 END ELSE 0 END +
+ CASE WHEN NULLIF(btrim(source),'') IS NOT NULL THEN 5 ELSE 0 END +
+ GREATEST(0,10-LEAST(age_days/18,10)))`
+
+func (b *Backfill) candidates(ctx context.Context, now time.Time, cursorNodePriority bool, cursor string, limit int) ([]backfillCandidate, error) {
 	var priority any
 	if cursor != "" {
 		priority = cursorNodePriority
 	}
 	rows, err := b.DB.Query(ctx, `WITH candidates AS (
- SELECT ip,geo,looked_up_at,EXISTS(SELECT 1 FROM node_ip_addresses n WHERE n.ip=ip_addresses.ip) AS node_priority
+	SELECT ip,geo,source,looked_up_at,EXISTS(SELECT 1 FROM node_ip_addresses n WHERE n.ip=ip_addresses.ip) AS node_priority,
+		CASE WHEN looked_up_at IS NULL THEN 0 ELSE GREATEST(floor(extract(epoch FROM ($5::timestamptz-looked_up_at))/86400)::integer,0) END AS age_days
  FROM ip_addresses
+), scored AS (
+	SELECT ip,node_priority,looked_up_at,`+candidateAgeScoreSQL+` AS age_score FROM candidates
 )
-SELECT host(ip),node_priority FROM candidates
-WHERE (looked_up_at IS NULL OR (CASE WHEN geo->>'quality_score' ~ '^[0-9]+$' THEN (geo->>'quality_score')::integer ELSE 0 END
- - CASE WHEN looked_up_at IS NULL THEN 0 ELSE LEAST(GREATEST(floor(extract(epoch FROM (now()-looked_up_at))/1555200)::integer,0),10) END) < $4
-)
+SELECT host(ip),node_priority FROM scored
+WHERE (looked_up_at IS NULL OR age_score < $4)
 AND ($1::boolean IS NULL OR node_priority<$1::boolean OR (node_priority=$1::boolean AND ($2::inet IS NULL OR ip>$2::inet)))
-ORDER BY node_priority DESC,ip LIMIT $3`, priority, nullableCursor(cursor), limit, QualityThreshold)
+ORDER BY node_priority DESC,ip LIMIT $3`, priority, nullableCursor(cursor), limit, QualityThreshold, now.UTC())
 	if err != nil {
 		return nil, err
 	}
@@ -270,41 +288,77 @@ ORDER BY node_priority DESC,ip LIMIT $3`, priority, nullableCursor(cursor), limi
 	return addresses, rows.Err()
 }
 
-func candidateAddresses(candidates []backfillCandidate) []string {
-	addresses := make([]string, len(candidates))
-	for i, candidate := range candidates {
-		addresses[i] = candidate.address
+func (b *Backfill) resolverFor(candidate backfillCandidate) *Resolver {
+	if candidate.nodePriority && b.NodeResolver != nil {
+		return b.NodeResolver
 	}
-	return addresses
+	return b.Resolver
 }
 
-func (b *Backfill) refreshBatch(ctx context.Context, addresses []string) (int, error) {
+func (b *Backfill) resolveCandidate(ctx context.Context, candidate backfillCandidate) (Location, error) {
+	resolver := b.resolverFor(candidate)
+	var location Location
+	var err error
+	if resolver != nil {
+		location, err = resolver.Lookup(ctx, candidate.address)
+		if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrBudgetExhausted) {
+			return Location{}, err
+		}
+	}
+	if location.City == "" || location.Latitude == 0 && location.Longitude == 0 {
+		cached, _, found, cacheErr := b.Cache.Get(ctx, candidate.address)
+		if cacheErr != nil {
+			return Location{}, cacheErr
+		}
+		if found {
+			location = cached
+		}
+	}
+	return location, err
+}
+
+func (b *Backfill) refreshBatch(ctx context.Context, candidates []backfillCandidate) (int, error) {
+	type pendingBatch struct {
+		index int
+		ip    string
+	}
+	pending := make([]pendingBatch, 0, len(candidates))
+	for i, candidate := range candidates {
+		location, err := b.resolveCandidate(ctx, candidate)
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return i, err
+		}
+		if location.City == "" || location.Latitude == 0 && location.Longitude == 0 {
+			pending = append(pending, pendingBatch{index: i, ip: candidate.address})
+		}
+	}
+	if len(pending) == 0 {
+		return len(candidates), nil
+	}
+	addresses := make([]string, len(pending))
+	for i, item := range pending {
+		addresses[i] = item.ip
+	}
 	locations, err := b.Batch.LookupBatch(ctx, addresses, budget.Background)
 	if err != nil {
-		return 0, err
-	}
-	for i, ip := range addresses {
-		if location, ok := locations[ip]; ok && !emptyLocation(location) {
-			if _, _, err := b.Cache.Merge(ctx, ip, location, "ip-api"); err != nil {
-				return i, err
-			}
+		if ctx.Err() != nil {
+			return pending[0].index, ctx.Err()
 		}
-		if b.Resolver != nil {
-			_, err := b.Resolver.Lookup(ctx, ip)
-			if errors.Is(err, ErrBudgetExhausted) {
-				return i, err
-			}
-			if err != nil && !errors.Is(err, ErrNotFound) {
-				return i, err
+		return len(candidates), nil
+	}
+	for _, item := range pending {
+		if location, ok := locations[item.ip]; ok && !emptyLocation(location) {
+			if _, _, err := b.Cache.Merge(ctx, item.ip, location, "ip-api"); err != nil {
+				return item.index, err
 			}
 		}
 	}
-	return len(addresses), nil
+	return len(candidates), nil
 }
 
-func (b *Backfill) refreshIndividually(ctx context.Context, addresses []string) (int, error) {
-	for i, ip := range addresses {
-		_, err := b.Resolver.Lookup(ctx, ip)
+func (b *Backfill) refreshIndividually(ctx context.Context, candidates []backfillCandidate) (int, error) {
+	for i, candidate := range candidates {
+		_, err := b.resolveCandidate(ctx, candidate)
 		if err != nil && !errors.Is(err, ErrNotFound) && !errors.Is(err, ErrBudgetExhausted) {
 			return i, err
 		}
@@ -312,7 +366,7 @@ func (b *Backfill) refreshIndividually(ctx context.Context, addresses []string) 
 			return i, err
 		}
 	}
-	return len(addresses), nil
+	return len(candidates), nil
 }
 
 func (b *Backfill) saveCursor(ctx context.Context, now time.Time, nodePriority bool, cursor string) error {

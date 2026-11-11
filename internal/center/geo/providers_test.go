@@ -102,12 +102,13 @@ type providerBudgetStore struct {
 	used     map[string]int
 	minutes  map[string]int
 	blocked  map[string]time.Time
+	next     map[string]time.Time
 	err      error
 	blockErr error
 }
 
 func newProviderBudgetStore() *providerBudgetStore {
-	return &providerBudgetStore{used: map[string]int{}, minutes: map[string]int{}, blocked: map[string]time.Time{}}
+	return &providerBudgetStore{used: map[string]int{}, minutes: map[string]int{}, blocked: map[string]time.Time{}, next: map[string]time.Time{}}
 }
 
 func providerDay(provider string, day time.Time) string {
@@ -134,16 +135,24 @@ func (s *providerBudgetStore) ReserveMany(_ context.Context, reservations []budg
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	used, minutes := cloneCounts(s.used), cloneCounts(s.minutes)
+	next := make(map[string]time.Time, len(s.next))
+	for key, value := range s.next {
+		next[key] = value
+	}
 	for _, r := range reservations {
 		dayKey, minuteKey := providerDay(r.Provider, r.Day), providerMinute(r.Provider, r.Minute)
 		if s.blocked[r.Provider].After(r.Now) || r.DailyLimit < 0 || r.MinuteLimit < 0 ||
+			(r.MinuteWindow && next[r.Provider].After(r.Now)) ||
 			(r.DailyLimit > 0 && used[dayKey] >= r.DailyLimit) || (r.MinuteLimit > 0 && minutes[minuteKey] >= r.MinuteLimit) {
 			return false, nil
 		}
 		used[dayKey]++
 		minutes[minuteKey]++
+		if r.MinuteWindow {
+			next[r.Provider] = r.Now.Add(r.MinimumInterval)
+		}
 	}
-	s.used, s.minutes = used, minutes
+	s.used, s.minutes, s.next = used, minutes, next
 	return true, nil
 }
 
@@ -164,7 +173,9 @@ func TestIPAPIBatchRejectsInputsAndReportsFailures(t *testing.T) {
 	defer server.Close()
 	cfg := providerTestConfig()
 	cfg.IPAPIURL, cfg.Observe = server.URL+"/json", func(_, got string) { outcome = got }
+	var now = time.Now().UTC()
 	_, cfg.Budget = batchBudgetConfig(t, server.URL)
+	cfg.Budget.WithClock(func() time.Time { return now })
 	provider, err := NewIPAPIProvider(cfg)
 	if err != nil {
 		t.Fatal(err)
@@ -188,6 +199,7 @@ func TestIPAPIBatchRejectsInputsAndReportsFailures(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			status, response, outcome = tc.status, tc.body, ""
+			now = now.Add(5 * time.Second)
 			locations, err := provider.LookupBatch(context.Background(), []string{"8.8.8.8"}, budget.Interactive)
 			if (err != nil) != tc.wantErr || (!tc.wantErr && len(locations) != 0) {
 				t.Fatalf("invalid or empty provider result = (%v,%v)", locations, err)
@@ -269,9 +281,12 @@ func TestIPAPIBatchQuotaSharedMinuteLimit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for range 15 {
+	for i := range 15 {
 		if _, err := first.LookupBatch(context.Background(), []string{"8.8.8.8"}, budget.Background); err != nil {
 			t.Fatalf("batch before cap: %v", err)
+		}
+		if i < 14 {
+			now = now.Add(4100 * time.Millisecond)
 		}
 	}
 	second, err := NewIPAPIProvider(cfg)
@@ -281,6 +296,69 @@ func TestIPAPIBatchQuotaSharedMinuteLimit(t *testing.T) {
 	if _, err := second.LookupBatch(context.Background(), []string{"8.8.8.8"}, budget.Background); !errors.Is(err, ErrBudgetExhausted) || requests.Load() != 15 {
 		t.Fatalf("new provider instance exceeded persisted 15/minute limit: err=%v requests=%d", err, requests.Load())
 	}
+}
+
+func TestProviderQuotaReservationFollowsLocalAdmission(t *testing.T) {
+	t.Run("open breaker does not reserve", func(t *testing.T) {
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests.Add(1)
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+		}))
+		defer server.Close()
+		store := newProviderBudgetStore()
+		broker, err := budget.New(map[string]budget.Limit{"ipinfo-lite": {PerDay: 10}}, store, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := providerTestConfig()
+		cfg.IPInfoURL, cfg.Budget, cfg.IPInfoRequestsPerMinute = server.URL+"/lite", broker, 0
+		provider, err := NewIPInfoLiteProvider(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for range 2 {
+			if _, err := provider.Lookup(context.Background(), "8.8.8.8"); err == nil {
+				t.Fatal("expected provider failure")
+			}
+		}
+		if _, err := provider.Lookup(context.Background(), "8.8.8.8"); err == nil || !strings.Contains(err.Error(), "circuit breaker is open") {
+			t.Fatalf("open breaker result = %v", err)
+		}
+		if used, _ := store.Used(context.Background(), "ipinfo-lite", time.Now().UTC()); used != 2 || requests.Load() != 2 {
+			t.Fatalf("open breaker consumed budget or sent HTTP: used=%d requests=%d", used, requests.Load())
+		}
+	})
+
+	t.Run("timed-out local wait does not reserve", func(t *testing.T) {
+		var requests atomic.Int32
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			requests.Add(1)
+			_, _ = fmt.Fprint(w, `{"ip":"8.8.8.8","country_code":"US"}`)
+		}))
+		defer server.Close()
+		store := newProviderBudgetStore()
+		broker, err := budget.New(map[string]budget.Limit{"ipinfo-lite": {PerDay: 10}}, store, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg := providerTestConfig()
+		cfg.IPInfoURL, cfg.Budget, cfg.IPInfoRequestsPerMinute = server.URL+"/lite", broker, 1
+		cfg.Timeout = 25 * time.Millisecond
+		provider, err := NewIPInfoLiteProvider(cfg)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := provider.Lookup(context.Background(), "8.8.8.8"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := provider.Lookup(context.Background(), "8.8.8.8"); err == nil || !strings.Contains(err.Error(), "rate limit wait timed out") {
+			t.Fatalf("timed-out rate wait = %v", err)
+		}
+		if used, _ := store.Used(context.Background(), "ipinfo-lite", time.Now().UTC()); used != 1 || requests.Load() != 1 {
+			t.Fatalf("timed-out wait consumed budget or sent HTTP: used=%d requests=%d", used, requests.Load())
+		}
+	})
 }
 
 func TestIPAPIBatch429CooldownPersistsAcrossProviders(t *testing.T) {
@@ -549,7 +627,7 @@ func TestProviderConfigurationAndLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 	providers, err := NewFallbackProviders(cfg)
-	if err != nil || len(providers) != 2 || providers[0].Source() != "ip-api" || providers[1].Source() != "ipinfo-lite" {
+	if err != nil || len(providers) != 2 || providers[0].Source() != "ipinfo-lite" || providers[1].Source() != "ip-api" {
 		t.Fatalf("provider order = %v, %v", providers, err)
 	}
 	badEndpoint := cfg

@@ -204,6 +204,15 @@ func buildInstaller(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCo
 // buildGeoBackfill wires the slow nightly location refresh. ip-api is used only through its batch endpoint, so it is left out of
 // the one-by-one fallbacks of the background resolver.
 func buildGeoBackfill(pool *pgxpool.Pool, watcher *ipwatch.Watcher, operational *telemetry.Telemetry, logger *slog.Logger) (*geo.Backfill, error) {
+	return buildGeoBackfillWithCache(pool, geo.NewPostgresCache(pool), watcher, operational, logger)
+}
+
+type geoBackfillCache interface {
+	geo.Cache
+	Merge(context.Context, string, geo.Location, string) (geo.Location, string, error)
+}
+
+func buildGeoBackfillWithCache(pool *pgxpool.Pool, cache geoBackfillCache, watcher *ipwatch.Watcher, operational *telemetry.Telemetry, logger *slog.Logger) (*geo.Backfill, error) {
 	backfillConfig, err := geo.BackfillConfigFromEnv()
 	if err != nil {
 		return nil, err
@@ -221,8 +230,11 @@ func buildGeoBackfill(pool *pgxpool.Pool, watcher *ipwatch.Watcher, operational 
 			fallbacks = append(fallbacks, provider)
 		}
 	}
-	return &geo.Backfill{DB: pool, Cache: geo.NewPostgresCache(pool),
-		Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, fallbacks...).WithPurpose(budget.Background),
-		Batch:    batch, MaxPerRun: backfillConfig.MaxPerRun, BatchSize: backfillConfig.BatchSize, Pause: backfillConfig.Pause,
+	resolver := geo.NewResolver(cache, watcher.Offline, fallbacks...).WithPurpose(budget.Background)
+	nodeResolver := geo.NewResolver(cache, watcher.Offline, fallbacks...).WithPurpose(budget.Background).
+		WithHighValue(true).WithConsensus(watcher.Consensus, logger)
+	return &geo.Backfill{DB: pool, Cache: cache,
+		Resolver: resolver, NodeResolver: nodeResolver,
+		Batch: batch, MaxPerRun: backfillConfig.MaxPerRun, BatchSize: backfillConfig.BatchSize, Pause: backfillConfig.Pause,
 		HourUTC: backfillConfig.HourUTC, Logger: logger, ObserveRun: func(ok bool) { operational.Job("geo_backfill", ok) }}, nil
 }

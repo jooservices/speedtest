@@ -44,6 +44,11 @@ the migration does not infer default provenance from numeric equality. Owners ca
 clear and reassign a plan to opt an existing node into advertised defaults. Its
 down migration removes those flags and leaves node speeds and plan assignments
 otherwise intact.
+`00023_geo_provider_usage.sql` adds durable online-provider usage, cooldowns
+and a resumable node-first geolocation refresh cursor. Its down migration
+preserves cached locations and address history. `00024_geo_provider_rolling_window.sql`
+adds the persisted next-request time used to enforce ip-api's 15-per-minute batch
+limit across minute boundaries; its down migration drops only that column.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file

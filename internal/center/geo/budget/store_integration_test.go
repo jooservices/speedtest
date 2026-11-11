@@ -149,27 +149,37 @@ func TestPostgresStoreZeroCeilingsAndAtomicBatchWindowIntegration(t *testing.T) 
 	reserveBatch := func(at time.Time) (bool, error) {
 		return store.ReserveMany(ctx, []Reservation{
 			{Provider: "ip-api", Day: utcDay(at), Minute: at.Truncate(time.Minute), Now: at, DailyLimit: 0, MinuteLimit: 45},
-			{Provider: "ip-api-batch", Day: batchDay, Minute: at.Truncate(time.Minute), Now: at, DailyLimit: 0, MinuteLimit: 15},
+			{Provider: "ip-api-batch", Day: batchDay, Minute: at.Truncate(time.Minute), Now: at, DailyLimit: 0, MinuteLimit: 15,
+				MinuteWindow: true, MinimumInterval: 4010 * time.Millisecond},
 		})
 	}
-	for range 15 {
-		if allowed, err := reserveBatch(now); err != nil || !allowed {
+	start := now
+	for i := range 15 {
+		at := start.Add(time.Duration(i) * 4010 * time.Millisecond)
+		if allowed, err := reserveBatch(at); err != nil || !allowed {
 			t.Fatalf("batch reservation before cap = (%v,%v)", allowed, err)
 		}
 	}
-	if allowed, err := reserveBatch(now); err != nil || allowed {
-		t.Fatalf("16th batch reservation = (%v,%v), want (false,nil)", allowed, err)
+	if allowed, err := reserveBatch(start.Add(time.Minute - time.Millisecond)); err != nil || allowed {
+		t.Fatalf("minute-boundary burst = (%v,%v), want (false,nil)", allowed, err)
 	}
 	if used, err := store.Used(ctx, "ip-api", utcDay(now)); err != nil || used != 15 {
 		t.Fatalf("atomic refusal consumed shared ip-api budget: used=%d err=%v", used, err)
 	}
-	if err := store.BlockUntil(ctx, "ip-api-batch", now, now.Add(90*time.Second)); err != nil {
+	if allowed, err := reserveBatch(start.Add(time.Minute + 50*time.Millisecond)); err != nil || allowed {
+		t.Fatalf("rolling window admitted a request too early after boundary: (%v,%v)", allowed, err)
+	}
+	cooldownStart := start.Add(time.Minute + 160*time.Millisecond)
+	if allowed, err := reserveBatch(cooldownStart); err != nil || !allowed {
+		t.Fatalf("request after rolling window = (%v,%v)", allowed, err)
+	}
+	if err := store.BlockUntil(ctx, "ip-api-batch", cooldownStart, cooldownStart.Add(90*time.Second)); err != nil {
 		t.Fatal(err)
 	}
 	if allowed, err := reserveBatch(now.Add(time.Minute)); err != nil || allowed {
 		t.Fatalf("batch cooldown did not survive the minute boundary: (%v,%v)", allowed, err)
 	}
-	if allowed, err := reserveBatch(now.Add(2 * time.Minute)); err != nil || !allowed {
+	if allowed, err := reserveBatch(now.Add(3 * time.Minute)); err != nil || !allowed {
 		t.Fatalf("batch reservation after cooldown = (%v,%v)", allowed, err)
 	}
 }

@@ -218,15 +218,15 @@ func envDuration(key string, fallback time.Duration) (time.Duration, error) {
 // the ASN-only RIPEstat fallback.
 func NewFallbackProviders(cfg ProviderConfig) ([]Fallback, error) {
 	providers := make([]Fallback, 0, 7)
-	if cfg.IPAPIEnabled {
-		provider, err := NewIPAPIProvider(cfg)
+	if cfg.IPInfoEnabled {
+		provider, err := NewIPInfoLiteProvider(cfg)
 		if err != nil {
 			return nil, err
 		}
 		providers = append(providers, provider)
 	}
-	if cfg.IPInfoEnabled {
-		provider, err := NewIPInfoLiteProvider(cfg)
+	if cfg.IPAPIEnabled {
+		provider, err := NewIPAPIProvider(cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -236,7 +236,7 @@ func NewFallbackProviders(cfg ProviderConfig) ([]Fallback, error) {
 	if err != nil {
 		return nil, err
 	}
-	return budgetProviders(providers, cfg.Budget, cfg.Observe), nil
+	return budgetProviders(providers, cfg.Budget), nil
 }
 
 // IPAPIProvider implements the free ip-api.com JSON endpoint.
@@ -287,16 +287,6 @@ func (p *IPAPIProvider) LookupBatch(ctx context.Context, addresses []string, pur
 		if err := p.batchLimiter.Wait(requestCtx); err != nil {
 			return nil, err
 		}
-	} else {
-		allowed, err := p.core.budget.AllowTogether(requestCtx, purpose, p.Source(), "ip-api-batch")
-		if err != nil {
-			p.observe("error")
-			return nil, err
-		}
-		if !allowed {
-			p.observe("budget_exhausted")
-			return nil, ErrBudgetExhausted
-		}
 	}
 	body, _ := json.Marshal(canonical)
 	endpoint, err := ipAPIBatchEndpoint(p.core.endpoint)
@@ -304,9 +294,13 @@ func (p *IPAPIProvider) LookupBatch(ctx context.Context, addresses []string, pur
 		p.observe("error")
 		return nil, err
 	}
-	data, status, err := p.core.requestWithQuota(requestCtx, http.MethodPost, endpoint, "", bytes.NewReader(body), p.batchLimiter, "ip-api-batch")
+	data, status, err := p.core.requestWithQuota(withProviderPurpose(requestCtx, purpose), http.MethodPost, endpoint, "", bytes.NewReader(body), p.batchLimiter, "ip-api-batch")
 	if err != nil {
-		p.observe("error")
+		if errors.Is(err, ErrBudgetExhausted) {
+			p.observe("budget_exhausted")
+		} else {
+			p.observe("error")
+		}
 		return nil, err
 	}
 	if status != http.StatusOK {
@@ -576,6 +570,20 @@ func (c *providerCore) requestWithQuota(ctx context.Context, method, endpoint, t
 	if token != "" {
 		request.Header.Set("Authorization", "Bearer "+token)
 	}
+	if c.budget != nil {
+		var allowed bool
+		if quotaProvider == "ip-api-batch" {
+			allowed, err = c.budget.AllowTogether(ctx, providerPurpose(ctx), c.name, quotaProvider)
+		} else {
+			allowed, err = c.budget.Allow(ctx, quotaProvider, providerPurpose(ctx))
+		}
+		if err != nil {
+			return nil, 0, errors.New("cannot reserve provider quota")
+		}
+		if !allowed {
+			return nil, 0, ErrBudgetExhausted
+		}
+	}
 	response, err := c.client.Do(request)
 	if err != nil {
 		return nil, 0, errors.New("provider request failed")
@@ -632,9 +640,12 @@ func (c *providerCore) lookup(ctx context.Context, request func(context.Context)
 		return Location{}, err
 	}
 	location, failed, err := request(requestCtx)
-	if errors.Is(err, ErrNotFound) {
+	switch {
+	case errors.Is(err, ErrBudgetExhausted):
+		outcome = "budget_exhausted"
+	case errors.Is(err, ErrNotFound):
 		outcome = "not_found"
-	} else if err != nil {
+	case err != nil:
 		outcome = "error"
 	}
 	timedOut := requestCtx.Err() != nil && ctx.Err() == nil

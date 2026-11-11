@@ -94,7 +94,9 @@ func ipapiViewValues(query string) []any {
 	source := "ip-api"
 	switch {
 	case strings.Contains(query, "node_ip_history"):
-		return []any{"history-id", "node-id", now, "203.0.113.1", "203.0.113.2", &source, location, &now, &source, location, &now}
+		ispID, asn, organisation, name := "isp-id", uint(64500), "Example Network", "Example ISP"
+		return []any{"history-id", "node-id", now, "203.0.113.1", "203.0.113.2", &source, location, &now, &source, location, &now,
+			&ispID, &asn, &organisation, &name, &ispID, &asn, &organisation, &name}
 	case strings.Contains(query, "node_ip_addresses") && !strings.Contains(query, "DISTINCT ON"):
 		down, up := 100.0, 50.0
 		return []any{"node-id", "203.0.113.2", now, now, int64(2), &down, &up, &source, location, &now}
