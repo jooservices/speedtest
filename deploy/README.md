@@ -31,28 +31,5 @@ Deployment artifacts for the node agent and the command center live here.
   its mode-0600 `.env`.
 - The agent and the center are deployed independently, matching the rule that
   nodes know only their own configuration.
-- The Docker staging center and extra-node bootstrap default to a 60-minute
-  schedule. `STAGING_INTERVAL_MINUTES` and `NODE_INTERVAL` accept explicit
-  whole-minute overrides from 5 through 1440. They apply only at first
-  enrollment; the center schedule and the Ookla engine schedule are synchronized
-  together, and the enrolled marker keeps restarts from overwriting an operator's
-  saved interval. Invalid values stop before node creation or token consumption.
-- The built-in staging node offsets are 0, 10 and 20 minutes. If an interval is
-  too short for those offsets, the entrypoint assigns the affected built-in
-  nodes the next unused minute below the interval. Custom `STAGING_NODES`
-  offsets are validated as a complete set before any node is created; an offset
-  must be below the selected interval.
-- `nodes.sh up` looks up a node by name first. An existing node is started from
-  its persistent volume without creating it again or changing its saved
-  schedule; restarts of existing nodes do not trigger schedule staggering. A new
-  node gets a fresh idempotency key. If creation is incomplete,
-  the key, node ID and one-time enrollment token are kept in a private state file
-  until startup succeeds; retries reuse that attempt. State lives under
-  `${XDG_STATE_HOME:-$HOME/.local/state}/speedtest/node-attempts` on the host.
-  `forget` removes any pending attempt state, so a later creation gets a new
-  key; it also removes that node's local container and volume so a replacement
-  does not reuse its old agent credential. `purge` removes only the local volume
-  and keeps the center node. Keep the host state directory on persistent
-  storage while creation is in progress.
-- Staging entrypoints keep persistent state in `/var/lib/speedtest`;
-  `SPEEDTEST_STATE_DIR` may point to an isolated directory for behavioral tests.
+- Docker staging defaults to a 60-minute schedule; `STAGING_INTERVAL_MINUTES`
+  and `NODE_INTERVAL` remain available for explicit overrides.

@@ -300,15 +300,8 @@ in dashboard, results or statistics before interpreting trends; different engine
 are never averaged together. Alert rules without an engine evaluate the primary
 engine only.
 
-Docker staging creates new Ookla schedules at 60 minutes by default.
-`STAGING_INTERVAL_MINUTES` overrides the center's initial schedule for nodes in
-the staging container; `NODE_INTERVAL` overrides schedules for extra node
-containers. Bootstrap applies an override only during first enrollment and
-updates `schedules` plus the Ookla `engine_schedules` row in one transaction.
-The enrolled marker prevents a restart from rewriting the chosen interval. A
-later change requires an explicit schedule update in the center. Both overrides
-must be whole minutes from 5 through 1440; invalid values stop before node
-creation or token consumption.
+Docker staging defaults to a 60-minute schedule. `STAGING_INTERVAL_MINUTES` and
+`NODE_INTERVAL` continue to provide explicit overrides.
 
 For a center binary rollback, stop all center writers before rolling back
 migration 00015 and restoring the previous binary. Start the previous binary
