@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/url"
 	"testing"
+	"time"
 )
 
 func f64p(v float64) *float64 { return &v }
@@ -13,12 +14,16 @@ func i64p(v int64) *int64 { return &v }
 
 func strp(v string) *string { return &v }
 
+func recentTestTimestamp() string {
+	return time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
+}
+
 // okResult builds a minimal valid, accepted-able result.
 func okResult(id string) Result {
 	down, up, ping := 300.0, 150.0, 8.5
 	return Result{
 		ID:       id,
-		TS:       "2026-11-03T07:00:00Z",
+		TS:       recentTestTimestamp(),
 		Status:   StatusOK,
 		Down:     &down,
 		Up:       &up,
@@ -34,7 +39,7 @@ func okResult(id string) Result {
 func failedResult(id, err string) Result {
 	return Result{
 		ID:      id,
-		TS:      "2026-11-03T07:00:00Z",
+		TS:      recentTestTimestamp(),
 		Status:  StatusFailed,
 		Error:   strp(err),
 		IP:      "203.0.113.10",

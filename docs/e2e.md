@@ -9,7 +9,13 @@ PostgreSQL database. Nothing in the data path is faked except the speed test its
   marker. The harness refuses any other database name and refuses a database without the marker, then drops and recreates its schema.
 - `psql`, Go and Node 22 with `npm ci` done.
 - A Chromium: set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to a local binary, or `PW_TEST_CONNECT_WS_ENDPOINT` to a remote browser server.
-  The browser never needs to reach anything but the center started on a random loopback port.
+  The browser never needs to reach anything but the center started on a loopback port.
+
+For a remote browser that must reach the center, set `E2E_HTTP_PORT` to an available port (1024–65535) and create an SSH reverse
+forward for that port from the browser host to local `127.0.0.1:<port>`. The center then binds that port on local loopback and the
+browser can keep using the harness origin `http://127.0.0.1:<port>`. This variable is only a test harness override; without it the
+harness continues to select a random loopback port. For `make ui-coverage`, also set `UI_TEST_PORT` to that forwarded port for its
+standalone smoke and wizard browser tests; the unit coverage runner overrides it to port 0 so parallel fixture servers stay isolated.
 
 ## What a run does
 

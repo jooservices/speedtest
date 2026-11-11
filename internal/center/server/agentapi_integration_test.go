@@ -177,7 +177,7 @@ func TestAgentIngestionProtocolIntegration(t *testing.T) {
 		t.Fatal("concurrent inserts", count)
 	}
 	first := ingestRequest(t, handler, token, "GET", "/api/agent/config", "")
-	if first.Code != 200 {
+	if first.Code != 200 || !strings.Contains(first.Body.String(), `"schedule":{"enabled":true,"interval":60,"offset":0}`) {
 		t.Fatal(first.Code, first.Body.String())
 	}
 	etag := first.Header().Get("ETag")

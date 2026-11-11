@@ -1,6 +1,6 @@
 -- +goose Up
 -- ISP entities derived from ASN/organisation already stored in ip_addresses.geo (JOOST-74).
--- Numbered 00014: JOOST-78 owns 00011/00012 and JOOST-73 owns 00013.
+-- Numbered 00016 after merging develop's 00015 schedule-default migration.
 CREATE TABLE isps (
     id uuid PRIMARY KEY,
     asn bigint NOT NULL UNIQUE CHECK (asn > 0 AND asn <= 4294967295),

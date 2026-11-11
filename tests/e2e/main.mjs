@@ -4,7 +4,7 @@ import { chromium } from 'playwright';
 import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import http from 'node:http';
-import { startStack, startAgent, stopAll, query, root } from './lib.mjs';
+import { startStack, startAgent, fetchAgentConfig, stopAll, query, root } from './lib.mjs';
 import { coreSteps } from './steps/core.mjs';
 import { enginesSuite } from './suites/engines.mjs';
 import { authSuite } from './suites/auth.mjs';
@@ -43,7 +43,7 @@ const receiver = { bodies: [], url: '' };
 const receiverServer = http.createServer((req, res) => { const chunks = []; req.on('data', c => chunks.push(c)); req.on('end', () => { try { receiver.bodies.push(JSON.parse(Buffer.concat(chunks).toString())); } catch { receiver.bodies.push({ raw: true }); } res.writeHead(200); res.end('ok'); }); });
 await new Promise(resolve => receiverServer.listen(0, '127.0.0.1', resolve));
 receiver.url = `http://127.0.0.1:${receiverServer.address().port}/hook`;
-const ctx = { page, stack, startAgent, query, problems, receiver };
+const ctx = { page, stack, startAgent, fetchAgentConfig, query, problems, receiver };
 const T = coreSteps(ctx);
 const S = { engines: enginesSuite(T, ctx), auth: authSuite(T, ctx), dashboard: dashboardSuite(T, ctx), nodes: nodesSuite(T, ctx), results: resultsSuite(T, ctx), statistics: statisticsSuite(T, ctx),
   network: networkSuite(T, ctx), isps: ispsSuite(T), schedules: schedulesSuite(T, ctx), alerts: alertsSuite(T, ctx), settings: settingsSuite(T, ctx), quality: qualitySuite(T, ctx) };
