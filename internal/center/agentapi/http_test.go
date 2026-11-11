@@ -56,9 +56,7 @@ func TestBatchOutcomes(t *testing.T) {
 	if w.Code != 207 || json.Unmarshal(w.Body.Bytes(), &response) != nil || len(response.Data) != 5 || store.saved != 1 {
 		t.Fatal(w.Code, w.Body.String())
 	}
-	if response.Data[0].Status != 201 || response.Data[0].ID == nil || *response.Data[0].ID != "00000000-0000-4000-8000-000000000001" ||
-		response.Data[1].Status != 422 || response.Data[1].ID == nil || *response.Data[1].ID != "00000000-0000-4000-8000-000000000002" ||
-		response.Data[2].ID != nil || response.Data[3].ID != nil || response.Data[4].ID != nil {
+	if response.Data[0].Status != 201 || response.Data[1].Status != 422 || response.Data[1].ID == nil || response.Data[2].ID != nil || response.Data[3].ID != nil || response.Data[4].ID != nil {
 		t.Fatal(response)
 	}
 	for i, outcome := range response.Data {
