@@ -53,7 +53,7 @@ func TestMCPToolsMatchOperationCatalogAndScope(t *testing.T) {
 		"list_nodes": ScopeRead, "get_node": ScopeRead, "list_results": ScopeRead,
 		"get_statistics": ScopeRead, "get_dashboard": ScopeRead, "list_alerts": ScopeRead, "get_alert": ScopeRead,
 		"acknowledge_alert": ScopeReadWrite, "run_test": ScopeReadWrite,
-		"get_schedule": ScopeRead, "update_schedule": ScopeReadWrite,
+		"get_schedule": ScopeRead, "update_schedule": ScopeReadWrite, "get_usage": ScopeRead,
 	}
 	if len(tools) != len(want) {
 		t.Fatalf("tool count = %d, want %d", len(tools), len(want))
