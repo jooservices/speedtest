@@ -81,6 +81,7 @@
     if (!ST.demo) return state.isps || [];
     var byASN = {};
     state.results.forEach(function (r) {
+      if (!r.ip) return; // failed tests (for example rate-limited ones) have no public address
       var geo = ST.geo(r.ip), asn = geo && +geo.asn;
       if (!asn) return;
       var id = 'as' + asn;
@@ -91,7 +92,7 @@
   ST.ispOptions = function () { return ST.isps().map(function (isp) { return { value: isp.id, label: isp.name + ' (AS' + isp.asn + ')' }; }); };
   ST.resultISP = function (result) {
     if (result && result.ispId) return result.ispId;
-    var geo = result && ST.geo(result.ip);
+    var geo = result && result.ip ? ST.geo(result.ip) : null;
     return geo && geo.asn ? 'as' + geo.asn : null;
   };
   ST.node = function (id) { return state.nodes.filter(function (n) { return n.id === id; })[0]; };
@@ -193,8 +194,8 @@
     jitter: { label: 'Jitter', short: 'Jitter', unit: 'ms', good: 'low' },
     loss: { label: 'Packet loss', short: 'Loss', unit: '%', good: 'low' }
   };
-  S.nodeSummary = function (id, from, to) {
-    var rs = ST.results({ nodeIds: [id], from: from, to: to }), ok = rs.filter(function (r) { return r.status !== 'failed'; }), n = ST.node(id);
+  S.nodeSummary = function (id, from, to, ispId) {
+    var rs = ST.results({ nodeIds: [id], from: from, to: to, ispId: ispId || null }), ok = rs.filter(function (r) { return r.status !== 'failed'; }), n = ST.node(id);
     var rateLimited = rs.filter(function (r) { return r.status === 'failed' && r.failureClass === 'rate_limited'; }).length;
     var eligible = rs.length - rateLimited;
     var ips = {}; rs.forEach(function (r) { ips[r.ip] = 1; });

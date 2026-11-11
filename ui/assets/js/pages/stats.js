@@ -26,17 +26,8 @@
     return { n: values.length, bins: counts.map(function (c, i) { return { from: lo + i * w, to: lo + (i + 1) * w, count: c, percent: c / values.length * 100 }; }) };
   }
 
-  function localSummary(node, from, to) {
-    var rows = ST.results({ nodeIds: [node.id], from: from, to: to, ispId: q.ispId }), good = rows.filter(function (r) { return r.status !== 'failed'; });
-    var ips = {}; rows.forEach(function (r) { ips[r.ip] = true; });
-    var summary = { count: rows.length, ok: good.length, failed: rows.length - good.length, successRate: rows.length ? good.length / rows.length * 100 : null };
-    ['down', 'up', 'ping', 'jitter', 'loss'].forEach(function (key) { summary[key] = S.summary(good.map(function (r) { return r[key]; })); });
-    summary.ipCount = Object.keys(ips).length;
-    summary.downPct = node.expectedDown > 0 && summary.down.mean != null ? summary.down.mean / node.expectedDown * 100 : null;
-    summary.upPct = node.expectedUp > 0 && summary.up.mean != null ? summary.up.mean / node.expectedUp * 100 : null;
-    summary.stability = summary.down.mean ? Math.max(0, Math.min(100, 100 - summary.down.std / summary.down.mean * 220)) : null;
-    return summary;
-  }
+  // One definition of a node summary (rate-limited tests are excluded from the success rate there); the ISP filter only narrows the rows.
+  function localSummary(node, from, to) { return S.nodeSummary(node.id, from, to, q.ispId); }
 
   function emptySummary() {
     var empty = { n: 0, mean: null, median: null, min: null, max: null, p5: null, p95: null, std: null };
