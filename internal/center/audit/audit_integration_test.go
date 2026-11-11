@@ -98,6 +98,9 @@ func TestStoreRecordsAndListsNewestFirst(t *testing.T) {
 func TestAuthenticationSourceMigrationRollsBackAndReapplies(t *testing.T) {
 	pool, ctx := openPool(t)
 	if err := db.Migrate(ctx, pool, "down"); err != nil {
+		t.Fatal("roll back geo provider usage migration:", err)
+	}
+	if err := db.Migrate(ctx, pool, "down"); err != nil {
 		t.Fatal("roll back audit authentication source migration:", err)
 	}
 	var columns int
@@ -106,6 +109,9 @@ func TestAuthenticationSourceMigrationRollsBackAndReapplies(t *testing.T) {
 	}
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal("reapply audit authentication source migration:", err)
+	}
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal("reapply geo provider usage migration:", err)
 	}
 	store := &Store{DB: pool}
 	entry := Entry{Actor: "owner@example.com", Action: "node.update"}
