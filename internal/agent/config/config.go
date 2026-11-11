@@ -68,7 +68,7 @@ func Load(path string) (Config, error) {
 		Name:                 "node",
 		ExpectedDownloadMbps: 0,
 		ExpectedUploadMbps:   0,
-		Interval:             30 * time.Minute,
+		Interval:             60 * time.Minute,
 	}
 
 	if err := applyFile(path, &cfg); err != nil {

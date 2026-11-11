@@ -242,7 +242,7 @@ func TestStoreTransactionsAndFailuresIntegration(t *testing.T) {
 	}
 	execSQL("INSERT INTO installer_events(id,installation_id,step,message,pct,status) VALUES($1,$2,'connect','Connecting',1,'running')", cursorID, jobID)
 	execSQL("INSERT INTO installer_idempotency(principal,key_hash,request_hash,installation_id,expires_at) VALUES('owner',$1,$2,$3,now()+interval '1 hour')", digest("populated"), digest("fixture"), jobID)
-	for range 5 { // Engine server catalogs, engine schedules, two-factor and audit precede installer rollback.
+	for range 8 { // Roll back later migrations before checking the installer migration.
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(err)
 		}
