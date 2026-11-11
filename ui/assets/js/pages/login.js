@@ -1,7 +1,7 @@
 /* Sign-in page and sign-out. The session lives in an HttpOnly cookie; nothing secret is kept in the page. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, API = ST.api;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, API = ST.api;
 
   // Plain-language text for what the center can answer, never the raw server detail.
   function explain(error) {

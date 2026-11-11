@@ -7,6 +7,14 @@ linters:
   default: standard
   enable:
     - gocritic
+    - funlen
+    - gocyclo
+  settings:
+    funlen:
+      lines: 271
+      statements: 188
+    gocyclo:
+      min-complexity: 120
 
 formatters:
   enable:

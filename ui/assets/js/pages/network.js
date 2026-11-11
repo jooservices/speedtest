@@ -1,7 +1,7 @@
 /* IP & location: public IP history per node, geolocation, map and lookup. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
   var q = { more: false, node: 'all', lookup: '', lookupRes: null };
 
   function geoLine(g) { return (g && [g.city, g.country].filter(Boolean).join(', ')) || 'Unknown location'; }

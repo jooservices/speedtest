@@ -1,7 +1,7 @@
 /* Settings: general, speed test engine, location service, notifications, data, access. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt;
   var tab = 'general';
 
   function row(title, desc, ctl) { return h('div', { class: 'setting' }, h('div', null, h('div', { style: 'font-weight:600' }, title), desc ? h('div', { class: 'hint' }, desc) : null), h('div', { class: 's-ctl' }, ctl)); }
