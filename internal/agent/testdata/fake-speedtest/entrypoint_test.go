@@ -25,7 +25,7 @@ func TestLibreSpeedFixtureOutputAndPinnedFallback(t *testing.T) {
 	}
 	stdout.Reset()
 	stderr.Reset()
-	if status := run(context.Background(), []string{"--json", "--server", "52"}, &stdout, &stderr); status == 0 || !strings.Contains(stderr.String(), "server unavailable") {
+	if status := run(context.Background(), []string{"--json", "--server", "52"}, &stdout, &stderr); status != 0 || stdout.String() != "null\n" || stderr.Len() != 0 {
 		t.Fatalf("pinned LibreSpeed server status=%d stdout=%q stderr=%q", status, stdout.String(), stderr.String())
 	}
 	stdout.Reset()
