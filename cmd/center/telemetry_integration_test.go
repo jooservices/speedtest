@@ -73,6 +73,8 @@ func TestTelemetryCompositionIntegration(t *testing.T) {
 	}
 	background, stop := context.WithCancel(t.Context())
 	stop()
+	t.Setenv("SPEEDTEST_GEOLITE2_LICENSE_KEY", "test-license")
+	t.Setenv("SPEEDTEST_GEO_IPINFO_TOKEN", "test-token")
 	svc.Background(background)
 	t.Setenv("SPEEDTEST_GEO_DBIP_AUTO_UPDATE", "invalid")
 	if _, _, err := buildServices(t.Context(), pool, cfg, logger); err == nil {
