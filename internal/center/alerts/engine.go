@@ -173,11 +173,14 @@ func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, rule Rule, node stri
 	}
 	var created string
 	if resultID == "" {
-		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail)
-			VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail).Scan(&created)
+		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail,isp_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE(
+				(SELECT h.to_isp_id FROM node_ip_history h WHERE h.node_id=$3 AND h.ts <= $5 AND h.to_isp_id IS NOT NULL ORDER BY h.ts DESC,h.id DESC LIMIT 1),
+				(SELECT r.isp_id FROM results r WHERE r.node_id=$3 AND r.ts <= $5 AND r.isp_id IS NOT NULL ORDER BY r.ts DESC,r.id DESC LIMIT 1)))
+			RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail).Scan(&created)
 	} else {
-		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail,trigger_result_id)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail,trigger_result_id,isp_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,(SELECT isp_id FROM results WHERE id=$8))
 			ON CONFLICT (rule_id,node_id,trigger_result_id) WHERE trigger_result_id IS NOT NULL DO NOTHING
 			RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail, resultID).Scan(&created)
 		if errors.Is(err, pgx.ErrNoRows) {

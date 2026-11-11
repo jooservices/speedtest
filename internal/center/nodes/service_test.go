@@ -145,7 +145,8 @@ func TestNodeResponses(t *testing.T) {
 	serverID := 7
 	input := Input{Name: "edge", Label: "label", Provider: "provider", Plan: "plan", ExpectedDown: 300, ExpectedUp: 100, Threads: 4, ServerID: &serverID, Enabled: true, AutoUpdate: true}
 	node := nodeResponse("00000000-0000-4000-8000-000000000001", input, 2, testTime(), 30, 0, "", "")
-	if node["server"] != 7 || node["status"] != "offline" || node["lastSeen"] != nil || node["autoUpdate"] != true {
+	isp, hasISP := node["isp"]
+	if node["server"] != 7 || node["status"] != "offline" || node["lastSeen"] != nil || node["autoUpdate"] != true || !hasISP || isp != nil {
 		t.Fatalf("node response = %#v", node)
 	}
 	record := nodeRecord{ID: "node-id", Name: "edge", ExpectedDown: 300, ExpectedUp: 100, Threads: 4, Revision: 3, Interval: 30, ScheduleOn: true, Enabled: true, AutoUpdate: true, ServerID: pgtype.Int4{Int32: 7, Valid: true}}
@@ -503,6 +504,59 @@ func TestCreateNodeTransactionSuccessAndDatabaseBoundaries(t *testing.T) {
 		t.Fatalf("invalid CreateNode() error = %v", err)
 	}
 }
+
+func TestCreateNodePlanDefaultsAreMarkedPerSpeed(t *testing.T) {
+	const planID = "00000000-0000-4000-8000-000000000021"
+	var nodeArgs []any
+	tx := &scriptedTx{queryRow: func(query string, args ...any) pgx.Row {
+		switch {
+		case strings.Contains(query, "api_idempotency"):
+			return scriptedRow{err: pgx.ErrNoRows}
+		case strings.Contains(query, "FROM isp_plans"):
+			return scriptedRow{values: []any{500.0, 100.0}}
+		case strings.Contains(query, "MAX(color_slot)"):
+			return scriptedRow{values: []any{1}}
+		case strings.Contains(query, "INSERT INTO nodes"):
+			nodeArgs = append([]any(nil), args...)
+			return scriptedRow{values: []any{testTime()}}
+		case strings.Contains(query, "WITH legacy AS"):
+			return scriptedRow{values: []any{60, 0}}
+		case strings.Contains(query, "INSERT INTO node_credentials"):
+			return scriptedRow{values: []any{testTime().Add(enrollmentLifetime)}}
+		default:
+			return scriptedRow{err: fmt.Errorf("unexpected plan create query: %s", query)}
+		}
+	}}
+	input := Input{Name: "plan-default", ISPPlanID: ptr(planID), Enabled: true, Threads: 4}
+	if _, replay, err := NewService(&scriptedDatabase{tx: tx}, bytes.Repeat([]byte{0x62}, 32)).CreateNode(t.Context(), input, "owner", "plan-key"); err != nil || replay {
+		t.Fatalf("CreateNode() replay=%v err=%v", replay, err)
+	}
+	if len(nodeArgs) != 18 || nodeArgs[6] != 500.0 || nodeArgs[7] != 100.0 || nodeArgs[8] != true || nodeArgs[9] != true {
+		t.Fatalf("node insert arguments=%v, expected plan values and per-speed default flags", nodeArgs)
+	}
+}
+
+func TestApplyCreatePlanDefaultsFailures(t *testing.T) {
+	if err := applyCreatePlanDefaults(t.Context(), &scriptedTx{}, &Input{}); err != nil {
+		t.Fatalf("no plan should need no lookup: %v", err)
+	}
+	planID := "00000000-0000-4000-8000-000000000021"
+	for _, tc := range []struct {
+		name string
+		err  error
+		want error
+	}{{"missing plan", pgx.ErrNoRows, ErrInvalidInput}, {"lookup error", errors.New("plan lookup failed"), errors.New("plan lookup failed")}} {
+		t.Run(tc.name, func(t *testing.T) {
+			tx := &scriptedTx{queryRow: func(string, ...any) pgx.Row { return scriptedRow{err: tc.err} }}
+			input := Input{ISPPlanID: &planID}
+			if err := applyCreatePlanDefaults(t.Context(), tx, &input); err == nil || err.Error() != tc.want.Error() {
+				t.Fatalf("applyCreatePlanDefaults() error=%v want %v", err, tc.want)
+			}
+		})
+	}
+}
+
+func ptr[T any](value T) *T { return &value }
 
 func TestEnrollTransactionSuccessAndNodeBoundaries(t *testing.T) {
 	const credentialID = "00000000-0000-4000-8000-000000000011"

@@ -69,6 +69,33 @@ func TestNodeServerOperationsDeclareTokenScopes(t *testing.T) {
 	}
 }
 
+func TestISPOperationsDeclareLeastPrivilegeAccessTokenScopes(t *testing.T) {
+	operations, err := Operations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]Scope{
+		"GET /api/isps": ScopeRead, "GET /api/isps/compare": ScopeRead,
+		"GET /api/isps/{id}": ScopeRead, "GET /api/isps/{id}/trend": ScopeRead,
+		"GET /api/isps/{id}/plans": ScopeRead, "POST /api/isps/{id}/plans": ScopeReadWrite,
+		"PUT /api/isps/{id}/plans/{planId}": ScopeReadWrite, "DELETE /api/isps/{id}/plans/{planId}": ScopeFull,
+	}
+	for _, operation := range operations {
+		key := operation.Method + " " + operation.Path
+		expected, ok := want[key]
+		if !ok {
+			continue
+		}
+		if operation.Scope != expected {
+			t.Errorf("%s scope = %q, want %q", key, operation.Scope, expected)
+		}
+		delete(want, key)
+	}
+	if len(want) != 0 {
+		t.Errorf("ISP operations missing from the API contract: %v", want)
+	}
+}
+
 func TestMCPToolsMatchOperationCatalogAndScope(t *testing.T) {
 	tools, err := MCPTools()
 	if err != nil {

@@ -36,7 +36,12 @@ has changed the database default to 60.
 `00020_audit_authentication_source.sql` records whether each audited change used
 a session or bearer credential and stores only the non-secret bearer token ID.
 Token creation audit targets also retain the newly created token ID.
-`00021_node_engine_servers.sql` adds per-node/per-engine server catalogs,
+`00021_isp_entities.sql` adds ASN-derived ISP entities, plans and links from
+results, addresses, IP history and alert events. `00022_isp_plan_default_provenance.sql`
+tracks download and upload defaults independently so plan changes update only
+speeds that still follow the advertised values. Existing rows start with both
+flags false; the migration does not infer provenance from numeric equality.
+`00023_node_engine_servers.sql` adds per-node/per-engine server catalogs,
 engine-scoped discovery commands and pins. Existing engine pins are backfilled
 from `nodes.server_id`; the legacy column remains synchronized for older agents.
 Results store whether the measurement-time selection and pin are known; old rows

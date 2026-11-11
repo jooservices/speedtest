@@ -76,7 +76,10 @@ func testTransaction(before, after *position, cached bool) *transaction {
 			tx.rows = append(tx.rows, row{values: []any{p.id, p.ip}})
 		}
 	}
-	tx.rows = append(tx.rows, row{values: []any{[]byte(`{"city":"fixture"}`), "fixture", cached}})
+	tx.rows = append(tx.rows, row{values: []any{[]byte(`{"city":"fixture"}`), cached, false}})
+	if !cached {
+		tx.rows = append(tx.rows, row{values: []any{[]byte(`{"city":"fixture"}`), "fixture", false}})
+	}
 	return tx
 }
 func hookResult() agentapi.Result {
@@ -103,6 +106,9 @@ func TestTimelineBranches(t *testing.T) {
 				t.Fatal(err)
 			}
 			joined := strings.Join(tx.execs, "\n")
+			if strings.Contains(joined, "FOR NO KEY UPDATE") {
+				t.Fatal("cached location without ASN should not lock the address", joined)
+			}
 			if strings.Contains(joined, "pg_notify") != tc.signal || strings.Contains(joined, "INSERT INTO ip_change_signals") != tc.signal {
 				t.Fatal(joined)
 			}
@@ -166,6 +172,36 @@ func TestGeoLookupAndDegradation(t *testing.T) {
 		t.Fatal("default logger")
 	}
 }
+
+func TestCachedLocationEdges(t *testing.T) {
+	t.Run("missing cache row falls through to lookup", func(t *testing.T) {
+		tx := testTransaction(nil, nil, false)
+		tx.rows[3].err = pgx.ErrNoRows
+		geo := &lookup{}
+		if err := (&Watcher{Offline: geo}).AfterResultStored(t.Context(), tx, "node", hookResult()); err != nil || geo.calls != 1 {
+			t.Fatal(err, geo.calls)
+		}
+	})
+	t.Run("linked address without ASN links the result", func(t *testing.T) {
+		tx := testTransaction(nil, nil, true)
+		tx.rows[3].values[2] = true
+		if err := (&Watcher{}).AfterResultStored(t.Context(), tx, "node", hookResult()); err != nil {
+			t.Fatal(err)
+		}
+		joined := strings.Join(tx.execs, "\n")
+		if !strings.Contains(joined, "UPDATE results r") || strings.Contains(joined, "FOR NO KEY UPDATE") {
+			t.Fatal("linked cached address was not copied without taking an ISP lock", joined)
+		}
+	})
+	t.Run("malformed cached location fails", func(t *testing.T) {
+		tx := testTransaction(nil, nil, true)
+		tx.rows[3].values[0] = []byte("{")
+		if err := (&Watcher{}).AfterResultStored(t.Context(), tx, "node", hookResult()); err == nil {
+			t.Fatal("malformed cache accepted")
+		}
+	})
+}
+
 func TestOpen(t *testing.T) {
 	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "false")
 	t.Setenv("SPEEDTEST_GEO_IPINFO_ENABLED", "false")
