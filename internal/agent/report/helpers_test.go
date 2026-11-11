@@ -6,6 +6,8 @@ import (
 	"net/url"
 	"testing"
 	"time"
+
+	"github.com/jooservices/speedtest/internal/shared/failureclass"
 )
 
 func f64p(v float64) *float64 { return &v }
@@ -38,12 +40,13 @@ func okResult(id string) Result {
 // failedResult builds a minimal valid failed result.
 func failedResult(id, err string) Result {
 	return Result{
-		ID:      id,
-		TS:      recentTestTimestamp(),
-		Status:  StatusFailed,
-		Error:   strp(err),
-		IP:      "203.0.113.10",
-		Threads: DefaultThreads,
+		ID:           id,
+		TS:           recentTestTimestamp(),
+		Status:       StatusFailed,
+		Error:        strp(err),
+		FailureClass: failureclass.FromText(err),
+		IP:           "203.0.113.10",
+		Threads:      DefaultThreads,
 	}
 }
 
