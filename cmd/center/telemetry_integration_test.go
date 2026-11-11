@@ -42,7 +42,7 @@ func TestTelemetryCompositionIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer cleanup()
-	if svc.Telemetry == nil || svc.Installer == nil || svc.OwnerNotifications == nil {
+	if svc.Telemetry == nil || svc.Installer == nil || svc.OwnerNotifications == nil || svc.AccessTokens == nil {
 		t.Fatal("operational services not composed")
 	}
 	defer func() {
