@@ -255,6 +255,24 @@ func (h *ownerResults) filter(w http.ResponseWriter, r *http.Request) (ownerapi.
 			return f, invalid(w, r, "nodes accepts at most 100 IDs.")
 		}
 	}
+	if _, present := q["isps"]; present {
+		f.ISPsSet = true
+		seen := map[string]bool{}
+		for _, id := range strings.Split(q.Get("isps"), ",") {
+			id = strings.ToLower(strings.TrimSpace(id))
+			if id == "" || seen[id] {
+				continue
+			}
+			if !uuidPattern.MatchString(id) {
+				return f, invalid(w, r, "isps must be comma-separated ISP IDs.")
+			}
+			seen[id] = true
+			f.ISPs = append(f.ISPs, id)
+		}
+		if len(f.ISPs) > 100 {
+			return f, invalid(w, r, "isps accepts at most 100 IDs.")
+		}
+	}
 	if !h.timeRange(w, r, q, &f) {
 		return f, false
 	}

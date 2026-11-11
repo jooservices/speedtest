@@ -53,7 +53,7 @@ export function settingsSuite(T, ctx) {
     async preferences() {
       await T.open('#/settings', 'Settings');
       await T.choose(setting('Decimal places').locator('select'), '2');
-      await T.toast('Saved').waitFor();
+      await T.eventually(() => T.db("select value->>'decimals' from settings where key='display'") === '2', 'the selected decimal precision is saved');
       assert.equal(T.db("select value->>'decimals' from settings where key='display'"), '2');
       await T.settled();
       await T.choose(setting('Speed units').locator('select'), 'Mbps');
@@ -168,6 +168,7 @@ export function settingsSuite(T, ctx) {
       await T.choose(setting('Keep results for').locator('select'), '90');
       await T.settled();
       await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '90', 'the retention period is stored');
+      assert.equal((await T.api('/api/settings')).body.data.retentionDays, 90, 'the settings API returns the saved retention period');
       assert.equal(T.db("select value #>> '{}' from settings where key='retentionDays'"), '90');
       const csv = await T.download(() => T.press('CSV', setting('Export all results')));
       assert.ok(csv.startsWith('time,node,status,download_mbps'), 'the CSV export has its header');
@@ -282,6 +283,13 @@ export function settingsSuite(T, ctx) {
         assert.equal(read.status(), 200, 'bearer GET works without a session cookie');
         const result = await read.json();
         assert.equal(result.success, true);
+        const isps = await client.get(ctx.stack.origin + '/api/isps?range=7d', { headers: { Authorization: `Bearer ${raw}` } });
+        assert.equal(isps.status(), 200, 'read scope can list ISPs without a session cookie');
+        assert.ok(Array.isArray((await isps.json()).data), 'the ISP response keeps its list envelope');
+        const planWrite = await client.post(ctx.stack.origin + '/api/isps/00000000-0000-4000-8000-000000000001/plans', {
+          headers: { Authorization: `Bearer ${raw}` }, data: { name: 'Blocked plan', advertisedDown: 100, advertisedUp: 50 },
+        });
+        assert.equal(planWrite.status(), 403, 'read scope refuses ISP plan writes');
         const write = await client.post(ctx.stack.origin + '/api/nodes/123e4567-e89b-12d3-a456-426614174000/run', { headers: { Authorization: `Bearer ${raw}` } });
         assert.equal(write.status(), 403, 'read scope refuses a write operation');
         await T.eventually(() => T.db("select last_used_at is not null from api_access_tokens where name='e2e-read-token'") === 't', 'successful bearer use updates last-used time');
