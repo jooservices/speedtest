@@ -284,9 +284,13 @@ Settings defaults match the preview: dark, 7d, auto units, browser timezone,
 24-hour clock, one decimal, 365-day retention (0=forever), GeoLite2 + ip-api fallback,
 weekly updates, Ookla/auto server/4 threads, stagger on/maxConcurrent=1, empty
 quiet hours, email enabled to `ops@example.com`, other channels off/empty.
-Public center URL comes from deployment `.env`, not the demo URL. New nodes
-start at interval=30/offset=0, enabled, threads=4, server=auto. Schedule PUT clamps
-offset after interval changes; effective quiet timezone is explicit. Usage uses
+Public center URL comes from deployment `.env`, not the demo URL. `POST /api/nodes`
+does not accept an interval; its response and the new node's Ookla schedule use
+interval=60/offset=0, enabled, threads=4, server=auto. Newly enabled engine
+schedules also default to 60 when interval is omitted or zero. Legacy schedule
+PUT fields remain required. The 60-minute migration changes only the schedules
+column default, never existing rows; rollback restores that default to 30.
+Schedule PUT clamps offset after interval changes; effective quiet timezone is explicit. Usage uses
 up to 200 recent nonfailed results × tests/day, month=30 days; paused/no history=0.
 The UI should display null measurements/location as unavailable, not zero.
 
