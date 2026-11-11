@@ -242,14 +242,7 @@ func TestStoreTransactionsAndFailuresIntegration(t *testing.T) {
 	}
 	execSQL("INSERT INTO installer_events(id,installation_id,step,message,pct,status) VALUES($1,$2,'connect','Connecting',1,'running')", cursorID, jobID)
 	execSQL("INSERT INTO installer_idempotency(principal,key_hash,request_hash,installation_id,expires_at) VALUES('owner',$1,$2,$3,now()+interval '1 hour')", digest("populated"), digest("fixture"), jobID)
-	for {
-		var installerExists bool
-		if err := pool.QueryRow(ctx, `SELECT to_regclass('installer_jobs') IS NOT NULL`).Scan(&installerExists); err != nil {
-			t.Fatal(err)
-		}
-		if !installerExists {
-			break
-		}
+	for range 5 { // The schedule-default, engine-schedule, two-factor and audit migrations precede installer rollback.
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(err)
 		}
