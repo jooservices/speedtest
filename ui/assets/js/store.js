@@ -229,6 +229,12 @@
   };
 
   /* ---------- Alert evaluation ---------- */
+  // Same text as the center's alert event (internal/center/alerts ipChangeDetail): the old and the new address, then the city when known.
+  function ipChangeText(from, to) {
+    var geo = ST.geo(to);
+    return (from ? 'Changed from ' + from + ' to ' + to : 'Now ' + to) + (geo ? ' (' + geo.city + ')' : '');
+  }
+
   function ruleMatch(rule, r, node, prevIp) {
     switch (rule.metric) {
       case 'failed': return r.status === 'failed' && r.failureClass !== 'rate_limited';
@@ -256,7 +262,7 @@
         var streak = 0, open = null, prevIp = null;
         (byNode[node.id] || []).forEach(function (r) {
           if (r.status === 'failed' && r.failureClass === 'rate_limited') return;
-          var hit = ruleMatch(rule, r, node, prevIp);
+          var before = prevIp, hit = ruleMatch(rule, r, node, prevIp);
           prevIp = r.ip;
           if (hit) {
             streak++;
@@ -264,7 +270,7 @@
               open = {
                 id: rule.id + ':' + node.id + ':' + r.ts, ruleId: rule.id, nodeId: node.id, ispId: ST.resultISP(r), severity: rule.severity, ts: r.ts, resolvedAt: null,
                 title: rule.name,
-                detail: rule.metric === 'ip_changed' ? 'Now ' + r.ip + (ST.geo(r.ip) ? ' (' + ST.geo(r.ip).city + ')' : '') : ST.ruleText(rule)
+                detail: rule.metric === 'ip_changed' ? ipChangeText(before, r.ip) : ST.ruleText(rule)
               };
               events.push(open);
             }
