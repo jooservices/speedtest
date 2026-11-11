@@ -45,7 +45,7 @@ what the page shows; put the change back (or order the scenario last) when it al
 
 ## Scenarios
 
-43 scenarios across auth, dashboard, nodes, results, statistics, IP, ISPs, schedules, alerts, settings and quality (layout, accessibility,
+44 scenarios across auth, dashboard, nodes, results, statistics, IP, ISPs, schedules, alerts, settings and quality (layout, accessibility,
 theme): see [e2e-scenarios.md](e2e-scenarios.md).
 
 The SSH install wizard (host-key confirmation, live progress, failure) is covered against the contract fixture by
