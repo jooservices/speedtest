@@ -534,6 +534,8 @@ func TestCreateNodePlanDefaultsAreMarkedPerSpeed(t *testing.T) {
 			return scriptedRow{values: []any{testTime()}}
 		case strings.Contains(query, "WITH legacy AS"):
 			return scriptedRow{values: []any{60, 0}}
+		case strings.Contains(query, "FROM usage_monthly_totals"):
+			return scriptedRow{values: []any{int64(0)}}
 		case strings.Contains(query, "INSERT INTO node_credentials"):
 			return scriptedRow{values: []any{testTime().Add(enrollmentLifetime)}}
 		default:
