@@ -247,16 +247,26 @@ func (s *Store) processSignal(ctx context.Context, tx pgx.Tx, item signal) error
 		return err
 	}
 	rows.Close()
-	detail := "Now " + item.ToIP
-	if item.City != "" {
-		detail += " (" + item.City + ")"
-	}
+	detail := ipChangeDetail(item)
 	for _, rule := range matched {
 		if _, err := s.insertEvent(ctx, tx, rule, item.NodeID, item.TS, item.ResultID, detail); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// ipChangeDetail is the event text of an address change: the old and the new address (and the city of the new one when known),
+// so a notification that carries only this line still says what changed.
+func ipChangeDetail(item signal) string {
+	detail := "Now " + item.ToIP
+	if item.FromIP != "" {
+		detail = "Changed from " + item.FromIP + " to " + item.ToIP
+	}
+	if item.City != "" {
+		detail += " (" + item.City + ")"
+	}
+	return detail
 }
 
 // DrainSignals consumes at most one bounded batch of durable IP changes. It is
