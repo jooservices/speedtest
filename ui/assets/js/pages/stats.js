@@ -6,6 +6,10 @@
   var DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
   function fmtM(m, v) { return v == null ? '—' : F.metric(m, v); }
+  function successCell(summary) {
+    var note = summary.rateLimited ? h('span', { class: 'hint' }, F.num(summary.rateLimited) + ' rate-limited excluded') : null;
+    return h('span', { class: 'stack' }, h('span', null, F.pct(summary.successRate, 1)), note);
+  }
   function axisFmt(m) { return ST.metrics[m].unit === 'speed' ? F.axisSpeed : function (v) { return F.num(v, m === 'loss' ? 1 : 0); }; }
   function axisUnit(m) { return ST.metrics[m].unit === 'speed' ? F.axisUnit() : ST.metrics[m].unit === 'ms' ? 'ms' : '%'; }
 
@@ -123,7 +127,7 @@
     var tableCols = [
       { key: 'n', label: 'Node', render: function (r) { return h('span', { class: 'row' }, U.dot(ST.nodeColor(r.n)), r.n.name, h('span', { class: 'muted' }, r.n.label)); } },
       { key: 'c', label: 'Tests', num: true, render: function (r) { return F.num(r.s.count); } },
-      { key: 'ok', label: 'Success', num: true, render: function (r) { return F.pct(r.s.successRate, 1); } },
+      { key: 'ok', label: 'Success', num: true, render: function (r) { return successCell(r.s); } },
       { key: 'avg', label: 'Average', num: true, render: function (r) { return fmtM(m, r.s[m].mean); } },
       { key: 'med', label: 'Median', num: true, render: function (r) { return fmtM(m, r.s[m].median); } },
       { key: 'p5', label: ST.metrics[m].good === 'high' ? 'Slow 5%' : 'Best 5%', num: true, render: function (r) { return fmtM(m, r.s[m].p5); } },

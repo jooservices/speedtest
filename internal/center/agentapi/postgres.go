@@ -63,22 +63,26 @@ var resultColumns = [...]string{
 	"id", "node_id", "ts", "status", "down_mbps", "up_mbps", "ping_ms", "jitter_ms", "down_latency_ms", "up_latency_ms",
 	"loss_percent", "server_id", "ip", "threads", "bytes_down", "bytes_up", "duration_seconds", "error", "manual", "raw",
 	"loaded_down", "loaded_up", "server", "engine_isp", "engine_result_id", "engine_result_url", "engine_ip", "warnings", "engine",
-	"pinned_server_id_at_test", "server_selection_known",
+	"pinned_server_id_at_test", "server_selection_known", "failure_class",
 }
 
 const resultInsertQuery = `INSERT INTO results (
 	id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,down_latency_ms,up_latency_ms,
 	loss_percent,server_id,ip,threads,bytes_down,bytes_up,duration_seconds,error,manual,raw,
 	loaded_down,loaded_up,server,engine_isp,engine_result_id,engine_result_url,engine_ip,warnings,engine,
-	pinned_server_id_at_test,server_selection_known
+	pinned_server_id_at_test,server_selection_known,failure_class
 ) VALUES (
 	$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
-	$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31
+	$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
 ) ON CONFLICT(id) DO NOTHING`
 
 func (r Result) values(node string) []any {
 	ts, _ := time.Parse(time.RFC3339Nano, r.TS)
-	return []any{r.ID, node, ts, r.Status, r.Down, r.Up, r.Ping, r.Jitter, r.DLat, r.ULat, r.Loss, r.ServerID, r.IP, r.Threads, r.BytesDown, r.BytesUp, r.Duration, r.Error, r.Manual, jsonValue(r.Raw), jsonValue(r.LoadedDown), jsonValue(r.LoadedUp), jsonValue(r.Server), r.EngineISP, r.EngineResultID, r.EngineResultURL, r.EngineIP, jsonValue(r.Warnings), resultEngine(r.Engine), r.PinnedServerID, r.ServerSelectionKnown}
+	class := r.FailureClass
+	if class == "" {
+		class = "other"
+	}
+	return []any{r.ID, node, ts, r.Status, r.Down, r.Up, r.Ping, r.Jitter, r.DLat, r.ULat, r.Loss, r.ServerID, r.IP, r.Threads, r.BytesDown, r.BytesUp, r.Duration, r.Error, r.Manual, jsonValue(r.Raw), jsonValue(r.LoadedDown), jsonValue(r.LoadedUp), jsonValue(r.Server), r.EngineISP, r.EngineResultID, r.EngineResultURL, r.EngineIP, jsonValue(r.Warnings), resultEngine(r.Engine), r.PinnedServerID, r.ServerSelectionKnown, class}
 }
 
 func resolveMissingServerID(ctx context.Context, tx pgx.Tx, node string, result *Result) error {
@@ -129,9 +133,16 @@ func resultReplayMatches(ctx context.Context, tx pgx.Tx, node string, result *Re
 	args := result.values(node)
 	comparisons := make([]string, len(resultColumns))
 	for i, column := range resultColumns {
-		comparisons[i] = column + " IS NOT DISTINCT FROM " + fmt.Sprintf("$%d", i+1)
+		parameter := fmt.Sprintf("$%d", i+1)
+		comparisons[i] = column + " IS NOT DISTINCT FROM " + parameter
+		if column == "failure_class" && result.classOmitted {
+			comparisons[i] = "(" + comparisons[i] + " OR (failure_class = 'other' AND $33::boolean))"
+		}
 	}
 	var identical bool
+	if result.classOmitted {
+		args = append(args, true)
+	}
 	err := tx.QueryRow(ctx, "SELECT "+strings.Join(comparisons, " AND ")+" FROM results WHERE id=$1", args...).Scan(&identical)
 	return identical, err
 }

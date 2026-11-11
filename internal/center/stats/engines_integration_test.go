@@ -22,14 +22,21 @@ func TestEveryAggregationSeparatesEngines(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	if _, err := pool.Exec(ctx, `INSERT INTO results(id,node_id,ts,status,threads,error,engine,failure_class) VALUES (gen_random_uuid(),$1,$2,'failed',4,'rate limited fixture','ookla','rate_limited')`, node, from.Add(2*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
 	for _, name := range []string{"", "ookla", "librespeed"} {
 		q := Query{Engine: name, From: from, To: from.Add(24 * time.Hour), PreviousFrom: from.Add(-24 * time.Hour), PreviousTo: from, Metric: Download, Timezone: "UTC", Bucket: "hour", Bins: 5}
 		want := 100.0
 		if name == "librespeed" {
 			want = 200
 		}
+		wantCount, wantLimited := 1, 0
+		if name != "librespeed" {
+			wantCount, wantLimited = 2, 1
+		}
 		summary, err := store.Summary(ctx, q)
-		if err != nil || len(summary) != 1 || summary[0].Current.Down.Mean == nil || *summary[0].Current.Down.Mean != want || summary[0].Current.Count != 1 {
+		if err != nil || len(summary) != 1 || summary[0].Current.Down.Mean == nil || *summary[0].Current.Down.Mean != want || summary[0].Current.Count != wantCount || summary[0].Current.RateLimited != wantLimited {
 			t.Fatalf("summary %q: %+v %v", name, summary, err)
 		}
 		series, err := store.Series(ctx, q, false, 1)
