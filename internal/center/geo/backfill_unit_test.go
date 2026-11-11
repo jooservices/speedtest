@@ -529,3 +529,36 @@ func TestBackfillRefreshBranchesAndPauseCancellation(t *testing.T) {
 		t.Fatalf("completed pause = (%d,%v)", count, err)
 	}
 }
+
+// A cache or storage failure is not a provider miss: the batch stops at that address, keeps the progress made before it and never
+// sends the address (or the ones after it) to the batch endpoint on the strength of an unchecked cache.
+func TestBackfillBatchStopsOnCacheFailureWithoutDispatch(t *testing.T) {
+	cache := &backfillMemoryCache{values: map[string]Location{"203.0.113.1": {City: "London", Latitude: 51.5, Longitude: -0.1}}}
+	batch := &backfillMemoryBatch{}
+	job := &Backfill{Cache: cache, Batch: batch}
+	failing := &backfillMemoryCache{getErr: errors.New("storage down")}
+	job.Cache = failing
+	completed, err := job.refresh(context.Background(), []backfillCandidate{{address: "203.0.113.2"}, {address: "203.0.113.3"}})
+	if completed != 0 || err == nil || batch.calls != 0 {
+		t.Fatalf("a failing cache must stop the batch before any dispatch: completed=%d err=%v calls=%d", completed, err, batch.calls)
+	}
+	// With a healthy cache holding the first address, the failure at the second keeps the first one's progress.
+	partial := &backfillMemoryCache{values: map[string]Location{"203.0.113.1": {City: "London", Latitude: 51.5, Longitude: -0.1}}}
+	job = &Backfill{Cache: &cacheFailingFor{backfillMemoryCache: partial, failIP: "203.0.113.2"}, Batch: batch}
+	completed, err = job.refresh(context.Background(), []backfillCandidate{{address: "203.0.113.1"}, {address: "203.0.113.2"}})
+	if completed != 1 || err == nil || batch.calls != 0 {
+		t.Fatalf("progress before the failing address is kept: completed=%d err=%v calls=%d", completed, err, batch.calls)
+	}
+}
+
+type cacheFailingFor struct {
+	*backfillMemoryCache
+	failIP string
+}
+
+func (c *cacheFailingFor) Get(ctx context.Context, ip string) (Location, string, bool, error) {
+	if ip == c.failIP {
+		return Location{}, "", false, errors.New("storage down")
+	}
+	return c.backfillMemoryCache.Get(ctx, ip)
+}
