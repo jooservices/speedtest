@@ -40,12 +40,12 @@ Operations: 81. Without a test: 0.
 | exportFilteredCSV | GET | `/api/results/export.csv` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | exportAllCSV | GET | `/api/export/results.csv` | `internal/center/server/httpx_test.go`<br>`internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | exportAllJSON | GET | `/api/export/results.json` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
-| listISPs | GET | `/api/isps` | `internal/center/apicontract/contract_test.go`<br>`internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/ui/contract.test.mjs`<br>+2 more |
+| listISPs | GET | `/api/isps` | `internal/center/apicontract/contract_test.go`<br>`internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/e2e/suites/settings.mjs`<br>+3 more |
 | compareISPs | GET | `/api/isps/compare` | `internal/center/apicontract/contract_test.go`<br>`internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/ui-fixtures/server.mjs` |
-| getISP | GET | `/api/isps/{id}` | `internal/center/apicontract/contract_test.go`<br>`internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/ui/smoke.mjs`<br>+1 more |
+| getISP | GET | `/api/isps/{id}` | `internal/center/apicontract/contract_test.go`<br>`internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/e2e/suites/settings.mjs`<br>+2 more |
 | getISPTrend | GET | `/api/isps/{id}/trend` | `internal/center/apicontract/contract_test.go`<br>`internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/ui/smoke.mjs` |
-| listISPPlans | GET | `/api/isps/{id}/plans` | `internal/center/apicontract/contract_test.go`<br>`internal/center/server/ownerisp_test.go` |
-| createISPPlan | POST | `/api/isps/{id}/plans` | `internal/center/server/ownerisp_test.go` |
+| listISPPlans | GET | `/api/isps/{id}/plans` | `internal/center/apicontract/contract_test.go`<br>`internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/settings.mjs` |
+| createISPPlan | POST | `/api/isps/{id}/plans` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/settings.mjs` |
 | updateISPPlan | PUT | `/api/isps/{id}/plans/{planId}` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs` |
 | deleteISPPlan | DELETE | `/api/isps/{id}/plans/{planId}` | `internal/center/server/ownerisp_test.go` |
 | getSummary | GET | `/api/stats/summary` | `internal/center/server/httpx_test.go`<br>`internal/center/server/ownerisp_test.go`<br>`internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>+5 more |
