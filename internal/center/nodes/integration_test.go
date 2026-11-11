@@ -337,6 +337,53 @@ WHERE s.node_id=$1`, response.Node.ID).Scan(&legacyInterval, &legacyOffset, &eng
 	}
 }
 
+func TestCreateNodePersistsISPPlanSpeedProvenanceIntegration(t *testing.T) {
+	pool, ctx := openIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	const ispID = "31000000-0000-4000-8000-000000000001"
+	const planID = "32000000-0000-4000-8000-000000000001"
+	if _, err := pool.Exec(ctx, `INSERT INTO isps(id,asn,organisation,name) VALUES ($1,64530,'Plan Creation ISP','Plan Creation ISP')`, ispID); err != nil {
+		t.Fatal("seed plan ISP:", err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO isp_plans(id,isp_id,name,advertised_down_mbps,advertised_up_mbps) VALUES ($1,$2,'Fiber',500,100)`, planID, ispID); err != nil {
+		t.Fatal("seed plan:", err)
+	}
+	service := NewService(pool, bytes.Repeat([]byte{0x6c}, 32))
+	for _, tc := range []struct {
+		name                   string
+		down, up               float64
+		wantDown, wantUp       float64
+		downDefault, upDefault bool
+	}{{"plan defaults", 0, 0, 500, 100, true, true}, {"explicit equal download", 500, 0, 500, 100, false, true}, {"explicit speeds", 650, 80, 650, 80, false, false}} {
+		createPlanDefaultsNode(t, ctx, pool, service, planID, tc.name, tc.down, tc.up, tc.wantDown, tc.wantUp, tc.downDefault, tc.upDefault)
+	}
+}
+
+func createPlanDefaultsNode(t *testing.T, ctx context.Context, pool *pgxpool.Pool, service *Service, planID, name string, down, up, wantDown, wantUp float64, downDefault, upDefault bool) {
+	t.Helper()
+	input := Input{Name: name, ISPPlanID: &planID, ExpectedDown: down, ExpectedUp: up, Enabled: true, Threads: 4}
+	created, replay, err := service.CreateNode(ctx, input, "owner:plan-provenance", "create-"+name)
+	if err != nil || replay {
+		t.Fatalf("create plan node %q: replay=%v err=%v", name, replay, err)
+	}
+	var response struct {
+		Node struct {
+			ID string `json:"id"`
+		} `json:"node"`
+	}
+	if err := json.Unmarshal(created, &response); err != nil || !validUUID(response.Node.ID) {
+		t.Fatalf("decode created plan node %q: response=%s err=%v", name, created, err)
+	}
+	var gotDown, gotUp float64
+	var gotDownDefault, gotUpDefault bool
+	err = pool.QueryRow(ctx, `SELECT expected_down_mbps,expected_up_mbps,expected_down_isp_default,expected_up_isp_default FROM nodes WHERE id=$1`, response.Node.ID).Scan(&gotDown, &gotUp, &gotDownDefault, &gotUpDefault)
+	if err != nil || gotDown != wantDown || gotUp != wantUp || gotDownDefault != downDefault || gotUpDefault != upDefault {
+		t.Fatalf("created plan node %q state=%v/%v:%v/%v want %v/%v:%v/%v err=%v", name, gotDown, gotUp, gotDownDefault, gotUpDefault, wantDown, wantUp, downDefault, upDefault, err)
+	}
+}
+
 func testHash(value string) string {
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])

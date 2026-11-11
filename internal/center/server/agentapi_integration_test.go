@@ -362,8 +362,8 @@ func TestAgentIngestionLoad1000PerMinuteIntegration(t *testing.T) {
 	t.Setenv("SPEEDTEST_GEO_DBIP_AUTO_UPDATE", "false")
 	process := exec.CommandContext(ctx, binary)
 	process.Dir = root
-	process.Stdout = io.Discard
-	process.Stderr = io.Discard
+	process.Stdout = os.Stdout
+	process.Stderr = os.Stderr
 	if err = process.Start(); err != nil {
 		t.Fatal(err)
 	}

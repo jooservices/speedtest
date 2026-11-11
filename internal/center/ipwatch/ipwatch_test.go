@@ -27,7 +27,13 @@ func (r row) Scan(dest ...any) error {
 		return r.err
 	}
 	for i, v := range r.values {
-		reflect.ValueOf(dest[i]).Elem().Set(reflect.ValueOf(v))
+		target := reflect.ValueOf(dest[i]).Elem()
+		value := reflect.ValueOf(v)
+		if !value.IsValid() {
+			target.SetZero()
+			continue
+		}
+		target.Set(value)
 	}
 	return nil
 }
@@ -81,9 +87,11 @@ func testTransaction(before, after *position, cached bool) *transaction {
 		}
 	}
 	lookedUpAt := time.Unix(1, 0)
-	tx.rows = append(tx.rows, row{values: []any{cached}})
-	tx.rows = append(tx.rows, row{values: []any{[]byte(`{"city":"fixture"}`), "fixture", cached, lookedUpAt}})
-	tx.rows = append(tx.rows, row{values: []any{[]byte(`{"city":"fixture"}`), "fixture", cached, lookedUpAt}})
+	tx.rows = append(tx.rows, row{values: []any{[]byte(`{}`), cached, cached}})
+	if !cached {
+		tx.rows = append(tx.rows, row{values: []any{[]byte(`{}`), "", false, lookedUpAt}})
+		tx.rows = append(tx.rows, row{values: []any{[]byte(`{}`), "", false, lookedUpAt}})
+	}
 	return tx
 }
 func hookResult() agentapi.Result {

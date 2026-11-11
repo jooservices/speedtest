@@ -22,6 +22,12 @@ func (s *Store) query(ctx context.Context, q Query, sql string, args ...any) (pg
 		}
 	}
 	predicate := fmt.Sprintf("r.node_id = n.id AND r.engine = COALESCE(NULLIF($%d::text,''),n.primary_engine)", index+1)
+	args = append(args, q.Engine)
+	index++
+	if q.ISPsSet {
+		predicate += fmt.Sprintf(" AND r.isp_id = ANY($%d::uuid[])", index+1)
+		args = append(args, q.ISPIDs)
+	}
 	sql = strings.ReplaceAll(sql, "r.node_id = n.id", predicate)
-	return s.DB.Query(ctx, sql, append(args, q.Engine)...)
+	return s.DB.Query(ctx, sql, args...)
 }
