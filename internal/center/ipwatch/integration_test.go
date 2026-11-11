@@ -289,12 +289,7 @@ func TestMigrationBackfillAndRollbackIntegration(t *testing.T) {
 	for i := range 8 {
 		save(t, s, nodeA, result(i+1, i, fmt.Sprintf("203.0.113.%d", i%2+1)))
 	}
-	for range 11 { // Roll back through the alert engine; the next step removes IP history.
-		if err := db.Migrate(t.Context(), p, "down"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Migrate(t.Context(), p, "down"); err != nil {
+	if err := db.MigrateDownTo(t.Context(), p, 3); err != nil { // the version-3 schema
 		t.Fatal(err)
 	}
 	// Populate version-3 data, including an obsolete history row, as a pre-upgrade fixture.
