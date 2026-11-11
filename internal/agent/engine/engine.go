@@ -77,6 +77,7 @@ const (
 	Timeout           ErrorClass = "timeout"
 	NoRoute           ErrorClass = "no_route"
 	ServerUnavailable ErrorClass = "server_unavailable"
+	RateLimited       ErrorClass = "rate_limited"
 	License           ErrorClass = "license"
 	BinaryMissing     ErrorClass = "binary_missing"
 	Canceled          ErrorClass = "canceled"

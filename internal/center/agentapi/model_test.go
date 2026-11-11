@@ -31,6 +31,30 @@ func TestResultValidation(t *testing.T) {
 			t.Fatalf("%s: %+v %v", status, result, err)
 		}
 	}
+	for _, item := range []struct {
+		status string
+		class  string
+		valid  bool
+	}{
+		{status: "ok", class: "other", valid: true},
+		{status: "degraded", class: "other", valid: true},
+		{status: "failed", class: "rate_limited", valid: true},
+		{status: "ok", class: "rate_limited"},
+		{status: "degraded", class: "timeout"},
+	} {
+		data := change(validResult, "status", item.status)
+		data = change(string(data), "failureClass", item.class)
+		if item.status == "failed" {
+			data = change(string(data), "error", "Too many requests")
+			for _, key := range []string{"down", "up", "ping", "serverId"} {
+				data = change(string(data), key, nil)
+			}
+		}
+		_, err := ParseResult(data)
+		if (err == nil) != item.valid {
+			t.Fatalf("status=%s class=%s: valid=%t err=%v", item.status, item.class, item.valid, err)
+		}
+	}
 	full := validResult[:len(validResult)-1] + `,"raw":{"nested":[1,true]},"loadedDown":{"low":null,"iqm":4,"high":10},"loadedUp":{"low":1,"iqm":2,"high":3},"server":{"id":1,"name":"a","city":"b","sponsor":"c","host":"test.example"},"engineISP":"isp","engineResultId":"engine-1","engineResultUrl":"https://example.test/result/1","engineIp":"2001:db8::1","warnings":["IP mismatch"]}`
 	if _, err := ParseResult([]byte(full)); err != nil {
 		t.Fatal(err)
@@ -95,6 +119,28 @@ func TestResultSelectionSnapshotDecode(t *testing.T) {
 		t.Fatalf("accepted pin without a known measurement selection: %v", err)
 	}
 }
+
+func TestParseResultPreservesFailureClassPresence(t *testing.T) {
+	data := change(validResult, "status", "failed")
+	data = change(string(data), "error", "speedtest: timeout")
+	for _, key := range []string{"down", "up", "ping", "jitter", "dLat", "uLat", "loss", "serverId", "ip", "server"} {
+		data = change(string(data), key, nil)
+	}
+	legacy, err := ParseResult(data)
+	if err != nil || !legacy.classOmitted || legacy.FailureClass != "timeout" {
+		t.Fatalf("omitted class = %+v, %v", legacy, err)
+	}
+	explicit, err := ParseResult(change(string(data), "failureClass", "timeout"))
+	if err != nil || explicit.classOmitted || explicit.FailureClass != "timeout" {
+		t.Fatalf("explicit class = %+v, %v", explicit, err)
+	}
+	for _, value := range []any{"", nil} {
+		if _, err := ParseResult(change(string(data), "failureClass", value)); !errors.Is(err, ErrInvalid) {
+			t.Errorf("accepted explicit empty class %v: %v", value, err)
+		}
+	}
+}
+
 func TestHeartbeatValidation(t *testing.T) {
 	valid := `{"agent":"1.0","uptime":0,"lastTest":null}`
 	for _, data := range []string{valid, `{"agent":"","uptime":12,"lastTest":"2026-11-03T00:00:00Z","updateResult":{"version":"v1","status":"succeeded","ts":"2026-11-03T00:00:00Z","error":null}}`} {

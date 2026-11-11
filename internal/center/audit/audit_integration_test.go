@@ -97,15 +97,19 @@ func TestStoreRecordsAndListsNewestFirst(t *testing.T) {
 
 func TestAuthenticationSourceMigrationRollsBackAndReapplies(t *testing.T) {
 	pool, ctx := openPool(t)
-	if err := db.Migrate(ctx, pool, "down"); err != nil {
-		t.Fatal("roll back audit authentication source migration:", err)
+	for range 2 { // Roll back the later server-catalog migration before 00020.
+		if err := db.Migrate(ctx, pool, "down"); err != nil {
+			t.Fatal("roll back audit authentication source migration:", err)
+		}
 	}
 	var columns int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_log' AND column_name IN ('auth_method','credential_id')`).Scan(&columns); err != nil || columns != 0 {
 		t.Fatalf("rolled-back audit columns = %d, error = %v", columns, err)
 	}
-	if err := db.Migrate(ctx, pool, "up"); err != nil {
-		t.Fatal("reapply audit authentication source migration:", err)
+	for range 2 {
+		if err := db.Migrate(ctx, pool, "up"); err != nil {
+			t.Fatal("reapply audit authentication source migration:", err)
+		}
 	}
 	store := &Store{DB: pool}
 	entry := Entry{Actor: "owner@example.com", Action: "node.update"}
