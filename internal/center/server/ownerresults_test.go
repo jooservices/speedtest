@@ -164,11 +164,11 @@ func TestOwnerResultsExportCSV(t *testing.T) {
 	if strings.Join(records[0], ",") != strings.Join(csvHeader, ",") {
 		t.Fatalf("header = %v", records[0])
 	}
-	if got := strings.Join(records[1], "|"); got != "2026-11-03T01:00:00Z|VM1 Home|ok|250.5|90.25|12|1.5|0|20.5|25|Viettel - Hanoi|203.0.113.5||" {
+	if got := strings.Join(records[1], "|"); got != "2026-11-03T01:00:00Z|VM1 Home|ok|250.5|90.25|12|1.5|0|20.5|25|Viettel - Hanoi|203.0.113.5||other|" {
 		t.Fatalf("row 1 = %s", got)
 	}
 	second := records[2]
-	if !strings.HasPrefix(second[1], "'=cmd") || second[12] != "'@SUM(1,2), \"quoted\"\nnext" || second[3] != "" || second[11] != "" || second[10] != "Da Nang" {
+	if !strings.HasPrefix(second[1], "'=cmd") || second[12] != "'@SUM(1,2), \"quoted\"\nnext" || second[13] != "other" || second[3] != "" || second[11] != "" || second[10] != "Da Nang" {
 		t.Fatalf("row 2 must neutralise formulas and keep quoting: %q", second)
 	}
 }
