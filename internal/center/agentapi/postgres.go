@@ -85,7 +85,8 @@ const resultReplayQuery = `SELECT
 	manual IS NOT DISTINCT FROM $19 AND raw IS NOT DISTINCT FROM $20 AND loaded_down IS NOT DISTINCT FROM $21 AND
 	loaded_up IS NOT DISTINCT FROM $22 AND server IS NOT DISTINCT FROM $23 AND engine_isp IS NOT DISTINCT FROM $24 AND
 	engine_result_id IS NOT DISTINCT FROM $25 AND engine_result_url IS NOT DISTINCT FROM $26 AND engine_ip IS NOT DISTINCT FROM $27 AND
-	warnings IS NOT DISTINCT FROM $28 AND engine IS NOT DISTINCT FROM $29 AND failure_class IS NOT DISTINCT FROM $30
+	warnings IS NOT DISTINCT FROM $28 AND engine IS NOT DISTINCT FROM $29 AND
+	(failure_class IS NOT DISTINCT FROM $30 OR (failure_class = 'other' AND $31::boolean))
 FROM results WHERE id=$1`
 
 func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool, error) {
@@ -113,7 +114,8 @@ func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool,
 		var identical bool
 		// A new READ COMMITTED statement sees a concurrent insert after ON CONFLICT
 		// waits for it. Compare every stored field, never return foreign row data.
-		err = tx.QueryRow(ctx, resultReplayQuery, args...).Scan(&identical)
+		replayArgs := append(args, r.classOmitted)
+		err = tx.QueryRow(ctx, resultReplayQuery, replayArgs...).Scan(&identical)
 		if err != nil {
 			return false, err
 		}
