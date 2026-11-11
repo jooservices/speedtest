@@ -193,16 +193,6 @@ type Outcome struct {
 	Problem *Problem `json:"problem"`
 }
 
-func invalidResultID(item []byte) *string {
-	var fields map[string]json.RawMessage
-	var identity string
-	if json.Unmarshal(item, &fields) != nil || json.Unmarshal(fields["id"], &identity) != nil || !UUID(identity) {
-		return nil
-	}
-	identity = strings.ToLower(identity)
-	return &identity
-}
-
 func (h Handler) results(w http.ResponseWriter, r *http.Request, node string) {
 	data, ok := body(w, r, 8<<20)
 	if !ok {
@@ -223,9 +213,14 @@ func (h Handler) results(w http.ResponseWriter, r *http.Request, node string) {
 	for index, item := range batch.Results {
 		result, err := ParseResult(item)
 		outcome := Outcome{Index: index, Outcome: "rejected", Status: 422}
-		if err == nil {
-			id := result.ID
+		// A valid UUID survives unrelated item validation errors.
+		var fields map[string]json.RawMessage
+		var identity string
+		if json.Unmarshal(item, &fields) == nil && json.Unmarshal(fields["id"], &identity) == nil && UUID(identity) {
+			id := strings.ToLower(identity)
 			outcome.ID = &id
+		}
+		if err == nil {
 			var duplicate bool
 			duplicate, err = h.Store.SaveResult(r.Context(), node, result)
 			switch {
@@ -243,9 +238,6 @@ func (h Handler) results(w http.ResponseWriter, r *http.Request, node string) {
 				storeError(w, err)
 				return
 			}
-		} else {
-			// Keep valid IDs on rejected items without decoding the success path twice.
-			outcome.ID = invalidResultID(item)
 		}
 		if outcome.Outcome == "rejected" {
 			p := problem(outcome.Status, w.Header().Get("X-Request-ID"))
