@@ -31,6 +31,37 @@ Login failures use the same 401 problem for an unknown email
 and an incorrect password. New passwords must contain at least 12 Unicode
 characters and at most 1024 UTF-8 bytes.
 
+Owner API access tokens are separate named credentials created and revoked at
+`/api/access-tokens` from an authenticated session. A token is returned only in
+its creation response; PostgreSQL stores its SHA-256 digest, and token metadata
+never includes the bearer value or digest. Tokens can expire and successful
+uses update `lastUsedAt`. Revocation blocks new requests immediately; an open
+installation event stream closes at its next 10-second credential check. Keep
+the bearer value in a secret store and send it as
+`Authorization: Bearer <token>` over HTTPS. Bearer requests do not need the
+session cookie, Origin or CSRF header.
+The per-token request bucket defaults to 120 requests per minute with a burst
+of 20, configured by `SPEEDTEST_API_TOKEN_REQUESTS_PER_MINUTE`.
+
+The scopes are `read` (safe owner operations), `read-write` (read plus
+non-destructive changes), and `full` (all operations, including destructive
+changes). Every operation declares its required scope in
+`docs/openapi.yaml` using `x-access-token-scope`; a token must meet that
+operation's scope before its handler runs. Agent credentials and auth/session
+endpoints are not API-token operations. Creating and revoking a token creates a
+safe audit entry. Audit rows retain the authentication method, the non-secret
+credential ID for bearer writes, and the created token ID as the creation
+target, so operators can distinguish tokens owned by the same account. MCP
+tool writes retain the incoming client address using the same trusted-proxy
+rules as REST writes. Access logs omit request headers and query data; bearer
+values are never written to the audit log or application logs.
+
+The Streamable HTTP MCP endpoint is `/mcp`. Its tools are generated from the
+OpenAPI operations marked with `x-mcp-tool`, including their input schemas and
+scope requirements; it does not return integration secrets. The separate
+`speedtest-mcp` executable exposes the same remote tools over stdio for MCP
+clients. See [MCP setup and tool reference](mcp.md).
+
 Run `go run ./cmd/center seed-admin` to ensure the documented default owner is
 present in local or test environments. `APP_ENV` must be `local` or `test`; the
 command refuses staging, production and unknown values. It inserts only when the
@@ -320,11 +351,7 @@ and `speedtest_bandwidth_budget_ratio{scope,node_id}` application gauges.
 These are scrape-time values from the current UTC month. System alert rules and
 notification infrastructure are maintained outside the application.
 
-The read-only MCP server exposes the same query as the `get_usage` tool over
-stdio. Run `go run ./cmd/mcp` from the center's working directory; it reads
-`SPEEDTEST_DB_*` from `.env` and verifies the local/test database ownership
-marker before connecting. The tool accepts optional `node`, `engine`, `from`,
-`to` and `group` arguments with the same meanings and limits as `GET /api/usage`.
+The same query is available to MCP clients as the read-only `get_usage` tool (marked `x-mcp-tool` in `docs/openapi.yaml`; see the MCP section for the HTTP and stdio servers). It accepts optional `node`, `engine`, `from`, `to` and `group` arguments with the same meanings and limits as `GET /api/usage`.
 
 Distribution accepts `bins` from 1 through 100 (default 15); the preview's
 current chart uses 12, so pass `bins=12` when comparing its histogram directly.
@@ -336,9 +363,13 @@ Settings defaults match the preview: dark, 7d, auto units, browser timezone,
 24-hour clock, one decimal, 365-day retention (0=forever), GeoLite2 + ip-api fallback,
 weekly updates, Ookla/auto server/4 threads, stagger on/maxConcurrent=1, empty
 quiet hours, email enabled to `ops@example.com`, other channels off/empty.
-Public center URL comes from deployment `.env`, not the demo URL. New nodes
-start at interval=60/offset=0, enabled, threads=4, server=auto. Schedule PUT clamps
-offset after interval changes; effective quiet timezone is explicit. Usage uses
+Public center URL comes from deployment `.env`, not the demo URL. `POST /api/nodes`
+does not accept an interval; its response and the new node's Ookla schedule use
+interval=60/offset=0, enabled, threads=4, server=auto. Newly enabled engine
+schedules also default to 60 when interval is omitted or zero. Legacy schedule
+PUT fields remain required. The 60-minute migration changes only the schedules
+column default, never existing rows; rollback restores that default to 30.
+Schedule PUT clamps offset after interval changes; effective quiet timezone is explicit. Usage uses
 up to 200 recent nonfailed results × tests/day, month=30 days; paused/no history=0.
 The UI should display null measurements/location as unavailable, not zero.
 

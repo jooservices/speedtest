@@ -86,7 +86,7 @@
     var slot = 1; while (used.indexOf(slot) >= 0) slot++;
     var id = 'n' + (Math.max.apply(null, state.nodes.map(function (x) { return +x.id.slice(1); }).concat([0])) + 1);
     var node = Object.assign({
-      id: id, colorSlot: slot, interval: 60, offset: state.nodes.length * 3 % 60, threads: 4, server: 'auto', enabled: true,
+      id: id, colorSlot: slot, interval: 60, offset: 0, threads: 4, server: 'auto', enabled: true,
       agent: '1.4.2', note: '', createdAt: Date.now(), pref: [1001, 2001],
       profile: { effD: .88, effU: .86, cong: .15, ping: 13, jit: 2, loss: .05 },
       ipModel: { kind: 'dynamic', prefix: '198.51.100', segSlots: 7 * 48, off: 3 + state.nodes.length * 17 }

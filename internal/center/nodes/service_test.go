@@ -445,6 +445,11 @@ func TestCreateNodeTransactionSuccessAndDatabaseBoundaries(t *testing.T) {
 					return scriptedRow{err: &pgconn.PgError{Code: "23505"}}
 				}
 				return scriptedRow{values: []any{testTime()}}
+			case strings.Contains(query, "WITH legacy AS"):
+				if fail == "schedule" {
+					return scriptedRow{err: errors.New("schedule insert failed")}
+				}
+				return scriptedRow{values: []any{60, 0}}
 			case strings.Contains(query, "INSERT INTO node_credentials"):
 				if fail == "enrollment" {
 					return scriptedRow{err: &pgconn.PgError{Code: "23505"}}
@@ -453,12 +458,6 @@ func TestCreateNodeTransactionSuccessAndDatabaseBoundaries(t *testing.T) {
 			default:
 				return scriptedRow{err: fmt.Errorf("unexpected create query: %s", query)}
 			}
-		}
-		tx.exec = func(query string, _ ...any) error {
-			if fail == "schedule" && strings.Contains(query, "INSERT INTO schedules") {
-				return errors.New("schedule insert failed")
-			}
-			return nil
 		}
 		return &scriptedDatabase{tx: tx}
 	}
@@ -469,9 +468,18 @@ func TestCreateNodeTransactionSuccessAndDatabaseBoundaries(t *testing.T) {
 		if err != nil || replay {
 			t.Fatalf("CreateNode() = %s, %t, %v", response, replay, err)
 		}
-		var issued map[string]any
-		if err := json.Unmarshal(response, &issued); err != nil || issued["token"] == nil {
+		var issued struct {
+			Token string `json:"token"`
+			Node  struct {
+				Interval int `json:"interval"`
+				Offset   int `json:"offset"`
+			} `json:"node"`
+		}
+		if err := json.Unmarshal(response, &issued); err != nil || issued.Token == "" {
 			t.Fatalf("issued response = %s, %v", response, err)
+		}
+		if issued.Node.Interval != 60 || issued.Node.Offset != 0 {
+			t.Fatalf("created node schedule = %d:%d, want inserted 60:0", issued.Node.Interval, issued.Node.Offset)
 		}
 	})
 	for _, test := range []struct {

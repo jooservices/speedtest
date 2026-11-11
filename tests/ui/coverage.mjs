@@ -11,7 +11,7 @@ const directory = mkdtempSync(resolve('.tmp/ui-v8-'));
 const targets = ['ui/assets/js/api.js', 'ui/assets/js/store.js', 'ui/assets/js/seed.js'].map(file => resolve(file));
 try {
   const tests = readdirSync('tests/ui').filter(file => file.endsWith('.test.mjs')).map(file => 'tests/ui/' + file);
-  const run = spawnSync(process.execPath, ['--test', ...tests], { stdio: 'inherit', env: { ...process.env, NODE_V8_COVERAGE: directory } });
+  const run = spawnSync(process.execPath, ['--test', ...tests], { stdio: 'inherit', env: { ...process.env, NODE_V8_COVERAGE: directory, UI_TEST_PORT: '0' } });
   if (run.status !== 0) process.exitCode = run.status || 1;
   const map = istanbul.createCoverageMap({});
   for (const name of readdirSync(directory)) {

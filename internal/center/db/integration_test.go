@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/shared/testenv"
+
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
@@ -28,9 +30,7 @@ func testPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	if err != nil {
 		t.Fatal("a configured worktree .env is required")
 	}
-	for k, v := range values {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid test configuration")
@@ -88,11 +88,11 @@ func TestMigrations(t *testing.T) {
 func verifyRequiredTables(t *testing.T, pool *pgxpool.Pool, ctx context.Context) {
 	t.Helper()
 	var got int
-	tables := []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor", "usage_monthly_totals", "usage_budgets", "usage_budget_events", "usage_budget_overrides"}
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", tables).Scan(&got); err != nil || got != 31 {
-		t.Fatalf("required tables: got %d want 31: %v", got, err)
+	tables := []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor", "api_access_tokens", "usage_monthly_totals", "usage_budgets", "usage_budget_events", "usage_budget_overrides"}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", tables).Scan(&got); err != nil || got != 32 {
+		t.Fatalf("required tables: got %d want 32: %v", got, err)
 	}
-	t.Log("PASS: 31 required tables created by embedded migrations")
+	t.Log("PASS: 32 required tables created by embedded migrations")
 }
 
 func verifyMigrationTypes(t *testing.T, pool *pgxpool.Pool, ctx context.Context) {
@@ -197,8 +197,9 @@ INSERT INTO notification_deliveries(id,event_id,channel) VALUES ('00000000-0000-
 INSERT INTO settings(key,value) VALUES ('display','{"theme":"dark"}');
 INSERT INTO settings(key,secret_ciphertext) VALUES ('integration',decode('aabb','hex'));
 INSERT INTO api_idempotency(principal,operation,key_hash,request_hash,response_ciphertext,expires_at) VALUES ('owner','create-node',repeat('a',64),repeat('b',64),decode(repeat('00',28),'hex'),now()+interval '1 hour');
+INSERT INTO api_access_tokens(id,user_id,name,scope,token_hash) VALUES ('00000000-0000-4000-8000-000000000017','00000000-0000-4000-8000-000000000010','rollback-fixture','read',decode(repeat('aa',32),'hex'));
 INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000-8000-000000000015',id,'run_now','00000000-0000-4000-8000-000000000002' FROM nodes;`)
-	for range 11 {
+	for range 14 {
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(err)
 		}
@@ -238,7 +239,7 @@ func verifyCancelledMigration(t *testing.T, pool *pgxpool.Pool) {
 
 func verifyTransactionalRollback(t *testing.T, pool *pgxpool.Pool, ctx context.Context) {
 	t.Helper()
-	for range 10 {
+	for range 13 {
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(err)
 		}
@@ -253,4 +254,58 @@ func verifyTransactionalRollback(t *testing.T, pool *pgxpool.Pool, ctx context.C
 		t.Fatal("failed rollback was not atomic")
 	}
 	exec(t, ctx, pool, "DROP VIEW rollback_blocker")
+}
+
+func TestScheduleDefaultMigrationPreservesIntervalsIntegration(t *testing.T) {
+	pool, ctx := testPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	const nodeIDs = "'00000000-0000-4000-8000-000000000101','00000000-0000-4000-8000-000000000102','00000000-0000-4000-8000-000000000103'"
+	exec(t, ctx, pool, "INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) SELECT id,'schedule-'||row_number() OVER (),100,100 FROM unnest(ARRAY["+nodeIDs+"]::uuid[]) AS items(id)")
+	exec(t, ctx, pool, `INSERT INTO schedules(node_id,interval_minutes,offset_minutes)
+VALUES ('00000000-0000-4000-8000-000000000101',5,0),
+       ('00000000-0000-4000-8000-000000000102',30,7),
+       ('00000000-0000-4000-8000-000000000103',60,11)`)
+	for range 4 { // Roll back usage, audit-source, API-token and 60-minute-default migrations.
+		if err := db.Migrate(ctx, pool, "down"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertScheduleIntervals(t, ctx, pool, "5:0,30:7,60:11")
+	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps)
+VALUES ('00000000-0000-4000-8000-000000000104','before-upgrade',100,100);
+INSERT INTO schedules(node_id) VALUES ('00000000-0000-4000-8000-000000000104')`)
+	assertScheduleInterval(t, ctx, pool, "00000000-0000-4000-8000-000000000104", 30)
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	assertScheduleIntervals(t, ctx, pool, "5:0,30:7,60:11,30:0")
+	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps)
+VALUES ('00000000-0000-4000-8000-000000000105','after-upgrade',100,100);
+INSERT INTO schedules(node_id) VALUES ('00000000-0000-4000-8000-000000000105')`)
+	assertScheduleInterval(t, ctx, pool, "00000000-0000-4000-8000-000000000105", 60)
+	assertScheduleIntervals(t, ctx, pool, "5:0,30:7,60:11,30:0,60:0")
+	t.Log("PASS: migration up/down preserves 5/30/60-minute rows; rollback default is 30; upgraded default is 60")
+}
+
+func assertScheduleIntervals(t *testing.T, ctx context.Context, pool *pgxpool.Pool, want string) {
+	t.Helper()
+	var got string
+	err := pool.QueryRow(ctx, `SELECT string_agg(interval_minutes||':'||offset_minutes,',' ORDER BY node_id)
+FROM schedules WHERE node_id::text >= '00000000-0000-4000-8000-000000000101'
+  AND node_id::text <= '00000000-0000-4000-8000-000000000105'`).Scan(&got)
+	if err != nil || got != want {
+		t.Fatalf("schedule intervals = %q, want %q: %v", got, want, err)
+	}
+}
+
+func assertScheduleInterval(t *testing.T, ctx context.Context, pool *pgxpool.Pool, nodeID string, want int) {
+	t.Helper()
+	var got int
+	if err := pool.QueryRow(ctx, "SELECT interval_minutes FROM schedules WHERE node_id=$1", nodeID).Scan(&got); err != nil || got != want {
+		t.Fatalf("schedule default for %s = %d, want %d: %v", nodeID, got, want, err)
+	}
 }

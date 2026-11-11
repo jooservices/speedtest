@@ -64,7 +64,7 @@ func verifyNullableResultRollback(t *testing.T, pool *pgxpool.Pool, ctx context.
 	t.Helper()
 	var null bool
 	// Roll back usage budgets, engine schedules, two-factor, audit log, installer, delivery, alert engine and history, then refuse to lose the nullable-IP contract.
-	for _, name := range []string{"bandwidth usage budgets", "engine schedules", "two-factor", "audit log", "SSH installer", "notification deliveries", "alert engine", "history"} {
+	for _, name := range []string{"bandwidth usage budgets", "Audit authentication source", "API access tokens", "60-minute schedule default", "engine schedules", "two-factor", "audit log", "SSH installer", "notification deliveries", "alert engine", "history"} {
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(name+" migration rollback failed", err)
 		}
