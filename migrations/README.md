@@ -17,14 +17,14 @@ installation limit per node. It stores no SSH credentials or enrollment tokens.
 `00010_engine_schedules.sql` adds per-engine schedules and result identity;
 existing nodes and results backfill to Ookla. Develop migrations 19–22 add API
 tokens, audit authentication metadata and ISP management. JOOST-78 migrations
-start after that baseline: `00023_alert_event_payload.sql` adds event keys and
-placeholder payloads to alert history; `00024_notification_events.sql` adds
-event overrides, per-node switches and templates; `00026_alert_streak_timestamps.sql`
+start after that baseline: `00026_alert_event_payload.sql` adds event keys and
+placeholder payloads to alert history; `00027_notification_events.sql` adds
+event overrides, per-node switches and templates; `00028_alert_streak_timestamps.sql`
 adds event thresholds, cooldowns, repeat intervals and maintenance windows;
-`00027_notification_defaults.sql` seeds missing default rules and quiet-hour
-defaults without replacing owner rules; `00028_system_notification_events.sql`
-permits events without a node; `00029_notification_escalation.sql` records
-delivery escalation time; and `00030_notification_auth_activity.sql` stores
+`00029_notification_defaults.sql` seeds missing default rules and quiet-hour
+defaults without replacing owner rules; `00030_system_notification_events.sql`
+permits events without a node; `00031_notification_escalation.sql` records
+delivery escalation time; and `00032_notification_auth_activity.sql` stores
 bounded login-failure counts and new sign-in IPs without retaining credentials.
 Upgrading from develop migration 22 applies versions 23–29 in order. These
 changes are additive; the 1.0.0 binary continues to use its existing tables and

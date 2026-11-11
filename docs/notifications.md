@@ -41,7 +41,7 @@ limit. A failed-test message includes its classified failure reason. Recovery
 messages include the alert onset in the owner's time zone and the elapsed time.
 The node-online event reports the offline duration.
 
-Bandwidth budget events use the event's `monthly_gb` threshold. Set a positive
+Bandwidth budget events use the event's `monthly_gb` threshold and its `percent` threshold (the share of the budget that raises the event; default 80 for the first event and 100 for the second, so any share can be chosen). Set a positive
 value in Settings to enable each budget calculation; a zero or missing budget
 does not emit a budget event. Usage is derived from successful/degraded result
 byte counts per node and engine in the current calendar month. `bandwidth.interval_widened`

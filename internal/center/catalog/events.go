@@ -68,6 +68,9 @@ func qualityBody(metric string) string {
 		"ping":     "Ping {value} ms vs limit {threshold}. ",
 		"jitter":   "Jitter {value} ms vs limit {threshold}. ",
 		"loss":     "Packet loss {value}% vs limit {threshold}. ",
+		// Recovery and the median drop have no single trigger metric: say the value against the expected value and its percentage.
+		"":     "Download {download} vs expected {expected} ({pct}% of expected). ",
+		"drop": "Speed {value}% of the {expected} (alert below {threshold}%). ",
 	}
 	return trigger[metric] + "Download {download} (limit {download_limit}, ok={download_ok}); upload {upload} (limit {upload_limit}, ok={upload_ok}); ping {ping} ms (limit {ping_limit}, ok={ping_ok}); jitter {jitter} ms (limit {jitter_limit}, ok={jitter_ok}); loss {loss}% (limit {loss_limit}, ok={loss_ok})."
 }
@@ -171,7 +174,7 @@ var events = []Event{
 		Key: "quality.drop_vs_median", Category: "quality", Title: "Drop versus 7-day median",
 		Description: "Speed dropped against the node's 7-day median.", Enabled: false, Severity: "warn", Thresholds: map[string]float64{"drop_pct": 30},
 		Channels: []string{"telegram"}, Placeholders: basePlaceholders(), EngineScoped: true,
-		Templates: defaultTemplates("Drop versus median", qualityBody("")),
+		Templates: defaultTemplates("Drop versus median", qualityBody("drop")),
 	},
 	{
 		Key: "quality.recovered", Category: "quality", Title: "Speed recovered",
@@ -199,13 +202,13 @@ var events = []Event{
 	},
 	{
 		Key: "bandwidth.budget_80", Category: "bandwidth", Title: "Bandwidth budget 80%",
-		Description: "Estimated monthly bandwidth reached 80%.", Enabled: true, Severity: "warn", Thresholds: map[string]float64{"monthly_gb": 0},
+		Description: "Bandwidth used this month reached the configured share of the monthly budget (default 80%).", Enabled: true, Severity: "warn", Thresholds: map[string]float64{"monthly_gb": 0, "percent": 80},
 		Channels: []string{"telegram"}, Placeholders: basePlaceholders(),
 		Templates: defaultTemplates("Bandwidth budget 80%", "Bandwidth usage is {value} GB of {expected} GB ({pct}%)."),
 	},
 	{
 		Key: "bandwidth.budget_100", Category: "bandwidth", Title: "Bandwidth budget 100%",
-		Description: "Estimated monthly bandwidth reached 100%.", Enabled: true, Severity: "crit", Thresholds: map[string]float64{"monthly_gb": 0},
+		Description: "Bandwidth used this month reached the configured share of the monthly budget (default 100%).", Enabled: true, Severity: "crit", Thresholds: map[string]float64{"monthly_gb": 0, "percent": 100},
 		Channels: []string{"telegram"}, Placeholders: basePlaceholders(),
 		Templates: defaultTemplates("Bandwidth budget 100%", "Bandwidth usage is {value} GB of {expected} GB ({pct}%)."),
 	},

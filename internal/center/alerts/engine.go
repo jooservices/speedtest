@@ -283,7 +283,7 @@ func (s *Store) emitRuleTransition(ctx context.Context, tx pgx.Tx, rule Rule, no
 		if sent {
 			lastNotified = timePointer(ts)
 		}
-	} else if state.active && hit && config.RepeatSeconds > 0 && shouldRepeatNotification(ts, lastNotified, config.RepeatSeconds) {
+	} else if state.active && hit && config.RepeatSeconds > 0 && shouldRepeatNotification(ts, lastNotified, state.streakStartedAt, config.RepeatSeconds) {
 		allowDelivery := shouldOpenNotification(ts, lastNotified, config.CooldownSeconds)
 		created, sent, err := s.insertEvent(ctx, tx, rule, node, ts, resultID, ruleText(rule), state.streakStartedAt, allowDelivery)
 		if err != nil {
@@ -324,8 +324,14 @@ func shouldOpenNotification(ts time.Time, last *time.Time, cooldownSeconds int) 
 	return last == nil || cooldownSeconds <= 0 || ts.Sub(*last) >= time.Duration(cooldownSeconds)*time.Second
 }
 
-func shouldRepeatNotification(ts time.Time, last *time.Time, repeatSeconds int) bool {
-	return last != nil && ts.Sub(*last) >= time.Duration(repeatSeconds)*time.Second
+// shouldRepeatNotification: a repeat is due repeatSeconds after the last delivery, or, when nothing was delivered yet (the breach began
+// during maintenance, with the event disabled or inside the cooldown), repeatSeconds after the breach began.
+func shouldRepeatNotification(ts time.Time, last, onset *time.Time, repeatSeconds int) bool {
+	reference := last
+	if reference == nil {
+		reference = onset
+	}
+	return reference != nil && ts.Sub(*reference) >= time.Duration(repeatSeconds)*time.Second
 }
 
 func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, rule Rule, node string, ts time.Time, resultID, detail string, onset *time.Time, allowDelivery bool) (string, bool, error) {
@@ -651,7 +657,7 @@ func (s *Store) openOfflineEvent(ctx context.Context, tx pgx.Tx, rule Rule, node
 }
 
 func (s *Store) repeatOfflineEvent(ctx context.Context, tx pgx.Tx, rule Rule, node string, now time.Time, state *offlineAlertState, change streakTransition, cooldown, repeat int) error {
-	if !state.active || !change.active || change.opened || repeat <= 0 || !shouldRepeatNotification(now, state.lastNotified, repeat) {
+	if !state.active || !change.active || change.opened || repeat <= 0 || !shouldRepeatNotification(now, state.lastNotified, state.onset, repeat) {
 		return nil
 	}
 	allowDelivery := shouldOpenNotification(now, state.lastNotified, cooldown)
