@@ -195,7 +195,8 @@ replay by the same node is `duplicate` (200) and cannot create another row.
 Changed content for that UUID, or a UUID already owned by another node, is a
 per-item 409 conflict with a generic diagnostic that reveals no other-node data. Retry transport failures/429/5xx with backoff and jitter;
 never discard unacknowledged spool entries. Failed results require an error and
-allow null measurements and `ip: null` when the address is unavailable. Never invent an IP or reuse a stale one. IP history hooks skip null-IP results; consumers display "unavailable".
+allow null measurements and `ip: null` when the address is unavailable. They also
+carry `failureClass` (omitted values are classified from the error text). Never invent an IP or reuse a stale one. IP history hooks skip null-IP results; consumers display "unavailable".
 Successful/degraded results require down/up/ping, a non-null IP, a server object with a nonblank name or host, and `error: null`. Numeric `serverId` is optional for every status, positive when present (LibreSpeed automatic selection has no numeric ID). Engines may omit
 loss/jitter/loaded latency even on success; preserve those as null. Optional
 loadedDown/loadedUp retain low/iqm/high; engine details retain ISP, result ID/URL,
@@ -242,7 +243,7 @@ part of this OpenAPI contract.
 Field names follow `seed.js` and `store.js`: Node `name`, `label`, `provider`,
 `plan`, `colorSlot`, `expectedDown`, `expectedUp`, `interval`, `offset`, `threads`,
 `server`, `enabled`, `host`, `agent`, `note`, `createdAt`; Result `id`, `nodeId`,
-`ts`, `serverId`, `threads`, `ip`, `status`, `error`, `down`, `up`, `ping`, `jitter`,
+`ts`, `serverId`, `threads`, `ip`, `status`, `error`, `failureClass`, `down`, `up`, `ping`, `jitter`,
 `loss`, `dLat`, `uLat`, `bytesDown`, `bytesUp`, `duration`, `manual`. Real IDs are
 opaque (result IDs are UUIDs); demo IDs are not wire IDs. `profile`, `ipModel`,
 `pref`, `OUTAGES` and RNG state are simulation inputs, never API fields. Demo
@@ -255,8 +256,12 @@ Statistics follow the UI formulas: summaries include nonfailed samples;
 trend/hour-of-day/heatmap/distribution include only `ok` samples as `stats.js`
 does. Percentiles interpolate at `(n-1)*p`, standard deviation is population,
 and stability is `clamp(100-220*std/mean,0,100)`, null for zero/no mean. Counts
-include failures; success rate includes degraded tests. Fleet percentages are
-unweighted means of node percentages; fleet latency is median of ok-only pings.
+include failures; success rate includes degraded tests and excludes
+`failureClass=rate_limited` (shown separately as `rateLimited`). Fleet
+percentages are unweighted means of node percentages; fleet latency is median of
+ok-only pings. Alert rules with metric `failed` also ignore rate-limited results.
+`failureClass` is the fixed vocabulary `rate_limited`, `no_network`,
+`server_unreachable`, `engine_missing`, `timeout`, `other`.
 Summary previous periods have equal adjacent duration. Missing chart buckets
 have null value/count=0. Timezone grouping uses IANA local calendar boundaries,
 including DST; heatmap is Monday=0..Sunday=6 × hour 0..23, last 30 days. Combined
@@ -281,11 +286,12 @@ GET /api/stats/distribution?range=30d&metric=down&bins=12
 ```
 
 `summary` returns current and immediately previous intervals of equal length.
-Its counts include failed tests; `ok` and success rate include both `ok` and
-`degraded` results. Each metric's `n` counts its non-null measurements from
-those nonfailed results. Download and upload expected percentages use that
-node's configured expected speed. Stability uses download's population standard
-deviation. Empty values are null, and a single value has standard deviation 0.
+Its counts include failed tests; `ok` includes both `ok` and `degraded` results.
+Success rate is `ok/(count-rateLimited)*100`. Each metric's `n` counts its
+non-null measurements from those nonfailed results. Download and upload expected
+percentages use that node's configured expected speed. Stability uses download's
+population standard deviation. Empty values are null, and a single value has
+standard deviation 0.
 
 Trend, hour-of-day, heatmap, and distribution use only status `ok`. Trend uses
 calendar `hour` or `day` buckets in the supplied IANA zone (`UTC` by default),
@@ -597,7 +603,7 @@ A daily job (03:15 UTC) deletes results older than the `retentionDays` setting (
 
 ## Dashboard and series
 
-`GET /api/dashboard?range=6h|24h|7d|30d` (default 7d) returns the whole dashboard in one call: `current` and `previous` fleet figures (the previous period is the same length, directly before), a card per node (node, summary for the window, 48-point 24 hour download sparkline), the 9 newest results, the 6 newest unacknowledged alert events and the unacknowledged count. Fleet figures follow the preview: `down`/`up` are the unweighted mean of each node's percentage of its expected speed (nodes without data are left out), `ping` is the median of every `ok` test's latency, `success` is non-failed over all tests, `ips` counts address changes (the first address a node ever reports is not a change). An empty fleet returns empty arrays, zero counts and null aggregates.
+`GET /api/dashboard?range=6h|24h|7d|30d` (default 7d) returns the whole dashboard in one call: `current` and `previous` fleet figures (the previous period is the same length, directly before), a card per node (node, summary for the window, 48-point 24 hour download sparkline), the 9 newest results, the 6 newest unacknowledged alert events and the unacknowledged count. Fleet figures follow the preview: `down`/`up` are the unweighted mean of each node's percentage of its expected speed (nodes without data are left out), `ping` is the median of every `ok` test's latency, `success` is non-failed eligible tests divided by all tests except `rate_limited` results, and `rateLimited` is reported separately. `ips` counts address changes (the first address a node ever reports is not a change). An empty fleet returns empty arrays, zero counts and null aggregates.
 
 `GET /api/series` returns comparison series with equally spaced buckets (`nodes`, `range` or `from`+`to`, `metric` down|up|ping|jitter|loss, `mode` absolute|percent, `maxPoints` 1–300, default 300; `timezone` is accepted for symmetry and does not change equal-width buckets). Each point is the mean of the non-failed samples in its bucket plus their count; a bucket without samples is a `null` gap. In percent mode each sample is divided by its own node's expected speed before it is averaged. The summary of a series is computed from the original samples of the window, not from the bucket means. Five 7-day series stay below 100 KB.
 

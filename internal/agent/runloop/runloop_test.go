@@ -263,6 +263,78 @@ func TestFailedOfflineAndCancellationAreDurable(t *testing.T) {
 		})
 	}
 }
+
+func TestRateLimitBackoffSurvivesRestartAndDefersManualRuns(t *testing.T) {
+	config := bootstrap(t)
+	t.Setenv("SPEEDTEST_RATE_LIMIT_BACKOFF_INITIAL", "2s")
+	t.Setenv("SPEEDTEST_RATE_LIMIT_BACKOFF_MAX", "2s")
+	t.Setenv("SPEEDTEST_RATE_LIMIT_BACKOFF_FACTOR", "2")
+	t.Setenv("SPEEDTEST_RATE_LIMIT_BACKOFF_JITTER", "0")
+	center := parseURL(t, "http://127.0.0.1:1")
+	var calls atomic.Int32
+	limited := fakeEngine{run: func(context.Context, engine.Options) (engine.Result, error) {
+		calls.Add(1)
+		return engine.Result{Error: "Too many requests"}, errors.New("provider rejected the request")
+	}}
+	first, err := New(config, center, "credential", "test", quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = first.Close() }()
+	first.cfg.engine = limited
+	if err := first.RunCommand(t.Context(), "manual-first"); err == nil {
+		t.Fatal("rate-limited engine error was lost")
+	}
+	deadline, ok := first.rateLimits.Deadline("ookla")
+	if !ok || !first.rateLimits.Blocked("ookla") {
+		t.Fatal("first failure did not open a backoff window")
+	}
+	pending, err := first.spool.Peek(10)
+	if err != nil || len(pending) != 1 || pending[0].FailureClass != "rate_limited" {
+		t.Fatalf("first rate-limited result = %+v err=%v", pending, err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := New(config, center, "credential", "test", quietLogger())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = second.Close() }()
+	if !second.rateLimits.Blocked("ookla") {
+		t.Fatal("restart forgot the provider deadline")
+	}
+	states, err := second.spool.RateLimitStates()
+	if err != nil || states["ookla"].Attempt != 1 || !states["ookla"].Recorded {
+		t.Fatalf("restart lost the recorded attempt: %+v err=%v", states, err)
+	}
+	second.cfg.engine = fakeEngine{run: func(context.Context, engine.Options) (engine.Result, error) {
+		calls.Add(1)
+		down, up, ping := 200.0, 100.0, 9.0
+		return engine.Result{Down: &down, Up: &up, Ping: &ping, ExternalIP: "203.0.113.10", Server: &engine.Server{ID: 1, Name: "test", Host: "test.example"}, Duration: 1}, nil
+	}}
+	for _, id := range []string{"manual-deferred", "manual-deferred-again"} {
+		if err := second.RunCommand(t.Context(), id); err != nil {
+			t.Fatal(err)
+		}
+		ack := second.command(t.Context(), control.Command{ID: id})
+		if ack.Status != "failed" || ack.Error == nil || !strings.Contains(*ack.Error, "provider rate-limit backoff is active") || calls.Load() != 1 {
+			t.Fatalf("manual request %s did not return a deferred outcome: ack=%+v calls=%d", id, ack, calls.Load())
+		}
+	}
+	time.Sleep(time.Until(deadline) + 10*time.Millisecond)
+	if err := second.RunCommand(t.Context(), "manual-recovered"); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 2 || second.rateLimits.Blocked("ookla") {
+		t.Fatalf("provider did not recover after its deadline: calls=%d blocked=%t", calls.Load(), second.rateLimits.Blocked("ookla"))
+	}
+	states, err = second.spool.RateLimitStates()
+	if err != nil || len(states) != 0 {
+		t.Fatalf("success did not clear durable backoff: %+v err=%v", states, err)
+	}
+}
+
 func TestLiveConfigurationAtomicAndBinding(t *testing.T) {
 	cfg := bootstrap(t)
 	cfg.NetworkInterface = "lo"

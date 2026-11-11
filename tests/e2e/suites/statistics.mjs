@@ -1,5 +1,31 @@
+function demoNode() {
+  return { id: 'demo73', name: 'Review fixture', label: 'Backoff review', provider: 'Fixture', plan: 'Test', colorSlot: 1,
+    expectedDown: 100, expectedUp: 50, interval: 60, offset: 0, threads: 4, server: 'auto', primaryEngine: 'ookla',
+    enabled: true, agent: '2.0.0', note: '', createdAt: Date.now(), profile: { effD: 1, effU: 1, cong: 0, ping: 10, jit: 1, loss: 0 },
+    ipModel: { kind: 'static', prefix: '203.0.113', host: 73 }, pref: [1001] };
+}
+
+function demoResult(nodeId, ts, status) {
+  const failed = status === 'failed';
+  return { nodeId, ts, status, engine: 'ookla', failureClass: failed ? 'rate_limited' : 'other',
+    error: failed ? 'Too many requests' : null, down: failed ? null : 90, up: failed ? null : 45,
+    ping: failed ? null : 10, jitter: failed ? null : 1, loss: failed ? null : 0,
+    dLat: null, uLat: null, serverId: failed ? null : 1001, ip: failed ? null : '203.0.113.73',
+    threads: 4, bytesDown: failed ? 0 : 100, bytesUp: failed ? 0 : 50, duration: 30, manual: false };
+}
+
+async function loadDemoCase(page, origin, statuses) {
+  const now = Date.now();
+  const extra = statuses.map((status, index) => demoResult('demo73', now - (statuses.length - index) * 60000, status));
+  const payload = { nodes: [demoNode()], settings: { range: '24h', timezone: 'UTC' }, extra };
+  await page.goto(`${origin}/?demo=1#/stats`);
+  await page.evaluate(value => localStorage.setItem('st.demo.v1', JSON.stringify(value)), payload);
+  await page.reload();
+  await page.getByRole('heading', { name: 'Summary by node' }).waitFor();
+}
+
 export function statisticsSuite(T) {
-  const { page, stack, assert } = T;
+  const { page, assert } = T;
   return {
     // The figures on the page are the center's, not a browser calculation.
     async summaryMatchesApi() {
@@ -48,6 +74,27 @@ export function statisticsSuite(T) {
       await T.see('last 24 hours', page.locator('#view'));
       await T.choose(page.locator('#topbar select').first(), '7d');
       await T.expectNoLoadError();
+    },
+
+    async demoRateLimitExclusions() {
+      const origin = new URL(T.url('#/')).origin;
+      await loadDemoCase(page, origin, ['ok', 'failed']);
+      assert.match(await T.row('Review fixture').innerText(), /2\s+100\.0%\s+1 rate-limited excluded/);
+      await page.setViewportSize({ width: 390, height: 900 });
+      assert.ok(await page.getByText('1 rate-limited excluded', { exact: true }).isVisible());
+      await page.goto(`${origin}/?demo=1#/nodes/demo73`);
+      const mixed = page.locator('.stat').filter({ hasText: 'Success rate' });
+      await mixed.waitFor();
+      assert.match(await mixed.innerText(), /100\.0%[\s\S]*1 failed; 1 rate-limited excluded of 2/);
+
+      await loadDemoCase(page, origin, ['failed']);
+      assert.match(await T.row('Review fixture').innerText(), /1\s+—\s+1 rate-limited excluded/);
+      await page.goto(`${origin}/?demo=1#/nodes/demo73`);
+      const allLimited = page.locator('.stat').filter({ hasText: 'Success rate' });
+      await allLimited.waitFor();
+      assert.match(await allLimited.innerText(), /—[\s\S]*1 failed; 1 rate-limited excluded of 1/);
+      assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth), false, 'node detail fits at 390 px');
+      await page.setViewportSize({ width: 1440, height: 900 });
     },
   };
 }

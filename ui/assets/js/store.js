@@ -177,9 +177,12 @@
   };
   S.nodeSummary = function (id, from, to) {
     var rs = ST.results({ nodeIds: [id], from: from, to: to }), ok = rs.filter(function (r) { return r.status !== 'failed'; }), n = ST.node(id);
+    var rateLimited = rs.filter(function (r) { return r.status === 'failed' && r.failureClass === 'rate_limited'; }).length;
+    var eligible = rs.length - rateLimited;
     var ips = {}; rs.forEach(function (r) { ips[r.ip] = 1; });
     var sum = {
-      count: rs.length, ok: ok.length, failed: rs.length - ok.length, successRate: rs.length ? ok.length / rs.length * 100 : null,
+      count: rs.length, ok: ok.length, failed: rs.length - ok.length, rateLimited: rateLimited,
+      successRate: eligible ? ok.length / eligible * 100 : null,
       down: S.summary(ok.map(function (r) { return r.down; })), up: S.summary(ok.map(function (r) { return r.up; })),
       ping: S.summary(ok.map(function (r) { return r.ping; })), jitter: S.summary(ok.map(function (r) { return r.jitter; })),
       loss: S.summary(ok.map(function (r) { return r.loss; })), ipCount: Object.keys(ips).length
@@ -209,7 +212,7 @@
   /* ---------- Alert evaluation ---------- */
   function ruleMatch(rule, r, node, prevIp) {
     switch (rule.metric) {
-      case 'failed': return r.status === 'failed';
+      case 'failed': return r.status === 'failed' && r.failureClass !== 'rate_limited';
       case 'ip_changed': return prevIp != null && prevIp !== r.ip;
       default:
         if (r.status === 'failed') return false;
@@ -233,6 +236,7 @@
         if (rule.nodes !== 'all' && rule.nodes.indexOf(node.id) < 0) return;
         var streak = 0, open = null, prevIp = null;
         (byNode[node.id] || []).forEach(function (r) {
+          if (r.status === 'failed' && r.failureClass === 'rate_limited') return;
           var hit = ruleMatch(rule, r, node, prevIp);
           prevIp = r.ip;
           if (hit) {
@@ -369,11 +373,11 @@
   };
 
   ST.csv = function (rows) {
-    var head = ['time', 'node', 'status', 'download_mbps', 'upload_mbps', 'ping_ms', 'jitter_ms', 'packet_loss_pct', 'bytes_down', 'bytes_up', 'bytes_total', 'loaded_latency_down_ms', 'loaded_latency_up_ms', 'server', 'public_ip', 'error', 'engine'];
+    var head = ['time', 'node', 'status', 'download_mbps', 'upload_mbps', 'ping_ms', 'jitter_ms', 'packet_loss_pct', 'bytes_down', 'bytes_up', 'bytes_total', 'loaded_latency_down_ms', 'loaded_latency_up_ms', 'server', 'public_ip', 'error', 'failure_class', 'engine'];
     var esc = function (v) { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     return [head.join(',')].concat(rows.map(function (r) {
       var n = ST.node(r.nodeId), s = ST.server(r.serverId);
-      return [new Date(r.ts).toISOString(), n ? n.name + ' ' + n.label : r.nodeId, r.status, r.down, r.up, r.ping, r.jitter, r.loss, r.bytesDown, r.bytesUp, F.bytesTotal(r.bytesDown, r.bytesUp), r.dLat, r.uLat, s.name + ' - ' + s.city, r.ip, r.error, r.engine || 'ookla'].map(esc).join(',');
+      return [new Date(r.ts).toISOString(), n ? n.name + ' ' + n.label : r.nodeId, r.status, r.down, r.up, r.ping, r.jitter, r.loss, r.bytesDown, r.bytesUp, F.bytesTotal(r.bytesDown, r.bytesUp), r.dLat, r.uLat, s.name + ' - ' + s.city, r.ip, r.error, r.failureClass || 'other', r.engine || 'ookla'].map(esc).join(',');
     })).join('\n');
   };
 
@@ -544,7 +548,19 @@
     };
     ST.saveSchedule = function (id, input) {
       var path = '/api/schedules/' + encodeURIComponent(id);
-      return conditional(path, function (response) { return mutation(path, 'PUT', input, { ifMatch: response.etag }); });
+      return conditional(path, function (response) { return API.request(path, { method: 'PUT', body: input, ifMatch: response.etag }); }).then(function (saved) {
+        return API.request('/api/schedules').then(function (response) {
+          schedules = response.data;
+          var node = state.nodes.filter(function (item) { return item.id === id; })[0];
+          if (node) ['interval', 'offset', 'enabled'].forEach(function (key) { if (Object.prototype.hasOwnProperty.call(input, key)) node[key] = input[key]; });
+          ST.emit('data');
+          return saved.data;
+        }, function (error) {
+          ST.remote = { status: 'error', error: error };
+          ST.emit('remote');
+          return saved.data;
+        });
+      });
     };
     ST.saveScheduleRules = function (patch) {
       return conditional('/api/schedules', function (response) {

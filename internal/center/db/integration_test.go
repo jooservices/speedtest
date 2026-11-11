@@ -199,7 +199,7 @@ INSERT INTO settings(key,secret_ciphertext) VALUES ('integration',decode('aabb',
 INSERT INTO api_idempotency(principal,operation,key_hash,request_hash,response_ciphertext,expires_at) VALUES ('owner','create-node',repeat('a',64),repeat('b',64),decode(repeat('00',28),'hex'),now()+interval '1 hour');
 INSERT INTO api_access_tokens(id,user_id,name,scope,token_hash) VALUES ('00000000-0000-4000-8000-000000000017','00000000-0000-4000-8000-000000000010','rollback-fixture','read',decode(repeat('aa',32),'hex'));
 INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000-8000-000000000015',id,'run_now','00000000-0000-4000-8000-000000000002' FROM nodes;`)
-	for range 14 {
+	for range 15 {
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(err)
 		}
@@ -239,7 +239,7 @@ func verifyCancelledMigration(t *testing.T, pool *pgxpool.Pool) {
 
 func verifyTransactionalRollback(t *testing.T, pool *pgxpool.Pool, ctx context.Context) {
 	t.Helper()
-	for range 13 {
+	for range 14 {
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(err)
 		}
@@ -269,7 +269,8 @@ func TestScheduleDefaultMigrationPreservesIntervalsIntegration(t *testing.T) {
 VALUES ('00000000-0000-4000-8000-000000000101',5,0),
        ('00000000-0000-4000-8000-000000000102',30,7),
        ('00000000-0000-4000-8000-000000000103',60,11)`)
-	for range 4 { // Roll back usage, audit-source, API-token and 60-minute-default migrations.
+	// Roll back usage, audit-source, API-token and failure-class migrations.
+	for range 4 {
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(err)
 		}

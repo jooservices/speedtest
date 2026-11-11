@@ -1,3 +1,53 @@
+async function runManual(T, name, message) {
+  const { page } = T;
+  await T.open('#/nodes', 'Nodes');
+  const row = T.row(name);
+  try {
+    await row.waitFor({ timeout: 10000 });
+  } catch (error) {
+    const exists = T.db(`SELECT count(*) FROM nodes WHERE name='${name}'`);
+    throw new Error(`node row ${name} did not render at ${page.url()} (database rows: ${exists}): ${error.message}`);
+  }
+  await row.click();
+  await page.getByRole('heading', { name: new RegExp(name), level: 1 }).waitFor();
+  await T.press('Run test');
+  const dialog = T.dialog('Running speed test');
+  await dialog.waitFor();
+  await dialog.getByText(message).waitFor({ timeout: 90000 });
+  await T.press('Close', dialog.locator('.modal-foot'));
+}
+
+async function restartAgentAndWait(T, agent, name, scenario = 'rate_limited') {
+  const since = T.db(`SELECT last_seen_at::text FROM nodes WHERE name='${name}'`);
+  await agent.restart({ scenario });
+  await T.eventually(() => T.db(`SELECT (last_seen_at > '${since}'::timestamptz)::int FROM nodes WHERE name='${name}'`) === '1', 'the restarted rate-limited agent checked in');
+}
+
+async function verifyRateLimitedAgent(T, agent, name) {
+  const { assert } = T;
+  T.db("UPDATE alert_rules SET for_tests=1 WHERE metric='failed'");
+  try {
+    await restartAgentAndWait(T, agent, name);
+    await runManual(T, name, /Failed: speedtest: rate_limited/);
+    const stored = T.db(`SELECT count(*) FROM results r JOIN nodes n ON n.id=r.node_id WHERE n.name='${name}' AND r.failure_class='rate_limited' AND r.manual`);
+    assert.equal(stored, '1', 'the real Ookla error is spooled, ingested and classified');
+    const alerts = T.db(`SELECT count(*) FROM alert_events e JOIN nodes n ON n.id=e.node_id JOIN alert_rules r ON r.id=e.rule_id WHERE n.name='${name}' AND r.metric='failed'`);
+    assert.equal(alerts, '0', 'rate-limited ingestion does not trigger a one-test failure alert');
+    await restartAgentAndWait(T, agent, name);
+    await runManual(T, name, /Failed: Test deferred: ookla provider rate-limit backoff is active until/);
+    assert.equal(T.db(`SELECT count(*) FROM results r JOIN nodes n ON n.id=r.node_id WHERE n.name='${name}' AND r.failure_class='rate_limited' AND r.manual`), '1', 'restart preserves the deadline and prevents a second engine attempt');
+    await runManual(T, name, /Failed: Test deferred: ookla provider rate-limit backoff is active until/);
+    assert.equal(T.db(`SELECT count(*) FROM results r JOIN nodes n ON n.id=r.node_id WHERE n.name='${name}' AND r.failure_class='rate_limited' AND r.manual`), '1', 'repeated manual requests remain deferred without another rate-limit result');
+    const successfulManuals = Number(T.db(`SELECT count(*) FROM results r JOIN nodes n ON n.id=r.node_id WHERE n.name='${name}' AND r.status='ok' AND r.manual`));
+    await new Promise(resolve => setTimeout(resolve, 31_000));
+    await agent.restart({ scenario: 'success' });
+    await runManual(T, name, /Mbps ↓|Gbps ↓|kbps ↓/);
+    assert.equal(Number(T.db(`SELECT count(*) FROM results r JOIN nodes n ON n.id=r.node_id WHERE n.name='${name}' AND r.status='ok' AND r.manual`)), successfulManuals + 1, 'the real agent resumes successful measurements after the deadline');
+  } finally {
+    T.db("UPDATE alert_rules SET for_tests=2 WHERE metric='failed'");
+  }
+}
+
 export function nodesSuite(T, ctx) {
   const { page, assert } = T;
   const { stack, startAgent, fetchAgentConfig } = ctx;
@@ -43,7 +93,7 @@ export function nodesSuite(T, ctx) {
       assert.ok(token && token.length > 20, 'the wizard shows a real one-time enrolment key: ' + command.slice(0, 80));
       assert.match(command, /install\.sh/);
       await T.press('I ran the command', dialog);
-      await startAgent(stack, { name: 'E2E-1', token });
+      const agent = await startAgent(stack, { name: 'E2E-1', token, backoffInitial: '30s', backoffMax: '30s' });
       await T.see('E2E-1 is online', dialog, 90000);
       await dialog.getByText(/First result: .* down, .* up, .* ping\./).waitFor({ timeout: 90000 });
       const schedules = T.db("select s.interval_minutes||':'||s.offset_minutes||':'||e.interval_minutes||':'||e.offset_minutes from schedules s join nodes n on n.id=s.node_id join engine_schedules e on e.node_id=n.id and e.engine='ookla' where n.name='E2E-1'");
@@ -62,11 +112,13 @@ export function nodesSuite(T, ctx) {
       const stored = T.db("select count(*) from results r join nodes n on n.id=r.node_id where n.name='E2E-1' and r.manual");
       assert.ok(Number(stored) >= 1, 'the manual result is stored on the center: ' + stored);
       await T.open('#/history', 'Results');
+      await T.selectWith('Any status').selectOption('all');
       await T.fill('Search results', 'E2E-1');
       await page.getByRole('row').nth(1).waitFor();
       // The same line cannot be enrolled twice with the same one-time key.
       const again = await page.request.post(stack.origin + '/api/agent/enroll', { data: { token, name: 'E2E-copy', agent: 'x' } });
       assert.ok(again.status() >= 400, 'an enrolment key works once, got ' + again.status());
+      await verifyRateLimitedAgent(T, agent, 'E2E-1');
     },
 
     async demoNodeDefault() {

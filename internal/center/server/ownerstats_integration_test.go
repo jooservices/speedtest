@@ -85,6 +85,10 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$13::jsonb,$11,4,$12)`, resultID, node, a
 	seedResult(0xb7, nodeA, bucketStart.Add(70*time.Minute), "ok", 300.0, 30.0, 30.0, nil, nil, "203.0.113.5")
 	seedResult(0xb8, nodeA, bucketStart.Add(100*time.Minute), "degraded", 400.0, 40.0, 40.0, 8.0, 2.0, "203.0.113.5")
 	seedResult(0xb9, nodeA, bucketStart.Add(130*time.Minute), "failed", nil, nil, nil, nil, nil, "203.0.113.6")
+	seedResult(0xc0, nodeA, bucketStart.Add(160*time.Minute), "failed", nil, nil, nil, nil, nil, "203.0.113.6")
+	if _, err := pool.Exec(ctx, `UPDATE results SET failure_class='rate_limited' WHERE id=$1`, fmt.Sprintf("00000000-0000-4000-8000-%012x", 0xc0)); err != nil {
+		t.Fatal(err)
+	}
 	seedResult(0xba, nodeB, bucketStart.Add(15*time.Minute), "ok", 50.0, 5.0, 20.0, 1.0, 0.1, "203.0.113.5")
 	seedResult(0xbf, statsConstantNodeID, now.Add(-12*time.Hour), "ok", 0.0, 0.0, 0.0, 0.0, 0.0, "203.0.113.5")
 
@@ -117,7 +121,7 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$13::jsonb,$11,4,$12)`, resultID, node, a
 			alpha = item
 		}
 	}
-	if alpha.Current.Count != 5 || alpha.Current.OK != 4 || alpha.Current.Failed != 1 || alpha.Current.SuccessRate == nil || *alpha.Current.SuccessRate != 80 || alpha.Current.IPCount != 2 {
+	if alpha.Current.Count != 6 || alpha.Current.OK != 4 || alpha.Current.Failed != 2 || alpha.Current.RateLimited != 1 || alpha.Current.SuccessRate == nil || *alpha.Current.SuccessRate != 80 || alpha.Current.IPCount != 2 {
 		t.Fatalf("current counts = %+v", alpha.Current)
 	}
 	if alpha.Current.Down.N != 4 || alpha.Current.Down.Mean == nil || *alpha.Current.Down.Mean != 250 || alpha.Current.Down.Median == nil || *alpha.Current.Down.Median != 250 ||
@@ -249,7 +253,7 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$13::jsonb,$11,4,$12)`, resultID, node, a
 	assertDSTTrend(time.Date(2026, 11, 1, 4, 0, 0, 0, time.UTC), time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC), []int{0, 1, 2}, 2)
 	assertDSTTrend(time.Date(2026, 3, 8, 5, 0, 0, 0, time.UTC), time.Date(2026, 3, 8, 9, 0, 0, 0, time.UTC), []int{0, 1, 3, 4}, 0)
 
-	t.Log("PASS: authenticated summary, trend/combined, time-of-day, 30-day heatmap and histogram flow over the real HTTP server and PostgreSQL")
+	t.Log("PASS: rate_limited is counted separately and excluded from success rate; authenticated stats flows pass over HTTP/PostgreSQL")
 }
 
 func mustLocation(t *testing.T, name string) *time.Location {
