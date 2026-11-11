@@ -115,6 +115,7 @@ func TestMetricMatches(t *testing.T) {
 		{name: "jitter", rule: Rule{Metric: "jitter", Op: "<", Value: 6}, result: result, want: true},
 		{name: "packet loss", rule: Rule{Metric: "loss", Op: "<=", Value: 10}, result: result, want: true},
 		{name: "failed", rule: Rule{Metric: "failed"}, result: agentapi.Result{Status: "failed"}, want: true},
+		{name: "rate limited ignored", rule: Rule{Metric: "failed"}, result: agentapi.Result{Status: "failed", FailureClass: "rate_limited"}},
 		{name: "failed resets numeric", rule: Rule{Metric: "ping", Op: ">", Value: 1}, result: agentapi.Result{Status: "failed", Ping: &ping}},
 		{name: "missing metric", rule: Rule{Metric: "jitter", Op: ">", Value: 1}, result: agentapi.Result{Status: "ok"}},
 		{name: "zero expected speed", rule: Rule{Metric: "down_pct", Op: "<", Value: 1}, result: result},

@@ -18,17 +18,17 @@ installation limit per node. It stores no SSH credentials or enrollment tokens.
 existing nodes and results backfill to Ookla. `00011_alert_event_payload.sql`
 adds defaulted event keys and placeholder payloads to alert history, and
 `00012_notification_events.sql` adds owner overrides for event settings,
-per-node event enablement and templates. `00016_alert_streak_timestamps.sql`
+per-node event enablement and templates. `00017_alert_streak_timestamps.sql`
 tracks consecutive-test timing and adds configurable event thresholds, cooldowns,
-repeat intervals and maintenance windows. `00017_notification_defaults.sql`
+repeat intervals and maintenance windows. `00018_notification_defaults.sql`
 preserves existing global rule settings and fills missing quiet-hour defaults.
-`00018_system_notification_events.sql` permits platform events without a node;
-`00021_notification_escalation.sql` records delivery escalation time. These
+`00019_system_notification_events.sql` permits platform events without a node;
+`00022_notification_escalation.sql` records delivery escalation time. These
 changes are additive; the 1.0.0 binary continues to use its existing tables and
 columns.
 
 `00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
-`00019_api_access_tokens.sql` adds owner-scoped API tokens with named permissions,
+`00020_api_access_tokens.sql` adds owner-scoped API tokens with named permissions,
 optional expiry, last-use and revocation timestamps, and only a 32-byte token
 digest. Its down migration removes that table and its index.
 `00010_engine_schedules.sql` adds per-engine schedules with a 60-minute default;
@@ -45,7 +45,7 @@ For rollback, stop all center writers, roll back 00015, restore the previous
 center binary, then start it. Do not run an older center binary against the
 new default: that version reports a hard-coded 30-minute response after 00015
 has changed the database default to 60.
-`00020_audit_authentication_source.sql` records whether each audited change used
+`00021_audit_authentication_source.sql` records whether each audited change used
 a session or bearer credential and stores only the non-secret bearer token ID.
 Token creation audit targets also retain the newly created token ID.
 SQL files are embedded by
@@ -110,7 +110,7 @@ that a subsequent up can reapply version 1.
 | `sessions` | Hashed opaque token and CSRF token, optional user for anonymous bootstrap, expiry |
 | `nodes` | Independent node settings, expected speeds, binding, revision and heartbeat |
 | `node_credentials` | Hashed single-use enrollment tokens and bearer credentials, expiration/revocation |
-| `results` | Client UUID, normalized nullable measurements, original engine JSON and metadata |
+| `results` | Client UUID, normalized nullable measurements, original engine JSON and metadata, fixed failure class |
 | `ip_addresses` | IPv4/IPv6 host address and cached geolocation JSON |
 | `node_ip_history` | Measurement-ordered address boundaries per node (initial row has null from_ip) |
 | `node_ip_addresses` | Per-node/address counts, first/last measurement time and speed sums |
@@ -234,3 +234,20 @@ with `make migrate` does not resend previously consumed events. Preserve deliver
 history through the operator backup process when needed. On a disposable test
 DB, `TestNotificationMigrationRollback` rehearses populated down/up and verifies
 that events and consumed markers survive without replaying old deliveries.
+
+## Version 16 rollback
+
+Version 16 adds `results.failure_class` as a non-null fixed-vocabulary column
+with default `other` and a partial index for failed results. The previous center
+binary remains compatible: existing result inserts use the column default and
+older queries ignore the added field. To roll back the application, switch to
+the previous center binary before running `make migrate-down`; the JOOST-73
+binary requires the column.
+
+Version 16 down removes the index and column but preserves result rows and their
+measurements. The failure-class values are discarded; reapplying version 16
+assigns `other` to existing rows. On a verified disposable worktree database,
+`TestFailureClassMigrationDefaultAndRollback` verifies populated down/up,
+existing-row defaults, accepted classes, rejection of unknown values, and result
+retention. Rehearse any production rollback on a protected realistic-data copy
+under the owner's separate deployment decision.
