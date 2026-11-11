@@ -347,6 +347,8 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
 .setting:last-child { border-bottom: 0; }
 .setting.engine-setting { flex-wrap: wrap; }
 .setting.engine-setting > .server-picker { flex: 1 0 100%; min-width: 0; }
+/* The server list has up to five columns inside a narrow setting row: tighter cells keep it inside its box at desktop width. */
+.server-picker table.data th, .server-picker table.data td { padding-left: 8px; padding-right: 8px; }
 .setting .s-ctl { width: 260px; flex: none; }
 .setting .s-ctl .switch { float: right; }
 .list-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line); }
