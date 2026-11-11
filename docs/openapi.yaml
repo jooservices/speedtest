@@ -3641,6 +3641,17 @@ components:
         - ok
         - degraded
         - failed
+    FailureClass:
+      type: string
+      description: Fixed vocabulary for why a test failed. Successful results use other.
+      enum:
+        - rate_limited
+        - no_network
+        - server_unreachable
+        - engine_missing
+        - timeout
+        - other
+      default: other
     Secret:
       type: string
       description: Write-only secret; never returned, logged or included in errors.
@@ -4240,6 +4251,8 @@ components:
             - string
             - "null"
           maxLength: 2000
+        failureClass:
+          $ref: "#/components/schemas/FailureClass"
         manual:
           type: boolean
           default: false
@@ -4308,7 +4321,8 @@ components:
         loss/jitter/loaded metrics may be null even on success when unavailable; never invent zero.
         Optional typed engine details preserve low/iqm/high, ISP, external IP, result ID/URL; raw
         retains remaining fields. warnings records an engine/public-IP mismatch without changing
-        selected binding.
+        selected binding. failureClass is a fixed vocabulary; omitted failed results are classified
+        from the error text, and successful results use other.
       allOf:
         - if:
             properties:
@@ -4335,6 +4349,8 @@ components:
                 $ref: "#/components/schemas/Server"
               error:
                 type: "null"
+              failureClass:
+                const: other
     Result:
       type: object
       additionalProperties: false
@@ -4397,6 +4413,8 @@ components:
             - string
             - "null"
           maxLength: 2000
+        failureClass:
+          $ref: "#/components/schemas/FailureClass"
         manual:
           type: boolean
           default: false
@@ -4463,6 +4481,7 @@ components:
         - bytesUp
         - duration
         - error
+        - failureClass
         - manual
         - raw
         - server
@@ -4472,7 +4491,8 @@ components:
         Engine-specific loss/jitter/loaded metrics may be null even on success when unavailable;
         never invent zero. Optional typed engine details preserve low/iqm/high, ISP, external IP,
         result ID/URL; raw retains remaining fields. warnings records an engine/public-IP mismatch
-        without changing selected binding.
+        without changing selected binding. failureClass is the fixed failure vocabulary.
+
       allOf:
         - if:
             properties:
@@ -4499,6 +4519,8 @@ components:
                 $ref: "#/components/schemas/Server"
               error:
                 type: "null"
+              failureClass:
+                const: other
     Node:
       type: object
       additionalProperties: false
@@ -5081,6 +5103,10 @@ components:
         failed:
           type: integer
           minimum: 0
+        rateLimited:
+          type: integer
+          minimum: 0
+          description: Failed results classified as rate_limited; excluded from successRate.
         successRate:
           anyOf:
             - $ref: "#/components/schemas/Percent"
@@ -5110,6 +5136,7 @@ components:
         - count
         - ok
         - failed
+        - rateLimited
         - successRate
         - down
         - up
@@ -5120,8 +5147,9 @@ components:
         - downPct
         - upPct
         - stability
-      description: ok counts all nonfailed results. Ratios of expected may exceed 100.
-        stability=clamp(100-220*down.std/down.mean,0,100); null for zero/no mean.
+      description: ok counts all nonfailed results. successRate = ok/(count-rateLimited)*100.
+        Ratios of expected may exceed 100. stability=clamp(100-220*down.std/down.mean,0,100);
+        null for zero/no mean.
     SummaryComparison:
       type: object
       additionalProperties: false
@@ -5324,6 +5352,10 @@ components:
           anyOf:
             - $ref: "#/components/schemas/Percent"
             - type: "null"
+        rateLimited:
+          type: integer
+          minimum: 0
+          description: Rate-limited failures excluded from success.
         ips:
           type: integer
           minimum: 0
@@ -5335,10 +5367,11 @@ components:
         - up
         - ping
         - success
+        - rateLimited
         - ips
         - count
       description: "down/up: unweighted mean of nonnull node percentages. ping: median of ok-only pings.
-        success: nonfailed/total*100. ips: number of address changes for all independent nodes; no
+        success: ok/(count-rateLimited)*100. ips: number of address changes for all independent nodes; no
         demo topology exclusion."
     NodeCard:
       type: object

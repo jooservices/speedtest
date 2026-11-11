@@ -59,18 +59,23 @@ func jsonValue(value any) any {
 }
 func (r Result) values(node string) []any {
 	ts, _ := time.Parse(time.RFC3339Nano, r.TS)
-	return []any{r.ID, node, ts, r.Status, r.Down, r.Up, r.Ping, r.Jitter, r.DLat, r.ULat, r.Loss, r.ServerID, r.IP, r.Threads, r.BytesDown, r.BytesUp, r.Duration, r.Error, r.Manual, jsonValue(r.Raw), jsonValue(r.LoadedDown), jsonValue(r.LoadedUp), jsonValue(r.Server), r.EngineISP, r.EngineResultID, r.EngineResultURL, r.EngineIP, jsonValue(r.Warnings), resultEngine(r.Engine)}
+	class := r.FailureClass
+	if class == "" {
+		class = "other"
+	}
+	return []any{r.ID, node, ts, r.Status, r.Down, r.Up, r.Ping, r.Jitter, r.DLat, r.ULat, r.Loss, r.ServerID, r.IP, r.Threads, r.BytesDown, r.BytesUp, r.Duration, r.Error, r.Manual, jsonValue(r.Raw), jsonValue(r.LoadedDown), jsonValue(r.LoadedUp), jsonValue(r.Server), r.EngineISP, r.EngineResultID, r.EngineResultURL, r.EngineIP, jsonValue(r.Warnings), resultEngine(r.Engine), class}
 }
 
 const resultInsertQuery = `INSERT INTO results (
-	id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,down_latency_ms,up_latency_ms,loss_percent,
-	server_id,ip,threads,bytes_down,bytes_up,duration_seconds,error,manual,raw,loaded_down,loaded_up,
-	server,engine_isp,engine_result_id,engine_result_url,engine_ip,warnings,engine
+	id, node_id, ts, status, down_mbps, up_mbps, ping_ms, jitter_ms, down_latency_ms, up_latency_ms,
+	loss_percent, server_id, ip, threads, bytes_down, bytes_up, duration_seconds, error, manual, raw,
+	loaded_down, loaded_up, server, engine_isp, engine_result_id, engine_result_url, engine_ip, warnings, engine, failure_class
 ) VALUES (
-	$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29
+	$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
+	$16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30
 ) ON CONFLICT(id) DO NOTHING`
 
-const resultCompareQuery = `SELECT
+const resultReplayQuery = `SELECT
 	id IS NOT DISTINCT FROM $1 AND node_id IS NOT DISTINCT FROM $2 AND ts IS NOT DISTINCT FROM $3 AND
 	status IS NOT DISTINCT FROM $4 AND down_mbps IS NOT DISTINCT FROM $5 AND up_mbps IS NOT DISTINCT FROM $6 AND
 	ping_ms IS NOT DISTINCT FROM $7 AND jitter_ms IS NOT DISTINCT FROM $8 AND down_latency_ms IS NOT DISTINCT FROM $9 AND
@@ -80,7 +85,8 @@ const resultCompareQuery = `SELECT
 	manual IS NOT DISTINCT FROM $19 AND raw IS NOT DISTINCT FROM $20 AND loaded_down IS NOT DISTINCT FROM $21 AND
 	loaded_up IS NOT DISTINCT FROM $22 AND server IS NOT DISTINCT FROM $23 AND engine_isp IS NOT DISTINCT FROM $24 AND
 	engine_result_id IS NOT DISTINCT FROM $25 AND engine_result_url IS NOT DISTINCT FROM $26 AND engine_ip IS NOT DISTINCT FROM $27 AND
-	warnings IS NOT DISTINCT FROM $28 AND engine IS NOT DISTINCT FROM $29
+	warnings IS NOT DISTINCT FROM $28 AND engine IS NOT DISTINCT FROM $29 AND
+	(failure_class IS NOT DISTINCT FROM $30 OR (failure_class = 'other' AND $31::boolean))
 FROM results WHERE id=$1`
 
 func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool, error) {
@@ -108,7 +114,8 @@ func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool,
 		var identical bool
 		// A new READ COMMITTED statement sees a concurrent insert after ON CONFLICT
 		// waits for it. Compare every stored field, never return foreign row data.
-		err = tx.QueryRow(ctx, resultCompareQuery, args...).Scan(&identical)
+		args = append(args, r.classOmitted)
+		err = tx.QueryRow(ctx, resultReplayQuery, args...).Scan(&identical)
 		if err != nil {
 			return false, err
 		}
