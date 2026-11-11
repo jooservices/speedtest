@@ -22,6 +22,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/nodes"
 	"github.com/jooservices/speedtest/internal/center/settings"
 	"github.com/jooservices/speedtest/internal/shared/config"
+	"github.com/jooservices/speedtest/internal/shared/testenv"
 )
 
 func rotationPool(t *testing.T) *pgxpool.Pool {
@@ -30,9 +31,7 @@ func rotationPool(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatal("worktree .env required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	t.Setenv("APP_ENV", "test")
 	t.Setenv("OLD_APP_KEY", "")
 	t.Setenv("NEW_APP_KEY", "")

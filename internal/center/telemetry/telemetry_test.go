@@ -168,7 +168,7 @@ func TestAllDocumentedRoutesAndAssets(t *testing.T) {
 			t.Fatal(p)
 		}
 	}
-	for _, p := range []string{"/healthz", "/readyz", "/metrics"} {
+	for _, p := range []string{"/healthz", "/readyz", "/metrics", "/mcp", "/api/access-tokens"} {
 		if Route(p) != p {
 			t.Fatal(p)
 		}
