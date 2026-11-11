@@ -6,9 +6,11 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 	"github.com/jooservices/speedtest/internal/center/isp"
 )
 
@@ -51,6 +53,29 @@ func TestOwnerISPRoutesRequireSession(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/isps?range=7d", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("code=%d", rec.Code)
+	}
+}
+
+func TestOwnerISPRoutesHonorAccessTokenScopes(t *testing.T) {
+	tokens := &tokenAuthStore{principal: apitoken.Principal{TokenID: "isp-token", UserID: "owner-1", Scope: apitoken.ReadOnly}}
+	auth := &serverAuth{tokens: tokens, tokenLimiter: newNodeRateLimiter(120, 20)}
+	routes := ownerAreas(Options{OwnerISP: &fakeOwnerISP{list: []map[string]any{}}}, auth)
+	handler := withAPITokenAuth(dispatcher(routes, http.NotFoundHandler()), routes, auth)
+
+	for _, test := range []struct {
+		method, path, body string
+		want               int
+	}{
+		{http.MethodGet, "/api/isps?range=7d", "", http.StatusOK},
+		{http.MethodPost, "/api/isps/00000000-0000-4000-8000-000000000001/plans", `{"name":"Fiber","advertisedDown":300,"advertisedUp":100}`, http.StatusForbidden},
+	} {
+		request := httptest.NewRequest(test.method, "https://center.test"+test.path, strings.NewReader(test.body))
+		request.Header.Set("Authorization", "Bearer valid-token")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != test.want {
+			t.Errorf("%s %s status = %d, want %d: %s", test.method, test.path, response.Code, test.want, response.Body.String())
+		}
 	}
 }
 
@@ -157,6 +182,28 @@ func TestOwnerISPPlanValidationAndErrors(t *testing.T) {
 	}
 	if rec := do(h, http.MethodPatch, "/api/isps/"+ispID+"/plans/"+planID, "", ownerWriteWith(nil)); rec.Code != http.StatusMethodNotAllowed {
 		t.Fatalf("plan patch=%d", rec.Code)
+	}
+}
+
+func TestOwnerISPPlanSchemaBoundaries(t *testing.T) {
+	const ispID = "00000000-0000-4000-8000-000000000001"
+	const planID = "00000000-0000-4000-8000-0000000000aa"
+	h := ispHandler(&fakeOwnerISP{plan: map[string]any{"id": planID}})
+	path := "/api/isps/" + ispID + "/plans"
+	item := path + "/" + planID
+	valid := func(name string) string { return `{"name":"` + name + `","advertisedDown":300,"advertisedUp":100}` }
+	for method, target := range map[string]string{http.MethodPost: path, http.MethodPut: item} {
+		if got := do(h, method, target, valid(strings.Repeat("x", 200)), ownerWriteWith(nil)).Code; got != map[string]int{http.MethodPost: http.StatusCreated, http.MethodPut: http.StatusOK}[method] {
+			t.Errorf("%s accepts 200-rune name: %d", method, got)
+		}
+		for label, body := range map[string]string{
+			"unknown property": valid("x")[:len(valid("x"))-1] + `,"unexpected":true}`,
+			"long name":        valid(strings.Repeat("x", 201)),
+		} {
+			if got := do(h, method, target, body, ownerWriteWith(nil)).Code; got != http.StatusUnprocessableEntity {
+				t.Errorf("%s %s -> %d, want 422", method, label, got)
+			}
+		}
 	}
 }
 

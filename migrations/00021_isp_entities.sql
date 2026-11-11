@@ -1,9 +1,9 @@
 -- +goose Up
 -- ISP entities derived from ASN/organisation already stored in ip_addresses.geo (JOOST-74).
--- Numbered 00014: JOOST-78 owns 00011/00012 and JOOST-73 owns 00013.
+-- Numbered 00016 after merging develop's 00015 schedule-default migration.
 CREATE TABLE isps (
     id uuid PRIMARY KEY,
-    asn integer NOT NULL UNIQUE CHECK (asn > 0 AND asn < 4294967296),
+    asn bigint NOT NULL UNIQUE CHECK (asn > 0 AND asn <= 4294967295),
     organisation text NOT NULL CHECK (length(trim(organisation)) > 0),
     name text NOT NULL CHECK (length(trim(name)) > 0),
     created_at timestamptz NOT NULL DEFAULT now(),
@@ -22,6 +22,9 @@ CREATE TABLE isp_plans (
 );
 CREATE UNIQUE INDEX isp_plans_isp_id_name_lower_uidx ON isp_plans (isp_id, lower(name));
 CREATE INDEX isp_plans_isp_id_idx ON isp_plans(isp_id);
+
+ALTER TABLE alert_events ADD COLUMN isp_id uuid REFERENCES isps(id);
+CREATE INDEX alert_events_isp_id_ts_idx ON alert_events(isp_id, ts DESC) WHERE isp_id IS NOT NULL;
 
 ALTER TABLE ip_addresses ADD COLUMN isp_id uuid REFERENCES isps(id);
 CREATE INDEX ip_addresses_isp_id_idx ON ip_addresses(isp_id) WHERE isp_id IS NOT NULL;
@@ -44,15 +47,16 @@ SELECT gen_random_uuid(),
            regexp_replace(organisation, '[[:space:],]+(group|corp\.?|corporation|inc\.?|incorporated|ltd\.?|limited|llc|co\.?|company|plc|gmbh|s\.?a\.?|bv|ag)\.?$', '', 'i'),
            '[[:space:],]+(group|corp\.?|corporation|inc\.?|incorporated|ltd\.?|limited|llc|co\.?|company|plc|gmbh|s\.?a\.?|bv|ag)\.?$', '', 'i')), ''), organisation)
 FROM (
-    SELECT DISTINCT ON (((geo->>'asn')::int))
-           (geo->>'asn')::int AS asn,
+    SELECT DISTINCT ON (((geo->>'asn')::bigint))
+           (geo->>'asn')::bigint AS asn,
            COALESCE(NULLIF(trim(geo->>'organisation'), ''), 'AS' || (geo->>'asn')) AS organisation
     FROM ip_addresses
     WHERE geo ? 'asn'
       AND (geo->>'asn') ~ '^[0-9]+$'
+      AND length(geo->>'asn') <= 10
       AND (geo->>'asn')::bigint > 0
       AND (geo->>'asn')::bigint < 4294967296
-    ORDER BY ((geo->>'asn')::int), looked_up_at DESC NULLS LAST, created_at DESC
+    ORDER BY ((geo->>'asn')::bigint), looked_up_at DESC NULLS LAST, created_at DESC
 ) src;
 
 UPDATE ip_addresses a
@@ -61,7 +65,8 @@ FROM isps i
 WHERE a.isp_id IS NULL
   AND a.geo ? 'asn'
   AND (a.geo->>'asn') ~ '^[0-9]+$'
-  AND (a.geo->>'asn')::int = i.asn;
+  AND length(a.geo->>'asn') <= 10
+  AND (a.geo->>'asn')::bigint = i.asn;
 
 UPDATE results r
 SET isp_id = a.isp_id
@@ -77,7 +82,17 @@ SET from_isp_id = (SELECT a.isp_id FROM ip_addresses a WHERE a.ip = h.from_ip),
 WHERE EXISTS (SELECT 1 FROM ip_addresses a WHERE a.ip = h.to_ip AND a.isp_id IS NOT NULL)
    OR EXISTS (SELECT 1 FROM ip_addresses a WHERE a.ip IS NOT DISTINCT FROM h.from_ip AND a.isp_id IS NOT NULL);
 
+UPDATE alert_events e
+SET isp_id = COALESCE(
+    (SELECT r.isp_id FROM results r WHERE r.id=e.trigger_result_id),
+    (SELECT h.to_isp_id FROM node_ip_history h WHERE h.node_id=e.node_id AND h.ts <= e.ts AND h.to_isp_id IS NOT NULL ORDER BY h.ts DESC,h.id DESC LIMIT 1),
+    (SELECT r.isp_id FROM results r WHERE r.node_id=e.node_id AND r.ts <= e.ts AND r.isp_id IS NOT NULL ORDER BY r.ts DESC,r.id DESC LIMIT 1)
+)
+WHERE e.isp_id IS NULL;
+
 -- +goose Down
+DROP INDEX alert_events_isp_id_ts_idx;
+ALTER TABLE alert_events DROP COLUMN isp_id;
 ALTER TABLE nodes DROP COLUMN isp_plan_id;
 ALTER TABLE node_ip_history DROP COLUMN to_isp_id;
 ALTER TABLE node_ip_history DROP COLUMN from_isp_id;

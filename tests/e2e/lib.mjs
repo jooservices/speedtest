@@ -32,11 +32,21 @@ function freePort() {
   });
 }
 
+export async function e2ePort(configured = process.env.E2E_HTTP_PORT) {
+  if (!configured) return freePort();
+  const port = Number(configured);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new Error('E2E_HTTP_PORT must be an integer between 1024 and 65535');
+  }
+  return port;
+}
+
 // The database must be a verified, non-live worktree or test database: the reset below drops everything in it.
 function database(env) {
-  const name = env.SPEEDTEST_DB_NAME || '';
+  const config = { ...env, ...process.env };
+  const name = config.SPEEDTEST_DB_NAME || '';
   if (!/^speedtest_(test|wt[0-9a-z]{1,16})$/.test(name)) throw new Error(`refusing to reset database "${name}": not a worktree or test database`);
-  const pg = { PGHOST: env.SPEEDTEST_DB_HOST, PGPORT: env.SPEEDTEST_DB_PORT, PGUSER: env.SPEEDTEST_DB_USER, PGPASSWORD: env.SPEEDTEST_DB_PASSWORD, PGDATABASE: name };
+  const pg = { PGHOST: config.SPEEDTEST_DB_HOST, PGPORT: config.SPEEDTEST_DB_PORT, PGUSER: config.SPEEDTEST_DB_USER, PGPASSWORD: config.SPEEDTEST_DB_PASSWORD, PGDATABASE: name };
   const marker = run('psql', ['-Atc', "select shobj_description(oid,'pg_database') from pg_database where datname=current_database()"], { env: { ...process.env, ...pg } }).trim();
   if (marker !== 'workspaces-project:speedtest') throw new Error('refusing to reset a database without the Speedtest ownership marker');
   return { name, pg: { ...process.env, ...pg } };
@@ -54,14 +64,14 @@ export async function startStack({ seed = true } = {}) {
   run('go', ['build', '-o', join(out, 'bin', 'agent'), './cmd/agent']);
   run('go', ['build', '-o', join(out, 'bin', 'fake-speedtest'), './internal/agent/testdata/fake-speedtest']);
   sql(db, 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
-  const port = await freePort();
+  const port = await e2ePort();
   const releaseDir = join(out, 'release');
   mkdirSync(releaseDir, { recursive: true });
   const artifact = 'speedtest-agent-linux-amd64';
   const binary = 'e2e-release-artifact';
   writeFileSync(join(releaseDir, artifact), binary);
   writeFileSync(join(releaseDir, 'release.json'), JSON.stringify({ version: '2.0.0', commit: 'e2e', builtAt: new Date().toISOString(), files: { [artifact]: createHash('sha256').update(binary).digest('hex') } }));
-  const centerEnv = { ...process.env, ...env, APP_ENV: 'local', APP_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=', SPEEDTEST_HTTP_ADDR: `127.0.0.1:${port}`, // gitleaks:allow (fixed test-only key)
+  const centerEnv = { ...env, ...process.env, APP_ENV: 'local', APP_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=', SPEEDTEST_HTTP_ADDR: `127.0.0.1:${port}`, // gitleaks:allow (fixed test-only key)
     SPEEDTEST_PUBLIC_URL: `http://127.0.0.1:${port}`, SPEEDTEST_RELEASE_DIR: releaseDir, SPEEDTEST_ADMIN_EMAIL: '', SPEEDTEST_LOGIN_MAX_ATTEMPTS: '100', SPEEDTEST_GEO_DBIP_AUTO_UPDATE: 'false' };
   run('go', ['run', './internal/center/db/cmd/migrate', 'up'], { env: centerEnv });
   run(join(out, 'bin', 'center'), ['seed-admin'], { env: centerEnv });
@@ -80,21 +90,45 @@ export async function startStack({ seed = true } = {}) {
 }
 
 // Starts a real agent for an enrolment token and waits until the center has seen it.
-export async function startAgent(stack, { name, token }) {
+export async function startAgent(stack, { name, token, scenario = 'success', backoffInitial, backoffMax }) {
   const dir = join(out, 'agents', name.replaceAll(/[^A-Za-z0-9]/g, '_'));
   rmSync(dir, { recursive: true, force: true });
   mkdirSync(dir, { recursive: true });
   const env = { ...process.env, SPEEDTEST_AGENT_CONFIG: join(dir, 'config.yaml'), SPEEDTEST_AGENT_CREDENTIAL: join(dir, 'credential'), SPEEDTEST_AGENT_CENTER: stack.origin,
-    SPEEDTEST_OOKLA_BINARY: join(out, 'bin', 'fake-speedtest'), SPEEDTEST_OOKLA_ARGS: '["--scenario","success"]',
+    SPEEDTEST_OOKLA_BINARY: join(out, 'bin', 'fake-speedtest'), SPEEDTEST_OOKLA_ARGS: JSON.stringify(['--scenario', scenario]),
     // Capability discovery only needs LookPath; reuse the Ookla fake so LibreSpeed is reported as installed.
     SPEEDTEST_LIBRESPEED_BINARY: join(out, 'bin', 'fake-speedtest'),
     SPEEDTEST_LIBRESPEED_CONCURRENT: '4', SPEEDTEST_LIBRESPEED_TIMEOUT: '60s',
     SPEEDTEST_SPOOL_DIR: join(dir, 'spool'),
     SPEEDTEST_AGENT_UPDATE_DIR: join(dir, 'update'), SPEEDTEST_AGENT_INBOX_DIR: join(dir, 'inbox') };
+  if (backoffInitial) env.SPEEDTEST_RATE_LIMIT_BACKOFF_INITIAL = backoffInitial;
+  if (backoffMax) env.SPEEDTEST_RATE_LIMIT_BACKOFF_MAX = backoffMax;
   run(join(out, 'bin', 'agent'), ['enroll', '--center', stack.origin, '--token', token, '--name', name], { env });
-  const agent = spawn(join(out, 'bin', 'agent'), ['run'], { cwd: dir, env, stdio: 'ignore' });
-  processes.push(agent);
-  return agent;
+  const spawnAgent = nextEnv => {
+    const child = spawn(join(out, 'bin', 'agent'), ['run'], { cwd: dir, env: nextEnv, stdio: 'ignore' });
+    processes.push(child);
+    return child;
+  };
+  let childProcess = spawnAgent(env);
+  return {
+    async restart(options = {}) {
+      if (childProcess.exitCode == null && childProcess.signalCode == null) {
+        await new Promise(resolveExit => { childProcess.once('exit', resolveExit); childProcess.kill('SIGTERM'); });
+      }
+      const nextEnv = { ...env };
+      if (options.scenario) nextEnv.SPEEDTEST_OOKLA_ARGS = JSON.stringify(['--scenario', options.scenario]);
+      childProcess = spawnAgent(nextEnv);
+    }
+  };
+}
+
+export async function fetchAgentConfig(stack, name) {
+  const safeName = name.replaceAll(/[^A-Za-z0-9]/g, '_');
+  const credential = readFileSync(join(out, 'agents', safeName, 'credential'), 'utf8').trim();
+  const response = await fetch(stack.origin + '/api/agent/config', { headers: { Authorization: `Bearer ${credential}` } });
+  if (!response.ok) throw new Error(`agent config returned HTTP ${response.status}`);
+  const body = await response.json();
+  return body.data || body;
 }
 
 export function stopAll() {

@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jooservices/speedtest/internal/center/agentapi"
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 	"github.com/jooservices/speedtest/internal/center/settings"
 	"github.com/jooservices/speedtest/internal/center/telemetry"
 	"github.com/jooservices/speedtest/internal/shared/errtrack"
@@ -79,6 +80,11 @@ type Options struct {
 	// Install optionally serves /install.sh and /download/<artifact>.
 	Install  http.Handler
 	AgentAPI agentapi.Store
+	// AccessTokens enables named owner bearer tokens and the authenticated /mcp endpoint.
+	AccessTokens AccessTokenStore
+	// AccessTokenRateLimit and AccessTokenBurst set each token's independent API rate bucket.
+	AccessTokenRateLimit int
+	AccessTokenBurst     int
 }
 
 // NewHandler builds the whole HTTP handler: owner APIs, agent API, health endpoints and the static UI, wrapped in
@@ -92,10 +98,20 @@ func NewHandler(options Options) http.Handler {
 	if readinessTimeout <= 0 {
 		readinessTimeout = defaultReadinessTimeout
 	}
-	auth := &serverAuth{service: options.Auth, requireHTTPS: options.RequireHTTPS, trustedProxyCIDRs: options.TrustedProxyCIDRs}
-	areas := append(ownerAreas(options, auth), platformAreas(options, auth, readyz(options.Pinger, readinessTimeout))...)
+	auth := &serverAuth{service: options.Auth, requireHTTPS: options.RequireHTTPS, trustedProxyCIDRs: options.TrustedProxyCIDRs,
+		tokens: options.AccessTokens, tokenLimiter: newNodeRateLimiter(options.AccessTokenRateLimit, options.AccessTokenBurst)}
+	owners := ownerAreas(options, auth)
+	internalOwner := withAudit(dispatcher(owners, http.NotFoundHandler()), options.Audit, auth, logger)
+	if options.AccessTokens != nil {
+		owners.addToken(newMCPHandler(internalOwner), onPath(func(path string) bool { return path == "/mcp" }), func(*http.Request) (apitoken.Scope, bool) { return "", true })
+	}
+	platform := platformAreas(options, auth, readyz(options.Pinger, readinessTimeout))
+	areas := make(routeTable, 0, len(owners)+len(platform))
+	areas = append(areas, owners...)
+	areas = append(areas, platform...)
 
 	handler := withAudit(dispatcher(areas, uiHandler(options.UI)), options.Audit, auth, logger)
+	handler = withAPITokenAuth(handler, owners, auth)
 	handler = withSecurityHeaders(handler)
 	handler = recoverPanics(handler, logger)
 	handler = logRequests(handler, logger)

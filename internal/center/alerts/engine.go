@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/shared/errtrack"
+	"github.com/jooservices/speedtest/internal/shared/failureclass"
 )
 
 const signalBatchSize = 100
@@ -32,6 +33,9 @@ type ruleForEvaluation struct {
 // change signal in the result's transaction. Duplicate result replays never
 // reach this hook because agentapi.Postgres rejects them before calling hooks.
 func (s *Store) AfterResultStored(ctx context.Context, tx pgx.Tx, node string, result agentapi.Result) error {
+	if result.Status == "failed" && result.FailureClass == failureclass.RateLimited {
+		return nil
+	}
 	// The result was validated at ingestion, so its timestamp parses; the stored value is only a fallback.
 	ts, err := time.Parse(time.RFC3339Nano, result.TS)
 	if err != nil {
@@ -89,7 +93,8 @@ func (s *Store) evaluateResult(ctx context.Context, tx pgx.Tx, node string, resu
 
 func metricMatches(rule Rule, result agentapi.Result, expectedDown, expectedUp float64) bool {
 	if rule.Metric == "failed" {
-		return result.Status == "failed"
+		// Provider rate limits are expected backoff noise, not alertable failures.
+		return result.Status == "failed" && result.FailureClass != "rate_limited"
 	}
 	if result.Status == "failed" {
 		return false
@@ -168,11 +173,14 @@ func (s *Store) insertEvent(ctx context.Context, tx pgx.Tx, rule Rule, node stri
 	}
 	var created string
 	if resultID == "" {
-		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail)
-			VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail).Scan(&created)
+		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail,isp_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,COALESCE(
+				(SELECT h.to_isp_id FROM node_ip_history h WHERE h.node_id=$3 AND h.ts <= $5 AND h.to_isp_id IS NOT NULL ORDER BY h.ts DESC,h.id DESC LIMIT 1),
+				(SELECT r.isp_id FROM results r WHERE r.node_id=$3 AND r.ts <= $5 AND r.isp_id IS NOT NULL ORDER BY r.ts DESC,r.id DESC LIMIT 1)))
+			RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail).Scan(&created)
 	} else {
-		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail,trigger_result_id)
-			VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+		err = tx.QueryRow(ctx, `INSERT INTO alert_events(id,rule_id,node_id,severity,ts,title,detail,trigger_result_id,isp_id)
+			VALUES ($1,$2,$3,$4,$5,$6,$7,$8,(SELECT isp_id FROM results WHERE id=$8))
 			ON CONFLICT (rule_id,node_id,trigger_result_id) WHERE trigger_result_id IS NOT NULL DO NOTHING
 			RETURNING id::text`, id, rule.ID, node, rule.Severity, ts, rule.Name, detail, resultID).Scan(&created)
 		if errors.Is(err, pgx.ErrNoRows) {

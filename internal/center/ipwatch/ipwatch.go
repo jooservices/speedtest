@@ -4,6 +4,7 @@ package ipwatch
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"time"
@@ -92,8 +93,35 @@ func setBoundary(ctx context.Context, tx pgx.Tx, node, id, ip string, previous *
 	return err
 }
 
+func cachedLocation(ctx context.Context, tx pgx.Tx, ip string) (geo.Location, bool, bool, error) {
+	var raw []byte
+	var lookedUp, linked bool
+	err := tx.QueryRow(ctx, `SELECT geo, looked_up_at IS NOT NULL, isp_id IS NOT NULL FROM ip_addresses WHERE ip=$1::inet`, ip).Scan(&raw, &lookedUp, &linked)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && !lookedUp {
+		return geo.Location{}, false, linked, nil
+	}
+	if err != nil {
+		return geo.Location{}, false, false, err
+	}
+	var location geo.Location
+	if err = json.Unmarshal(raw, &location); err != nil {
+		return geo.Location{}, false, false, errors.New("invalid cached geolocation")
+	}
+	return location, true, linked, nil
+}
+
 func (w *Watcher) resolveAndLink(ctx context.Context, tx pgx.Tx, node string, r agentapi.Result, ip string) error {
-	if _, err := tx.Exec(ctx, `SELECT ip FROM ip_addresses WHERE ip=$1 FOR NO KEY UPDATE`, ip); err != nil {
+	cached, found, linked, err := cachedLocation(ctx, tx, ip)
+	if err != nil {
+		return err
+	}
+	if found && cached.ASN == 0 {
+		if linked {
+			return isp.LinkResult(ctx, tx, r.ID, node, ip)
+		}
+		return nil
+	}
+	if err := isp.LockAddress(ctx, tx, ip); err != nil {
 		return err
 	}
 	resolver := geo.NewResolver(boundCache{Cache: geo.NewPostgresCache(tx), ip: ip}, w.Offline, w.Fallbacks...).WithConsensus(w.Consensus, w.Logger)

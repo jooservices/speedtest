@@ -2,18 +2,18 @@
 (function () {
   'use strict';
   var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt;
-  var state = { selected: null, compare: [], remote: null };
+  var state = { selected: null, compare: [], remote: null, trendRevision: 0, trendController: null };
 
   function mean(a) { return a.length ? a.reduce(function (s, v) { return s + v; }, 0) / a.length : null; }
   function p95(a) {
     if (!a.length) return null;
     var s = a.slice().sort(function (x, y) { return x - y; });
-    return s[Math.min(s.length - 1, Math.floor(0.95 * (s.length - 1)))];
+    return ST.stats.pct(s, 0.95);
   }
 
   function ispsFromResults() {
     var map = {}, list = [];
-    ST.results({ status: 'all' }).forEach(function (r) {
+    ST.results({ status: 'all', from: Date.now() - ST.ranges[ST.settings().range] }).forEach(function (r) {
       var g = ST.geo(r.ip);
       if (!g || !g.asn) return;
       var key = 'as' + g.asn;
@@ -47,24 +47,36 @@
   }
 
   function drawTrend(host, row) {
+    state.trendRevision++;
+    var revision = state.trendRevision;
+    if (state.trendController) state.trendController.abort();
+    state.trendController = null;
     U.clear(host);
     if (!row) {
       host.appendChild(U.empty('Select an ISP', 'Choose a row to see its download trend for the current range.'));
       return;
     }
     function paint(points) {
+      if (revision !== state.trendRevision || !host.isConnected || !state.selected || state.selected.id !== row.id) return;
       if (!points.length) {
         host.appendChild(U.empty('No samples', 'No successful tests for this ISP in the selected range.'));
         return;
       }
-      host.appendChild(ST.charts.line({ series: [{ name: row.name, color: 'var(--accent)', points: points }], height: 220, yFormat: F.axisSpeed, yUnit: F.axisUnit() }));
+      ST.charts.line(host, {
+        series: [{ name: row.name, color: 'var(--accent)', points: points }],
+        x: { type: 'time', min: Date.now() - ST.ranges[ST.settings().range], max: Date.now() },
+        y: { min: 0, format: F.axisSpeed, unit: F.axisUnit() }, height: 220, label: row.name + ' download trend'
+      });
     }
     if (!ST.demo && row.id.indexOf('as') !== 0) {
       var trendPath = '/api/isps/' + encodeURIComponent(row.id) + '/trend?range=' + encodeURIComponent(ST.settings().range) + ST.engineQuery();
-      ST.api.request(trendPath).then(function (res) {
+      state.trendController = new AbortController();
+      ST.api.request(trendPath, { signal: state.trendController.signal }).then(function (res) {
+        if (revision !== state.trendRevision || !host.isConnected || !state.selected || state.selected.id !== row.id) return;
         U.clear(host);
         paint((res.data || []).filter(function (p) { return p.down != null; }).map(function (p) { return [Date.parse(p.ts), p.down]; }));
       }).catch(function (err) {
+        if (revision !== state.trendRevision || err.name === 'AbortError' || !host.isConnected) return;
         U.clear(host);
         host.appendChild(U.empty('Could not load trend', err.message || 'Try again.'));
       });
@@ -72,20 +84,23 @@
       return;
     }
     var from = Date.now() - ST.ranges[ST.settings().range];
-    var buckets = {}, order = [];
-    ST.results({ from: from, status: 'ok' }).forEach(function (r) {
+    var buckets = {}, order = [], hourly = ST.ranges[ST.settings().range] <= 24 * ST.HOUR;
+    ST.results({ from: from, status: 'all' }).forEach(function (r) {
       var g = ST.geo(r.ip);
-      if (!g || g.asn !== row.asn || r.down == null) return;
-      var day = F.parts(r.ts).key;
-      if (!buckets[day]) { buckets[day] = { t: 0, n: 0, v: 0 }; order.push(day); }
-      buckets[day].t += r.ts; buckets[day].n++; buckets[day].v += r.down;
+      if (!g || g.asn !== row.asn || r.status === 'failed' || r.down == null) return;
+      var key = hourly ? Math.floor(r.ts / ST.HOUR) : F.parts(r.ts).key;
+      if (!buckets[key]) { buckets[key] = { t: 0, n: 0, v: 0 }; order.push(key); }
+      buckets[key].t += r.ts; buckets[key].n++; buckets[key].v += r.down;
     });
     paint(order.map(function (k) { return [buckets[k].t / buckets[k].n, buckets[k].v / buckets[k].n]; }));
   }
 
   function render(root, list) {
     var trendHost = h('div', { class: 'card card-pad' });
+    var selectedStatus = h('div', { role: 'status', 'aria-live': 'polite', class: 'muted mb' });
     var compareHost = h('div', { class: 'card card-pad' });
+    state.selected = list.filter(function (row) { return state.selected && row.id === state.selected.id; })[0] || null;
+    function selectISP(row) { state.selected = row; selectedStatus.textContent = 'Selected ISP: ' + row.name + ' (AS' + row.asn + ')'; drawTrend(trendHost, row); }
     function redrawCompare() {
       U.clear(compareHost);
       var rows = list.filter(function (r) { return state.compare.indexOf(r.id) >= 0; });
@@ -118,7 +133,7 @@
             redrawCompare();
           } });
         } },
-        { key: 'name', label: 'ISP', render: function (r) { return h('span', null, r.name, h('span', { class: 'muted' }, ' AS' + r.asn)); } },
+        { key: 'name', label: 'ISP', render: function (r) { return h('button', { type: 'button', class: 'btn sm', 'aria-label': 'Show trend for ' + r.name + ' (AS' + r.asn + ')', 'aria-pressed': !!(state.selected && state.selected.id === r.id), onClick: function () { selectISP(r); } }, r.name + ' (AS' + r.asn + ')'); } },
         { key: 'nodeCount', label: 'Nodes', num: true },
         { key: 'avgDown', label: 'Average', num: true, render: function (r) { return F.speed(r.avgDown); } },
         { key: 'p95Down', label: 'p95', num: true, render: function (r) { return F.speed(r.p95Down); } },
@@ -127,12 +142,12 @@
         { key: 'avgPing', label: 'Latency', num: true, render: function (r) { return F.ms(r.avgPing); } }
       ],
       rows: list,
-      onRow: function (r) { state.selected = r; drawTrend(trendHost, r); },
       empty: U.empty('No ISP data yet', 'Run tests so public IPs get ASN lookups; ISPs appear automatically.')
     })));
     root.appendChild(h('div', { class: 'grid-2', style: 'margin-top:16px' },
-      h('div', null, h('h2', { class: 'section-title' }, 'Trend'), trendHost),
+      h('div', null, h('h2', { class: 'section-title' }, 'Trend'), selectedStatus, trendHost),
       h('div', null, h('h2', { class: 'section-title' }, 'Comparison'), compareHost)));
+    if (state.selected) selectedStatus.textContent = 'Selected ISP: ' + state.selected.name + ' (AS' + state.selected.asn + ')';
     drawTrend(trendHost, state.selected);
     redrawCompare();
     if (!ST.demo) root.appendChild(reportCard());

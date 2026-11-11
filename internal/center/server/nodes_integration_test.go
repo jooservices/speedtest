@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/shared/testenv"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/auth"
@@ -29,9 +31,7 @@ func openServerIntegrationPool(t *testing.T) (*pgxpool.Pool, context.Context, []
 	if err != nil {
 		t.Fatal("a configured worktree .env is required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
@@ -104,6 +104,17 @@ func TestNodeCredentialHTTPFlowIntegration(t *testing.T) {
 	handler.ServeHTTP(createResponse, create)
 	if createResponse.Code != http.StatusCreated {
 		t.Fatalf("bootstrap create status = %d", createResponse.Code)
+	}
+	var createdEnvelope struct {
+		Data struct {
+			Node map[string]any `json:"node"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(createResponse.Body.Bytes(), &createdEnvelope); err != nil {
+		t.Fatal("decode node creation response", err)
+	}
+	if isp, exists := createdEnvelope.Data.Node["isp"]; !exists || isp != nil {
+		t.Fatal("new node without a current IP must expose isp: null")
 	}
 	nodeID := responseString(t, createResponse.Body.Bytes(), "data", "node", "id")
 	token := responseString(t, createResponse.Body.Bytes(), "data", "token")
