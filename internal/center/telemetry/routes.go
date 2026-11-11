@@ -139,6 +139,7 @@ var uiRoutes = map[string]bool{
 	"/assets/js/pages/alerts.js":                       true,
 	"/assets/js/pages/nodes.js":                        true,
 	"/assets/js/pages/network.js":                      true,
+	"/assets/js/pages/isps.js":                         true,
 	"/assets/js/pages/history.js":                      true,
 	"/assets/js/pages/schedules.js":                    true,
 	"/assets/js/pages/dashboard.js":                    true,

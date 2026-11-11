@@ -5,10 +5,14 @@ package dbtest
 
 import (
 	"context"
+	"io/fs"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jooservices/speedtest/internal/center/db"
+	"github.com/jooservices/speedtest/migrations"
 )
 
 type testReporter interface {
@@ -60,4 +64,25 @@ func MigrateUp(t testReporter, pool *pgxpool.Pool) {
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal(err)
 	}
+}
+
+var createTable = regexp.MustCompile(`(?im)^\s*CREATE TABLE (?:IF NOT EXISTS )?(?:public\.)?([a-z_][a-z0-9_]*)`)
+
+// speedtestTables lists every table the embedded migrations create, plus the goose journal.
+func speedtestTables() map[string]bool {
+	known := map[string]bool{"goose_db_version": true}
+	files, err := fs.Glob(migrations.Files, "*.sql")
+	if err != nil {
+		return known
+	}
+	for _, name := range files {
+		data, err := fs.ReadFile(migrations.Files, name)
+		if err != nil {
+			continue
+		}
+		for _, m := range createTable.FindAllStringSubmatch(string(data), -1) {
+			known[m[1]] = true
+		}
+	}
+	return known
 }

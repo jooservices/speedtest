@@ -74,6 +74,7 @@ type EventFilter struct {
 	State    string
 	Severity string
 	NodeID   string
+	ISPID    string
 }
 
 var severities = map[string]bool{"info": true, "warn": true, "crit": true}

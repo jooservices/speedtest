@@ -67,7 +67,12 @@ func scanRule(row rowScanner) (Rule, error) {
 	return r, nil
 }
 
-const eventColumns = `id::text,rule_id::text,node_id::text,severity,ts,resolved_at,title,detail,acked`
+const eventColumns = `id::text,rule_id::text,node_id::text,isp_id::text,severity,ts,resolved_at,title,detail,acked`
+
+func qualifyEventColumns(alias string) string {
+	return alias + `.id::text,` + alias + `.rule_id::text,` + alias + `.node_id::text,` + alias + `.isp_id::text,` +
+		alias + `.severity,` + alias + `.ts,` + alias + `.resolved_at,` + alias + `.title,` + alias + `.detail,` + alias + `.acked`
+}
 
 func scanEvent(row rowScanner) (Event, error) {
 	var e Event
@@ -246,17 +251,21 @@ func ruleNodeIDs(in RuleInput) []string {
 
 // ListEvents returns a newest-first page matching the event activity filters.
 func (s *Store) ListEvents(ctx context.Context, filter EventFilter, page, size int) ([]Event, int, error) {
-	var node any
+	var node, isp any
 	if filter.NodeID != "" {
 		node = filter.NodeID
 	}
-	args := []any{filter.State == "open", filter.Severity, node}
-	where := `($1::boolean=false OR acked=false) AND ($2::text='' OR severity=$2) AND ($3::uuid IS NULL OR node_id=$3)`
+	if filter.ISPID != "" {
+		isp = filter.ISPID
+	}
+	args := []any{filter.State == "open", filter.Severity, node, isp}
+	where := `($1::boolean=false OR e.acked=false) AND ($2::text='' OR e.severity=$2) AND ($3::uuid IS NULL OR e.node_id=$3)
+		AND ($4::uuid IS NULL OR e.isp_id=$4::uuid)`
 	var total int
-	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM alert_events WHERE `+where, args...).Scan(&total); err != nil {
+	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM alert_events e WHERE `+where, args...).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.DB.Query(ctx, `SELECT `+eventColumns+` FROM alert_events WHERE `+where+` ORDER BY ts DESC,id DESC LIMIT $4 OFFSET $5`, append(args, size, (page-1)*size)...)
+	rows, err := s.DB.Query(ctx, `SELECT `+qualifyEventColumns("e")+` FROM alert_events e WHERE `+where+` ORDER BY e.ts DESC,e.id DESC LIMIT $5 OFFSET $6`, append(args, size, (page-1)*size)...)
 	if err != nil {
 		return nil, 0, err
 	}

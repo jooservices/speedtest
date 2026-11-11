@@ -104,8 +104,19 @@ func TestAuthenticationSourceMigrationRollsBackAndReapplies(t *testing.T) {
 		}
 	}
 	var columns int
-	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_log' AND column_name IN ('auth_method','credential_id')`).Scan(&columns); err != nil || columns != 0 {
-		t.Fatalf("rolled-back audit columns = %d, error = %v", columns, err)
+	for step := 0; step < 30; step++ {
+		if err := db.Migrate(ctx, pool, "down"); err != nil {
+			t.Fatal("roll back migrations down to the audit authentication source one:", err)
+		}
+		if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_log' AND column_name IN ('auth_method','credential_id')`).Scan(&columns); err != nil {
+			t.Fatal(err)
+		}
+		if columns == 0 {
+			break
+		}
+	}
+	if columns != 0 {
+		t.Fatalf("rolled-back audit columns = %d", columns)
 	}
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal("reapply audit authentication source migration:", err)
