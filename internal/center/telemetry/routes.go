@@ -128,6 +128,7 @@ var apiRoutes = map[string]bool{
 	"/healthz":                                        true,
 	"/readyz":                                         true,
 	"/metrics":                                        true,
+	"/api/reports/monthly":                            true,
 }
 
 var uiRoutes = map[string]bool{
