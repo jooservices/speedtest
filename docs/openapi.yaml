@@ -7112,9 +7112,9 @@ components:
       type: object
       required: [ispId, isp, asn, nodeId, node, plan, advertisedDownMbps, advertisedUpMbps, tests, failures, avgDownMbps, p95DownMbps, avgUpMbps, p95UpMbps, deliveredPercent, worstHoursUtc, downtimeMinutes, ipChanges]
       properties:
-        ispId: {type: string, format: uuid}
-        isp: {type: string}
-        asn: {type: integer}
+        ispId: {type: [string, "null"], format: uuid, description: Null when no ISP can be attributed at the measurement time.}
+        isp: {type: string, description: Unknown ISP when no attribution is available.}
+        asn: {type: integer, description: 0 when the ISP is unknown.}
         nodeId: {type: string, format: uuid}
         node: {type: string}
         plan: {type: [string, "null"]}
@@ -7127,9 +7127,9 @@ components:
         avgUpMbps: {type: [number, "null"]}
         p95UpMbps: {type: [number, "null"]}
         deliveredPercent: {type: [number, "null"], description: Average download as a percentage of the advertised plan speed.}
-        worstHoursUtc: {type: array, items: {type: integer, minimum: 0, maximum: 23}, description: The three UTC hours with the lowest average download.}
-        downtimeMinutes: {type: integer, description: Minutes from each failed test to the next test, at most a day per failure.}
-        ipChanges: {type: integer}
+        worstHoursUtc: {type: array, items: {type: integer, minimum: 0, maximum: 23}, description: The three UTC hours with the lowest average download for this ISP and node.}
+        downtimeMinutes: {type: integer, description: Minutes from each failed test to the next test or report boundary, at most a day per failure.}
+        ipChanges: {type: integer, description: Actual transitions only; attributed to the destination ISP.}
     MonthlyReport:
       type: object
       required: [month, from, to, partial, engine, generatedAt, rows]

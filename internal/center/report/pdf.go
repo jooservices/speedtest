@@ -2,110 +2,120 @@ package report
 
 import (
 	"bytes"
+	"embed"
 	"fmt"
 	"strings"
+
+	"github.com/go-pdf/fpdf"
 )
+
+//go:embed fonts/NotoSans.ttf
+var fontFiles embed.FS
 
 const (
-	pdfWidth, pdfHeight = 842, 595 // A4 landscape in points
-	pdfMargin           = 36
-	pdfLine             = 13
+	pdfMargin    = 10.0
+	pdfBottom    = 200.0
+	pdfLine      = 3.3
+	pdfFontSize  = 6.5
+	pdfCellInset = 1.0
 )
 
-// pdfEscape keeps a string inside the standard Helvetica WinAnsi set and escapes the PDF string delimiters.
-func pdfEscape(s string) string {
-	var b strings.Builder
-	for _, r := range s {
-		switch {
-		case r == '\\' || r == '(' || r == ')':
-			b.WriteByte('\\')
-			b.WriteRune(r)
-		case r >= 32 && r < 127:
-			b.WriteRune(r)
-		default:
-			b.WriteByte('?')
-		}
-	}
-	return b.String()
-}
+var pdfWidths = []float64{43, 32, 50, 12, 12, 20, 20, 20, 30, 20, 16}
+var pdfHeaders = []string{"ISP", "Node", "Plan", "Tests", "Fail", "Avg down", "p95 down", "Delivered", "Worst UTC", "Downtime min", "IP changes"}
 
-func clip(s string, n int) string {
-	if r := []rune(s); len(r) > n {
-		return string(r[:n-1]) + "~"
+// PDF renders the report with an embedded Unicode font and wraps long table values.
+func PDF(r Report) ([]byte, error) {
+	font, err := fontFiles.ReadFile("fonts/NotoSans.ttf")
+	if err != nil {
+		return nil, err
 	}
-	return s
-}
-
-func pdfRows(r Report) []string {
-	lines := []string{fmt.Sprintf("%-22s %-16s %-14s %6s %5s %8s %8s %8s %-9s %5s %4s", "ISP", "Node", "Plan", "Tests", "Fail", "AvgDown", "P95Down", "Deliv%", "Worst UTC", "Mins", "IPs")}
-	for _, row := range r.Rows {
-		lines = append(lines, fmt.Sprintf("%-22s %-16s %-14s %6d %5d %8s %8s %8s %-9s %5d %4d",
-			clip(row.ISP, 22), clip(row.Node, 16), clip(planName(row.Plan), 14), row.Tests, row.Failures,
-			num(row.AvgDown), num(row.P95Down), num(row.DeliveredPct), hours(row.WorstHours), row.DowntimeMin, row.IPChanges))
+	pdf := fpdf.New("L", "mm", "A4", "")
+	pdf.AddUTF8FontFromBytes("NotoSans", "", font)
+	pdf.SetMargins(pdfMargin, pdfMargin, pdfMargin)
+	pdf.SetAutoPageBreak(false, pdfMargin)
+	pdf.SetCompression(false)
+	pdf.SetFont("NotoSans", "", pdfFontSize)
+	if err := pdf.Error(); err != nil {
+		return nil, err
 	}
-	return lines
-}
-
-// PDF renders the report as a small paginated PDF using only the built-in Helvetica font (no dependencies). The table
-// uses Courier so columns line up.
-func PDF(r Report) []byte {
-	title := fmt.Sprintf("Monthly ISP and plan report %s (UTC)%s - engine: %s", r.Month, map[bool]string{true: " - partial month", false: ""}[r.Partial], engineName(r.Engine))
-	body := pdfRows(r)
+	pdfPage(pdf, r)
 	if len(r.Rows) == 0 {
-		body = append(body, "", "No tests with a known ISP in this month.")
+		pdf.SetXY(pdfMargin, pdf.GetY()+4)
+		pdf.MultiCell(275, 5, "No tests reported this month.", "", "L", false)
 	}
-	perPage := (pdfHeight - 2*pdfMargin - 40) / pdfLine
-	var pages [][]string
-	for len(body) > 0 {
-		n := min(perPage, len(body))
-		pages = append(pages, body[:n])
-		body = body[n:]
-	}
-	var objs []string
-	objs = append(objs, "<< /Type /Catalog /Pages 2 0 R >>")
-	kids := make([]string, len(pages))
-	for i := range pages {
-		kids[i] = fmt.Sprintf("%d 0 R", 5+2*i)
-	}
-	objs = append(objs, fmt.Sprintf("<< /Type /Pages /Kids [%s] /Count %d >>", strings.Join(kids, " "), len(pages)))
-	objs = append(objs, "<< /Type /Font /Subtype /Type1 /BaseFont /Courier /Encoding /WinAnsiEncoding >>")
-	objs = append(objs, "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>")
-	for i, lines := range pages {
-		var c strings.Builder
-		y := pdfHeight - pdfMargin
-		fmt.Fprintf(&c, "BT /F2 12 Tf %d %d Td (%s) Tj ET\n", pdfMargin, y, pdfEscape(title))
-		y -= 28
-		fmt.Fprintf(&c, "BT /F1 7 Tf %d %d Td %d TL\n", pdfMargin, y, pdfLine)
-		for _, l := range lines {
-			fmt.Fprintf(&c, "(%s) Tj T*\n", pdfEscape(l))
+	for _, row := range r.Rows {
+		if err := drawPDFRow(pdf, r, pdfRowValues(row)); err != nil {
+			return nil, err
 		}
-		fmt.Fprintf(&c, "ET\nBT /F1 7 Tf %d %d Td (Page %d of %d) Tj ET\n", pdfWidth-pdfMargin-60, pdfMargin-12, i+1, len(pages))
-		objs = append(objs, fmt.Sprintf("<< /Type /Page /Parent 2 0 R /MediaBox [0 0 %d %d] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents %d 0 R >>", pdfWidth, pdfHeight, 6+2*i))
-		objs = append(objs, fmt.Sprintf("<< /Length %d >>\nstream\n%sendstream", c.Len(), c.String()))
 	}
-	return assemble(objs)
-}
-
-func engineName(e string) string {
-	if e == "" {
-		return "primary"
-	}
-	return e
-}
-
-func assemble(objs []string) []byte {
 	var out bytes.Buffer
-	out.WriteString("%PDF-1.4\n")
-	offsets := make([]int, len(objs))
-	for i, o := range objs {
-		offsets[i] = out.Len()
-		fmt.Fprintf(&out, "%d 0 obj\n%s\nendobj\n", i+1, o)
+	if err := pdf.Output(&out); err != nil {
+		return nil, err
 	}
-	xref := out.Len()
-	fmt.Fprintf(&out, "xref\n0 %d\n0000000000 65535 f \n", len(objs)+1)
-	for _, off := range offsets {
-		fmt.Fprintf(&out, "%010d 00000 n \n", off)
+	return out.Bytes(), nil
+}
+
+func pdfPage(pdf *fpdf.Fpdf, r Report) {
+	pdf.AddPage()
+	pdf.SetFont("NotoSans", "", 9)
+	pdf.CellFormat(275, 7, pdfTitle(r), "", 1, "L", false, 0, "")
+	pdf.SetFont("NotoSans", "", pdfFontSize)
+	lines, height := pdfMeasure(pdf, pdfHeaders)
+	pdfDrawCells(pdf, lines, height, true)
+}
+
+func pdfTitle(r Report) string {
+	partial := ""
+	if r.Partial {
+		partial = " - partial month"
 	}
-	fmt.Fprintf(&out, "trailer\n<< /Size %d /Root 1 0 R >>\nstartxref\n%d\n%%%%EOF\n", len(objs)+1, xref)
-	return out.Bytes()
+	engine := r.Engine
+	if engine == "" {
+		engine = "primary"
+	}
+	return fmt.Sprintf("Monthly ISP and plan report %s (UTC)%s - engine: %s", r.Month, partial, engine)
+}
+
+func pdfRowValues(row Row) []string {
+	return []string{row.ISP, row.Node, planName(row.Plan), fmt.Sprint(row.Tests), fmt.Sprint(row.Failures), num(row.AvgDown), num(row.P95Down),
+		num(row.DeliveredPct), hours(row.WorstHours), fmt.Sprint(row.DowntimeMin), fmt.Sprint(row.IPChanges)}
+}
+
+func drawPDFRow(pdf *fpdf.Fpdf, report Report, values []string) error {
+	lines, height := pdfMeasure(pdf, values)
+	if pdf.GetY()+height > pdfBottom {
+		pdfPage(pdf, report)
+	}
+	pdfDrawCells(pdf, lines, height, false)
+	return pdf.Error()
+}
+
+func pdfMeasure(pdf *fpdf.Fpdf, values []string) ([][]string, float64) {
+	lines := make([][]string, len(values))
+	maxLines := 1
+	for i, value := range values {
+		lines[i] = pdf.SplitText(strings.ToValidUTF8(value, "�"), pdfWidths[i]-2*pdfCellInset)
+		if len(lines[i]) == 0 {
+			lines[i] = []string{""}
+		}
+		maxLines = max(maxLines, len(lines[i]))
+	}
+	return lines, float64(maxLines)*pdfLine + 2
+}
+
+func pdfDrawCells(pdf *fpdf.Fpdf, lines [][]string, height float64, header bool) {
+	x, y := pdf.GetX(), pdf.GetY()
+	for i, width := range pdfWidths {
+		if header {
+			pdf.SetFillColor(235, 239, 244)
+			pdf.Rect(x, y, width, height, "DF")
+		} else {
+			pdf.Rect(x, y, width, height, "D")
+		}
+		for j, line := range lines[i] {
+			pdf.Text(x+pdfCellInset, y+2.8+float64(j)*pdfLine, line)
+		}
+		x += width
+	}
+	pdf.SetXY(pdfMargin, y+height)
 }

@@ -47,6 +47,9 @@ func TestOwnerReportFormats(t *testing.T) {
 				t.Fatalf("headers %v", rec.Header())
 			}
 		}
+		if format == "pdf" && (!strings.HasPrefix(rec.Body.String(), "%PDF-") || !strings.Contains(rec.Body.String(), "/ToUnicode")) {
+			t.Fatal("PDF response did not contain a Unicode PDF")
+		}
 	}
 	if f.engine != "ookla" || f.id != "00000000-0000-4000-8000-000000000001" {
 		t.Fatalf("filters %q %q", f.engine, f.id)
