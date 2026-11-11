@@ -33,7 +33,15 @@ nodes of different capacity. Percent of expected can exceed 100.
 The record of every public IP a node used and when it changed. For each address
 it stores the first and last time it was seen, how many tests used it, its
 average download/upload, and its geolocation. Address changes are tracked as
-transitions (`from` → `to`). Schemas: `IPAddress`, `IPChange`.
+transitions (`from` → `to`) and carry the ISP of each address when known.
+Schemas: `IPAddress`, `IPChange`.
+
+## ISP
+
+An Internet Service Provider entity inferred from the ASN number and
+organisation already stored with each public IP's geolocation. Results and
+addresses link to an ISP; a node exposes its current ISP; optional plans hold
+advertised down/up speeds used as expected-speed defaults. Schema: `ISP`.
 
 ## Rule
 

@@ -125,4 +125,5 @@ DROP TABLE usage_monthly_totals;
 DROP INDEX results_usage_period_idx;
 DROP TRIGGER results_usage_budget_lifecycle ON results;
 DROP FUNCTION speedtest_lock_usage_budget_changes();
-ALTER TABLE schedules ALTER COLUMN interval_minutes SET DEFAULT 30;
+-- The migration is additive over the 60-minute default established by 00015.
+ALTER TABLE schedules ALTER COLUMN interval_minutes SET DEFAULT 60;

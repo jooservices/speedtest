@@ -36,12 +36,19 @@ has changed the database default to 60.
 `00020_audit_authentication_source.sql` records whether each audited change used
 a session or bearer credential and stores only the non-secret bearer token ID.
 Token creation audit targets also retain the newly created token ID.
-`00022_bandwidth_usage_budgets.sql` adds a monthly per-node/engine byte rollup
+`00023_bandwidth_usage_budgets.sql` adds a monthly per-node/engine byte rollup
 refreshed when a budget is configured and maintained by an insert trigger while
 budgets exist (so older center writers remain compatible),
 optional global/node budget state, a durable budget-event extension queue and
-monthly schedule overrides. New node schedules default to 60 minutes; the down
-migration restores the former 30-minute default without changing existing rows.
+`00021_isp_entities.sql` adds ASN-derived ISP entities, plan records and links
+from results, addresses, IP history and alert events. `00022_isp_plan_default_provenance.sql`
+adds separate per-speed flags so plan updates change only expected speeds that
+still follow the advertised defaults. Existing rows start with both flags false;
+the migration does not infer default provenance from numeric equality. Owners can
+clear and reassign a plan to opt an existing node into advertised defaults. Its
+down migration removes those flags and leaves node speeds and plan assignments
+otherwise intact. Usage down preserves the 60-minute schedule default from
+00015 and restores overrides without changing rows that were not overridden.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file

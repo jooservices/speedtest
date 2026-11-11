@@ -88,11 +88,11 @@ func TestMigrations(t *testing.T) {
 func verifyRequiredTables(t *testing.T, pool *pgxpool.Pool, ctx context.Context) {
 	t.Helper()
 	var got int
-	tables := []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor", "api_access_tokens", "usage_monthly_totals", "usage_budgets", "usage_budget_events", "usage_budget_overrides"}
-	if err := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", tables).Scan(&got); err != nil || got != 32 {
-		t.Fatalf("required tables: got %d want 32: %v", got, err)
+	tables := []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor", "api_access_tokens", "isps", "isp_plans", "usage_monthly_totals", "usage_budgets", "usage_budget_events", "usage_budget_overrides"}
+	if err := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", tables).Scan(&got); err != nil || got != len(tables) {
+		t.Fatalf("required tables: got %d want %d: %v", got, len(tables), err)
 	}
-	t.Log("PASS: 32 required tables created by embedded migrations")
+	t.Logf("PASS: %d required tables created by embedded migrations", len(tables))
 }
 
 func verifyMigrationTypes(t *testing.T, pool *pgxpool.Pool, ctx context.Context) {
@@ -199,10 +199,8 @@ INSERT INTO settings(key,secret_ciphertext) VALUES ('integration',decode('aabb',
 INSERT INTO api_idempotency(principal,operation,key_hash,request_hash,response_ciphertext,expires_at) VALUES ('owner','create-node',repeat('a',64),repeat('b',64),decode(repeat('00',28),'hex'),now()+interval '1 hour');
 INSERT INTO api_access_tokens(id,user_id,name,scope,token_hash) VALUES ('00000000-0000-4000-8000-000000000017','00000000-0000-4000-8000-000000000010','rollback-fixture','read',decode(repeat('aa',32),'hex'));
 INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000-8000-000000000015',id,'run_now','00000000-0000-4000-8000-000000000002' FROM nodes;`)
-	for range 15 {
-		if err := db.Migrate(ctx, pool, "down"); err != nil {
-			t.Fatal(err)
-		}
+	if err := db.MigrateDownTo(ctx, pool, 0); err != nil {
+		t.Fatal("roll back every migration", err)
 	}
 	var count int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name <> 'goose_db_version'").Scan(&count); err != nil || count != 0 {
@@ -239,10 +237,8 @@ func verifyCancelledMigration(t *testing.T, pool *pgxpool.Pool) {
 
 func verifyTransactionalRollback(t *testing.T, pool *pgxpool.Pool, ctx context.Context) {
 	t.Helper()
-	for range 14 {
-		if err := db.Migrate(ctx, pool, "down"); err != nil {
-			t.Fatal(err)
-		}
+	if err := db.MigrateDownTo(ctx, pool, 1); err != nil {
+		t.Fatal("roll back to the initial schema", err)
 	}
 	exec(t, ctx, pool, "CREATE VIEW rollback_blocker AS SELECT id FROM users")
 	t.Cleanup(func() { exec(t, context.Background(), pool, "DROP VIEW IF EXISTS rollback_blocker") })
@@ -269,11 +265,9 @@ func TestScheduleDefaultMigrationPreservesIntervalsIntegration(t *testing.T) {
 VALUES ('00000000-0000-4000-8000-000000000101',5,0),
        ('00000000-0000-4000-8000-000000000102',30,7),
        ('00000000-0000-4000-8000-000000000103',60,11)`)
-	// Roll back usage, audit-source, API-token and failure-class migrations.
-	for range 4 {
-		if err := db.Migrate(ctx, pool, "down"); err != nil {
-			t.Fatal(err)
-		}
+	// Return to the schema before 00015; this remains stable as later migrations are added.
+	if err := db.MigrateDownTo(ctx, pool, 10); err != nil {
+		t.Fatal("roll back to the schema before the 60-minute default", err)
 	}
 	assertScheduleIntervals(t, ctx, pool, "5:0,30:7,60:11")
 	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps)

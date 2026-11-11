@@ -24,6 +24,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/center/nodes"
 	"github.com/jooservices/speedtest/internal/center/ownerapi"
+	"github.com/jooservices/speedtest/internal/center/usage"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -50,6 +51,7 @@ type accessTokenFixture struct {
 	logs    *bytes.Buffer
 	nodeID  string
 	alertID string
+	ispID   string
 }
 
 func newAccessTokenFixture(t *testing.T) *accessTokenFixture {
@@ -75,17 +77,20 @@ func newAccessTokenFixture(t *testing.T) *accessTokenFixture {
 	logs := &bytes.Buffer{}
 	owner := &ownerapi.Store{DB: pool}
 	alertStore := &alerts.Store{DB: pool, AppKey: appKey}
-	nodeID, alertID := seedAccessTokenMCPData(t, pool, ctx)
+	nodeID, alertID, ispID := seedAccessTokenMCPData(t, pool, ctx)
 	handler := NewHandler(Options{Auth: authService, NodeCredentials: nodes.NewService(pool, appKey), OwnerNodes: owner, OwnerSchedules: owner,
-		OwnerResults: owner, OwnerAlerts: alertStore, Audit: &audit.Store{DB: pool}, AccessTokens: &apitoken.Store{DB: pool},
+		OwnerResults: owner, OwnerAlerts: alertStore, OwnerUsage: &usage.Store{DB: pool}, Audit: &audit.Store{DB: pool}, AccessTokens: &apitoken.Store{DB: pool},
 		TrustedProxyCIDRs: "127.0.0.1/32", Logger: slog.New(slog.NewJSONHandler(logs, nil))})
 	session, csrf := loginIntegrationOwner(t, handler)
-	return &accessTokenFixture{pool: pool, ctx: ctx, handler: handler, session: session, csrf: csrf, logs: logs, nodeID: nodeID, alertID: alertID}
+	return &accessTokenFixture{pool: pool, ctx: ctx, handler: handler, session: session, csrf: csrf, logs: logs, nodeID: nodeID, alertID: alertID, ispID: ispID}
 }
 
-func seedAccessTokenMCPData(t *testing.T, pool *pgxpool.Pool, ctx context.Context) (string, string) {
+func seedAccessTokenMCPData(t *testing.T, pool *pgxpool.Pool, ctx context.Context) (string, string, string) {
 	t.Helper()
-	nodeID, alertID := "00000000-0000-4000-8000-000000000921", "00000000-0000-4000-8000-000000000922"
+	nodeID, alertID, ispID := "00000000-0000-4000-8000-000000000921", "00000000-0000-4000-8000-000000000922", "00000000-0000-4000-8000-000000000925"
+	if _, err := pool.Exec(ctx, `INSERT INTO isps(id,asn,organisation,name) VALUES($1,64501,'MCP Fixture Network','MCP Fixture ISP')`, ispID); err != nil {
+		t.Fatal("seed MCP ISP:", err)
+	}
 	now := time.Now().UTC()
 	if _, err := pool.Exec(ctx, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps,created_at) VALUES ($1,'mcp-fixture-node',100,50,$2)`, nodeID, now); err != nil {
 		t.Fatal("seed MCP node:", err)
@@ -100,7 +105,7 @@ func seedAccessTokenMCPData(t *testing.T, pool *pgxpool.Pool, ctx context.Contex
 	if _, err := pool.Exec(ctx, `INSERT INTO alert_events(id,node_id,severity,ts,title,detail) VALUES ($1,$2,'warn',$3,'MCP fixture alert','')`, alertID, nodeID, now); err != nil {
 		t.Fatal("seed MCP alert:", err)
 	}
-	return nodeID, alertID
+	return nodeID, alertID, ispID
 }
 
 func seedAccessTokenResults(t *testing.T, pool *pgxpool.Pool, ctx context.Context, nodeID string, now time.Time) {
@@ -113,11 +118,14 @@ func seedAccessTokenResults(t *testing.T, pool *pgxpool.Pool, ctx context.Contex
 		down, up, ping, serverID := 80.0+float64(index), 40.0, 8.0, 1
 		ip := fixture.ip
 		result := agentapi.Result{Engine: "ookla", ID: fixture.id, TS: now.Add(time.Duration(index-2) * time.Minute).Format(time.RFC3339Nano),
-			Status: "ok", Down: &down, Up: &up, Ping: &ping, ServerID: &serverID, IP: &ip, Threads: 1, Raw: json.RawMessage(`{}`),
+			Status: "ok", Down: &down, Up: &up, Ping: &ping, ServerID: &serverID, IP: &ip, Threads: 1, BytesDown: int64(1000 + index*100), BytesUp: 500, Raw: json.RawMessage(`{}`),
 			Warnings: []string{}, Server: &agentapi.Server{ID: &serverID, Name: "MCP fixture", Host: "mcp.example.test"}}
 		if _, err := store.SaveResult(ctx, nodeID, result); err != nil {
 			t.Fatal("seed MCP result:", err)
 		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE results SET isp_id='00000000-0000-4000-8000-000000000925' WHERE id='00000000-0000-4000-8000-000000000923'`); err != nil {
+		t.Fatal("attribute MCP fixture result to ISP:", err)
 	}
 }
 
@@ -194,6 +202,7 @@ func (f *accessTokenFixture) verifyReadMCP(t *testing.T, raw, id string) {
 	if !usageTool {
 		t.Fatal("read token cannot see the get_usage MCP tool")
 	}
+	f.verifyMCPUsageFilter(t, remote)
 	result, err := remote.CallTool(f.ctx, &mcp.CallToolParams{Name: "list_nodes", Arguments: map[string]any{}})
 	if err != nil || result.IsError {
 		t.Fatalf("MCP list_nodes error = %v, tool-error=%t", err, result != nil && result.IsError)
@@ -201,6 +210,24 @@ func (f *accessTokenFixture) verifyReadMCP(t *testing.T, raw, id string) {
 	var used time.Time
 	if err := f.pool.QueryRow(f.ctx, `SELECT last_used_at FROM api_access_tokens WHERE id=$1`, id).Scan(&used); err != nil || used.IsZero() {
 		t.Fatal("successful REST or MCP call did not update last-used time")
+	}
+}
+
+func (f *accessTokenFixture) verifyMCPUsageFilter(t *testing.T, remote *mcp.ClientSession) {
+	t.Helper()
+	now := time.Now().UTC()
+	result := callMCPTool(t, remote, "get_usage", map[string]any{"node": f.nodeID, "engine": "ookla", "isp": f.ispID,
+		"from": now.Add(-5 * time.Minute).Format(time.RFC3339Nano), "to": now.Add(time.Minute).Format(time.RFC3339Nano), "group": "day"})
+	if result.IsError {
+		t.Fatalf("read-scoped get_usage returned a tool error: %+v", result.Content)
+	}
+	envelope, ok := result.StructuredContent.(map[string]any)
+	data, dataOK := envelope["data"].(map[string]any)
+	totals, totalsOK := data["totals"].(map[string]any)
+	rows, rowsOK := data["byNodeEngine"].([]any)
+	bytes, bytesOK := totals["totalBytes"].(float64)
+	if !ok || !dataOK || !totalsOK || !rowsOK || !bytesOK || bytes != 1500 || len(rows) != 1 {
+		t.Fatalf("filtered get_usage result = %#v", result.StructuredContent)
 	}
 }
 
@@ -386,7 +413,24 @@ func (f *accessTokenFixture) verifyExpiryAndRevoke(t *testing.T, readToken, read
 	if got := f.request(http.MethodGet, "/api/nodes", writeToken, "").Code; got != http.StatusUnauthorized {
 		t.Fatalf("revoked token status = %d, want 401", got)
 	}
+	f.verifyRevokedMCPUsage(t, writeToken)
 	f.verifyTokenAudit(t, "access_token.revoke", 1)
+}
+
+func (f *accessTokenFixture) verifyRevokedMCPUsage(t *testing.T, token string) {
+	t.Helper()
+	endpoint := httptest.NewServer(f.handler)
+	defer endpoint.Close()
+	client := mcp.NewClient(&mcp.Implementation{Name: "revoked-integration-client", Version: "1"}, nil)
+	remote, err := client.Connect(f.ctx, &mcp.StreamableClientTransport{Endpoint: endpoint.URL + "/mcp", HTTPClient: bearerClient(endpoint.Client(), token)}, nil)
+	if err != nil {
+		return
+	}
+	defer func() { _ = remote.Close() }()
+	result, err := remote.CallTool(f.ctx, &mcp.CallToolParams{Name: "get_usage", Arguments: map[string]any{"node": f.nodeID, "engine": "ookla"}})
+	if err == nil && result != nil && !result.IsError {
+		t.Fatal("revoked read/write token received usage data through MCP")
+	}
 }
 
 func (f *accessTokenFixture) streamCredential(t *testing.T, token string, withSession bool) (*installerAPI, *http.Request) {

@@ -11,14 +11,16 @@ import (
 var ErrInvalid = errors.New("invalid usage request")
 
 const (
-	DefaultGroup = "day"
-	MaxRange     = 366 * 24 * time.Hour
+	DefaultGroup     = "day"
+	MaxRange         = 366 * 24 * time.Hour
+	BudgetAlertRatio = 0.8
 )
 
 // Query selects usage totals without combining engine measurements.
 type Query struct {
 	NodeID string
 	Engine string
+	ISPID  string
 	From   time.Time
 	To     time.Time
 	Group  string
@@ -33,17 +35,21 @@ type Bytes struct {
 
 // Bucket represents one UTC calendar bucket.
 type Bucket struct {
-	NodeID string    `json:"nodeId"`
-	Engine string    `json:"engine"`
-	Start  time.Time `json:"start"`
+	NodeID  string    `json:"nodeId"`
+	Engine  string    `json:"engine"`
+	ISPID   string    `json:"ispId,omitempty"`
+	ISPName string    `json:"ispName,omitempty"`
+	Start   time.Time `json:"start"`
 	Bytes
 }
 
-// NodeEngine is the per-node, per-engine table row.
+// NodeEngine is the per-node, per-engine and recorded-ISP table row.
 type NodeEngine struct {
 	NodeID   string `json:"nodeId"`
 	NodeName string `json:"nodeName"`
 	Engine   string `json:"engine"`
+	ISPID    string `json:"ispId,omitempty"`
+	ISPName  string `json:"ispName,omitempty"`
 	Bytes
 	MonthToDate       Bytes `json:"monthToDate"`
 	ProjectedMonthEnd Bytes `json:"projectedMonthEnd"`
@@ -82,26 +88,31 @@ type Event struct {
 
 // Advice estimates bytes from recent real results and the proposed interval.
 type Advice struct {
-	NodeID                 string  `json:"nodeId"`
-	Engine                 string  `json:"engine"`
-	IntervalMinutes        int     `json:"intervalMinutes"`
-	AverageBytesPerTest    float64 `json:"averageBytesPerTest"`
-	EstimatedBytesPerDay   float64 `json:"estimatedBytesPerDay"`
-	EstimatedBytesPerMonth float64 `json:"estimatedBytesPerMonth"`
-	BudgetBytes            int64   `json:"budgetBytes,omitempty"`
-	RecommendedInterval    *int    `json:"recommendedIntervalMinutes"`
-	RecommendationStatus   string  `json:"recommendationStatus"`
+	NodeID                      string   `json:"nodeId"`
+	Engine                      string   `json:"engine"`
+	IntervalMinutes             int      `json:"intervalMinutes"`
+	AverageBytesPerTest         *float64 `json:"averageBytesPerTest"`
+	EstimatedBytesPerDay        *float64 `json:"estimatedBytesPerDay"`
+	EstimatedBytesPerMonth      *float64 `json:"estimatedBytesPerMonth"`
+	BudgetBytes                 int64    `json:"budgetBytes,omitempty"`
+	BudgetScope                 string   `json:"budgetScope,omitempty"`
+	RemainingBudgetBytes        int64    `json:"remainingBudgetBytes,omitempty"`
+	MeasurementAvailable        bool     `json:"measurementAvailable"`
+	SharedMeasurementsAvailable bool     `json:"sharedMeasurementsAvailable"`
+	RecommendedInterval         *int     `json:"recommendedIntervalMinutes"`
+	RecommendationStatus        string   `json:"recommendationStatus"`
 }
 
 // BudgetStatus is the current utilization of one configured budget.
 type BudgetStatus struct {
-	ScopeKey     string  `json:"scopeKey"`
-	NodeID       string  `json:"nodeId,omitempty"`
-	MonthlyBytes int64   `json:"monthlyBytes"`
-	UsedBytes    int64   `json:"usedBytes"`
-	Ratio        float64 `json:"ratio"`
-	Action       string  `json:"action"`
-	Alert        bool    `json:"alert"`
+	ScopeKey          string  `json:"scopeKey"`
+	NodeID            string  `json:"nodeId,omitempty"`
+	MonthlyBytes      int64   `json:"monthlyBytes"`
+	UsedBytes         int64   `json:"usedBytes"`
+	Ratio             float64 `json:"ratio"`
+	Action            string  `json:"action"`
+	AtMaximumInterval bool    `json:"atMaximumInterval"`
+	Alert             bool    `json:"alert"`
 }
 
 // Response keeps aggregate totals and engine-separated rows together.
@@ -122,6 +133,7 @@ type Response struct {
 // Normalize validates caller-controlled filters and supplies the default grouping.
 func (q Query) Normalize(now time.Time) (Query, error) {
 	q.NodeID = strings.ToLower(q.NodeID)
+	q.ISPID = strings.ToLower(q.ISPID)
 	if q.Group == "" {
 		q.Group = DefaultGroup
 	}
@@ -167,7 +179,7 @@ func ProjectMonthEnd(used int64, now time.Time) int64 {
 
 // RecommendedInterval returns the minimum interval that keeps a 30-day estimate within budget.
 func RecommendedInterval(avgBytes float64, budget int64) *int {
-	if avgBytes <= 0 || math.IsNaN(avgBytes) || math.IsInf(avgBytes, 0) || budget <= 0 {
+	if avgBytes < 0 || math.IsNaN(avgBytes) || math.IsInf(avgBytes, 0) || budget <= 0 {
 		return nil
 	}
 	minutesFloat := math.Ceil(avgBytes * 30 * 24 * 60 / float64(budget))

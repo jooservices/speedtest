@@ -50,6 +50,17 @@ test('demo mode seeds and persists locally without making API calls', () => {
   ST.updateNode('n1', { name: 'Local demo' });
   assert.equal(ST.node('n1').name, 'Local demo'); assert.ok(storage.has('st.demo.v1'));
 });
+test('demo bandwidth budgets survive reload and reset with the rest of demo state', () => {
+  const first = runtime('http://localhost', { demo: true });
+  const budget = { scopeKey: 'global', monthlyBytes: 4096, action: 'pause', widenMultiplier: 2 };
+  first.ST.setDemoBandwidthBudgets([budget]);
+  assert.equal(JSON.stringify(first.ST.demoBandwidthBudgets()), JSON.stringify([budget]));
+  const reloaded = runtime('http://localhost', { demo: true, storage: first.storage });
+  assert.equal(JSON.stringify(reloaded.ST.demoBandwidthBudgets()), JSON.stringify([budget]));
+  reloaded.ST.resetDemo();
+  const reset = runtime('http://localhost', { demo: true, storage: first.storage });
+  assert.equal(JSON.stringify(reset.ST.demoBandwidthBudgets()), '[]');
+});
 test('engine selector updates the selected engine and refreshes demo data', () => {
   const { ST } = runtime('http://localhost', { demo: true });
   let refreshes = 0;

@@ -9,12 +9,14 @@ All notable changes to Speedtest are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Bandwidth accounting by result, node, engine, recorded ISP and UTC period, with monthly projections, optional shared budgets, threshold events and interval cost advice.
 - Optional two-factor sign-in with an authenticator app (TOTP) and ten one-time recovery codes, in Settings > Access; the operator command `disable-2fa` is the recovery path.
 - Geolocation: ipwho.is, ipapi.co and ipgeolocation.io providers (off by default), consensus mode, and a built-in monthly DB-IP Lite database updater.
 - Fixed failure classes on test results; Ookla rate limits use capped exponential backoff, and rate-limited tests are counted separately from success rates and ignored by failure alerts.
 
 ### Changed
 - New nodes, missing agent intervals, and newly enabled engine schedules default to 60 minutes; existing schedules retain their configured values. Docker staging scripts keep their current default until JOOST-89.
+- Results and Alerts ISP filters stay page-scoped; rolling ISP trends use in-range hourly samples, and plan edits preserve explicitly chosen expected speeds.
 
 ### Fixed
 - Installation event streams revalidate the bearer token that opened them, so expiry and revocation stop the stream at its next 10-second check.

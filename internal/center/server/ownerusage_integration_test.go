@@ -106,7 +106,7 @@ func verifyBudgetWrites(t *testing.T, call ownerUsageCaller) string {
 func verifyUsageAdvice(t *testing.T, call ownerUsageCaller, node string) {
 	t.Helper()
 	response := call(http.MethodGet, "/api/usage/advice?node="+node+"&engine=ookla&interval=60", "", nil, true)
-	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"estimatedBytesPerMonth":0`) {
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"estimatedBytesPerMonth":null`) || !strings.Contains(response.Body.String(), `"measurementAvailable":false`) {
 		t.Fatalf("usage advice = %d %s", response.Code, response.Body.String())
 	}
 }

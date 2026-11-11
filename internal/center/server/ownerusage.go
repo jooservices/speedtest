@@ -92,6 +92,9 @@ func usageQuery(w http.ResponseWriter, r *http.Request, now time.Time) (usage.Qu
 	if q.Engine, ok = optionalParam(w, r, values, "engine"); !ok {
 		return usage.Query{}, false
 	}
+	if q.ISPID, ok = optionalParam(w, r, values, "isp"); !ok {
+		return usage.Query{}, false
+	}
 	if q.Group, ok = optionalParam(w, r, values, "group"); !ok {
 		return usage.Query{}, false
 	}
@@ -113,7 +116,7 @@ func usageQuery(w http.ResponseWriter, r *http.Request, now time.Time) (usage.Qu
 			return usage.Query{}, false
 		}
 	}
-	if normalized, err := q.Normalize(now); err != nil || q.NodeID != "" && !uuidPattern.MatchString(q.NodeID) {
+	if normalized, err := q.Normalize(now); err != nil || q.NodeID != "" && !uuidPattern.MatchString(q.NodeID) || q.ISPID != "" && !uuidPattern.MatchString(q.ISPID) {
 		invalid(w, r, "usage filters are invalid or the date range exceeds 366 days.")
 		return usage.Query{}, false
 	} else {
