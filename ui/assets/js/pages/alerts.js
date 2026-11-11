@@ -13,7 +13,7 @@
     return ok(result);
   }
   var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt;
-  var q = { tab: 'events', show: 'open', sev: 'all' };
+  var q = { tab: 'events', show: 'open', sev: 'all', ispId: '' };
   var METRICS = [
     { value: 'down_pct', label: 'Download (% of expected)', unit: '%', ops: ['<'] },
     { value: 'up_pct', label: 'Upload (% of expected)', unit: '%', ops: ['<'] },
@@ -71,9 +71,13 @@
     if (q.tab === 'events') {
       var filt = h('div', { class: 'row wrap mb' },
         U.seg([{ value: 'open', label: 'Open' }, { value: 'all', label: 'All' }], q.show, function (v) { q.show = v; ST.refresh(); }),
-        U.select([{ value: 'all', label: 'Any importance' }].concat(SEV), q.sev, function (v) { q.sev = v; ST.refresh(); }, 'auto'));
+        U.select([{ value: 'all', label: 'Any importance' }].concat(SEV), q.sev, function (v) { q.sev = v; ST.refresh(); }, 'auto'),
+        h('div', { style: 'min-width:190px' }, U.field('ISP', U.select([{ value: '', label: 'Any ISP' }].concat(ST.ispOptions()), q.ispId, function (v) {
+          q.ispId = v;
+          ST.refresh();
+        }, 'auto'))));
       root.appendChild(filt);
-      var list = events.filter(function (e) { return (q.show === 'all' || !e.acked) && (q.sev === 'all' || e.severity === q.sev); });
+      var list = events.filter(function (e) { return (!q.ispId || e.ispId === q.ispId) && (q.show === 'all' || !e.acked) && (q.sev === 'all' || e.severity === q.sev); });
       var card = h('div', { class: 'card card-pad' });
       if (!list.length) card.appendChild(U.empty(q.show === 'open' ? 'All clear' : 'No alerts', q.show === 'open' ? 'No open alerts. Switch to “All” to see past ones.' : 'Nothing has triggered a rule in this period.'));
       list.slice(0, 60).forEach(function (e) {

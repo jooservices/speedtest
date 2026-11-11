@@ -36,6 +36,14 @@ has changed the database default to 60.
 `00020_audit_authentication_source.sql` records whether each audited change used
 a session or bearer credential and stores only the non-secret bearer token ID.
 Token creation audit targets also retain the newly created token ID.
+`00021_isp_entities.sql` adds ASN-derived ISP entities, plan records and links
+from results, addresses, IP history and alert events. `00022_isp_plan_default_provenance.sql`
+adds separate per-speed flags so plan updates change only expected speeds that
+still follow the advertised defaults. Existing rows start with both flags false;
+the migration does not infer default provenance from numeric equality. Owners can
+clear and reassign a plan to opt an existing node into advertised defaults. Its
+down migration removes those flags and leaves node speeds and plan assignments
+otherwise intact.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file

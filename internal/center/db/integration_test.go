@@ -243,6 +243,9 @@ INSERT INTO schedules(node_id) VALUES ('00000000-0000-4000-8000-000000000104')`)
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal(err)
 	}
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
 	assertScheduleIntervals(t, ctx, pool, "5:0,30:7,60:11,30:0")
 	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps)
 VALUES ('00000000-0000-4000-8000-000000000105','after-upgrade',100,100);

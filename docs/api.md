@@ -227,7 +227,8 @@ The center coordinates offsets; there is no WAN, load-balancer or peer-node mode
 | Dashboard, JOOST-27/38 | `/api/dashboard`, `/api/series`; `Fleet` current/previous, `NodeCard` summary/sparkline/latestGood/current IP/city, latest results/open alerts/count, `Series.summary` for table mode |
 | Nodes and wizard, JOOST-25/41/43/44 | node CRUD/run/commands, installer probes/installations/uninstallations and SSE; `Node`, `Enrollment`, `Install`, `InstallEvent`, pinned fingerprint, `Command` progress |
 | Results, JOOST-24/32/38 | results list/detail/filtered CSV and full CSV/JSON exports; `Result` includes every measured field, `Server`, `Geo`, raw JSON and manual flag; search/sort/range/download/status filters |
-| Statistics, JOOST-26/39 | `/api/stats/{summary,trend,hour-of-day,heatmap,distribution}`; `SummaryComparison`, `MetricSummary`, `Series`, `HourSeries`, `Heatmap` counts, `Distribution` edges/count/percent; combined total is display-only |
+| Statistics, JOOST-26/39 | `/api/stats/{summary,trend,hour-of-day,heatmap,distribution}`; `SummaryComparison`, `MetricSummary`, `Series`, `HourSeries`, `Heatmap` counts, `Distribution` edges/count/percent; combined total is display-only; optional `isps` filter |
+| ISPs, JOOST-74 | `/api/isps`, `/api/isps/compare`, `/api/isps/{id}`, `/api/isps/{id}/trend`, `/api/isps/{id}/plans`; entities from uint32 ASN/organisation; engine-isolated aggregates; optional plans; `isps`/`isp` filters on results, statistics and alert events |
 | IP & location, JOOST-33/34/35/36/39/42 | `/api/ip/{history,addresses,lookup,map}` (location database updates run on the center's schedule; manual update/refresh/status endpoints are not part of v1); `IPChange`, `IPAddress`, `Geo` (all location/ASN/ISP/accuracy/source fields), `MapLocation`, database timestamp/cache count, maintenance `Job` |
 | Schedules, JOOST-28/39 | `/api/schedules`, per-node GET/PUT, rules PUT, stagger POST; `ScheduleInput`, `ScheduleRules`, `Schedules` clashes/upcoming/nextRun/bytesPerDay/bytesPerMonth |
 | Alerts, JOOST-29/40 | rules CRUD, events list/detail/ack, snapshot acknowledge-all job; `AlertRule`, `AlertEvent` title/detail/severity/ts/resolvedAt/acked; reopen means acked=false |
@@ -423,7 +424,7 @@ for (const response of Object.values(api.components.responses)) {
 const paths = [
   '/api/agent/enroll', '/api/agent/results', '/api/agent/config', '/api/agent/heartbeat',
   '/api/agent/commands', '/api/agent/commands/{id}/ack', '/api/agent/ip',
-  '/api/nodes', '/api/results', '/api/stats/summary', '/api/stats/trend',
+  '/api/nodes', '/api/results', '/api/isps', '/api/isps/compare', '/api/stats/summary', '/api/stats/trend',
   '/api/stats/hour-of-day', '/api/stats/heatmap', '/api/stats/distribution',
   '/api/dashboard', '/api/series', '/api/schedules/{node}', '/api/alerts/rules',
   '/api/alerts/events', '/api/notifications/test/{channel}', '/api/settings',
@@ -616,3 +617,20 @@ average. Full exports retain all measurements and their engine identity. CSV add
 `engine` as its final column. Alert rules optionally specify `engine`; omission
 selects the node's primary engine, so another engine cannot advance or reset its
 measurement streak.
+
+## ISP plans and page filters
+
+An assigned ISP plan supplies the node's expected download and upload speeds
+when those values are omitted. The center records default provenance separately
+for each speed. Editing a plan updates only values still using that plan default;
+an owner-entered value remains an override even when it equals the advertised
+speed. Existing assignments migrate as explicit values because their original
+provenance cannot be inferred from numeric equality. Clear and reassign a plan
+to opt an existing node into its advertised defaults. Clearing a plan keeps the
+current expected speeds as node settings.
+
+ISP trends use hourly buckets for windows up to 24 hours and daily buckets for
+longer windows. Each point is timestamped at the average time of its samples, so
+all points remain inside a rolling window, including across UTC midnight. The
+Results and Alerts ISP selectors filter their own page data; they do not narrow
+the shared snapshot used by dashboard, node, map or export views.
