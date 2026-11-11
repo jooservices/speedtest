@@ -65,6 +65,40 @@ func TestPinnedServerFailureRetriesAutomaticallyWithWarning(t *testing.T) {
 	}
 }
 
+type endpointFallbackEngine struct{}
+
+func (endpointFallbackEngine) Run(_ context.Context, options engine.Options) (engine.Result, error) {
+	if options.ServerID > 0 {
+		return engine.Result{}, &engine.RunError{Class: engine.ServerUnavailable}
+	}
+	return engine.Result{ExternalIP: "198.51.100.7", Server: &engine.Server{
+		Name: "Second endpoint", Host: "shared.example.test", Endpoint: "https://shared.example.test/b",
+	}}, nil
+}
+
+func (endpointFallbackEngine) ListServers(context.Context, engine.Options) ([]engine.ServerOption, error) {
+	return []engine.ServerOption{
+		{ID: 51, Name: "First endpoint", Host: "shared.example.test", Endpoint: "https://shared.example.test/a"},
+		{ID: 52, Name: "Second endpoint", Host: "shared.example.test", Endpoint: "https://shared.example.test/b"},
+	}, nil
+}
+
+func TestPinnedFallbackResolvesServerByFullEndpoint(t *testing.T) {
+	center := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"success":true,"code":200,"data":{"ip":"198.51.100.7"}}`))
+	}))
+	defer center.Close()
+	runner, err := netpath.NewRunner(endpointFallbackEngine{}, center.URL, "test-token", netpath.Binding{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := runWithServerFallback(t.Context(), runner, 99)
+	if err != nil || out.Measurement.Server == nil || out.Measurement.Server.ID != 52 || out.Measurement.Server.Endpoint != "https://shared.example.test/b" {
+		t.Fatalf("fallback identity=%+v err=%v", out.Measurement.Server, err)
+	}
+}
+
 func TestPinnedServerFallbackIsLimitedToUnavailableFailures(t *testing.T) {
 	ctx := context.Background()
 	for _, tc := range []struct {

@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -162,6 +163,9 @@ func (e *LibreSpeed) Run(ctx context.Context, opts Options) (Result, error) {
 	}
 	if stdout.overflow {
 		return failed(Result{}, InvalidResult, nil)
+	}
+	if opts.ServerID > 0 && bytes.Equal(bytes.TrimSpace(stdout.data), []byte("null")) {
+		return failed(Result{}, ServerUnavailable, nil)
 	}
 	r, err := ParseLibreSpeed(stdout.data)
 	if err != nil {

@@ -146,15 +146,15 @@ func parseLibreServer(raw []byte) (ServerOption, error) {
 	if err != nil {
 		return ServerOption{}, err
 	}
-	u, err := url.Parse(strings.TrimSpace(in.Server))
-	if err != nil || u.Host == "" || u.User != nil {
+	u, err := parseServerEndpoint(in.Server)
+	if err != nil {
 		return ServerOption{}, errors.New("invalid server host")
 	}
 	name := strings.TrimSpace(in.Name)
 	if name == "" {
 		return ServerOption{}, errors.New("invalid server name")
 	}
-	option := ServerOption{ID: id, Name: name, City: firstText(in.City, in.Location), ISP: firstText(in.ISP, in.Sponsor), Host: u.Host}
+	option := ServerOption{ID: id, Name: name, City: firstText(in.City, in.Location), ISP: firstText(in.ISP, in.Sponsor), Host: u.Host, Endpoint: serverEndpointIdentity(u)}
 	if !validServerOptionText(option) {
 		return ServerOption{}, errors.New("invalid server")
 	}
@@ -238,17 +238,43 @@ func parseLibreSpeedCLIEntry(line, rawID string) (ServerOption, bool) {
 		if !strings.HasSuffix(serverText, ")") {
 			continue
 		}
-		serverURL, err := url.Parse(serverText[:len(serverText)-1])
-		if err != nil || serverURL.Host == "" || serverURL.User != nil {
+		serverURL, err := parseServerEndpoint(serverText[:len(serverText)-1])
+		if err != nil {
 			continue
 		}
-		option := ServerOption{ID: id, Name: strings.TrimSpace(rest[:start]), ISP: sponsor, Host: serverURL.Host}
+		option := ServerOption{ID: id, Name: strings.TrimSpace(rest[:start]), ISP: sponsor, Host: serverURL.Host, Endpoint: serverEndpointIdentity(serverURL)}
 		if option.Name == "" || !validServerOptionText(option) {
 			return ServerOption{}, false
 		}
 		return option, true
 	}
 	return ServerOption{}, false
+}
+
+func parseServerEndpoint(raw string) (*url.URL, error) {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" || u.User != nil || u.Scheme != "" && u.Scheme != "http" && u.Scheme != "https" {
+		return nil, errors.New("invalid server endpoint")
+	}
+	if u.Scheme == "" {
+		u.Scheme = "https"
+	}
+	return u, nil
+}
+
+func serverEndpointIdentity(u *url.URL) string {
+	if u == nil || u.User != nil {
+		return ""
+	}
+	identity := *u
+	identity.Scheme = strings.ToLower(identity.Scheme)
+	identity.Host = strings.ToLower(identity.Host)
+	identity.RawQuery, identity.ForceQuery = "", false
+	identity.Fragment, identity.RawFragment = "", ""
+	if identity.Path == "" {
+		identity.Path = "/"
+	}
+	return identity.String()
 }
 
 func serverRow(rawID, name string) (ServerOption, bool) {

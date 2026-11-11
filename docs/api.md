@@ -197,7 +197,7 @@ per-item 409 conflict with a generic diagnostic that reveals no other-node data.
 never discard unacknowledged spool entries. Failed results require an error and
 allow null measurements and `ip: null` when the address is unavailable. They also
 carry `failureClass` (omitted values are classified from the error text). Never invent an IP or reuse a stale one. IP history hooks skip null-IP results; consumers display "unavailable".
-Successful/degraded results require down/up/ping, a non-null IP, a server object with a nonblank name or host, and `error: null`. Numeric `serverId` is optional for every status, positive when present (LibreSpeed automatic selection has no numeric ID). Engines may omit
+Successful/degraded results require down/up/ping, a non-null IP, a server object with a nonblank name or host, and `error: null`. Numeric `serverId` is optional for every status and positive when present. LibreSpeed results include the sanitized server endpoint URL when available; its path distinguishes servers that share a hostname. Automatic results resolve their numeric ID against the agent's measurement-time server list when that endpoint is present there. Engines may omit
 loss/jitter/loaded latency even on success; preserve those as null. Optional
 loadedDown/loadedUp retain low/iqm/high; engine details retain ISP, result ID/URL,
 external IP and mismatch warnings, with remaining original fields in raw.

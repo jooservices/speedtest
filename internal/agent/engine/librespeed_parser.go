@@ -61,7 +61,7 @@ func ParseLibreSpeed(raw []byte) (Result, error) {
 		}
 	}
 	serverURL, err := url.ParseRequestURI(v.Server.URL)
-	if err != nil || (serverURL.Scheme != "http" && serverURL.Scheme != "https") || serverURL.Host == "" {
+	if err != nil || (serverURL.Scheme != "http" && serverURL.Scheme != "https") || serverURL.Host == "" || serverURL.User != nil {
 		return failed(r, InvalidResult, nil)
 	}
 	const maxInt64 = uint64(1<<63 - 1)
@@ -72,7 +72,7 @@ func ParseLibreSpeed(raw []byte) (Result, error) {
 	r.Timestamp = v.Timestamp.UTC()
 	r.Down, r.Up, r.Ping, r.Jitter = v.Download, v.Upload, v.Ping, v.Jitter
 	r.BytesDown, r.BytesUp = int64(*v.BytesReceived), int64(*v.BytesSent)
-	r.Server = &Server{Name: v.Server.Name, Host: serverURL.Host}
+	r.Server = &Server{Name: v.Server.Name, Host: serverURL.Host, Endpoint: serverEndpointIdentity(serverURL)}
 	r.ISP = v.Client.ISP
 	if r.ISP == "" {
 		r.ISP = v.Client.Organization

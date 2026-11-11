@@ -1,2 +1,2 @@
-51: Hanoi, Vietnam (Hanoi Speedtest) (//hn.example.test/backend) [Sponsor: Hanoi ISP]
-52: Singapore, Singapore (Singapore Speedtest) (https://sg.example.test/backend) [Sponsor: Singapore ISP]
+51: Hanoi, Vietnam (Hanoi Speedtest) (https://hn.example.test/backend) [Sponsor: Hanoi ISP]
+52: Singapore, Singapore (Singapore Speedtest) (https://hn.example.test/down) [Sponsor: Singapore ISP]

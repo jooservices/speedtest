@@ -68,11 +68,12 @@ type LoadedLatency struct {
 }
 
 type Server struct {
-	ID      *int   `json:"id,omitempty"`
-	Name    string `json:"name"`
-	City    string `json:"city"`
-	Sponsor string `json:"sponsor"`
-	Host    string `json:"host,omitempty"`
+	ID       *int   `json:"id,omitempty"`
+	Name     string `json:"name"`
+	City     string `json:"city"`
+	Sponsor  string `json:"sponsor"`
+	Host     string `json:"host,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 // ServerOption is one discovered target that an owner can pin for an engine.
@@ -82,6 +83,7 @@ type ServerOption struct {
 	City       string   `json:"city"`
 	ISP        string   `json:"isp"`
 	Host       string   `json:"host"`
+	Endpoint   string   `json:"endpoint,omitempty"`
 	DistanceKM *float64 `json:"distanceKm,omitempty"`
 }
 
@@ -354,12 +356,20 @@ func validServerOptions(servers *[]ServerOption) bool {
 	}
 	seen := make(map[int64]bool, len(*servers))
 	for _, server := range *servers {
-		if server.ID < 1 || server.ID > math.MaxInt32 || seen[server.ID] || strings.TrimSpace(server.Name) == "" || !textValue(server.Name, 200) || !textValue(server.City, 120) || !textValue(server.ISP, 200) || !textValue(server.Host, 255) || server.DistanceKM != nil && !number(server.DistanceKM) {
+		if server.ID < 1 || server.ID > math.MaxInt32 || seen[server.ID] || strings.TrimSpace(server.Name) == "" || !textValue(server.Name, 200) || !textValue(server.City, 120) || !textValue(server.ISP, 200) || !textValue(server.Host, 255) || !validServerEndpoint(server.Endpoint) || server.DistanceKM != nil && !number(server.DistanceKM) {
 			return false
 		}
 		seen[server.ID] = true
 	}
 	return true
+}
+
+func validServerEndpoint(value string) bool {
+	if value == "" {
+		return true
+	}
+	u, err := url.Parse(value)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && len(value) <= 2048
 }
 
 func textValue(value string, max int) bool { return utf8.RuneCountInString(value) <= max }
@@ -434,7 +444,7 @@ func (r Result) validateDetails(fields map[string]json.RawMessage) error {
 	}
 	if r.Server != nil {
 		serverFields, err := decodeFields(fields["server"], new(Server))
-		if err != nil || !nonNullFields(serverFields, "id", "name", "city", "sponsor", "host") || (r.Server.ID != nil && *r.Server.ID < 1) || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || utf8.RuneCountInString(r.Server.Host) > 255 {
+		if err != nil || !nonNullFields(serverFields, "id", "name", "city", "sponsor", "host", "endpoint") || (r.Server.ID != nil && *r.Server.ID < 1) || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || utf8.RuneCountInString(r.Server.Host) > 255 || !validServerEndpoint(r.Server.Endpoint) {
 			return ErrInvalid
 		}
 	}

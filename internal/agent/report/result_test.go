@@ -94,7 +94,7 @@ func TestFromEngineOK(t *testing.T) {
 		Jitter:     f64p(1.2),
 		Loss:       f64p(0),
 		LoadedDown: &engine.LoadedLatency{Low: f64p(5), IQM: f64p(8), High: f64p(12)},
-		Server:     &engine.Server{ID: 42, Name: "Hanoi", Location: "Hanoi, VN", Host: "h.example"},
+		Server:     &engine.Server{ID: 42, Name: "Hanoi", Location: "Hanoi, VN", Host: "h.example", Endpoint: "https://h.example/backend"},
 		ISP:        "Viettel",
 		ExternalIP: "203.0.113.10",
 		ResultID:   "r123",
@@ -130,7 +130,7 @@ func TestFromEngineOK(t *testing.T) {
 	if r.ServerID == nil || *r.ServerID != 42 {
 		t.Fatalf("ServerID = %v, want 42", r.ServerID)
 	}
-	if r.Server == nil || r.Server.Name != "Hanoi" || r.Server.City != "Hanoi, VN" || r.Server.Host != "h.example" {
+	if r.Server == nil || r.Server.Name != "Hanoi" || r.Server.City != "Hanoi, VN" || r.Server.Host != "h.example" || r.Server.Endpoint != "https://h.example/backend" {
 		t.Fatalf("Server = %+v", r.Server)
 	}
 	if r.IP != "203.0.113.10" || r.EngineIP != "203.0.113.10" || r.EngineISP != "Viettel" {

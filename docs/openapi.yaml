@@ -4288,6 +4288,11 @@ components:
         host:
           type: string
           maxLength: 255
+        endpoint:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: Full engine endpoint identity. LibreSpeed includes this so servers sharing a host remain distinct.
         city:
           type: string
         sponsor:
@@ -4325,6 +4330,11 @@ components:
         host:
           type: string
           maxLength: 255
+        endpoint:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: Present for LibreSpeed; preserves the configured endpoint path for server matching.
         distanceKm:
           type: number
           minimum: 0
