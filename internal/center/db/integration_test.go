@@ -234,7 +234,7 @@ func TestScheduleDefaultMigrationPreservesIntervalsIntegration(t *testing.T) {
 VALUES ('00000000-0000-4000-8000-000000000101',5,0),
        ('00000000-0000-4000-8000-000000000102',30,7),
        ('00000000-0000-4000-8000-000000000103',60,11)`)
-	for range 3 { // Roll back audit-source, API-token and 60-minute-default migrations.
+	for range 4 { // Roll back geo usage, audit-source, API-token and 60-minute-default migrations.
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(err)
 		}
