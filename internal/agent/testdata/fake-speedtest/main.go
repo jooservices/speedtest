@@ -155,7 +155,8 @@ func runLibreSpeed(args []string, stdout, stderr io.Writer) int {
 		_, _ = fmt.Fprintln(stderr, "server unavailable")
 		return 2
 	}
-	_, _ = io.WriteString(stdout, `{"timestamp":"2026-11-03T02:30:15.123456Z","server":{"name":"Hanoi, Vietnam (Hanoi Speedtest)","url":"https://hn.example.test/backend"},"client":{"ip":"203.0.113.10","isp":"Example ISP"},"bytes_sent":1000,"bytes_received":5000,"ping":3.5,"jitter":0.5,"upload":20,"download":100,"share":""}`+"\n")
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	_, _ = fmt.Fprintf(stdout, `{"timestamp":%q,"server":{"name":"Hanoi, Vietnam (Hanoi Speedtest)","url":"https://hn.example.test/backend"},"client":{"ip":"203.0.113.10","isp":"Example ISP"},"bytes_sent":1000,"bytes_received":5000,"ping":3.5,"jitter":0.5,"upload":20,"download":100,"share":""}`+"\n", timestamp)
 	return 0
 }
 
