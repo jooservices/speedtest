@@ -189,7 +189,7 @@ func (r ownerScanRow) Scan(dest ...any) error {
 	values := []any{"result-id", "node-id", now, "ok", ptrFloat(100), ptrFloat(50), ptrFloat(5), ptrFloat(1), ptrFloat(20), ptrFloat(25), ptrFloat(0), &serverID,
 		[]byte(`{"name":"London"}`), &ip, int32(4), ptrInt64(1000), ptrInt64(500), ptrFloat(10), ptrString(""), true,
 		[]byte(`{"download":true}`), []byte(`{"p95":20}`), []byte(`{"p95":25}`), ptrString("Example ISP"), &resultID, ptrString("https://example.test/result"), &engineIP,
-		[]byte(`["warning"]`), "ookla", "extra value"}
+		[]byte(`["warning"]`), "ookla", "other", "extra value"}
 	for i, target := range dest {
 		value := reflect.ValueOf(target).Elem()
 		if values[i] == nil {
@@ -212,7 +212,7 @@ func TestScanResultMapsColumnsAndErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	if view.IP != "203.0.113.4" || view.Object["id"] != "result-id" || view.Object["nodeId"] != "node-id" || view.Object["status"] != "ok" ||
-		view.Object["engine"] != "ookla" || view.Object["manual"] != true || view.Object["geo"] != nil || view.Object["server"].(map[string]any)["name"] != "London" || extra != "extra value" {
+		view.Object["engine"] != "ookla" || view.Object["failureClass"] != "other" || view.Object["manual"] != true || view.Object["geo"] != nil || view.Object["server"].(map[string]any)["name"] != "London" || extra != "extra value" {
 		t.Fatalf("result view = %+v extra=%q", view, extra)
 	}
 	if _, err := ScanResult(ownerScanRow{err: pgx.ErrNoRows}); !errors.Is(err, pgx.ErrNoRows) {
