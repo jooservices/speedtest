@@ -97,6 +97,21 @@ func TestLoadPartialFileKeepsDefaults(t *testing.T) {
 
 type loadErrorCase struct{ name, file, wantErr string }
 
+func TestLoadExplicitFiveAndThirtyMinuteIntervals(t *testing.T) {
+	for _, interval := range []time.Duration{5 * time.Minute, 30 * time.Minute} {
+		t.Run(interval.String(), func(t *testing.T) {
+			path := writeFile(t, t.TempDir(), "config.yaml", "interval: "+interval.String()+"\n")
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v, want nil", err)
+			}
+			if cfg.Interval != interval {
+				t.Fatalf("interval = %s, want explicit %s", cfg.Interval, interval)
+			}
+		})
+	}
+}
+
 func TestLoadErrors(t *testing.T) {
 	tests := []loadErrorCase{
 		{"malformed yaml", "name: [unclosed", "parse config"},

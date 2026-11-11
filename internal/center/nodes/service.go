@@ -174,7 +174,19 @@ func (s *Service) createNodeTx(ctx context.Context, tx pgx.Tx, input Input) (any
 	if err != nil {
 		return nil, translateDBError(err)
 	}
-	if _, err := tx.Exec(ctx, `WITH legacy AS (INSERT INTO schedules (node_id) VALUES ($1) RETURNING *) INSERT INTO engine_schedules(node_id,engine,interval_minutes,offset_minutes,enabled,revision) SELECT node_id,'ookla',interval_minutes,offset_minutes,enabled,revision FROM legacy`, nodeID); err != nil {
+	var interval, offset int
+	err = tx.QueryRow(ctx, `
+		WITH legacy AS (
+			INSERT INTO schedules (node_id) VALUES ($1)
+			RETURNING node_id, interval_minutes, offset_minutes, enabled, revision
+		), engine AS (
+			INSERT INTO engine_schedules(node_id,engine,interval_minutes,offset_minutes,enabled,revision)
+			SELECT node_id,'ookla',interval_minutes,offset_minutes,enabled,revision FROM legacy
+			RETURNING node_id
+		)
+		SELECT legacy.interval_minutes, legacy.offset_minutes
+		FROM legacy JOIN engine USING (node_id)`, nodeID).Scan(&interval, &offset)
+	if err != nil {
 		return nil, translateDBError(err)
 	}
 	if err := usage.ReconcileScheduleEdit(ctx, tx, nodeID, s.now()); err != nil {
@@ -192,7 +204,7 @@ func (s *Service) createNodeTx(ctx context.Context, tx pgx.Tx, input Input) (any
 		return nil, translateDBError(err)
 	}
 	return map[string]any{
-		"node":      nodeResponse(nodeID, input, colorSlot, createdAt, 60, 0, "", ""),
+		"node":      nodeResponse(nodeID, input, colorSlot, createdAt, interval, offset, "", ""),
 		"token":     token,
 		"expiresAt": expiresAt.UTC().Format(time.RFC3339Nano),
 	}, nil

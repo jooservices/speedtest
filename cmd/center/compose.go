@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/alerts"
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 	"github.com/jooservices/speedtest/internal/center/audit"
 	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/dashboard"
@@ -55,24 +56,10 @@ type services struct {
 	OwnerAlerts        server.OwnerAlertsStore
 	OwnerJobs          server.OwnerJobsStore
 	Audit              server.AuditStore
+	AccessTokens       server.AccessTokenStore
 	Installer          *installer.Service
 	// Background runs until the context ends, for example the daily retention job.
 	Background func(context.Context)
-}
-
-type serviceAssembly struct {
-	services
-	pool          *pgxpool.Pool
-	owner         *ownerapi.Store
-	stats         *stats.Store
-	releases      *release.Catalog
-	watcher       *ipwatch.Watcher
-	alerts        *alerts.Store
-	usage         *usage.Store
-	notifications *notify.Store
-	retention     *jobs.Retention
-	dbip          geo.DBIPConfig
-	logger        *slog.Logger
 }
 
 func newAuthService(store auth.Store, cfg config.CenterConfig) (*auth.Service, error) {
@@ -82,6 +69,42 @@ func newAuthService(store auth.Store, cfg config.CenterConfig) (*auth.Service, e
 		LoginWindow:      cfg.LoginWindow,
 		AppKey:           cfg.AppKey,
 	})
+}
+
+func newOperationalStores(pool *pgxpool.Pool, cfg config.CenterConfig, logger *slog.Logger, notifications *notify.Store) (*telemetry.Telemetry, *alerts.Store, *jobs.Retention) {
+	operational := telemetry.New(version)
+	operational.RegisterDatabase(pool)
+	if notifications != nil {
+		notifications.ObserveRun = func(ok bool) { operational.Job("notification", ok) }
+	}
+	alertStore := &alerts.Store{DB: pool, AppKey: cfg.AppKey, Logger: logger, ObserveRun: func(ok bool) { operational.Job("alerts", ok) }}
+	retention := &jobs.Retention{DB: pool, Logger: logger, ObserveRun: func(ok bool) { operational.Job("retention", ok) }}
+	return operational, alertStore, retention
+}
+
+func backgroundServices(notifications *notify.Store, retention *jobs.Retention, usageStore *usage.Store, logger *slog.Logger, watcher *ipwatch.Watcher, dbip geo.DBIPConfig, alertStore *alerts.Store) func(context.Context) {
+	return func(ctx context.Context) {
+		if notifications != nil {
+			go notifications.Loop(ctx)
+		}
+		go retention.Loop(ctx)
+		go usageStore.Loop(ctx, logger)
+		if watcher.Reader != nil {
+			// GeoLite2 (weekly, needs a licence key) or DB-IP Lite (monthly, free): the first one configured wins.
+			if os.Getenv("SPEEDTEST_GEOLITE2_LICENSE_KEY") != "" {
+				go watcher.Reader.Run(ctx, geo.EnvironmentSettings{})
+			}
+			go watcher.Reader.RunDBIP(ctx, dbip)
+		}
+		alertStore.Loop(ctx)
+	}
+}
+
+func ownerNotifications(notifications *notify.Store) server.OwnerNotificationsStore {
+	if notifications == nil {
+		return nil
+	}
+	return notifications
 }
 
 // buildServices wires every store and background job of the center. The returned function releases what was
@@ -110,68 +133,40 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		cleanup()
 		return services{}, nil, err
 	}
-	operational := telemetry.New(version)
-	operational.RegisterDatabase(pool)
-	if notifications != nil {
-		notifications.ObserveRun = func(ok bool) { operational.Job("notification", ok) }
-	}
-	alertStore := &alerts.Store{DB: pool, AppKey: cfg.AppKey, Logger: logger, ObserveRun: func(ok bool) { operational.Job("alerts", ok) }}
+	operational, alertStore, retention := newOperationalStores(pool, cfg, logger, notifications)
 	dbip, err := geo.DBIPConfigFromEnv()
 	if err != nil {
 		cleanup()
 		return services{}, nil, err
 	}
-	retention := &jobs.Retention{DB: pool, Logger: logger, ObserveRun: func(ok bool) { operational.Job("retention", ok) }}
 	installerService, err := buildInstaller(ctx, pool, cfg, nodeService, logger)
 	if err != nil {
 		cleanup()
 		return services{}, nil, err
 	}
-	var notificationAPI server.OwnerNotificationsStore
-	if notifications != nil {
-		notificationAPI = notifications
-	}
-	assembled := serviceAssembly{
-		services: baseServices(pool, operational, notificationAPI, authService, nodeService, owner, statsStore, usageStore, preferences, alertStore, installerService),
-		pool:     pool, owner: owner, stats: statsStore, releases: releases, watcher: watcher,
-		alerts: alertStore, usage: usageStore, notifications: notifications, retention: retention,
-		dbip: dbip, logger: logger,
-	}
-	return assembleServices(assembled), cleanup, nil
-}
-
-func baseServices(pool *pgxpool.Pool, operational *telemetry.Telemetry, notifications server.OwnerNotificationsStore, authService *auth.Service, nodeService *nodes.Service, owner *ownerapi.Store, statsStore *stats.Store, usageStore *usage.Store, preferences settings.Store, alertStore *alerts.Store, installerService *installer.Service) services {
 	return services{
-		Telemetry: operational, OwnerNotifications: notifications, Auth: authService,
-		NodeCredential: nodeService, Pinger: poolPinger{pool: pool}, Metrics: metrics.Collector{DB: pool},
-		OwnerNodes: owner, OwnerResults: owner, OwnerSchedules: owner,
-		OwnerStats: statsStore, OwnerUsage: usageStore, Settings: preferences,
-		OwnerAlerts: alertStore, Installer: installerService,
-	}
-}
-
-func assembleServices(d serviceAssembly) services {
-	s := d.services
-	s.Agent = &agentapi.Postgres{Pool: d.pool, Releases: d.releases, Hook: agentapi.ResultHookChain{d.watcher, d.alerts, d.usage}}
-	s.OwnerIP = &ipapi.Store{DB: d.pool, Resolver: geo.NewResolver(geo.NewPostgresCache(d.pool), d.watcher.Offline, d.watcher.Fallbacks...).WithConsensus(d.watcher.Consensus, d.logger)}
-	s.OwnerDashboard = &dashboard.Cached{Source: &dashboard.Store{DB: d.pool, Nodes: d.owner, Stats: d.stats, Results: d.owner, Alerts: d.alerts}, TTL: 5 * time.Second}
-	s.OwnerJobs = &jobs.Registry{DB: d.pool}
-	s.Audit = &audit.Store{DB: d.pool}
-	s.Background = func(ctx context.Context) {
-		go d.usage.Loop(ctx, d.logger)
-		if d.notifications != nil {
-			go d.notifications.Loop(ctx)
-		}
-		go d.retention.Loop(ctx)
-		if d.watcher.Reader != nil {
-			if os.Getenv("SPEEDTEST_GEOLITE2_LICENSE_KEY") != "" {
-				go d.watcher.Reader.Run(ctx, geo.EnvironmentSettings{})
-			}
-			go d.watcher.Reader.RunDBIP(ctx, d.dbip)
-		}
-		d.alerts.Loop(ctx)
-	}
-	return s
+		Telemetry:          operational,
+		OwnerNotifications: ownerNotifications(notifications),
+		Auth:               authService,
+		NodeCredential:     nodeService,
+		Pinger:             poolPinger{pool: pool},
+		Metrics:            metrics.Collector{DB: pool},
+		Agent:              &agentapi.Postgres{Pool: pool, Releases: releases, Hook: agentapi.ResultHookChain{watcher, alertStore, usageStore}},
+		OwnerNodes:         owner,
+		OwnerResults:       owner,
+		OwnerSchedules:     owner,
+		OwnerStats:         statsStore,
+		OwnerUsage:         usageStore,
+		Settings:           preferences,
+		OwnerIP:            &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...).WithConsensus(watcher.Consensus, logger)},
+		OwnerDashboard:     &dashboard.Cached{Source: &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore}, TTL: 5 * time.Second},
+		OwnerAlerts:        alertStore,
+		OwnerJobs:          &jobs.Registry{DB: pool},
+		Audit:              &audit.Store{DB: pool},
+		AccessTokens:       &apitoken.Store{DB: pool},
+		Installer:          installerService,
+		Background:         backgroundServices(notifications, retention, usageStore, logger, watcher, dbip, alertStore),
+	}, cleanup, nil
 }
 
 // buildPreferences creates the settings store and the notification worker. Without APP_KEY nothing secret can be

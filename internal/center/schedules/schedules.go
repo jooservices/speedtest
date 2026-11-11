@@ -12,8 +12,9 @@ import (
 
 const (
 	// MinInterval and MaxInterval bound a node's test interval in minutes.
-	MinInterval = 5
-	MaxInterval = 1440
+	DefaultInterval = 60
+	MinInterval     = 5
+	MaxInterval     = 1440
 	// OverlapMinutes is how long a test is assumed to occupy the link when looking for clashes.
 	OverlapMinutes = 5
 	// MaxUpcoming is the longest list of upcoming runs returned for a node.
