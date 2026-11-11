@@ -15,7 +15,7 @@ import (
 const ResultColumns = `r.id::text, r.node_id::text, r.ts, r.status, r.down_mbps, r.up_mbps, r.ping_ms, r.jitter_ms,
 	r.down_latency_ms, r.up_latency_ms, r.loss_percent, r.server_id, r.server, host(r.ip), r.threads, r.bytes_down,
 	r.bytes_up, r.duration_seconds, r.error, r.manual, r.raw, r.loaded_down, r.loaded_up, r.engine_isp,
-	r.engine_result_id, r.engine_result_url, host(r.engine_ip), r.warnings, r.engine, r.isp_id::text`
+	r.engine_result_id, r.engine_result_url, host(r.engine_ip), r.warnings, r.engine, r.failure_class, r.isp_id::text`
 
 // ResultView is a result in the shape of the contract plus the IP used to attach its location.
 type ResultView struct {
@@ -26,7 +26,7 @@ type ResultView struct {
 // ScanResult reads one row selected with ResultColumns followed by the columns for extra. The geo member is nil
 // until the caller attaches it.
 func ScanResult(row pgx.Row, extra ...any) (ResultView, error) {
-	var id, nodeID, status, engine string
+	var id, nodeID, status, engine, failureClass string
 	var ts time.Time
 	var down, up, ping, jitter, dLat, uLat, loss, duration *float64
 	var bytesDown, bytesUp *int64
@@ -37,7 +37,7 @@ func ScanResult(row pgx.Row, extra ...any) (ResultView, error) {
 	var sid *int32
 	dest := []any{&id, &nodeID, &ts, &status, &down, &up, &ping, &jitter, &dLat, &uLat, &loss, &sid, &server, &ip,
 		&threads, &bytesDown, &bytesUp, &duration, &errText, &manual, &raw, &loadedDown, &loadedUp, &engineISP,
-		&engineResultID, &engineResultURL, &engineIP, &warnings, &engine, &ispID}
+		&engineResultID, &engineResultURL, &engineIP, &warnings, &engine, &failureClass, &ispID}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return ResultView{}, err
 	}
@@ -50,7 +50,7 @@ func ScanResult(row pgx.Row, extra ...any) (ResultView, error) {
 		"down": nullable(down), "up": nullable(up), "ping": nullable(ping), "jitter": nullable(jitter),
 		"dLat": nullable(dLat), "uLat": nullable(uLat), "loss": nullable(loss), "serverId": serverIDValue,
 		"ip": nullable(ip), "threads": int64(threads), "bytesDown": nullable(bytesDown), "bytesUp": nullable(bytesUp),
-		"duration": nullable(duration), "error": nullable(errText), "manual": manual,
+		"duration": nullable(duration), "error": nullable(errText), "failureClass": failureClass, "manual": manual,
 		"raw": jsonObject(raw), "server": jsonOrNil(server), "geo": nil,
 		"loadedDown": jsonOrNil(loadedDown), "loadedUp": jsonOrNil(loadedUp),
 		"engineISP": nullable(engineISP), "engineResultId": nullable(engineResultID),

@@ -140,11 +140,21 @@
     res.ip = byId ? ipForNode(node, slot, byId) : '198.51.100.9';
     if (out || randomFail) {
       res.status = 'failed';
-      res.error = out ? (rnd() < .5 ? 'No route to test server' : 'Link down (no response from gateway)') : 'Timed out while contacting the test server';
+      if (out) {
+        res.error = rnd() < .5 ? 'No route to test server' : 'Link down (no response from gateway)';
+        res.failureClass = 'no_network';
+      } else if (rnd() < 0.2) {
+        res.error = 'Too many requests';
+        res.failureClass = 'rate_limited';
+      } else {
+        res.error = 'Timed out while contacting the test server';
+        res.failureClass = 'timeout';
+      }
       res.down = res.up = res.ping = res.jitter = res.loss = res.dLat = res.uLat = null;
       res.bytesDown = res.bytesUp = 0; res.duration = 30;
       return res;
     }
+    res.failureClass = 'other';
     var noise = 1 + gauss(rnd) * 0.035;
     var down = node.expectedDown * p.effD * (1 - cg) * degrade * noise;
     var up = node.expectedUp * p.effU * (1 - cg * 0.45) * degrade * (1 + gauss(rnd) * 0.04);
