@@ -3993,7 +3993,7 @@ components:
           type: integer
           minimum: 5
           maximum: 1440
-          default: 30
+          default: 60
         offset:
           type: integer
           minimum: 0
@@ -4612,6 +4612,7 @@ components:
           type: integer
           minimum: 5
           maximum: 1440
+          default: 60
         offset:
           type: integer
           minimum: 0

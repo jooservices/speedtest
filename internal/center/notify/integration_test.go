@@ -292,9 +292,9 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	if _, err := worker.Consume(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Later migrations (for example the SSH installer) sit above this one; roll back until the delivery table is gone.
+	// Later migrations (including the schedule default and SSH installer) sit above this one; roll back until the delivery table is gone.
 	var exists bool
-	for step := 0; step < 6; step++ { // ISP entities sits above engine/2FA/audit/installer/delivery.
+	for step := 0; step < 7; step++ { // ISP entities and the schedule default sit above engine/2FA/audit/installer/delivery.
 		if err := db.Migrate(ctx, p, "down"); err != nil {
 			t.Fatal("rollback step", step, err)
 		}

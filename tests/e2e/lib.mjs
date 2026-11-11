@@ -32,6 +32,15 @@ function freePort() {
   });
 }
 
+export async function e2ePort(configured = process.env.E2E_HTTP_PORT) {
+  if (!configured) return freePort();
+  const port = Number(configured);
+  if (!Number.isInteger(port) || port < 1024 || port > 65535) {
+    throw new Error('E2E_HTTP_PORT must be an integer between 1024 and 65535');
+  }
+  return port;
+}
+
 // The database must be a verified, non-live worktree or test database: the reset below drops everything in it.
 function database(env) {
   const name = env.SPEEDTEST_DB_NAME || '';
@@ -54,7 +63,7 @@ export async function startStack({ seed = true } = {}) {
   run('go', ['build', '-o', join(out, 'bin', 'agent'), './cmd/agent']);
   run('go', ['build', '-o', join(out, 'bin', 'fake-speedtest'), './internal/agent/testdata/fake-speedtest']);
   sql(db, 'DROP SCHEMA public CASCADE; CREATE SCHEMA public;');
-  const port = await freePort();
+  const port = await e2ePort();
   const releaseDir = join(out, 'release');
   mkdirSync(releaseDir, { recursive: true });
   const artifact = 'speedtest-agent-linux-amd64';
@@ -95,6 +104,15 @@ export async function startAgent(stack, { name, token }) {
   const agent = spawn(join(out, 'bin', 'agent'), ['run'], { cwd: dir, env, stdio: 'ignore' });
   processes.push(agent);
   return agent;
+}
+
+export async function fetchAgentConfig(stack, name) {
+  const safeName = name.replaceAll(/[^A-Za-z0-9]/g, '_');
+  const credential = readFileSync(join(out, 'agents', safeName, 'credential'), 'utf8').trim();
+  const response = await fetch(stack.origin + '/api/agent/config', { headers: { Authorization: `Bearer ${credential}` } });
+  if (!response.ok) throw new Error(`agent config returned HTTP ${response.status}`);
+  const body = await response.json();
+  return body.data || body;
 }
 
 export function stopAll() {
