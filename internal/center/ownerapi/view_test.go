@@ -129,6 +129,49 @@ func TestApplyPatch(t *testing.T) {
 	}
 }
 
+func TestApplyOnePlanDefault(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		patch       map[string]string
+		wasDefault  bool
+		initial     float64
+		wantValue   float64
+		wantDefault bool
+	}{
+		{name: "updates a default", wasDefault: true, initial: 300, wantValue: 700, wantDefault: true},
+		{name: "keeps an override", wasDefault: false, initial: 500, wantValue: 500},
+		{name: "explicit equal value becomes override", patch: map[string]string{"expectedDown": `500`}, wasDefault: true, initial: 500, wantValue: 500},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			value := tc.initial
+			gotDefault := applyOnePlanDefault(raw(tc.patch), "expectedDown", tc.wasDefault, &value, 700)
+			if value != tc.wantValue || gotDefault != tc.wantDefault {
+				t.Fatalf("value/default=%v/%v want %v/%v", value, gotDefault, tc.wantValue, tc.wantDefault)
+			}
+		})
+	}
+}
+
+func TestSameNullable(t *testing.T) {
+	value, other := "plan-a", "plan-b"
+	for _, tc := range []struct {
+		name string
+		a, b *string
+		want bool
+	}{
+		{name: "both nil", want: true},
+		{name: "one nil", b: &value},
+		{name: "equal values", a: &value, b: &value, want: true},
+		{name: "different values", a: &value, b: &other},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := sameNullable(tc.a, tc.b); got != tc.want {
+				t.Fatalf("sameNullable()=%v want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestQueueCommandRejectsInvalidRequestsBeforeTouchingTheDatabase(t *testing.T) {
 	s := &Store{}
 	for name, tc := range map[string]struct{ typ, version string }{

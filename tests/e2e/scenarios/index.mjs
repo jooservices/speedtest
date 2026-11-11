@@ -32,6 +32,8 @@ export function scenarios({ T, S }) {
     { id: 'SC-IP-02', area: 'ip', title: 'the IP page filters by node and lists address changes', covers: 'node filter, change timeline', run: S.network.filterAndHistory },
 
     { id: 'SC-ISP-01', area: 'isps', title: 'the ISP page lists providers and supports compare and filters', covers: 'ISP list, trend, compare, results isps filter', run: S.isps.listAndCompare },
+    { id: 'SC-ISP-02', area: 'isps', title: 'ISP filters stay local to Results, Statistics and Alerts', covers: 'multi-ISP predicates, clear filters, dashboard snapshot, map and full exports', run: S.isps.filtersStayPageScopedAndClear },
+    { id: 'SC-ISP-03', area: 'isps', title: 'ISP plan defaults update while explicit speeds stay fixed', covers: 'plan assignment, equal and different speed overrides, later plan edits', run: S.isps.planDefaultsPreserveOverrides },
 
     { id: 'SC-ENG-01', area: 'engines', title: 'a second installed engine has an independent saved schedule', covers: 'JOOST-71 capabilities, enable/disable, 60-minute default and persistence', run: S.engines.enableSecondEngine },
     { id: 'SC-ENG-02', area: 'engines', title: 'the engine selector filters charts, results and statistics', covers: 'JOOST-71 engine-isolated views and empty states', run: S.engines.selectEngine },

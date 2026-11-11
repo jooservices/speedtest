@@ -1548,7 +1548,8 @@ paths:
       operationId: getISPTrend
       tags:
         - ISPs
-      summary: Daily download trend for one ISP
+      summary: Download trend for one ISP
+      description: Uses hourly buckets for windows up to 24 hours and daily buckets for longer windows. Each bucket timestamp is the average sample time, so points remain within the requested window.
       security:
         - SessionCookie: []
       parameters:

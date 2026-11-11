@@ -74,7 +74,7 @@
         U.select([{ value: 'all', label: 'Any importance' }].concat(SEV), q.sev, function (v) { q.sev = v; ST.refresh(); }, 'auto'),
         h('div', { style: 'min-width:190px' }, U.field('ISP', U.select([{ value: '', label: 'Any ISP' }].concat(ST.ispOptions()), q.ispId, function (v) {
           q.ispId = v;
-          if (!ST.demo && ST.setAlertISPFilter) ST.setAlertISPFilter(v); else ST.refresh();
+          ST.refresh();
         }, 'auto'))));
       root.appendChild(filt);
       var list = events.filter(function (e) { return (!q.ispId || e.ispId === q.ispId) && (q.show === 'all' || !e.acked) && (q.sev === 'all' || e.severity === q.sev); });

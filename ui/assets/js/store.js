@@ -404,10 +404,6 @@
       slack: { on: false, to: '' }, webhook: { on: false, to: '' } };
     ST.servers = [];
     var geos = {}, addresses = [], changes = [], schedules = { rules: {}, nodes: [], clashes: [] }, controller, revision = 0;
-    ST.resultsISPFilter = '';
-    ST.setResultsISPFilter = function (id) { ST.resultsISPFilter = id || ''; return ST.load(); };
-    ST.alertISPFilter = '';
-    ST.setAlertISPFilter = function (id) { ST.alertISPFilter = id || ''; return ST.load(); };
     var API = ST.api;
     ST.remote = { status: 'idle', error: null };
     ST.geo = function (ip) { return geos[ip] || null; };
@@ -441,10 +437,10 @@
         var range = settings.data.range;
         var snapshot = await Promise.all([
           API.list('/api/nodes', options),
-          API.list('/api/results?range=' + encodeURIComponent(range) + (ST.resultsISPFilter ? '&isps=' + encodeURIComponent(ST.resultsISPFilter) : '') + ST.engineQuery(), options),
+          API.list('/api/results?range=' + encodeURIComponent(range) + ST.engineQuery(), options),
           API.list('/api/alerts/rules', options),
           // state=all: acknowledged alerts stay visible under "All" and can be reopened (the center's default is open only).
-          API.list('/api/alerts/events?state=all&range=' + encodeURIComponent(range) + (ST.alertISPFilter ? '&isp=' + encodeURIComponent(ST.alertISPFilter) : ''), options),
+          API.list('/api/alerts/events?state=all&range=' + encodeURIComponent(range), options),
           API.request('/api/isps?range=' + encodeURIComponent(range) + ST.engineQuery(), options),
           API.list('/api/ip/addresses', options),
           API.list('/api/ip/history', options),

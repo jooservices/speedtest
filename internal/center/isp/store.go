@@ -127,7 +127,7 @@ WHERE i.id=$1::uuid GROUP BY i.id`, args...))
 	return item, err
 }
 
-// Trend returns daily average download points for one ISP.
+// Trend returns average download points, using hourly buckets for rolling-day windows.
 func (s *Store) Trend(ctx context.Context, id string, q Query) ([]map[string]any, error) {
 	if !ValidID(id) {
 		return nil, ErrNotFound
@@ -142,7 +142,7 @@ func (s *Store) Trend(ctx context.Context, id string, q Query) ([]map[string]any
 	join, extra := engineJoin(q.Engine, 4)
 	args := append([]any{id, q.From, q.To}, extra...)
 	rows, err := s.DB.Query(ctx, `
-SELECT date_trunc('day', r.ts AT TIME ZONE 'UTC') AS bucket,
+SELECT to_timestamp(AVG(EXTRACT(EPOCH FROM r.ts))) AS bucket,
 	AVG(r.down_mbps) FILTER (WHERE r.status <> 'failed'),
 	AVG(r.up_mbps) FILTER (WHERE r.status <> 'failed'),
 	AVG(r.ping_ms) FILTER (WHERE r.status <> 'failed'),
@@ -150,7 +150,8 @@ SELECT date_trunc('day', r.ts AT TIME ZONE 'UTC') AS bucket,
 FROM results r
 JOIN nodes n ON n.id=r.node_id AND `+join+`
 WHERE r.isp_id=$1::uuid AND r.ts >= $2 AND r.ts < $3
-GROUP BY bucket ORDER BY bucket`, args...)
+GROUP BY date_trunc(CASE WHEN $3 - $2 <= interval '24 hours' THEN 'hour' ELSE 'day' END, r.ts AT TIME ZONE 'UTC')
+ORDER BY date_trunc(CASE WHEN $3 - $2 <= interval '24 hours' THEN 'hour' ELSE 'day' END, r.ts AT TIME ZONE 'UTC')`, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -278,17 +279,17 @@ func (s *Store) UpdatePlan(ctx context.Context, ispID, planID, name string, down
 	}
 	var updatedID string
 	err := s.DB.QueryRow(ctx, `WITH old AS MATERIALIZED (
-		SELECT id,advertised_down_mbps AS old_down,advertised_up_mbps AS old_up FROM isp_plans
+		SELECT id FROM isp_plans
 		WHERE id=$1::uuid AND isp_id=$2::uuid FOR UPDATE
 	), updated AS (
 		UPDATE isp_plans p SET name=$3,advertised_down_mbps=$4,advertised_up_mbps=$5,updated_at=$6
-		FROM old o WHERE p.id=o.id RETURNING p.id,o.old_down,o.old_up
+		FROM old o WHERE p.id=o.id RETURNING p.id
 	), sync_defaults AS (
 		UPDATE nodes n SET
-			expected_down_mbps=CASE WHEN n.expected_down_mbps=u.old_down THEN $4 ELSE n.expected_down_mbps END,
-			expected_up_mbps=CASE WHEN n.expected_up_mbps=u.old_up THEN $5 ELSE n.expected_up_mbps END,
+			expected_down_mbps=CASE WHEN n.expected_down_isp_default THEN $4 ELSE n.expected_down_mbps END,
+			expected_up_mbps=CASE WHEN n.expected_up_isp_default THEN $5 ELSE n.expected_up_mbps END,
 			config_revision=n.config_revision+1,updated_at=now()
-		FROM updated u WHERE n.isp_plan_id=u.id AND (n.expected_down_mbps=u.old_down OR n.expected_up_mbps=u.old_up)
+		FROM updated u WHERE n.isp_plan_id=u.id AND (n.expected_down_isp_default OR n.expected_up_isp_default)
 		RETURNING n.id
 	)
 	SELECT id::text FROM updated`, planID, ispID, name, down, up, s.now()).Scan(&updatedID)

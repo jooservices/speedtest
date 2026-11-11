@@ -11,6 +11,8 @@ INSERT INTO isps(id,asn,organisation,name) VALUES
  ('22000000-0000-4000-8000-000000000001',7552,'Viettel Group','Viettel'),
  ('22000000-0000-4000-8000-000000000002',45899,'VNPT','VNPT'),
  ('22000000-0000-4000-8000-000000000003',4294967295,'Boundary Network Ltd.','Boundary Network');
+INSERT INTO isp_plans(id,isp_id,name,advertised_down_mbps,advertised_up_mbps) VALUES
+ ('23000000-0000-4000-8000-000000000001','22000000-0000-4000-8000-000000000001','E2E Fiber',500,100);
 INSERT INTO ip_addresses (ip,geo,source,looked_up_at,isp_id) VALUES
  ('203.0.113.11','{"city":"Hanoi","region":"Hanoi","country":"VN","latitude":21.0285,"longitude":105.8542,"time_zone":"Asia/Ho_Chi_Minh","accuracy_radius":20,"asn":7552,"organisation":"Viettel Group"}','GeoLite2',now(),'22000000-0000-4000-8000-000000000001'),
  ('203.0.113.12','{"city":"Ho Chi Minh City","region":"Ho Chi Minh","country":"VN","latitude":10.8231,"longitude":106.6297,"time_zone":"Asia/Ho_Chi_Minh","accuracy_radius":20,"asn":7552,"organisation":"Viettel Group"}','GeoLite2',now(),'22000000-0000-4000-8000-000000000001'),

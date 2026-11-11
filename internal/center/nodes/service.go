@@ -67,19 +67,21 @@ type Binding struct {
 
 // Input contains the fields accepted when creating an independent node.
 type Input struct {
-	Name         string  `json:"name"`
-	Label        string  `json:"label"`
-	Provider     string  `json:"provider"`
-	Plan         string  `json:"plan"`
-	ISPPlanID    *string `json:"ispPlanId"`
-	ExpectedDown float64 `json:"expectedDown"`
-	ExpectedUp   float64 `json:"expectedUp"`
-	Threads      int     `json:"threads"`
-	ServerID     *int    `json:"-"`
-	Note         string  `json:"note"`
-	Enabled      bool    `json:"enabled"`
-	Binding      Binding `json:"binding"`
-	AutoUpdate   bool    `json:"autoUpdate"`
+	Name                    string  `json:"name"`
+	Label                   string  `json:"label"`
+	Provider                string  `json:"provider"`
+	Plan                    string  `json:"plan"`
+	ISPPlanID               *string `json:"ispPlanId"`
+	ExpectedDown            float64 `json:"expectedDown"`
+	ExpectedUp              float64 `json:"expectedUp"`
+	ExpectedDownPlanDefault bool    `json:"-"`
+	ExpectedUpPlanDefault   bool    `json:"-"`
+	Threads                 int     `json:"threads"`
+	ServerID                *int    `json:"-"`
+	Note                    string  `json:"note"`
+	Enabled                 bool    `json:"enabled"`
+	Binding                 Binding `json:"binding"`
+	AutoUpdate              bool    `json:"autoUpdate"`
 }
 
 // ServerSelection accepts either "auto" or a positive server ID.
@@ -162,20 +164,8 @@ func (s *Service) CreateNode(ctx context.Context, input Input, principal, idempo
 }
 
 func (s *Service) createNodeTx(ctx context.Context, tx pgx.Tx, input Input) (any, error) {
-	if input.ISPPlanID != nil {
-		var down, up float64
-		if err := tx.QueryRow(ctx, `SELECT advertised_down_mbps,advertised_up_mbps FROM isp_plans WHERE id=$1::uuid`, *input.ISPPlanID).Scan(&down, &up); err != nil {
-			if errors.Is(err, pgx.ErrNoRows) {
-				return nil, ErrInvalidInput
-			}
-			return nil, err
-		}
-		if input.ExpectedDown == 0 {
-			input.ExpectedDown = down
-		}
-		if input.ExpectedUp == 0 {
-			input.ExpectedUp = up
-		}
+	if err := applyCreatePlanDefaults(ctx, tx, &input); err != nil {
+		return nil, err
 	}
 	nodeID, err := s.uuid()
 	if err != nil {
@@ -191,10 +181,10 @@ func (s *Service) createNodeTx(ctx context.Context, tx pgx.Tx, input Input) (any
 	}
 	var createdAt, expiresAt time.Time
 	err = tx.QueryRow(ctx, `
-		INSERT INTO nodes (id,name,label,provider,plan,isp_plan_id,expected_down_mbps,expected_up_mbps,threads,server_id,color_slot,enabled,auto_update,binding_interface,binding_source_ip,note)
-		VALUES ($1,$2,$3,$4,$5,$6::uuid,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+		INSERT INTO nodes (id,name,label,provider,plan,isp_plan_id,expected_down_mbps,expected_up_mbps,expected_down_isp_default,expected_up_isp_default,threads,server_id,color_slot,enabled,auto_update,binding_interface,binding_source_ip,note)
+		VALUES ($1,$2,$3,$4,$5,$6::uuid,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		RETURNING created_at`, nodeID, input.Name, input.Label, input.Provider, input.Plan, input.ISPPlanID,
-		input.ExpectedDown, input.ExpectedUp, input.Threads, input.ServerID, colorSlot,
+		input.ExpectedDown, input.ExpectedUp, input.ExpectedDownPlanDefault, input.ExpectedUpPlanDefault, input.Threads, input.ServerID, colorSlot,
 		input.Enabled, input.AutoUpdate, input.Binding.Iface, input.Binding.SourceIP, input.Note).Scan(&createdAt)
 	if err != nil {
 		return nil, translateDBError(err)
@@ -219,6 +209,29 @@ func (s *Service) createNodeTx(ctx context.Context, tx pgx.Tx, input Input) (any
 		"token":     token,
 		"expiresAt": expiresAt.UTC().Format(time.RFC3339Nano),
 	}, nil
+}
+
+func applyCreatePlanDefaults(ctx context.Context, tx interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, input *Input) error {
+	if input.ISPPlanID == nil {
+		return nil
+	}
+	var down, up float64
+	err := tx.QueryRow(ctx, `SELECT advertised_down_mbps,advertised_up_mbps FROM isp_plans WHERE id=$1::uuid`, *input.ISPPlanID).Scan(&down, &up)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrInvalidInput
+	}
+	if err != nil {
+		return err
+	}
+	if input.ExpectedDown == 0 {
+		input.ExpectedDown, input.ExpectedDownPlanDefault = down, true
+	}
+	if input.ExpectedUp == 0 {
+		input.ExpectedUp, input.ExpectedUpPlanDefault = up, true
+	}
+	return nil
 }
 
 func insertNodeSchedules(ctx context.Context, tx pgx.Tx, nodeID string) (int, int, error) {

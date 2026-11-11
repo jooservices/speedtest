@@ -11,6 +11,7 @@
     q.nodes = q.nodes.filter(function (id) { return ST.node(id); });
     var rangeKey = q.range || ST.settings().range;
     var listHost = h('div'), countHost = h('span', { class: 'muted' });
+    var statusSelect, ispSelect, minDownInput, maxDownInput, searchInput;
 
     function filtered() {
       var from = Date.now() - ST.ranges[rangeKey];
@@ -58,7 +59,16 @@
           { key: 'status', label: 'Status', sort: true, render: function (r) { return U.statusChip(r.status); } }],
         rows: slice, sortKey: q.sort, sortDir: q.dir, onSort: function (k) { if (q.sort === k) q.dir = q.dir === 'asc' ? 'desc' : 'asc'; else { q.sort = k; q.dir = k === 'ts' ? 'desc' : 'asc'; } draw(); },
         onRow: function (r) { ST.openResult(r); },
-        empty: U.empty('No results match', 'Try a wider time range or clear some filters.', U.btn('Clear filters', { onClick: function () { q.nodes = nodes.map(function (n) { return n.id; }); q.status = 'all'; q.ispId = ''; q.text = ''; q.minDown = ''; q.maxDown = ''; q.page = 1; ST.refresh(); } }))
+        empty: U.empty('No results match', 'Try a wider time range or clear some filters.', U.btn('Clear filters', { onClick: function () {
+          q.allNodes = true; q.nodes = nodes.map(function (n) { return n.id; }); q.status = 'all'; q.ispId = ''; q.text = ''; q.minDown = ''; q.maxDown = ''; q.page = 1;
+          if (statusSelect) statusSelect.value = 'all';
+          if (ispSelect) ispSelect.value = '';
+          if (minDownInput) minDownInput.value = '';
+          if (maxDownInput) maxDownInput.value = '';
+          if (searchInput) searchInput.value = '';
+          Array.prototype.forEach.call(nodeBox.querySelectorAll('button'), function (button) { button.classList.remove('off'); button.setAttribute('aria-pressed', 'true'); });
+          draw();
+        } }))
       }));
       var pager = h('div', { class: 'pager' },
         h('span', { class: 'row' }, 'Rows per page', U.select([10, 25, 50, 100], q.size, function (v) { q.size = +v; q.page = 1; draw(); }, 'auto')),
@@ -90,14 +100,13 @@
       h('div', { class: 'row wrap between' },
         h('div', { class: 'row wrap' },
           U.rangeSelect(rangeKey, function (v) { q.range = v; q.page = 1; draw(); }),
-          U.select([{ value: 'all', label: 'Any status' }, { value: 'ok', label: 'OK' }, { value: 'degraded', label: 'Degraded' }, { value: 'failed', label: 'Failed' }], q.status, function (v) { q.status = v; q.page = 1; draw(); }, 'auto'),
-          h('div', { style: 'min-width:190px' }, U.field('ISP', U.select([{ value: '', label: 'Any ISP' }].concat(ST.ispOptions()), q.ispId, function (v) {
-            q.ispId = v; q.page = 1;
-            if (!ST.demo && ST.setResultsISPFilter) ST.setResultsISPFilter(v); else draw();
-          }, 'auto'))),
-          h('div', { style: 'width:190px' }, U.suffix(U.input(q.minDown, function (v) { q.minDown = v; q.page = 1; draw(); }, { type: 'number', min: 0, placeholder: 'Min download', 'aria-label': 'Minimum download' }), 'Mbps')),
-          h('div', { style: 'width:190px' }, U.suffix(U.input(q.maxDown, function (v) { q.maxDown = v; q.page = 1; draw(); }, { type: 'number', min: 0, placeholder: 'Max download', 'aria-label': 'Maximum download' }), 'Mbps')),
-          h('div', { style: 'width:280px;position:relative' }, U.input(q.text, function (v) { q.text = v; q.page = 1; draw(); }, { type: 'search', placeholder: 'Search IP, server, city, error', 'aria-label': 'Search results' }))),
+          (statusSelect = U.select([{ value: 'all', label: 'Any status' }, { value: 'ok', label: 'OK' }, { value: 'degraded', label: 'Degraded' }, { value: 'failed', label: 'Failed' }], q.status, function (v) { q.status = v; q.page = 1; draw(); }, 'auto')),
+          h('div', { style: 'min-width:190px' }, U.field('ISP', (ispSelect = U.select([{ value: '', label: 'Any ISP' }].concat(ST.ispOptions()), q.ispId, function (v) {
+            q.ispId = v; q.page = 1; draw();
+          }, 'auto')))),
+          h('div', { style: 'width:190px' }, U.suffix((minDownInput = U.input(q.minDown, function (v) { q.minDown = v; q.page = 1; draw(); }, { type: 'number', min: 0, placeholder: 'Min download', 'aria-label': 'Minimum download' })), 'Mbps')),
+          h('div', { style: 'width:190px' }, U.suffix((maxDownInput = U.input(q.maxDown, function (v) { q.maxDown = v; q.page = 1; draw(); }, { type: 'number', min: 0, placeholder: 'Max download', 'aria-label': 'Maximum download' })), 'Mbps')),
+          h('div', { style: 'width:280px;position:relative' }, (searchInput = U.input(q.text, function (v) { q.text = v; q.page = 1; draw(); }, { type: 'search', placeholder: 'Search IP, server, city, error', 'aria-label': 'Search results' })))),
         countHost),
       nodeBox);
     root.appendChild(filters);

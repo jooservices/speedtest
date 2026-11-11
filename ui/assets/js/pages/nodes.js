@@ -436,10 +436,8 @@
           if (!d.name.trim()) { U.toast('Node name cannot be empty', 'error'); return; }
           if (!(+d.down > 0) || !(+d.up > 0)) { U.toast('Expected speeds must be above zero', 'error'); return; }
           var patch = { name: d.name.trim(), label: d.label.trim(), ispPlanId: d.ispPlanId || null, expectedDown: +d.down, expectedUp: +d.up, threads: d.threads, server: ST.demo || d.server === 'auto' ? d.server : +d.server, note: d.note };
-          if (d.ispPlanId && d.ispPlanId !== (n.ispPlanId || '')) {
-            if (!d.downTouched) delete patch.expectedDown;
-            if (!d.upTouched) delete patch.expectedUp;
-          }
+          if (!d.downTouched) delete patch.expectedDown;
+          if (!d.upTouched) delete patch.expectedUp;
           Promise.resolve(ST.updateNode(n.id, patch)).then(function () { U.toast('Settings saved'); }, function (error) {
             U.toast(error.status === 409 ? 'Another node already has this name.' : error.status === 412 ? 'This node was changed elsewhere. Reload and try again.' : error.message, 'error');
           });

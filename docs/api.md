@@ -609,3 +609,20 @@ average. Full exports retain all measurements and their engine identity. CSV add
 `engine` as its final column. Alert rules optionally specify `engine`; omission
 selects the node's primary engine, so another engine cannot advance or reset its
 measurement streak.
+
+## ISP plans and page filters
+
+An assigned ISP plan supplies the node's expected download and upload speeds
+when those values are omitted. The center records default provenance separately
+for each speed. Editing a plan updates only values still using that plan default;
+an owner-entered value remains an override even when it equals the advertised
+speed. Existing assignments migrate as explicit values because their original
+provenance cannot be inferred from numeric equality. Clear and reassign a plan
+to opt an existing node into its advertised defaults. Clearing a plan keeps the
+current expected speeds as node settings.
+
+ISP trends use hourly buckets for windows up to 24 hours and daily buckets for
+longer windows. Each point is timestamped at the average time of its samples, so
+all points remain inside a rolling window, including across UTC midnight. The
+Results and Alerts ISP selectors filter their own page data; they do not narrow
+the shared snapshot used by dashboard, node, map or export views.
