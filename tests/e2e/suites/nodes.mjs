@@ -1,6 +1,6 @@
 export function nodesSuite(T, ctx) {
   const { page, assert } = T;
-  const { stack, startAgent, fetchAgentConfig, submitScheduledResult, receiver } = ctx;
+  const { stack, startAgent, fetchAgentConfig, submitScheduledResult, submitFailedResult, sendAgentHeartbeat, receiver } = ctx;
   return {
     async publishedUpdate() {
       T.db("update nodes set agent='speedtest-agent/1.0.0 (linux/amd64)' where name='VM3'");
@@ -54,7 +54,7 @@ export function nodesSuite(T, ctx) {
       assert.ok(token && token.length > 20, 'the wizard shows a real one-time enrolment key: ' + command.slice(0, 80));
       assert.match(command, /install\.sh/);
       await T.press('I ran the command', dialog);
-      await startAgent(stack, { name: 'E2E-1', token });
+      const agent = await startAgent(stack, { name: 'E2E-1', token });
       await T.see('E2E-1 is online', dialog, 90000);
       await submitScheduledResult(stack, { name: 'E2E-1' });
       await dialog.getByText(/First result: .* down, .* up, .* ping\./).waitFor({ timeout: 90000 });
@@ -92,6 +92,45 @@ export function nodesSuite(T, ctx) {
       assert.ok(Number(stored) >= 1, 'the manual result is stored on the center: ' + stored);
       await T.eventually(() => Number(T.db("select count(*) from alert_events e join nodes n on n.id=e.node_id where n.name='E2E-1' and e.event_key='test.manual_finished'")) >= 1, 'manual result creates a finished-test event');
       await T.eventually(() => receiver.bodies.slice(receivedBefore).some(message => /Manual test finished/.test(message.text || '')), 'manual completion notification reaches the configured webhook', 75000);
+
+      const nodeID = T.db("select id::text from nodes where name='E2E-1'");
+      // Reuse the global failed-test rule seeded for the suite instead of adding a duplicate rule.
+      const recoveryRule = '20000000-0000-4000-8000-000000000002';
+      const offlineRule = '70000000-0000-4000-8000-000000000002';
+      T.db(`INSERT INTO alert_rules(id,name,metric,op,value,for_tests,severity,channels,enabled)
+        VALUES('${offlineRule}','E2E node offline','offline','=',1,1,'crit',ARRAY['webhook'],true)`);
+      T.db(`INSERT INTO notification_event_settings(event_key,enabled,severity,channels)
+        VALUES ('test.failed',true,'warn',ARRAY['webhook']),('test.recovered',true,'info',ARRAY['webhook']),
+          ('node.offline',true,'crit',ARRAY['webhook']),('node.online',true,'info',ARRAY['webhook'])
+        ON CONFLICT (event_key) DO UPDATE SET enabled=excluded.enabled,severity=excluded.severity,channels=excluded.channels`);
+      const recoveryBefore = receiver.bodies.length;
+      await submitFailedResult(stack, { name: 'E2E-1' });
+      await submitFailedResult(stack, { name: 'E2E-1' });
+      await T.eventually(() => Number(T.db(`select count(*) from alert_events where rule_id='${recoveryRule}' and event_key='test.failed'`)) === 1, 'two failed tests open one failed-test alert');
+      await T.eventually(() => receiver.bodies.slice(recoveryBefore).some(message => /Test failed/.test(message.text || '')), 'failed-test notification reaches the webhook', 75000);
+      await submitScheduledResult(stack, { name: 'E2E-1' });
+      await T.eventually(() => {
+        const count = Number(T.db(`select count(*) from alert_events where node_id='${nodeID}' and event_key='test.recovered'`));
+        return count === 1 || JSON.stringify({ count, state: T.db(`select consecutive_count||':'||active||':'||COALESCE(active_event_id::text,'')||':'||COALESCE(last_evaluated_at::text,'') from alert_state where rule_id='${recoveryRule}' and node_id='${nodeID}'`), results: T.db(`select status||':'||ts::text from results where node_id='${nodeID}' order by ts desc limit 4`) });
+      }, 'the next successful test creates a recovery event');
+      const recovered = JSON.parse(T.db(`select payload::text from alert_events where node_id='${nodeID}' and event_key='test.recovered' order by ts desc limit 1`));
+      assert.ok(recovered.duration, 'the test recovery includes the failed streak duration');
+      await T.eventually(() => receiver.bodies.slice(recoveryBefore).some(message => /Tests recovered/.test(message.text || '')), 'test recovery notification reaches the webhook', 75000);
+
+      const stopped = new Promise(resolve => agent.once('exit', resolve));
+      agent.kill('SIGTERM');
+      await stopped;
+      T.db(`UPDATE engine_schedules SET interval_minutes=5 WHERE node_id='${nodeID}' AND engine='ookla';
+        UPDATE schedules SET interval_minutes=5 WHERE node_id='${nodeID}';
+        UPDATE nodes SET last_seen_at=now()-interval '16 minutes' WHERE id='${nodeID}'`);
+      await T.eventually(() => Number(T.db(`select count(*) from alert_events where node_id='${nodeID}' and event_key='node.offline'`)) === 1, 'three missed intervals open one node-offline event', 45000);
+      await T.eventually(() => receiver.bodies.slice(recoveryBefore).some(message => /Node offline/.test(message.text || '')), 'node-offline notification reaches the webhook', 75000);
+      await sendAgentHeartbeat(stack, { name: 'E2E-1' });
+      await T.eventually(() => Number(T.db(`select count(*) from alert_events where node_id='${nodeID}' and event_key='node.online'`)) === 1, 'the restored heartbeat creates a node-online recovery event', 45000);
+      const online = JSON.parse(T.db(`select payload::text from alert_events where node_id='${nodeID}' and event_key='node.online' order by ts desc limit 1`));
+      assert.ok(online.duration, 'the node recovery includes its downtime');
+      await T.eventually(() => receiver.bodies.slice(recoveryBefore).some(message => /Node back online/.test(message.text || '')), 'node-online notification reaches the webhook', 75000);
+
       await T.open('#/history', 'Results');
       await T.fill('Search results', 'E2E-1');
       await page.getByRole('row').nth(1).waitFor();

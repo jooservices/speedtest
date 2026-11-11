@@ -130,6 +130,17 @@ func TestMetricMatches(t *testing.T) {
 	}
 }
 
+func TestMetricObservationFailedResultBreaksQualityStreak(t *testing.T) {
+	_, observed := metricObservation(Rule{Metric: "ping", Op: ">", Value: 30}, agentapi.Result{Status: "failed"}, 0, 0)
+	if !observed {
+		t.Fatal("a failed test must break a consecutive quality streak")
+	}
+	_, observed = metricObservation(Rule{Metric: "ping", Op: ">", Value: 30}, agentapi.Result{Status: "ok"}, 0, 0)
+	if observed {
+		t.Fatal("a successful test without the metric must leave the streak unchanged")
+	}
+}
+
 func TestRuleText(t *testing.T) {
 	tests := []struct{ metric, want string }{
 		{"failed", "3 failed tests in a row"},

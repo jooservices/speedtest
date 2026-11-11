@@ -417,6 +417,10 @@ func (s *Store) emitOneTestOutcome(ctx context.Context, tx pgx.Tx, node string, 
 
 // PrepareResultBatch loads notification settings once for all successful results in a request.
 func (s *Store) PrepareResultBatch(ctx context.Context, node string, results []agentapi.Result) (context.Context, error) {
+	ctx, err := s.prepareObservedBatch(ctx, node, results)
+	if err != nil {
+		return ctx, err
+	}
 	events := make(map[string]catalog.Event, 3)
 	for _, result := range results {
 		for _, key := range testOutcomeKeys(result) {

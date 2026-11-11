@@ -51,7 +51,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-SET-06', area: 'settings', title: 'the enrolment key is shown once', covers: 'enrolment key rotation', run: S.settings.enrolmentKeyShownOnce },
 
     // Adds a real agent and a node; the removal scenario below deletes it again.
-    { id: 'SC-NODE-05', area: 'nodes', title: 'a node is added with the install command and reports', covers: 'wizard, 60-minute default, real agent enrolment/sync, matching schedules, first result notification, scheduled success delivery, manual test notification', run: S.nodes.addWithCommandAndRunTest },
+    { id: 'SC-NODE-05', area: 'nodes', title: 'a node is added with the install command and reports', covers: 'wizard, 60-minute default, real agent enrolment/sync, test-success and manual notifications, rule failure/recovery delivery, node offline/online recovery with downtime', run: S.nodes.addWithCommandAndRunTest },
     { id: 'SC-NODE-06', area: 'nodes', title: 'a node can be removed from the dashboard', covers: 'node removal', run: () => S.nodes.removeFromDashboard('E2E-1') },
 
     { id: 'SC-SET-08', area: 'settings', title: 'the activity log lists owner changes without secrets', covers: 'audit log, filter, no secrets', run: S.settings.activityLog },

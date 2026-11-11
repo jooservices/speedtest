@@ -119,6 +119,9 @@ func metricObservation(rule Rule, result agentapi.Result, expectedDown, expected
 			return false, false
 		}
 	}
+	if result.Status == "failed" {
+		return false, true
+	}
 	if result.Status != "ok" && result.Status != "degraded" {
 		return false, false
 	}
