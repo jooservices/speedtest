@@ -1,7 +1,7 @@
 /* Nodes: list, add-node wizard (guided install), node detail with settings and agent controls. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
   var detailTab = {};
 
   /* ---------- List ---------- */
