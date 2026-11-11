@@ -87,10 +87,10 @@ func (s *Store) AfterResultStored(ctx context.Context, tx pgx.Tx, node string, r
 
 func (s *Store) evaluateResult(ctx context.Context, tx pgx.Tx, node string, result agentapi.Result, ts time.Time) error {
 	rows, err := tx.Query(ctx, `SELECT r.id::text,r.name,r.metric,r.op,
-		CASE WHEN r.node_ids IS NULL AND r.engine IS NULL AND es.updated_at>r.updated_at
+		CASE WHEN r.node_ids IS NULL AND r.engine IS NULL AND es.thresholds_updated_at>r.updated_at
 			THEN COALESCE((es.thresholds->>CASE WHEN r.metric='failed' THEN 'for_tests' ELSE r.metric END)::float8,r.value)
 			ELSE r.value END,
-		CASE WHEN r.node_ids IS NULL AND r.engine IS NULL AND es.updated_at>r.updated_at
+		CASE WHEN r.node_ids IS NULL AND r.engine IS NULL AND es.thresholds_updated_at>r.updated_at
 			THEN COALESCE((es.thresholds->>'for_tests')::integer,r.for_tests) ELSE r.for_tests END,r.node_ids IS NULL,
 		COALESCE(r.node_ids::text[],ARRAY[]::text[]),r.severity,r.channels,r.enabled,r.revision,
 		n.expected_down_mbps,n.expected_up_mbps

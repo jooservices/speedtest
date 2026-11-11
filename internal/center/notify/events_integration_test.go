@@ -245,3 +245,35 @@ func TestAuthenticationEventProducersUseScopedThresholds(t *testing.T) {
 		t.Fatalf("signin/burst/failure/location rows = %d/%d/%d/%d", newSignIns, bursts, failures, locations)
 	}
 }
+
+// An event setting overrides the global rules of its metric only while the owner's THRESHOLD edit is newer than the rule: editing the
+// cooldown or the channels later must not move that timestamp (it would restore a stale threshold over a newer rule value).
+func TestEventThresholdTimestampMovesOnlyWithThresholdEdits(t *testing.T) {
+	p, ctx := database(t)
+	store := &EventStore{DB: p}
+	stamp := func() time.Time {
+		var at time.Time
+		if err := p.QueryRow(ctx, `SELECT thresholds_updated_at FROM notification_event_settings WHERE event_key='quality.download_low'`).Scan(&at); err != nil {
+			t.Fatal(err)
+		}
+		return at
+	}
+	if _, err := store.UpdateEvent(ctx, "quality.download_low", EventPatch{Thresholds: map[string]float64{"down_pct": 50}}); err != nil {
+		t.Fatal(err)
+	}
+	first := stamp()
+	time.Sleep(20 * time.Millisecond)
+	cooldown := 300
+	if _, err := store.UpdateEvent(ctx, "quality.download_low", EventPatch{CooldownSeconds: &cooldown}); err != nil {
+		t.Fatal(err)
+	}
+	if !stamp().Equal(first) {
+		t.Fatal("a cooldown edit must not move the threshold timestamp")
+	}
+	if _, err := store.UpdateEvent(ctx, "quality.download_low", EventPatch{Thresholds: map[string]float64{"down_pct": 55}}); err != nil {
+		t.Fatal(err)
+	}
+	if !stamp().After(first) {
+		t.Fatal("a threshold edit must move the threshold timestamp")
+	}
+}

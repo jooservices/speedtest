@@ -10,7 +10,10 @@ CREATE TABLE notification_event_settings (
     severity text NOT NULL CHECK (severity IN ('info', 'warn', 'crit')),
     channels text[] NOT NULL
         CHECK (cardinality(channels) BETWEEN 1 AND 4),
-    updated_at timestamptz NOT NULL DEFAULT now()
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    -- Moves only when the owner edits the thresholds: an event setting overrides the global rules of its metric only while the threshold edit is newer
+    -- than the rule, so editing a cooldown or a channel later never restores a stale threshold.
+    thresholds_updated_at timestamptz NOT NULL DEFAULT now()
 );
 
 CREATE TABLE notification_templates (

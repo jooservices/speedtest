@@ -3,7 +3,6 @@ package alerts
 import (
 	"context"
 	"errors"
-	"math"
 	"strconv"
 	"time"
 
@@ -178,8 +177,11 @@ func (s *Store) emitMedianDrop(ctx context.Context, tx pgx.Tx, node string, resu
 	if downPct >= 100-threshold && upPct >= 100-threshold {
 		return nil
 	}
-	value := math.Min(downPct, upPct)
-	extra := map[string]string{"value": strconv.FormatFloat(value, 'f', 1, 64), "threshold": strconv.FormatFloat(100-threshold, 'f', 1, 64), "expected": "7-day median", "pct": strconv.FormatFloat(value, 'f', 1, 64)}
+	value, direction, median := downPct, "download", *medianDown
+	if upPct < downPct {
+		value, direction, median = upPct, "upload", *medianUp
+	}
+	extra := map[string]string{"value": strconv.FormatFloat(value, 'f', 1, 64), "threshold": strconv.FormatFloat(100-threshold, 'f', 1, 64), "expected": medianText(direction, median), "pct": strconv.FormatFloat(value, 'f', 1, 64)}
 	return s.emitObservedCatalogEvent(ctx, tx, "quality.drop_vs_median", node, result, ts, extra)
 }
 
@@ -214,4 +216,9 @@ func (s *Store) emitObservedCatalogEvent(ctx context.Context, tx pgx.Tx, key, no
 	payload := BuildPayload(key, name, url, config.Severity, result, expectedDown, expectedUp, limits, extra)
 	_, err = s.insertCatalogEventWithSettings(ctx, tx, key, node, event.Title, event.Description, result.ID, payload, ts, config)
 	return err
+}
+
+// medianText names the direction that dropped and its 7-day median, so "Speed 50% of the ..." reads with the number it is measured against.
+func medianText(direction string, median float64) string {
+	return strconv.FormatFloat(median, 'f', 1, 64) + " Mbps 7-day " + direction + " median"
 }

@@ -26,7 +26,7 @@ defaults without replacing owner rules; `00030_system_notification_events.sql`
 permits events without a node; `00031_notification_escalation.sql` records
 delivery escalation time; and `00032_notification_auth_activity.sql` stores
 bounded login-failure counts and new sign-in IPs without retaining credentials.
-Upgrading from develop migration 22 applies versions 23–29 in order. These
+Upgrading from develop migration 22 applies versions 23–32 in order. These
 changes are additive; the 1.0.0 binary continues to use its existing tables and
 columns.
 

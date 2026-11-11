@@ -41,7 +41,7 @@ type notificationQuerier interface {
 func (s *Store) qualityLimits(ctx context.Context, q notificationQuerier, node, engine string) (QualityLimits, error) {
 	limits := DefaultQualityLimits()
 	seen := map[string]bool{}
-	rows, err := q.Query(ctx, `SELECT r.metric,CASE WHEN r.node_ids IS NULL AND r.engine IS NULL AND es.updated_at>r.updated_at
+	rows, err := q.Query(ctx, `SELECT r.metric,CASE WHEN r.node_ids IS NULL AND r.engine IS NULL AND es.thresholds_updated_at>r.updated_at
 		THEN COALESCE((es.thresholds->>r.metric)::float8,r.value) ELSE r.value END
 		FROM alert_rules r
 		LEFT JOIN notification_event_settings es ON es.event_key=CASE r.metric
