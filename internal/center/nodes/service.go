@@ -199,20 +199,9 @@ func (s *Service) createNodeTx(ctx context.Context, tx pgx.Tx, input Input) (any
 	if err != nil {
 		return nil, translateDBError(err)
 	}
-	var interval, offset int
-	err = tx.QueryRow(ctx, `
-		WITH legacy AS (
-			INSERT INTO schedules (node_id) VALUES ($1)
-			RETURNING node_id, interval_minutes, offset_minutes, enabled, revision
-		), engine AS (
-			INSERT INTO engine_schedules(node_id,engine,interval_minutes,offset_minutes,enabled,revision)
-			SELECT node_id,'ookla',interval_minutes,offset_minutes,enabled,revision FROM legacy
-			RETURNING node_id
-		)
-		SELECT legacy.interval_minutes, legacy.offset_minutes
-		FROM legacy JOIN engine USING (node_id)`, nodeID).Scan(&interval, &offset)
+	interval, offset, err := insertNodeSchedules(ctx, tx, nodeID)
 	if err != nil {
-		return nil, translateDBError(err)
+		return nil, err
 	}
 	credentialID, err := s.uuid()
 	if err != nil {
@@ -230,6 +219,25 @@ func (s *Service) createNodeTx(ctx context.Context, tx pgx.Tx, input Input) (any
 		"token":     token,
 		"expiresAt": expiresAt.UTC().Format(time.RFC3339Nano),
 	}, nil
+}
+
+func insertNodeSchedules(ctx context.Context, tx pgx.Tx, nodeID string) (int, int, error) {
+	var interval, offset int
+	err := tx.QueryRow(ctx, `
+		WITH legacy AS (
+			INSERT INTO schedules (node_id) VALUES ($1)
+			RETURNING node_id, interval_minutes, offset_minutes, enabled, revision
+		), engine AS (
+			INSERT INTO engine_schedules(node_id,engine,interval_minutes,offset_minutes,enabled,revision)
+			SELECT node_id,'ookla',interval_minutes,offset_minutes,enabled,revision FROM legacy
+			RETURNING node_id
+		)
+		SELECT legacy.interval_minutes, legacy.offset_minutes
+		FROM legacy JOIN engine USING (node_id)`, nodeID).Scan(&interval, &offset)
+	if err != nil {
+		return 0, 0, translateDBError(err)
+	}
+	return interval, offset, nil
 }
 
 // IssueInstallToken creates a new one-time token for an existing node. The
