@@ -421,7 +421,7 @@ func (s *Store) PrepareResultBatch(ctx context.Context, node string, results []a
 	for _, result := range results {
 		for _, key := range testOutcomeKeys(result) {
 			if event, ok := catalog.LookupEvent(key); ok {
-			events[eventConfigKey(key, result.Engine)] = event
+				events[eventConfigKey(key, result.Engine)] = event
 			}
 		}
 	}

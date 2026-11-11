@@ -243,8 +243,10 @@ func TestScheduleDefaultMigrationPreservesIntervalsIntegration(t *testing.T) {
 VALUES ('00000000-0000-4000-8000-000000000101',5,0),
        ('00000000-0000-4000-8000-000000000102',30,7),
        ('00000000-0000-4000-8000-000000000103',60,11)`)
-	if err := db.Migrate(ctx, pool, "down"); err != nil {
-		t.Fatal(err)
+	for range 5 {
+		if err := db.Migrate(ctx, pool, "down"); err != nil {
+			t.Fatal(err)
+		}
 	}
 	assertScheduleIntervals(t, ctx, pool, "5:0,30:7,60:11")
 	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps)
