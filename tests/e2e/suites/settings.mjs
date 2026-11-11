@@ -310,6 +310,10 @@ export function settingsSuite(T, ctx) {
         await demoPage.locator('form').getByLabel('Monthly budget (GiB)').fill('1');
         await demoPage.locator('form').getByRole('button', { name: 'Save budget' }).click();
         await demoPage.locator('#toasts').getByText('Bandwidth budget saved').waitFor();
+        // The global budget is shared: the advice for one node and engine reserves what the other nodes and engines consume (as the center does).
+        const advice = await demoPage.evaluate(() => ST.bandwidth.advice(ST.node('n1'), 'ookla', 60, 0).data);
+        assert.ok(advice.sharedReservedBytes > 0, 'the other nodes and engines reserve part of the shared global budget');
+        assert.equal(advice.budgetBytes, 1073741824, 'the budget shown is the configured total');
         await demoPage.getByRole('tab', { name: 'Data' }).click();
         await demoPage.locator('#view').getByRole('button', { name: 'Reset demo data' }).click();
         await demoPage.getByRole('dialog', { name: 'Reset demo data?' }).getByRole('button', { name: 'Reset' }).click();
