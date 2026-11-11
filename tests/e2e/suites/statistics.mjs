@@ -132,18 +132,7 @@ export function statisticsSuite(T) {
       await T.see('No data in the last 30 days');
       assert.match(await T.row('VM1').innerText(), /0/);
       await T.press('Clear ISP filter');
-      await T.db(`INSERT INTO alert_events(id,node_id,severity,ts,title,detail,trigger_result_id)
-        SELECT gen_random_uuid(),'10000000-0000-4000-8000-000000000001','info',now()-g*interval '1 second','E2E cap event','plain text',NULL
-        FROM generate_series(1,501) AS generated(g)`);
-      await page.reload(); await T.heading('Statistics').waitFor();
-      await T.see('Showing the newest 500 events. Older events are omitted.');
-      const eventStatus = page.getByRole('status').filter({ hasText: 'Showing the newest 500 events' });
-      const eventList = page.locator('.stats-events');
-      assert.equal(await eventStatus.count(), 1);
-      assert.equal(await eventStatus.locator('xpath=ancestor::ol').count(), 0, 'the truncation status is outside the list in the accessibility tree');
-      assert.equal(await eventList.getByRole('listitem').count(), 500);
-      assert.equal(await eventList.locator(':scope > .stats-truncated').count(), 0, 'the ordered list contains only list items');
-      await T.expectNoLoadError();
+      await verifyEventCapIsolated(T, page, assert);
     },
 
     async demoParityAndRetry() {
@@ -218,4 +207,26 @@ export function statisticsSuite(T) {
       await page.setViewportSize({ width: 1440, height: 900 });
     },
   };
+}
+
+async function verifyEventCapIsolated(T, page, assert) {
+  const cleanup = "DELETE FROM alert_events WHERE title='E2E cap event' AND detail='plain text'";
+  T.db(cleanup);
+  try {
+    T.db(`INSERT INTO alert_events(id,node_id,severity,ts,title,detail,trigger_result_id)
+      SELECT gen_random_uuid(),'10000000-0000-4000-8000-000000000001','info',now()-g*interval '1 second','E2E cap event','plain text',NULL
+      FROM generate_series(1,501) AS generated(g)`);
+    await page.reload(); await T.heading('Statistics').waitFor();
+    await T.see('Showing the newest 500 events. Older events are omitted.');
+    const eventStatus = page.getByRole('status').filter({ hasText: 'Showing the newest 500 events' });
+    const eventList = page.locator('.stats-events');
+    assert.equal(await eventStatus.count(), 1);
+    assert.equal(await eventStatus.locator('xpath=ancestor::ol').count(), 0, 'the truncation status is outside the list in the accessibility tree');
+    assert.equal(await eventList.getByRole('listitem').count(), 500);
+    assert.equal(await eventList.locator(':scope > .stats-truncated').count(), 0, 'the ordered list contains only list items');
+    await T.expectNoLoadError();
+  } finally {
+    T.db(cleanup);
+  }
+  assert.equal(T.db("SELECT count(*) FROM alert_events WHERE title='E2E cap event' AND detail='plain text'"), '0', 'event-cap fixture does not leak into later scenarios');
 }
