@@ -25,13 +25,17 @@ func NewHandler(api http.Handler) http.Handler {
 			return
 		}
 		stream := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
-			return buildServer(api, principal)
+			source := requestSource{}
+			if req != nil {
+				source = requestSource{remoteAddr: req.RemoteAddr, forwardedFor: req.Header.Get("X-Forwarded-For")}
+			}
+			return buildServer(api, principal, source)
 		}, &mcp.StreamableHTTPOptions{Stateless: true, JSONResponse: true})
 		stream.ServeHTTP(w, r)
 	})
 }
 
-func buildServer(api http.Handler, principal apitoken.Principal) *mcp.Server {
+func buildServer(api http.Handler, principal apitoken.Principal, source requestSource) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{Name: "speedtest", Version: "1.0.0"}, nil)
 	operations, err := apicontract.MCPTools()
 	if err != nil {
@@ -41,7 +45,7 @@ func buildServer(api http.Handler, principal apitoken.Principal) *mcp.Server {
 		if !apicontract.Allows(apicontract.Scope(principal.Scope), operation.Scope) {
 			continue
 		}
-		addTool(server, api, principal, operation)
+		addTool(server, api, principal, operation, source)
 	}
 	server.AddResource(&mcp.Resource{URI: "speedtest://docs/metrics", Name: "Speedtest metrics", Description: "Metric definitions returned by Speedtest tools.", MIMEType: "text/markdown"},
 		func(context.Context, *mcp.ReadResourceRequest) (*mcp.ReadResourceResult, error) {
@@ -50,7 +54,7 @@ func buildServer(api http.Handler, principal apitoken.Principal) *mcp.Server {
 	return server
 }
 
-func addTool(server *mcp.Server, api http.Handler, principal apitoken.Principal, operation apicontract.Operation) {
+func addTool(server *mcp.Server, api http.Handler, principal apitoken.Principal, operation apicontract.Operation, source requestSource) {
 	schema, err := operation.InputSchema()
 	if err != nil {
 		return
@@ -62,13 +66,13 @@ func addTool(server *mcp.Server, api http.Handler, principal apitoken.Principal,
 			if request.Params == nil {
 				return toolError("Tool arguments are required."), nil
 			}
-			return callOperation(ctx, api, principal, operation, request.Params.Arguments)
+			return callOperation(ctx, api, principal, operation, request.Params.Arguments, source)
 		})
 }
 
 func boolPointer(value bool) *bool { return &value }
 
-func callOperation(ctx context.Context, api http.Handler, principal apitoken.Principal, operation apicontract.Operation, raw json.RawMessage) (*mcp.CallToolResult, error) {
+func callOperation(ctx context.Context, api http.Handler, principal apitoken.Principal, operation apicontract.Operation, raw json.RawMessage, source requestSource) (*mcp.CallToolResult, error) {
 	if len(raw) == 0 {
 		raw = json.RawMessage(`{}`)
 	}
@@ -80,9 +84,18 @@ func callOperation(ctx context.Context, api http.Handler, principal apitoken.Pri
 	if err != nil {
 		return toolError(err.Error()), nil
 	}
+	req.RemoteAddr = source.remoteAddr
+	if source.forwardedFor != "" {
+		req.Header.Set("X-Forwarded-For", source.forwardedFor)
+	}
 	recorder := newResponseRecorder()
 	api.ServeHTTP(recorder, req.WithContext(apitoken.WithPrincipal(req.Context(), principal)))
 	return responseResult(recorder, operation.ResponseHeaders), nil
+}
+
+type requestSource struct {
+	remoteAddr   string
+	forwardedFor string
 }
 
 func operationRequest(ctx context.Context, operation apicontract.Operation, arguments map[string]any) (*http.Request, error) {

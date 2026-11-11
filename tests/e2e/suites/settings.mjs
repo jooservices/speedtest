@@ -218,6 +218,8 @@ export function settingsSuite(T, ctx) {
       assert.ok(raw.startsWith('st_at_'), 'the bearer credential is shown after creation');
       const storedHash = T.db("select encode(token_hash,'hex') from api_access_tokens where name='e2e-read-token'");
       assert.ok(storedHash === createHash('sha256').update(raw).digest('hex'), 'only its SHA-256 digest is stored');
+      const tokenID = T.db("select id::text from api_access_tokens where name='e2e-read-token'");
+      await T.eventually(async () => await T.row('e2e-read-token').getByText(tokenID.slice(0, 8), { exact: true }).count() === 1, 'the non-secret token ID is shown for audit correlation');
 
       await tokenName.fill('e2e-expiring-token');
       await page.getByLabel('Optional expiry').fill(new Date(Date.now() + 86400000).toISOString().slice(0, 16));

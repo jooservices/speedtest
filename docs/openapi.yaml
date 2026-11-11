@@ -3906,7 +3906,7 @@ components:
           type: integer
           minimum: 5
           maximum: 1440
-          default: 30
+          default: 60
         offset:
           type: integer
           minimum: 0
@@ -4515,6 +4515,7 @@ components:
           type: integer
           minimum: 5
           maximum: 1440
+          default: 60
         offset:
           type: integer
           minimum: 0
@@ -6717,6 +6718,13 @@ components:
           pattern: Z$
         actor:
           type: string
+        authMethod:
+          type: string
+          enum: [session, bearer]
+          description: Authentication method used for the change.
+        credentialId:
+          $ref: "#/components/schemas/ID"
+          description: Non-secret API token ID that authorized a bearer change; omitted for session changes.
         action:
           type: string
         targetType:
@@ -6732,6 +6740,7 @@ components:
         - id
         - ts
         - actor
+        - authMethod
         - action
         - targetType
         - targetId

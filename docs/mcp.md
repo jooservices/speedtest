@@ -8,6 +8,11 @@ In **Settings → Access**, create a named API token. Use `read` for dashboards 
 
 Bearer calls use `Authorization: Bearer <token>`. They do not need a browser session cookie, Origin or CSRF header. Use HTTPS when the center is reached remotely. Each token is limited independently by `SPEEDTEST_API_TOKEN_REQUESTS_PER_MINUTE` (default 120 requests per minute, burst 20).
 
+Successful writes through REST or MCP record the authentication method and the
+non-secret token ID that authorized a bearer request. Token creation records the
+new token ID as its audit target. MCP writes use the incoming client address and
+the center's trusted-proxy rules; bearer values are never recorded.
+
 ## Claude Code stdio setup
 
 Build the bridge binary in a location on the MCP client's PATH:

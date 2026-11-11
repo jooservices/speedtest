@@ -25,7 +25,7 @@ func TestReplaceEnginesBeginFailure(t *testing.T) {
 }
 
 func TestValidateEngineSchedules(t *testing.T) {
-	for _, input := range [][]EngineSchedule{nil, {{Engine: "bad"}}, {{Engine: "librespeed"}}, {{Engine: "ookla"}, {Engine: "ookla"}}, {{Engine: "ookla", Interval: 4}}, {{Engine: "ookla", Interval: 1441}}, {{Engine: "ookla", Offset: -1}}, {{Engine: "ookla", Offset: 1440}}} {
+	for _, input := range [][]EngineSchedule{nil, {{Engine: "bad"}}, {{Engine: "librespeed"}}, {{Engine: "ookla"}, {Engine: "ookla"}}, {{Engine: "ookla"}, {Engine: "librespeed"}, {Engine: "ookla"}}, {{Engine: "ookla", Interval: 4}}, {{Engine: "ookla", Interval: 1441}}, {{Engine: "ookla", Offset: -1}}, {{Engine: "ookla", Offset: 1440}}} {
 		if validateEngines(input) == nil {
 			t.Fatal("accepted", input)
 		}

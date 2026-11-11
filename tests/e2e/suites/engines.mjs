@@ -17,6 +17,16 @@ export function enginesSuite(T) {
       await page.getByLabel('LibreSpeed interval', { exact: true }).waitFor();
       assert.equal(await page.getByLabel('LibreSpeed interval', { exact: true }).inputValue(), '60');
       await page.getByRole('checkbox', { name: 'LibreSpeed enabled' }).click();
+      await T.press('Save engine schedules');
+      await T.toast('Engine schedules saved').waitFor();
+      assert.equal(T.db("select s.interval_minutes||':'||s.enabled from engine_schedules s join nodes n on n.id=s.node_id where n.name='VM1' and s.engine='librespeed'"), '60:true');
+      await page.reload();
+      await T.heading(/VM1/).waitFor();
+      await T.tab('Settings');
+      await T.settled();
+      await page.getByText('LibreSpeed', { exact: true }).scrollIntoViewIfNeeded();
+      await page.getByLabel('LibreSpeed interval', { exact: true }).waitFor();
+      assert.equal(await page.getByLabel('LibreSpeed interval', { exact: true }).inputValue(), '60', 'new engine schedule default survives reload');
       await T.fill('LibreSpeed interval', '90', page, true);
       await T.press('Save engine schedules');
       await T.toast('Engine schedules saved').waitFor();
