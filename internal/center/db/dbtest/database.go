@@ -5,10 +5,14 @@ package dbtest
 
 import (
 	"context"
+	"io/fs"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jooservices/speedtest/internal/center/db"
+	"github.com/jooservices/speedtest/migrations"
 )
 
 type testReporter interface {
@@ -35,15 +39,29 @@ func Reset(t testReporter, pool *pgxpool.Pool) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	verify(t, ctx, pool)
-	if _, err := pool.Exec(ctx, `DROP TABLE IF EXISTS
-	 public.api_access_tokens, public.user_two_factor, public.audit_log, public.installer_idempotency, public.installer_events, public.installer_jobs, public.installer_probe_idempotency, public.installer_probes,
-		 public.notification_signin_locations, public.notification_login_failures,
-		 public.notification_event_node_settings, public.notification_templates, public.notification_event_settings,
- public.notification_deliveries, public.ip_change_signals, public.alert_notification_outbox, public.maintenance_jobs, public.node_ip_addresses, public.agent_commands, public.alert_state, public.alert_events, public.alert_rules,
- public.engine_schedules, public.schedules, public.node_ip_history, public.results, public.node_credentials,
-		 public.sessions, public.users, public.nodes, public.isp_plans, public.ip_addresses, public.isps, public.settings,
- public.api_idempotency, public.goose_db_version`); err != nil {
-		t.Fatal("could not reset test database")
+	// The Speedtest tables are the ones the embedded migrations create (plus the goose journal), so a new migration needs no change
+	// here. Tables that no migration creates are unrelated: they are never removed (the count check below then fails).
+	known := speedtestTables()
+	var names []string
+	rows, err := pool.Query(ctx, `SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'`)
+	if err != nil {
+		t.Fatal("could not list test database tables")
+	}
+	for rows.Next() {
+		var name string
+		if rows.Scan(&name) != nil {
+			t.Fatal("could not read test database tables")
+		}
+		if known[name] {
+			names = append(names, "public."+name)
+		}
+	}
+	rows.Close()
+	if len(names) > 0 {
+		// One statement, without CASCADE: PostgreSQL orders the foreign keys, and a dependent object outside the list stops the reset.
+		if _, err := pool.Exec(ctx, "DROP TABLE IF EXISTS "+strings.Join(names, ", ")); err != nil {
+			t.Fatal("could not reset test database")
+		}
 	}
 	var count int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").Scan(&count); err != nil || count != 0 {
@@ -61,4 +79,25 @@ func MigrateUp(t testReporter, pool *pgxpool.Pool) {
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal(err)
 	}
+}
+
+var createTable = regexp.MustCompile(`(?im)^\s*CREATE TABLE (?:IF NOT EXISTS )?(?:public\.)?([a-z_][a-z0-9_]*)`)
+
+// speedtestTables lists every table the embedded migrations create, plus the goose journal.
+func speedtestTables() map[string]bool {
+	known := map[string]bool{"goose_db_version": true}
+	files, err := fs.Glob(migrations.Files, "*.sql")
+	if err != nil {
+		return known
+	}
+	for _, name := range files {
+		data, err := fs.ReadFile(migrations.Files, name)
+		if err != nil {
+			continue
+		}
+		for _, m := range createTable.FindAllStringSubmatch(string(data), -1) {
+			known[m[1]] = true
+		}
+	}
+	return known
 }

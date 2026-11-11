@@ -1,5 +1,5 @@
 -- +goose Up
--- Preserve the existing global alert-rule configuration as its starting event setting.
+-- Preserve the existing global alert-rule configuration as its starting event setting (one global rule per metric only).
 WITH rules AS (
     SELECT DISTINCT ON (event_key)
         event_key, enabled, severity, channels,
@@ -24,6 +24,9 @@ WITH rules AS (
         WHERE metric IN ('offline','failed','down_pct','up_pct','ping','jitter','loss','ip_changed')
           AND node_ids IS NULL AND engine IS NULL
     ) global_rules
+    -- Only an unambiguous metric (exactly one global rule) seeds an event setting: an event setting applies to every global rule of its
+    -- metric, so with several rules of different thresholds each rule must keep its own values.
+    WHERE (SELECT count(*) FROM alert_rules o WHERE o.metric = global_rules.metric AND o.node_ids IS NULL AND o.engine IS NULL) = 1
     ORDER BY event_key, updated_at DESC, id
 )
 INSERT INTO notification_event_settings(event_key,enabled,severity,channels,thresholds)

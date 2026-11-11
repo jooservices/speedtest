@@ -46,10 +46,11 @@ func (s *Store) emitBandwidthEvents(ctx context.Context, tx pgx.Tx, node string,
 			return err
 		}
 		budget := config.Thresholds["monthly_gb"]
-		if !config.Enabled || budget <= 0 || !bandwidthThresholdReached(key, previousGB, currentGB, ts, budget) {
+		percent := bandwidthPercent(key, config.Thresholds)
+		if !config.Enabled || budget <= 0 || !bandwidthThresholdReached(key, previousGB, currentGB, ts, budget, percent) {
 			continue
 		}
-		payload := bandwidthPayload(key, name, config.Severity, result, currentGB, budget, ts)
+		payload := bandwidthPayload(key, name, config.Severity, result, currentGB, budget, percent, ts)
 		if _, err := s.insertCatalogEventWithSettings(ctx, tx, key, node, event.Title, event.Description, result.ID, payload, ts, config); err != nil {
 			return err
 		}
@@ -70,12 +71,23 @@ func bandwidthEventKeys() []string {
 	return []string{"bandwidth.budget_80", "bandwidth.budget_100", "bandwidth.projection_over"}
 }
 
-func bandwidthThresholdReached(key string, previous, current float64, ts time.Time, budget float64) bool {
+// bandwidthPercent is the share of the monthly budget that raises the event: the configured `percent` threshold, or the default of
+// the event (80 and 100) when it is missing or not positive.
+func bandwidthPercent(key string, thresholds map[string]float64) float64 {
+	if value := thresholds["percent"]; value > 0 {
+		return value
+	}
+	if key == "bandwidth.budget_80" {
+		return 80
+	}
+	return 100
+}
+
+func bandwidthThresholdReached(key string, previous, current float64, ts time.Time, budget, percent float64) bool {
 	switch key {
-	case "bandwidth.budget_80":
-		return previous < budget*0.8 && current >= budget*0.8
-	case "bandwidth.budget_100":
-		return previous < budget && current >= budget
+	case "bandwidth.budget_80", "bandwidth.budget_100":
+		limit := budget * percent / 100
+		return previous < limit && current >= limit
 	case "bandwidth.projection_over":
 		return monthlyProjection(previous, ts) <= budget && monthlyProjection(current, ts) > budget
 	default:
@@ -93,10 +105,10 @@ func monthlyProjection(usageGB float64, ts time.Time) float64 {
 	return usageGB / elapsedDays * monthDays
 }
 
-func bandwidthPayload(key, node string, severity string, result agentapi.Result, usage, budget float64, ts time.Time) map[string]string {
+func bandwidthPayload(key, node string, severity string, result agentapi.Result, usage, budget, percent float64, ts time.Time) map[string]string {
 	threshold := budget
-	if key == "bandwidth.budget_80" {
-		threshold *= 0.8
+	if key != "bandwidth.projection_over" {
+		threshold = budget * percent / 100
 	}
 	return BuildPayload(key, node, "", severity, result, 0, 0, DefaultQualityLimits(), map[string]string{
 		"value": formatNum(usage), "expected": formatNum(budget), "pct": formatNum(usage / budget * 100),

@@ -349,3 +349,35 @@ func assertScheduleInterval(t *testing.T, ctx context.Context, pool *pgxpool.Poo
 		t.Fatalf("schedule default for %s = %d, want %d: %v", nodeID, got, want, err)
 	}
 }
+
+func TestNotificationDefaultsKeepDistinctGlobalThresholdsIntegration(t *testing.T) {
+	pool, ctx := testPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MigrateDownTo(ctx, pool, 24); err != nil { // before the notification migrations (00026 and later; 00025 is the server catalogs of JOOST-76)
+		t.Fatal(err)
+	}
+	exec(t, ctx, pool, `DELETE FROM alert_rules;
+INSERT INTO alert_rules(id,name,metric,op,value,for_tests,node_ids,severity,channels,enabled,engine) VALUES
+ ('00000000-0000-4000-8000-000000000201','Download strict','down_pct','<',50,2,NULL,'warn',ARRAY['email'],true,NULL),
+ ('00000000-0000-4000-8000-000000000202','Download lenient','down_pct','<',80,3,NULL,'crit',ARRAY['email'],true,NULL),
+ ('00000000-0000-4000-8000-000000000203','Ping only','ping','>',40,2,NULL,'warn',ARRAY['email'],true,NULL)`)
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	var settings int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM notification_event_settings WHERE event_key='quality.download_low'`).Scan(&settings); err != nil || settings != 0 {
+		t.Fatalf("two global rules of one metric must not collapse into one event setting: %d %v", settings, err)
+	}
+	var ping float64
+	if err := pool.QueryRow(ctx, `SELECT (thresholds->>'ping')::float8 FROM notification_event_settings WHERE event_key='quality.ping_high'`).Scan(&ping); err != nil || ping != 40 {
+		t.Fatalf("a single global rule seeds its event setting: %v %v", ping, err)
+	}
+	var values string
+	if err := pool.QueryRow(ctx, `SELECT string_agg(value::text||'/'||for_tests::text,',' ORDER BY id) FROM alert_rules WHERE metric='down_pct'`).Scan(&values); err != nil || values != "50/2,80/3" {
+		t.Fatalf("both download rules keep their own threshold and streak: %q %v", values, err)
+	}
+}
