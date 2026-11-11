@@ -53,6 +53,13 @@ export function coreSteps(ctx) {
       try { await file.saveAs(path); return readFileSync(path, 'utf8'); }
       finally { rmSync(directory, { recursive: true, force: true }); }
     },
+    async downloadBytes(trigger) {
+      const [file] = await Promise.all([page.waitForEvent('download'), trigger()]);
+      const directory = mkdtempSync(join(process.cwd(), '.tmp', 'e2e-download-'));
+      const path = join(directory, file.suggestedFilename());
+      try { await file.saveAs(path); return readFileSync(path); }
+      finally { rmSync(directory, { recursive: true, force: true }); }
+    },
 
     // Polls a condition (a stored value, a file) for a few seconds: for results that are saved a moment after the click.
     async eventually(check, message, timeout = 8000) {
@@ -70,7 +77,7 @@ export function coreSteps(ctx) {
 
     // ---- the center, for checking what was really stored ----
     db: sql => query(stack.db, sql),
-    async api(path) { const res = await page.request.get(stack.browserOrigin + path); return { status: res.status(), body: res.status() < 300 ? await res.json() : null, text: await res.text() }; },
+    async api(path) { const res = await page.request.get(stack.browserOrigin + path); return { status: res.status(), body: res.status() < 300 && /json/.test(res.headers()['content-type'] || '') ? await res.json() : null, text: await res.text() }; },
 
     // The browser logs a refused request itself; where refusing is the expected outcome, drop that log line.
     expectRefusal(status) { for (let i = problems.length - 1; i >= 0; i--) if (new RegExp(`status of ${status}`).test(problems[i])) problems.splice(i, 1); },

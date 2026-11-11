@@ -41,7 +41,7 @@ results, addresses, IP history and alert events. `00022_isp_plan_default_provena
 tracks download and upload defaults independently so plan changes update only
 speeds that still follow the advertised values. Existing rows start with both
 flags false; the migration does not infer provenance from numeric equality.
-`00023_node_engine_servers.sql` adds per-node/per-engine server catalogs,
+`00025_node_engine_servers.sql` adds per-node/per-engine server catalogs,
 engine-scoped discovery commands and pins. Existing engine pins are backfilled
 from `nodes.server_id`; the legacy column remains synchronized for older agents.
 Results store whether the measurement-time selection and pin are known; old rows
@@ -121,6 +121,7 @@ that a subsequent up can reapply version 1.
 | `alert_notification_outbox` | One event-keyed, channel-snapshotted handoff to JOOST-30 |
 | `maintenance_jobs` | Status of owner-started maintenance work (bulk alert acknowledgement, later IP refresh) polled at `/api/jobs/{id}` |
 | `settings` | Public JSON or encrypted secret bytes, revision |
+| `monthly_report_runs` | Durable scheduled-report delivery attempts, retry time, and expiring claim lease |
 | `api_idempotency` | Hashed request identity and encrypted one-time issuance responses, expiring after 24 hours |
 | `agent_commands` | Per-node command lifecycle and progress |
 | `node_engine_servers` | Per-node/per-engine discovered server JSON, pin and refresh timestamp |

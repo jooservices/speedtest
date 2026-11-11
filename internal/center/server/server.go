@@ -73,6 +73,8 @@ type Options struct {
 	OwnerStats OwnerStatsStore
 	// OwnerISP optionally serves ISP list, comparison, trend and plan APIs.
 	OwnerISP OwnerISPStore
+	// OwnerReport optionally serves the monthly ISP and plan report (JSON, CSV, PDF).
+	OwnerReport OwnerReportStore
 	// OwnerAlerts optionally serves alert-rule and event APIs.
 	OwnerAlerts OwnerAlertsStore
 	// Installer serves SSH fingerprint probes, install jobs, and replayable progress.
