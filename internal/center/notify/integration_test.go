@@ -290,18 +290,13 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	if _, err := worker.Consume(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Roll back later migrations until the delivery table is gone.
+	// Roll back to the version immediately before notification deliveries.
 	var exists bool
-	for step := 0; step < 11; step++ {
-		if err := db.Migrate(ctx, p, "down"); err != nil {
-			t.Fatal("rollback step", step, err)
-		}
-		if err := p.QueryRow(ctx, `SELECT to_regclass('notification_deliveries') IS NOT NULL`).Scan(&exists); err != nil {
-			t.Fatal(err)
-		}
-		if !exists {
-			break
-		}
+	if err := db.MigrateDownTo(ctx, p, 5); err != nil {
+		t.Fatal("rollback to pre-delivery schema", err)
+	}
+	if err := p.QueryRow(ctx, `SELECT to_regclass('notification_deliveries') IS NOT NULL`).Scan(&exists); err != nil {
+		t.Fatal(err)
 	}
 	if exists {
 		t.Fatal("delivery table not dropped")

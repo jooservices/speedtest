@@ -132,6 +132,7 @@ var uiRoutes = map[string]bool{
 	"/assets/js/pages/dashboard.js":                    true,
 	"/assets/js/pages/stats.js":                        true,
 	"/assets/js/pages/settings.js":                     true,
+	"/assets/js/pages/isps.js":                         true,
 	"/assets/vendor/leaflet/LICENSE":                   true,
 	"/assets/vendor/leaflet/leaflet.js":                true,
 	"/assets/vendor/leaflet/leaflet.css":               true,
