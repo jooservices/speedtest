@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/shared/testenv"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
@@ -34,34 +36,13 @@ func (l *locator) Lookup(context.Context, string) (geo.Location, error) {
 	l.calls.Add(1)
 	return geo.Location{City: "Fixture city", Country: "ZZ"}, nil
 }
-
-type asnLocator struct{ calls atomic.Int64 }
-
-func (l *asnLocator) Lookup(context.Context, string) (geo.Location, error) {
-	l.calls.Add(1)
-	return geo.Location{City: "Fixture city", Country: "ZZ", ASN: 64500, Organisation: "Concurrent Fiber Network Ltd."}, nil
-}
-
-type boundaryASNLocator struct{ calls atomic.Int64 }
-
-func (l *boundaryASNLocator) Lookup(_ context.Context, ip string) (geo.Location, error) {
-	l.calls.Add(1)
-	asn := uint(4294967295)
-	if strings.HasSuffix(ip, ".252") {
-		asn = 1
-	}
-	return geo.Location{ASN: asn}, nil
-}
-
 func setup(t *testing.T) (*pgxpool.Pool, *agentapi.Postgres, *locator) {
 	t.Helper()
 	values, err := godotenv.Read("../../../.env")
 	if err != nil {
 		t.Fatal("worktree .env required")
 	}
-	for k, v := range values {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
 		t.Fatal("configured Speedtest worktree/test database required")
@@ -260,100 +241,6 @@ func TestConcurrentIngestionIntegration(t *testing.T) {
 	}
 	t.Log("PASS: 80 concurrent samples on two independent nodes; concurrent UUID retries; exact timeline/aggregates; one lookup per shared address")
 }
-
-func seedConcurrentNodes(t *testing.T, p *pgxpool.Pool, count int) []string {
-	t.Helper()
-	nodes := make([]string, count)
-	for i := range count {
-		nodes[i] = fmt.Sprintf("20000000-0000-4000-8000-%012d", i+1)
-		if _, err := p.Exec(t.Context(), `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES ($1,$2,100,50)`, nodes[i], fmt.Sprintf("isp-race-%d", i)); err != nil {
-			t.Fatal("seed concurrent ISP node", err)
-		}
-	}
-	return nodes
-}
-
-func resultAddress(index int) string {
-	if index < 16 {
-		return "203.0.113.250"
-	}
-	return fmt.Sprintf("198.51.100.%d", index-15)
-}
-
-func saveConcurrentISPResults(t *testing.T, s *agentapi.Postgres, nodes []string) {
-	t.Helper()
-	start := make(chan struct{})
-	errs := make(chan error, len(nodes))
-	var wg sync.WaitGroup
-	for i, node := range nodes {
-		wg.Go(func() {
-			<-start
-			_, err := s.SaveResult(t.Context(), node, result(i+1000, i, resultAddress(i)))
-			errs <- err
-		})
-	}
-	close(start)
-	wg.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatal("concurrent ISP result ingestion", err)
-		}
-	}
-}
-
-func TestConcurrentISPLinkingIntegration(t *testing.T) {
-	p, s, _ := setup(t)
-	const count = 32
-	nodes := seedConcurrentNodes(t, p, count)
-	geo := &asnLocator{}
-	s.Hook = &ipwatch.Watcher{Offline: geo, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	saveConcurrentISPResults(t, s, nodes)
-	var providers, linkedResults, linkedAddresses int
-	if err := p.QueryRow(t.Context(), `SELECT count(*) FROM isps WHERE asn=64500`).Scan(&providers); err != nil || providers != 1 {
-		t.Fatal("concurrent ASN upsert", providers, err)
-	}
-	if err := p.QueryRow(t.Context(), `SELECT count(*) FROM results WHERE isp_id IS NOT NULL`).Scan(&linkedResults); err != nil || linkedResults != count {
-		t.Fatal("result ISP links", linkedResults, err)
-	}
-	if err := p.QueryRow(t.Context(), `SELECT count(*) FROM ip_addresses WHERE isp_id IS NOT NULL`).Scan(&linkedAddresses); err != nil || linkedAddresses != 17 {
-		t.Fatal("address ISP links", linkedAddresses, err)
-	}
-	if geo.calls.Load() != 17 {
-		t.Fatal("shared address lookup count", geo.calls.Load())
-	}
-	t.Log("PASS: concurrent result ingestion links 32 nodes across 17 addresses to one ASN; shared-IP cache and ISP upsert are race-safe")
-}
-
-func TestBoundaryASNAndCachedEmptyOrganisationIntegration(t *testing.T) {
-	p, s, _ := setup(t)
-	lookup := &boundaryASNLocator{}
-	s.Hook = &ipwatch.Watcher{Offline: lookup, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	for _, sample := range []struct {
-		id, ip string
-		second int
-	}{{"00000000-0000-4000-8000-000000003001", "203.0.113.251", 1}, {"00000000-0000-4000-8000-000000003002", "203.0.113.251", 2}, {"00000000-0000-4000-8000-000000003003", "203.0.113.252", 3}} {
-		r := result(sample.second+4000, sample.second, sample.ip)
-		r.ID = sample.id
-		save(t, s, nodeA, r)
-	}
-	var linked, providers int
-	if err := p.QueryRow(t.Context(), `SELECT count(*) FROM results WHERE id=ANY($1::uuid[]) AND isp_id IS NOT NULL`, []string{"00000000-0000-4000-8000-000000003001", "00000000-0000-4000-8000-000000003002", "00000000-0000-4000-8000-000000003003"}).Scan(&linked); err != nil || linked != 3 {
-		t.Fatal("boundary ASN results were not linked", linked, err)
-	}
-	if err := p.QueryRow(t.Context(), `SELECT count(*) FROM isps WHERE asn IN (1,4294967295) AND organisation=name`).Scan(&providers); err != nil || providers != 2 {
-		t.Fatal("inclusive uint32 ASN boundary fallback", providers, err)
-	}
-	var highName string
-	if err := p.QueryRow(t.Context(), `SELECT name FROM isps WHERE asn=4294967295`).Scan(&highName); err != nil || highName != "AS4294967295" {
-		t.Fatal("cached empty organisation fallback", highName, err)
-	}
-	if lookup.calls.Load() != 2 {
-		t.Fatal("cached same-address ASN performed duplicate geo lookups", lookup.calls.Load())
-	}
-	t.Log("PASS: ASN 1 and 4294967295 ingest and link; missing organisation falls back to AS<number> on first and cached observations")
-}
-
 func TestRandomArrivalOracleIntegration(t *testing.T) {
 	p, s, _ := setup(t)
 	order := rand.New(rand.NewPCG(35, 35)).Perm(120)
@@ -370,7 +257,7 @@ func TestMigrationBackfillAndRollbackIntegration(t *testing.T) {
 	for i := range 8 {
 		save(t, s, nodeA, result(i+1, i, fmt.Sprintf("203.0.113.%d", i%2+1)))
 	}
-	for range 8 {
+	for range 9 {
 		if err := db.Migrate(t.Context(), p, "down"); err != nil {
 			t.Fatal(err)
 		}

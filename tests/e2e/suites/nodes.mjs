@@ -169,12 +169,12 @@ export function nodesSuite(T, ctx) {
       await T.press('Pause');
       await T.toast('paused').waitFor();
       await T.settled();
-      assert.equal(T.db("select enabled from nodes where name='VM4'"), 'f');
+      await T.eventually(() => T.db("select enabled from nodes where name='VM4'") === 'f', 'the pause is stored');
       await T.eventually(async () => await page.getByRole('button', { name: 'Run test' }).isDisabled(), 'a paused node cannot be tested');
       await T.press('Resume');
       await T.toast('resumed').waitFor();
       await T.settled();
-      assert.equal(T.db("select enabled from nodes where name='VM4'"), 't');
+      await T.eventually(() => T.db("select enabled from nodes where name='VM4'") === 't', 'the resume is stored');
     },
 
     // Removing a node from the dashboard only (no SSH): the node and its results disappear.

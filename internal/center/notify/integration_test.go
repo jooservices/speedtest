@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/shared/testenv"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/db"
@@ -31,9 +33,7 @@ func database(t *testing.T) (*pgxpool.Pool, context.Context) {
 	if err != nil {
 		t.Fatal("worktree .env required")
 	}
-	for k, v := range env {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, env)
 	cfg, err := config.LoadCenter()
 	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
 		t.Fatal("configured non-live test database required")
@@ -211,9 +211,7 @@ func TestSharedMailpitSMTP(t *testing.T) {
 	if err != nil {
 		t.Fatal("worktree environment required")
 	}
-	for k, v := range env {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, env)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("configuration")
@@ -292,9 +290,9 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	if _, err := worker.Consume(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Later migrations (including the schedule default and SSH installer) sit above this one; roll back until the delivery table is gone.
+	// Roll back later migrations until the delivery table is gone.
 	var exists bool
-	for step := 0; step < 7; step++ { // ISP entities and the schedule default sit above engine/2FA/audit/installer/delivery.
+	for step := 0; step < 8; step++ {
 		if err := db.Migrate(ctx, p, "down"); err != nil {
 			t.Fatal("rollback step", step, err)
 		}

@@ -14,8 +14,7 @@ func TestEngineMigrationBackfillLegacyWritesAndRollback(t *testing.T) {
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	dbtest.MigrateUp(t, pool)
-	// Roll back ISP entities (00016), the schedule default (00015), then engine schedules (00010) to rehearse the pre-engine schema.
-	for range 3 {
+	for range 4 {
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(err)
 		}
@@ -36,7 +35,7 @@ func TestEngineMigrationBackfillLegacyWritesAndRollback(t *testing.T) {
 	// A v1.0.0 result insert has no engine; legacy schedule queries still address exactly one row.
 	exec(t, ctx, pool, `INSERT INTO results(id,node_id,ts,status,threads,error) SELECT '00000000-0000-4000-8000-000000000073',id,now(),'failed',4,'old binary insert' FROM nodes;
  INSERT INTO engine_schedules(node_id,engine) SELECT id,'librespeed' FROM nodes;`)
-	for range 3 {
+	for range 4 {
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(err)
 		}
