@@ -65,6 +65,7 @@ test('effective ISP prefers the trimmed engine value and falls back to cached IP
   assert.equal(ST.stats.effectiveISP({ engineISP: '  Engine ISP  ', ip: '203.0.113.9' }), 'Engine ISP');
   assert.equal(ST.stats.effectiveISP({ engineISP: ' ', ip: '203.0.113.9' }), 'Viettel Group');
   assert.equal(ST.stats.effectiveISP({ ip: '192.0.2.99' }), 'VNPT Corp');
+  assert.equal(ST.stats.effectiveISP({ status: 'failed', failureClass: 'rate_limited', ip: null }), null);
   assert.equal(ST.stats.effectiveISP({ ip: '203.0.114.9' }), null);
   const filtered = ST.results({ nodeIds: ['n1'], isp: 'viettel group' });
   assert.ok(filtered.length > 0);

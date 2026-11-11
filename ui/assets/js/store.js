@@ -145,7 +145,7 @@
   ST.nodeResults = function (id) { return ST.results({nodeIds:[id]}); };
   function effectiveISP(result) {
     var value = String(result.engineISP || '').trim();
-    var geo = result.geo || (ST.geo && ST.geo(result.ip)) || {};
+    var geo = result.geo || (result.ip && ST.geo && ST.geo(result.ip)) || {};
     if (!value) value = String(geo.organisation || geo.asnOrg || geo.isp || '').trim();
     return value || null;
   }
