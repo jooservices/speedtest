@@ -134,3 +134,6 @@ The same suite parses Go syntax and rejects any non-test function longer than
 60 lines under `internal/`, excluding `internal/center/server/` (the HTTP-layer
 refactor is reviewed separately). This includes the fake speed-test executable.
 No endpoint, migration, configuration variable or UI behavior changes here.
+
+## IP change text
+A notification is the event title and node, then the event detail line, then the start time and the dashboard link. For an IP change the detail is `Changed from <old IP> to <new IP>` followed by the city of the new address when it is known, so a message read on a phone says what changed without opening the dashboard.
