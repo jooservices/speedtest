@@ -96,6 +96,41 @@ test('demo IP marks compare known results within one engine across nulls and ran
     ['after-null', '203.0.113.4', '203.0.113.5'],
   ]));
 });
+test('engine selector updates the selected engine and refreshes demo data', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  let refreshes = 0;
+  ST.ui = { field: (label, control) => ({ label, control }), select: (options, value, onChange) => ({ options, value, onChange }) };
+  ST.refresh = () => { refreshes++; };
+  const field = ST.engineSelector();
+  field.control.onChange('librespeed');
+  assert.equal(field.label, 'Engine');
+  assert.equal(ST.selectedEngine, 'librespeed');
+  assert.equal(ST.engineQuery(), '&engine=librespeed');
+  assert.equal(refreshes, 1);
+});
+test('engine schedules use the primary engine for legacy nodes', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  const [schedule] = ST.engineSchedules({ interval: 60, enabled: true });
+  assert.equal(schedule.engine, 'ookla'); assert.equal(schedule.interval, 60);
+  assert.equal(schedule.offset, 0); assert.equal(schedule.enabled, true);
+});
+test('remote engine schedules are filtered by node and include the default engine', async t => {
+  const { ST, data } = await setup(t);
+  await ST.load();
+  const [schedule] = ST.engineSchedules({ id: data.node.id });
+  assert.equal(schedule.engine, 'ookla'); assert.equal(schedule.interval, 30);
+  assert.equal(ST.engineSchedules({ id: 'missing' }).length, 0);
+});
+test('duration formatting includes days', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  assert.equal(ST.fmt.dur(90_000_000), '1d 1h');
+});
+test('new demo nodes use a 60-minute interval and zero offset', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  const node = ST.addNode({ name: 'New demo node', expectedDown: 100, expectedUp: 50 });
+  assert.equal(node.interval, 60);
+  assert.equal(node.offset, 0);
+});
 test('settings writes use CSRF and ETag and never echo configured flags or blank secrets', async t => {
   const { ST, control } = await setup(t);
   await ST.load();
@@ -223,6 +258,28 @@ test('demo manual test reports progress and inserts a result without network acc
   assert.equal(ST.latest('n1').id, result.id);
 });
 
+test('demo rate-limited results preserve failed and numeric alert streaks', async () => {
+  const { ST, context } = runtime('http://localhost', { demo: true });
+  const { default: vm } = await import('node:vm');
+  vm.runInContext('var testClock = Date.now(); Date.now = function () { return testClock; };', context);
+  context.setTimeout = fn => { context.testClock += 1000; fn(); };
+  ST.util.rng = () => () => 0.99;
+  const node = ST.addNode({ name: 'Rate-limit fixture', expectedDown: 100, expectedUp: 50 });
+  const failedRule = { id: 'demo-rate-failed', name: 'Failed streak', metric: 'failed', op: '>=', value: 1, forTests: 2, nodes: [node.id], severity: 'warn', enabled: true };
+  const pingRule = { id: 'demo-rate-ping', name: 'Ping streak', metric: 'ping', op: '>', value: 50, forTests: 2, nodes: [node.id], severity: 'warn', enabled: true };
+  ST.saveRule(failedRule); ST.saveRule(pingRule);
+  let nextSample;
+  ST.genSample = (selected, ts) => ({ ...nextSample, nodeId: selected.id, ts });
+  const run = async sample => { nextSample = sample; return ST.runTest(node.id); };
+  const ping = { status: 'ok', failureClass: 'other', serverId: ST.servers[0].id, ip: '203.0.113.73', down: 100, up: 50, ping: 100, jitter: 1, dLat: 5, uLat: 5, loss: 0, bytesDown: 100, bytesUp: 50, duration: 1 };
+  const limited = { status: 'failed', failureClass: 'rate_limited', error: 'Too many requests', serverId: ST.servers[0].id, ip: '', down: null, up: null, ping: null, jitter: null, dLat: null, uLat: null, loss: null, bytesDown: 0, bytesUp: 0, duration: 1 };
+  const failure = { ...limited, failureClass: 'other', error: 'fixture failure' };
+  await run(ping); await run(limited); await run(ping); await run(limited);
+  assert.ok(ST.events().some(event => event.ruleId === pingRule.id && !event.resolvedAt), 'rate limit between and after high ping results preserves the numeric alert');
+  await run(failure); await run(limited); await run(failure); await run(limited);
+  assert.ok(ST.events().some(event => event.ruleId === failedRule.id && !event.resolvedAt), 'rate limit between and after failures preserves the failed-test alert');
+});
+
 test('remote schedules, rules, stagger, key rotation, agent update, manual tests and notification tests use the API', async t => {
   const { ST, control, data } = await setup(t);
   await ST.load();
@@ -248,6 +305,16 @@ test('remote schedules, rules, stagger, key rotation, agent update, manual tests
   assert.equal((await ST.testNotification('webhook')).status, 'sent');
   control.deliveryFails = true;
   assert.equal((await ST.testNotification('webhook')).status, 'failed');
+});
+
+test('remote engine schedule queries select the node and default legacy entries to Ookla', async t => {
+  const { ST, data } = await setup(t);
+  await ST.load();
+  const rows = ST.engineSchedules(ST.node(data.node.id));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].engine, 'ookla'); assert.equal(rows[0].interval, 30);
+  assert.equal(rows[0].offset, 0); assert.equal(rows[0].enabled, true);
+  assert.equal(ST.engineSchedules({ id: 'missing' }).length, 0);
 });
 
 test('a manual test follows the command to its result and reports a failed command plainly', async t => {

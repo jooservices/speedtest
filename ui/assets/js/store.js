@@ -37,7 +37,7 @@
     ];
   };
 
-  var state = ST.state = { nodes: [], results: [], settings: defaultSettings(), rules: defaultRules(), acked: {}, events: [], now: Date.now() };
+  var state = ST.state = { nodes: [], results: [], isps: [], settings: defaultSettings(), rules: defaultRules(), acked: {}, events: [], now: Date.now() };
 
   function load() {
     var saved = {};
@@ -81,6 +81,24 @@
   };
   ST.setSettings = function (patch, silent) { Object.assign(state.settings, patch); persist(); if (!silent) ST.emit('settings'); };
   ST.nodes = function () { return state.nodes; };
+  ST.isps = function () {
+    if (!ST.demo) return state.isps || [];
+    var byASN = {};
+    state.results.forEach(function (r) {
+      if (!r.ip) return; // failed tests (for example rate-limited ones) have no public address
+      var geo = ST.geo(r.ip), asn = geo && +geo.asn;
+      if (!asn) return;
+      var id = 'as' + asn;
+      byASN[id] = byASN[id] || { id: id, asn: asn, name: geo.isp || geo.asnOrg || id.toUpperCase(), organisation: geo.asnOrg || geo.isp || '' };
+    });
+    return Object.keys(byASN).map(function (id) { return byASN[id]; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+  };
+  ST.ispOptions = function () { return ST.isps().map(function (isp) { return { value: isp.id, label: isp.name + ' (AS' + isp.asn + ')' }; }); };
+  ST.resultISP = function (result) {
+    if (result && result.ispId) return result.ispId;
+    var geo = result && result.ip ? ST.geo(result.ip) : null;
+    return geo && geo.asn ? 'as' + geo.asn : null;
+  };
   ST.node = function (id) { return state.nodes.filter(function (n) { return n.id === id; })[0]; };
   ST.nodeColor = function (node) { return 'var(--' + ST.palette[((node.colorSlot - 1) % 8) + 1] + ')'; };
   ST.nodeTitle = function (n) { return n.name + ' · ' + n.label; };
@@ -90,7 +108,7 @@
     var slot = 1; while (used.indexOf(slot) >= 0) slot++;
     var id = 'n' + (Math.max.apply(null, state.nodes.map(function (x) { return +x.id.slice(1); }).concat([0])) + 1);
     var node = Object.assign({
-      id: id, colorSlot: slot, interval: 30, offset: state.nodes.length * 3 % 30, threads: 4, server: 'auto', enabled: true,
+      id: id, colorSlot: slot, interval: 60, offset: 0, threads: 4, server: 'auto', enabled: true,
       agent: '1.4.2', note: '', createdAt: Date.now(), pref: [1001, 2001],
       profile: { effD: .88, effU: .86, cong: .15, ping: 13, jit: 2, loss: .05 },
       ipModel: { kind: 'dynamic', prefix: '198.51.100', segSlots: 7 * 48, off: 3 + state.nodes.length * 17 }
@@ -143,6 +161,7 @@
         if ((r.engine || 'ookla') !== (o.engine || ST.selectedEngine || (ST.node(id) || {}).primaryEngine || 'ookla')) continue;
         if (o.isp && (!effectiveISP(r) || effectiveISP(r).toLowerCase() !== o.isp.toLowerCase())) continue;
         if (o.status && o.status !== 'all' && r.status !== o.status) continue;
+        if (o.ispId && ST.resultISP(r) !== o.ispId) continue;
         out.push(r);
       }
     });
@@ -201,11 +220,14 @@
     jitter: { label: 'Jitter', short: 'Jitter', unit: 'ms', good: 'low' },
     loss: { label: 'Packet loss', short: 'Loss', unit: '%', good: 'low' }
   };
-  S.nodeSummary = function (id, from, to, isp) {
-    var rs = ST.results({ nodeIds: [id], from: from, to: to, isp: isp }), ok = rs.filter(function (r) { return r.status !== 'failed'; }), n = ST.node(id);
+  S.nodeSummary = function (id, from, to, isp, ispId) {
+    var rs = ST.results({ nodeIds: [id], from: from, to: to, isp: isp || null, ispId: ispId || null }), ok = rs.filter(function (r) { return r.status !== 'failed'; }), n = ST.node(id);
+    var rateLimited = rs.filter(function (r) { return r.status === 'failed' && r.failureClass === 'rate_limited'; }).length;
+    var eligible = rs.length - rateLimited;
     var ips = {}; rs.forEach(function (r) { ips[r.ip] = 1; });
     var sum = {
-      count: rs.length, ok: ok.length, failed: rs.length - ok.length, successRate: rs.length ? ok.length / rs.length * 100 : null,
+      count: rs.length, ok: ok.length, failed: rs.length - ok.length, rateLimited: rateLimited,
+      successRate: eligible ? ok.length / eligible * 100 : null,
       down: S.summary(ok.map(function (r) { return r.down; })), up: S.summary(ok.map(function (r) { return r.up; })),
       ping: S.summary(ok.map(function (r) { return r.ping; })), jitter: S.summary(ok.map(function (r) { return r.jitter; })),
       loss: S.summary(ok.map(function (r) { return r.loss; })), ipCount: Object.keys(ips).length
@@ -235,7 +257,7 @@
   /* ---------- Alert evaluation ---------- */
   function ruleMatch(rule, r, node, prevIp) {
     switch (rule.metric) {
-      case 'failed': return r.status === 'failed';
+      case 'failed': return r.status === 'failed' && r.failureClass !== 'rate_limited';
       case 'ip_changed': return prevIp != null && prevIp !== r.ip;
       default:
         if (r.status === 'failed') return false;
@@ -259,13 +281,14 @@
         if (rule.nodes !== 'all' && rule.nodes.indexOf(node.id) < 0) return;
         var streak = 0, open = null, prevIp = null;
         (byNode[node.id] || []).forEach(function (r) {
+          if (r.status === 'failed' && r.failureClass === 'rate_limited') return;
           var hit = ruleMatch(rule, r, node, prevIp);
           prevIp = r.ip;
           if (hit) {
             streak++;
             if (streak === rule.forTests) {
               open = {
-                id: rule.id + ':' + node.id + ':' + r.ts, ruleId: rule.id, nodeId: node.id, severity: rule.severity, ts: r.ts, resolvedAt: null,
+                id: rule.id + ':' + node.id + ':' + r.ts, ruleId: rule.id, nodeId: node.id, ispId: ST.resultISP(r), severity: rule.severity, ts: r.ts, resolvedAt: null,
                 title: rule.name,
                 detail: rule.metric === 'ip_changed' ? 'Now ' + r.ip + (ST.geo(r.ip) ? ' (' + ST.geo(r.ip).city + ')' : '') : ST.ruleText(rule),
                 triggerResultId: r.id,
@@ -396,11 +419,11 @@
   };
 
   ST.csv = function (rows) {
-    var head = ['time', 'node', 'status', 'download_mbps', 'upload_mbps', 'ping_ms', 'jitter_ms', 'packet_loss_pct', 'loaded_latency_down_ms', 'loaded_latency_up_ms', 'server', 'public_ip', 'error', 'engine'];
+    var head = ['time', 'node', 'status', 'download_mbps', 'upload_mbps', 'ping_ms', 'jitter_ms', 'packet_loss_pct', 'loaded_latency_down_ms', 'loaded_latency_up_ms', 'server', 'public_ip', 'error', 'failure_class', 'engine'];
     var esc = function (v) { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     return [head.join(',')].concat(rows.map(function (r) {
       var n = ST.node(r.nodeId), s = ST.server(r.serverId);
-      return [new Date(r.ts).toISOString(), n ? n.name + ' ' + n.label : r.nodeId, r.status, r.down, r.up, r.ping, r.jitter, r.loss, r.dLat, r.uLat, s.name + ' - ' + s.city, r.ip, r.error, r.engine || 'ookla'].map(esc).join(',');
+      return [new Date(r.ts).toISOString(), n ? n.name + ' ' + n.label : r.nodeId, r.status, r.down, r.up, r.ping, r.jitter, r.loss, r.dLat, r.uLat, s.name + ' - ' + s.city, r.ip, r.error, r.failureClass || 'other', r.engine || 'ookla'].map(esc).join(',');
     })).join('\n');
   };
 
@@ -451,6 +474,7 @@
           API.list('/api/alerts/rules', options),
           // state=all: acknowledged alerts stay visible under "All" and can be reopened (the center's default is open only).
           API.list('/api/alerts/events?state=all&range=' + encodeURIComponent(range), options),
+          API.request('/api/isps?range=' + encodeURIComponent(range) + ST.engineQuery(), options),
           API.list('/api/ip/addresses', options),
           API.list('/api/ip/history', options),
           API.request('/api/schedules', options)
@@ -467,12 +491,13 @@
         state.results.forEach(remember);
         state.rules = snapshot[2];
         state.events = snapshot[3].map(function (e) { return Object.assign({}, e, { ts: timestamp(e.ts), resolvedAt: timestamp(e.resolvedAt) }); });
-        addresses = snapshot[4].map(function (a) {
+        state.isps = snapshot[4].data;
+        addresses = snapshot[5].map(function (a) {
           if (a.geo) geos[a.ip] = a.geo;
           return Object.assign({}, a, { first: timestamp(a.first), last: timestamp(a.last) });
         });
-        changes = snapshot[5].map(function (c) { return Object.assign({}, c, { ts: timestamp(c.ts) }); });
-        schedules = snapshot[6].data;
+        changes = snapshot[6].map(function (c) { return Object.assign({}, c, { ts: timestamp(c.ts) }); });
+        schedules = snapshot[7].data;
         reindex();
         ST.remote = { status: 'ready', error: null };
         ST.emit('settings');
@@ -514,6 +539,10 @@
     }
     ST.updateNode = function (id, patch) {
       return editable('/api/nodes/' + encodeURIComponent(id), 'PATCH', patch, 'application/merge-patch+json');
+    };
+    ST.listISPPlans = function (id) {
+      if (!id) return Promise.resolve([]);
+      return API.request('/api/isps/' + encodeURIComponent(id) + '/plans').then(function (r) { return r.data; });
     };
     ST.addNode = function (node) { return mutation('/api/nodes', 'POST', node, { idempotencyKey: API.key() }); };
     ST.removeNode = function (id) {

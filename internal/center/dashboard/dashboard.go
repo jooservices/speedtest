@@ -66,12 +66,13 @@ func (s *Store) now() time.Time {
 
 // Fleet is the headline figures of one period.
 type Fleet struct {
-	Down    *float64 `json:"down"`
-	Up      *float64 `json:"up"`
-	Ping    *float64 `json:"ping"`
-	Success *float64 `json:"success"`
-	IPs     int      `json:"ips"`
-	Count   int      `json:"count"`
+	Down        *float64 `json:"down"`
+	Up          *float64 `json:"up"`
+	Ping        *float64 `json:"ping"`
+	Success     *float64 `json:"success"`
+	RateLimited int      `json:"rateLimited"`
+	IPs         int      `json:"ips"`
+	Count       int      `json:"count"`
 }
 
 // NodeCard is one node with its summary and 24 hour download sparkline.
@@ -104,11 +105,11 @@ func mean(values []float64) *float64 {
 }
 
 // fleet follows the preview: down/up are the unweighted mean of each node's percentage of its expected speed
-// (nodes without data are left out), success is non-failed over all tests, ips counts address changes and
-// ping is the median of every successful test's latency.
+// (nodes without data are left out), success excludes rate-limited failures (shown separately), ips counts
+// address changes and ping is the median of every successful test's latency.
 func (s *Store) fleet(ctx context.Context, summaries []stats.SummaryComparison, current bool, from, to time.Time, engine string) (Fleet, error) {
 	var downs, ups []float64
-	var ok, count int
+	var ok, count, rateLimited int
 	for _, item := range summaries {
 		sum := item.Previous
 		if current {
@@ -122,10 +123,11 @@ func (s *Store) fleet(ctx context.Context, summaries []stats.SummaryComparison, 
 		}
 		ok += sum.OK
 		count += sum.Count
+		rateLimited += sum.RateLimited
 	}
-	f := Fleet{Down: mean(downs), Up: mean(ups), Count: count}
-	if count > 0 {
-		success := float64(ok) / float64(count) * 100
+	f := Fleet{Down: mean(downs), Up: mean(ups), Count: count, RateLimited: rateLimited}
+	if eligible := count - rateLimited; eligible > 0 {
+		success := float64(ok) / float64(eligible) * 100
 		f.Success = &success
 	}
 	err := s.DB.QueryRow(ctx, `SELECT

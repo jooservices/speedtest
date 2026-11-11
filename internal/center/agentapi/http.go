@@ -214,7 +214,18 @@ func (h Handler) results(w http.ResponseWriter, r *http.Request, node string) {
 		result, err := ParseResult(item)
 		outcome := Outcome{Index: index, Outcome: "rejected", Status: 422}
 		if err == nil {
-			outcome.ID = &result.ID
+			id := result.ID
+			outcome.ID = &id
+		} else {
+			// A valid UUID survives unrelated item validation errors.
+			var fields map[string]json.RawMessage
+			var identity string
+			if json.Unmarshal(item, &fields) == nil && json.Unmarshal(fields["id"], &identity) == nil && UUID(identity) {
+				id := strings.ToLower(identity)
+				outcome.ID = &id
+			}
+		}
+		if err == nil {
 			var duplicate bool
 			duplicate, err = h.Store.SaveResult(r.Context(), node, result)
 			switch {
@@ -234,10 +245,6 @@ func (h Handler) results(w http.ResponseWriter, r *http.Request, node string) {
 			}
 		}
 		if outcome.Outcome == "rejected" {
-			// Keep a valid UUID on an invalid item without decoding accepted items twice.
-			if outcome.ID == nil {
-				outcome.ID = resultIdentity(item)
-			}
 			p := problem(outcome.Status, w.Header().Get("X-Request-ID"))
 			outcome.Problem = &p
 		}
@@ -246,17 +253,6 @@ func (h Handler) results(w http.ResponseWriter, r *http.Request, node string) {
 	}
 	success(w, 207, outcomes)
 }
-
-func resultIdentity(data []byte) *string {
-	var fields map[string]json.RawMessage
-	var identity string
-	if json.Unmarshal(data, &fields) != nil || json.Unmarshal(fields["id"], &identity) != nil || !UUID(identity) {
-		return nil
-	}
-	identity = strings.ToLower(identity)
-	return &identity
-}
-
 func (h Handler) config(w http.ResponseWriter, r *http.Request, node string) {
 	config, err := h.Store.Config(r.Context(), node)
 	if err != nil {

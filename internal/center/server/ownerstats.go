@@ -71,8 +71,10 @@ func (h *ownerStats) summary(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	q.NodeIDs, q.NodesSet, ok = parseStatsNodes(w, r)
-	if !ok {
+	if q.NodeIDs, q.NodesSet, ok = parseStatsNodes(w, r); !ok {
+		return
+	}
+	if q.ISPIDs, q.ISPsSet, ok = parseStatsISPs(w, r); !ok {
 		return
 	}
 	items, err := h.store.Summary(r.Context(), q)
@@ -89,6 +91,9 @@ func (h *ownerStats) trend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if q.NodeIDs, q.NodesSet, ok = parseStatsNodes(w, r); !ok {
+		return
+	}
+	if q.ISPIDs, q.ISPsSet, ok = parseStatsISPs(w, r); !ok {
 		return
 	}
 	if q.Metric, ok = parseStatsMetric(w, r); !ok {
@@ -140,6 +145,9 @@ func (h *ownerStats) hourOfDay(w http.ResponseWriter, r *http.Request) {
 	if q.NodeIDs, q.NodesSet, ok = parseStatsNodes(w, r); !ok {
 		return
 	}
+	if q.ISPIDs, q.ISPsSet, ok = parseStatsISPs(w, r); !ok {
+		return
+	}
 	if q.Metric, ok = parseStatsMetric(w, r); !ok {
 		return
 	}
@@ -164,6 +172,9 @@ func (h *ownerStats) heatmap(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var ok bool
+	if q.ISPIDs, q.ISPsSet, ok = parseStatsISPs(w, r); !ok {
+		return
+	}
 	if q.Metric, ok = parseStatsMetric(w, r); !ok {
 		return
 	}
@@ -210,6 +221,9 @@ func (h *ownerStats) distribution(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if q.NodeIDs, q.NodesSet, ok = parseStatsNodes(w, r); !ok {
+		return
+	}
+	if q.ISPIDs, q.ISPsSet, ok = parseStatsISPs(w, r); !ok {
 		return
 	}
 	if q.Metric, ok = parseStatsMetric(w, r); !ok {
@@ -316,7 +330,15 @@ func parseStatsISP(w http.ResponseWriter, r *http.Request) (string, bool) {
 }
 
 func parseStatsNodes(w http.ResponseWriter, r *http.Request) ([]string, bool, bool) {
-	raw, present, valid := singleStatsParam(w, r, "nodes")
+	return parseStatsIDList(w, r, "nodes", "nodes must be comma-separated node IDs.", "nodes accepts at most 100 IDs.")
+}
+
+func parseStatsISPs(w http.ResponseWriter, r *http.Request) ([]string, bool, bool) {
+	return parseStatsIDList(w, r, "isps", "isps must be comma-separated ISP IDs.", "isps accepts at most 100 IDs.")
+}
+
+func parseStatsIDList(w http.ResponseWriter, r *http.Request, key, badID, tooMany string) ([]string, bool, bool) {
+	raw, present, valid := singleStatsParam(w, r, key)
 	if !valid {
 		return nil, false, false
 	}
@@ -334,13 +356,13 @@ func parseStatsNodes(w http.ResponseWriter, r *http.Request) ([]string, bool, bo
 			continue
 		}
 		if !uuidPattern.MatchString(id) {
-			statsInvalid(w, r, "nodes must be comma-separated node IDs.")
+			statsInvalid(w, r, badID)
 			return nil, true, false
 		}
 		seen[id] = true
 		ids = append(ids, id)
 		if len(ids) > 100 {
-			statsInvalid(w, r, "nodes accepts at most 100 IDs.")
+			statsInvalid(w, r, tooMany)
 			return nil, true, false
 		}
 	}

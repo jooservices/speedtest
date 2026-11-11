@@ -57,6 +57,34 @@ func TestMetricColumnsAndUnits(t *testing.T) {
 	}
 }
 
+func TestSuccessRateExcludesRateLimitedFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		count   int
+		ok      int
+		limited int
+		want    *float64
+	}{
+		{name: "rate limits excluded", count: 5, ok: 3, limited: 1, want: number(75)},
+		{name: "all rate limited", count: 2, limited: 2},
+		{name: "no rate limits", count: 4, ok: 3, want: number(75)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := NodeSummary{Count: tc.count, OK: tc.ok, RateLimited: tc.limited}
+			got.setSuccessRate()
+			if tc.want == nil {
+				if got.SuccessRate != nil {
+					t.Fatalf("success rate = %v, want nil", *got.SuccessRate)
+				}
+				return
+			}
+			if got.SuccessRate == nil || *got.SuccessRate != *tc.want {
+				t.Fatalf("success rate = %v, want %v", got.SuccessRate, *tc.want)
+			}
+		})
+	}
+}
+
 func TestCombinedSeriesMatchesPreviewSumOfAvailableNodeBuckets(t *testing.T) {
 	first := "node-a"
 	second := "node-b"
