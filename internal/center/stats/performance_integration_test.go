@@ -8,8 +8,11 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/jooservices/speedtest/internal/shared/testenv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,9 +28,7 @@ func openStatsIntegrationStore(t *testing.T) (*pgxpool.Pool, context.Context, *S
 	if err != nil {
 		t.Fatal("a configured worktree .env is required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
@@ -280,7 +281,7 @@ type planDetail struct {
 
 func containsRelation(nodes []string, relation string) bool {
 	for _, node := range nodes {
-		if node == "Seq Scan on "+relation || node == "Index Scan on "+relation || node == "Bitmap Heap Scan on "+relation {
+		if strings.HasPrefix(node, "Seq Scan on "+relation) || strings.HasPrefix(node, "Index Scan on "+relation) || strings.HasPrefix(node, "Bitmap Heap Scan on "+relation) {
 			return true
 		}
 	}

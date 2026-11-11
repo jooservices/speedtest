@@ -50,6 +50,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-SET-07', area: 'settings', title: 'notification quiet hours are saved as a complete window', covers: 'quiet hours for messages, critical exemption', run: S.settings.notificationQuietHours },
     { id: 'SC-SET-05', area: 'settings', title: 'retention and the full exports work', covers: 'retention, CSV and JSON export', run: S.settings.dataRetentionAndExport },
     { id: 'SC-SET-06', area: 'settings', title: 'the enrolment key is shown once', covers: 'enrolment key rotation', run: S.settings.enrolmentKeyShownOnce },
+    { id: 'SC-SET-09', area: 'settings', title: 'API access tokens are issued once, authorize scoped calls and can be revoked', covers: 'token creation, digest storage, bearer auth without cookies or CSRF, scope enforcement, installation event stream revalidation, revocation', run: S.settings.apiTokenCanBeCreatedUsedAndRevoked },
 
     // Adds a real agent and a node; the removal scenario below deletes it again.
     { id: 'SC-NODE-05', area: 'nodes', title: 'a node is added with the install command and reports', covers: 'wizard, 60-minute default, real agent enrolment/sync, matching schedules, first result, run test', run: S.nodes.addWithCommandAndRunTest },

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 	"github.com/jooservices/speedtest/internal/center/auth"
 )
 
@@ -13,6 +14,11 @@ import (
 // owner authentication routes to session-protected node operations.
 func (s *serverAuth) requireOwner(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if principal, ok := apitoken.PrincipalFromContext(r.Context()); ok {
+			ctx := context.WithValue(r.Context(), ownerIdentityContextKey{}, principal.UserID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
 		if s.service == nil {
 			writeProblemResponse(w, http.StatusServiceUnavailable, problemResponse{
 				Type: "/problems/servererror", Title: "Service unavailable", Status: http.StatusServiceUnavailable,
@@ -48,6 +54,11 @@ func (s *serverAuth) requireOwner(next http.Handler) http.Handler {
 // read-only (safe method) routes, so unlike requireOwner it needs no CSRF token or origin check.
 func (s *serverAuth) requireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if principal, ok := apitoken.PrincipalFromContext(r.Context()); ok {
+			ctx := context.WithValue(r.Context(), ownerIdentityContextKey{}, principal.UserID)
+			next.ServeHTTP(w, r.WithContext(ctx))
+			return
+		}
 		if s.service == nil {
 			writeProblemResponse(w, http.StatusServiceUnavailable, problemResponse{
 				Type: "/problems/servererror", Title: "Service unavailable", Status: http.StatusServiceUnavailable,
@@ -90,6 +101,9 @@ func (s *serverAuth) requireSession(next http.Handler) http.Handler {
 }
 
 func (s *serverAuth) validSessionAndCSRF(w http.ResponseWriter, r *http.Request) (string, auth.SessionView, bool) {
+	if principal, ok := apitoken.PrincipalFromContext(r.Context()); ok {
+		return principal.TokenID, auth.SessionView{Identity: &auth.Identity{ID: principal.UserID, Email: principal.Email}}, true
+	}
 	token, present, invalid := readSessionCookie(r)
 	if !present || invalid {
 		if invalid {
