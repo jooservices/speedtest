@@ -64,6 +64,11 @@ func TestOwnerResultsHTTPFlowIntegration(t *testing.T) {
 			t.Fatal(i, err)
 		}
 	}
+	rateLimitedID := "00000000-0000-4000-8000-0000000000b4"
+	if _, err := pool.Exec(ctx, `INSERT INTO results (id,node_id,ts,status,threads,error,engine,failure_class,bytes_down,bytes_up,duration_seconds)
+VALUES ($1,$2,$3,'failed',4,'Too many requests','ookla','rate_limited',0,0,0)`, rateLimitedID, node, now.Add(-30*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
 	get := func(path string, withSession bool) *httptest.ResponseRecorder {
 		req := httptest.NewRequest(http.MethodGet, "http://center.test"+path, nil)
 		if withSession {
@@ -87,8 +92,8 @@ func TestOwnerResultsHTTPFlowIntegration(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &list); err != nil || rec.Code != http.StatusOK {
 		t.Fatalf("list = %d %s", rec.Code, rec.Body.String())
 	}
-	if list.Meta.Pagination["total"] != float64(2) || list.Meta.Pagination["last_page"] != float64(2) || list.Data[0]["down"] != float64(120) {
-		t.Fatalf("the default 7 day range holds two results, lowest download first: %s", rec.Body.String())
+	if list.Meta.Pagination["total"] != float64(3) || list.Meta.Pagination["last_page"] != float64(3) || list.Data[0]["down"] != float64(120) {
+		t.Fatalf("the default 7 day range holds three results, lowest download first: %s", rec.Body.String())
 	}
 	if wide := get("/api/results?range=30d&q=hanoi&minDown=100", true); !strings.Contains(wide.Body.String(), `"total":2`) {
 		t.Fatalf("30d with search and min download = %s", wide.Body.String())
@@ -97,12 +102,16 @@ func TestOwnerResultsHTTPFlowIntegration(t *testing.T) {
 	if detail.Code != http.StatusOK || responseString(t, detail.Body.Bytes(), "data", "geo", "city") != "Hanoi" || responseString(t, detail.Body.Bytes(), "data", "geo", "source") != "GeoLite2" {
 		t.Fatalf("detail = %d %s", detail.Code, detail.Body.String())
 	}
+	rateLimited := get("/api/results/"+rateLimitedID, true)
+	if rateLimited.Code != http.StatusOK || responseString(t, rateLimited.Body.Bytes(), "data", "failureClass") != "rate_limited" {
+		t.Fatalf("rate-limited result API = %d %s", rateLimited.Code, rateLimited.Body.String())
+	}
 	if rec := get("/api/results/00000000-0000-4000-8000-0000000000ff", true); rec.Code != http.StatusNotFound {
 		t.Fatalf("unknown result = %d", rec.Code)
 	}
 	export := get("/api/results/export.csv?range=30d&sort=ts&dir=asc", true)
 	records, err := csv.NewReader(export.Body).ReadAll()
-	if export.Code != http.StatusOK || err != nil || len(records) != 4 || records[1][1] != "VM1 Home" || records[1][3] != "50" || records[3][11] != "203.0.113.5" || records[1][10] != "Viettel - Hanoi" {
+	if export.Code != http.StatusOK || err != nil || len(records) != 5 || records[1][1] != "VM1 Home" || records[1][3] != "50" || records[4][11] != "203.0.113.5" || records[1][10] != "Viettel - Hanoi" {
 		t.Fatalf("export = %d %v %v", export.Code, records, err)
 	}
 	if rec := get("/api/results?minDown=500&maxDown=100", true); rec.Code != http.StatusUnprocessableEntity {
@@ -110,18 +119,21 @@ func TestOwnerResultsHTTPFlowIntegration(t *testing.T) {
 	}
 	full := get("/api/export/results.json", true)
 	var all []map[string]any
-	if full.Code != http.StatusOK || json.Unmarshal(full.Body.Bytes(), &all) != nil || len(all) != 3 || all[0]["id"] != "00000000-0000-4000-8000-0000000000b3" ||
-		all[2]["id"] != "00000000-0000-4000-8000-0000000000b1" {
+	if full.Code != http.StatusOK || json.Unmarshal(full.Body.Bytes(), &all) != nil || len(all) != 4 || all[0]["id"] != "00000000-0000-4000-8000-0000000000b3" ||
+		all[3]["id"] != "00000000-0000-4000-8000-0000000000b1" {
 		t.Fatalf("full JSON export covers every result regardless of age, oldest first: %d %s", full.Code, full.Body.String())
+	}
+	if all[2]["id"] != rateLimitedID || all[2]["failureClass"] != "rate_limited" {
+		t.Fatalf("full JSON export lost failure class: %v", all[2])
 	}
 	if all[0]["geo"].(map[string]any)["city"] != "Hanoi" {
 		t.Fatalf("exported result lacks its location: %v", all[0])
 	}
 	fullCSV := get("/api/export/results.csv", true)
-	if rows, err := csv.NewReader(fullCSV.Body).ReadAll(); fullCSV.Code != http.StatusOK || err != nil || len(rows) != 4 {
+	if rows, err := csv.NewReader(fullCSV.Body).ReadAll(); fullCSV.Code != http.StatusOK || err != nil || len(rows) != 5 {
 		t.Fatalf("full CSV export = %d %v %v", fullCSV.Code, rows, err)
 	}
-	t.Log("PASS: result list, detail with geolocation and CSV export over HTTP against PostgreSQL")
+	t.Log("PASS: result list, detail exposes failureClass, and CSV/full exports work over HTTP against PostgreSQL")
 }
 
 // countingWriter discards the body so the test measures the server, not a recorder that keeps everything.

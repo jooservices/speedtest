@@ -14,6 +14,7 @@ func TestEngineMigrationBackfillLegacyWritesAndRollback(t *testing.T) {
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	dbtest.MigrateUp(t, pool)
+	// Roll back geo usage, audit source, API tokens, failure class, schedule default, and engine schedules.
 	for range 5 {
 		if err := db.Migrate(ctx, pool, "down"); err != nil {
 			t.Fatal(err)

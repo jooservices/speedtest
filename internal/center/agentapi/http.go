@@ -214,7 +214,8 @@ func (h Handler) results(w http.ResponseWriter, r *http.Request, node string) {
 		result, err := ParseResult(item)
 		outcome := Outcome{Index: index, Outcome: "rejected", Status: 422}
 		if err == nil {
-			outcome.ID = &result.ID
+			id := result.ID
+			outcome.ID = &id
 		} else if id := validResultID(item); id != "" {
 			outcome.ID = &id
 		}
