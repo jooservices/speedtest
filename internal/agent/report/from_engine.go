@@ -106,11 +106,12 @@ func (r *Result) copyMeasurement(e engine.Result, o Options) {
 			r.ServerID = &id
 		}
 		r.Server = &Server{
-			ID:      e.Server.ID,
-			Name:    e.Server.Name,
-			City:    e.Server.Location,
-			Sponsor: "",
-			Host:    e.Server.Host,
+			ID:       e.Server.ID,
+			Name:     e.Server.Name,
+			City:     e.Server.Location,
+			Sponsor:  "",
+			Host:     e.Server.Host,
+			Endpoint: e.Server.Endpoint,
 		}
 	}
 

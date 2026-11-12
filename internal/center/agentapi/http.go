@@ -167,7 +167,7 @@ func (h Handler) ServeNode(w http.ResponseWriter, r *http.Request, node, observe
 			writeProblem(w, 404)
 			return
 		}
-		data, ok := body(w, r, 64<<10)
+		data, ok := body(w, r, 3<<20)
 		if !ok {
 			return
 		}
@@ -291,6 +291,7 @@ func completeResultOutcome(w http.ResponseWriter, outcome Outcome) Outcome {
 	}
 	return outcome
 }
+
 func (h Handler) config(w http.ResponseWriter, r *http.Request, node string) {
 	config, err := h.Store.Config(r.Context(), node)
 	if err != nil {

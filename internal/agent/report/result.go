@@ -37,11 +37,12 @@ type LoadedLatency struct {
 // engine's location string and Sponsor is empty because the engine does not
 // expose a distinct sponsor value.
 type Server struct {
-	ID      int64  `json:"id,omitempty"`
-	Name    string `json:"name"`
-	City    string `json:"city"`
-	Sponsor string `json:"sponsor"`
-	Host    string `json:"host,omitempty"`
+	ID       int64  `json:"id,omitempty"`
+	Name     string `json:"name"`
+	City     string `json:"city"`
+	Sponsor  string `json:"sponsor"`
+	Host     string `json:"host,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 // Result is one reportable result, mirroring the ResultInput wire schema in
@@ -78,11 +79,13 @@ type Result struct {
 	LoadedUp   *LoadedLatency  `json:"loadedUp,omitempty"`
 	Server     *Server         `json:"server,omitempty"`
 
-	EngineISP       string   `json:"engineISP,omitempty"`
-	EngineResultID  string   `json:"engineResultId,omitempty"`
-	EngineResultURL string   `json:"engineResultUrl,omitempty"`
-	EngineIP        string   `json:"engineIp,omitempty"`
-	Warnings        []string `json:"warnings,omitempty"`
+	EngineISP            string   `json:"engineISP,omitempty"`
+	EngineResultID       string   `json:"engineResultId,omitempty"`
+	EngineResultURL      string   `json:"engineResultUrl,omitempty"`
+	EngineIP             string   `json:"engineIp,omitempty"`
+	Warnings             []string `json:"warnings,omitempty"`
+	ServerSelectionKnown bool     `json:"serverSelectionKnown,omitempty"`
+	PinnedServerID       *int64   `json:"pinnedServerId,omitempty"`
 }
 
 // Validate checks that r satisfies the wire schema constraints, so an invalid
@@ -212,7 +215,10 @@ func (r Result) validateDetails() error {
 	if r.ServerID != nil && *r.ServerID <= 0 {
 		return errors.New("serverId must be positive")
 	}
-	if r.Server != nil && (r.Server.ID < 0 || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || len([]rune(r.Server.Host)) > 255) {
+	if r.PinnedServerID != nil && (*r.PinnedServerID <= 0 || *r.PinnedServerID > math.MaxInt32 || !r.ServerSelectionKnown) {
+		return errors.New("pinnedServerId must be a known positive server ID")
+	}
+	if r.Server != nil && (r.Server.ID < 0 || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || len([]rune(r.Server.Host)) > 255 || !validServerEndpoint(r.Server.Endpoint)) {
 		return errors.New("invalid server identity")
 	}
 	if r.EngineIP != "" {
@@ -227,4 +233,12 @@ func (r Result) validateDetails() error {
 		}
 	}
 	return nil
+}
+
+func validServerEndpoint(value string) bool {
+	if value == "" {
+		return true
+	}
+	u, err := url.Parse(value)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && len(value) <= 2048
 }

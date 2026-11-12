@@ -49,6 +49,27 @@ func TestScenarioWireMeasurements(t *testing.T) {
 	}
 }
 
+func TestLibreSpeedFallbackFixtureUsesCurrentTimestamp(t *testing.T) {
+	started := time.Now().Add(-time.Second)
+	var stdout, stderr bytes.Buffer
+	if code := run(t.Context(), []string{"--json"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("exit %d: %s", code, &stderr)
+	}
+	var report struct {
+		Timestamp string `json:"timestamp"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
+		t.Fatal(err)
+	}
+	timestamp, err := time.Parse(time.RFC3339Nano, report.Timestamp)
+	if err != nil {
+		t.Fatalf("timestamp %q: %v", report.Timestamp, err)
+	}
+	if timestamp.Before(started) || timestamp.After(time.Now().Add(time.Second)) {
+		t.Fatalf("fixture timestamp %s is not current", timestamp)
+	}
+}
+
 func TestExplicitOverridesAndFailures(t *testing.T) {
 	var out bytes.Buffer
 	cfg, err := parseFlags([]string{"--down", "1", "--up", "2", "--ping", "3", "--jitter", "4", "--loss", "0", "--server-id", "99"}, &out)

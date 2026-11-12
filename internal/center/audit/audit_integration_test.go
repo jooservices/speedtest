@@ -108,8 +108,10 @@ func TestAuthenticationSourceMigrationRollsBackAndReapplies(t *testing.T) {
 	if columns != 0 {
 		t.Fatalf("rolled-back audit columns = %d", columns)
 	}
-	if err := db.Migrate(ctx, pool, "up"); err != nil {
-		t.Fatal("reapply audit authentication source migration:", err)
+	for range 4 {
+		if err := db.Migrate(ctx, pool, "up"); err != nil {
+			t.Fatal("reapply audit authentication source migration:", err)
+		}
 	}
 	store := &Store{DB: pool}
 	entry := Entry{Actor: "owner@example.com", Action: "node.update"}
