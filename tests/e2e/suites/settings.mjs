@@ -57,16 +57,17 @@ export function settingsSuite(T, ctx) {
       assert.equal(T.db("select value->>'decimals' from settings where key='display'"), '2');
       await T.settled();
       await T.choose(setting('Speed units').locator('select'), 'Mbps');
-      await T.settled();
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.units === 'Mbps', 'speed units are stored');
       await T.choose(setting('Time zone').locator('select'), 'UTC');
-      await T.settled();
-      await setting('12-hour clock').locator('.switch').click();
-      await T.settled();
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.timezone === 'UTC', 'time zone is stored');
+      const clock = setting('12-hour clock').locator('input[type=checkbox]');
+      if (!(await clock.isChecked())) await setting('12-hour clock').locator('.switch').click();
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.hour12 === true, '12-hour clock is enabled');
       await T.choose(setting('Default time range').locator('select'), '24h');
-      await T.settled();
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.range === '24h', 'default time range is stored');
       await page.getByRole('radio', { name: 'Light' }).or(page.getByRole('tab', { name: 'Light' })).first().click();
-      await T.settled();
-      assert.deepEqual(JSON.parse(T.db("select value from settings where key='display'")).hour12, true);
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.theme === 'light', 'light theme is stored');
+      assert.equal((await T.api('/api/settings')).body.data.hour12, true);
       await page.reload();
       await T.heading('Settings').waitFor();
       assert.equal(await setting('Decimal places').locator('select').inputValue(), '2', 'the preference survives a reload');
@@ -75,7 +76,8 @@ export function settingsSuite(T, ctx) {
       await T.choose(setting('Decimal places').locator('select'), '1'); await T.settled();
       await T.choose(setting('Speed units').locator('select'), 'auto'); await T.settled();
       await T.choose(setting('Time zone').locator('select'), 'browser'); await T.settled();
-      await setting('12-hour clock').locator('.switch').click(); await T.settled();
+      if (await clock.isChecked()) await setting('12-hour clock').locator('.switch').click();
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.hour12 === false, '12-hour clock default is restored');
       await T.choose(setting('Default time range').locator('select'), '7d'); await T.settled();
       await page.getByRole('radio', { name: 'Dark' }).or(page.getByRole('tab', { name: 'Dark' })).first().click(); await T.settled();
     },
@@ -85,11 +87,9 @@ export function settingsSuite(T, ctx) {
       await T.open('#/settings', 'Settings');
       await T.tab('Speed test');
       await T.choose(setting('Parallel connections').locator('select'), '8');
-      await T.toast('Saved').waitFor();
-      await T.settled();
-      await T.eventually(() => T.db("select value->>'defaultThreads' from settings where key='display'") === '8', 'the default parallel connections are stored');
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.defaultThreads === 8, 'parallel connections are stored');
       await T.choose(setting('Server choice').locator('select'), 'pinned');
-      await T.settled();
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.serverMode === 'pinned', 'server choice is stored');
       await T.tab('Location');
       await T.fillAndLeave('MaxMind license key', 'e2e-licence-key-123');
       await T.settled();
@@ -100,8 +100,10 @@ export function settingsSuite(T, ctx) {
       await page.reload();
       await T.tab('Speed test');
       assert.equal(await setting('Parallel connections').locator('select').inputValue(), '8');
-      await T.choose(setting('Parallel connections').locator('select'), '4'); await T.settled();
-      await T.choose(setting('Server choice').locator('select'), 'auto'); await T.settled();
+      await T.choose(setting('Parallel connections').locator('select'), '4');
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.defaultThreads === 4, 'default parallel connections are restored');
+      await T.choose(setting('Server choice').locator('select'), 'auto');
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.serverMode === 'auto', 'automatic server choice is restored');
     },
 
     // Secrets are write-only and stored encrypted.
@@ -141,7 +143,10 @@ export function settingsSuite(T, ctx) {
       await T.toast('Saved').waitFor();
       await T.settled();
       await page.getByLabel('Enable Webhook').check({ force: true });
-      await T.settled();
+      await T.eventually(async () => {
+        const settings = (await T.api('/api/settings')).body.data;
+        return settings.notify.webhook.on && settings.notify.webhook.configured;
+      }, 'the webhook is enabled and configured');
       await T.press('Send a test', setting('Webhook'));
       await T.toast('Test message sent to Webhook').waitFor({ timeout: 30000 });
       assert.ok(receiver.bodies.length >= 1, 'the receiver got the message');
@@ -262,6 +267,7 @@ export function settingsSuite(T, ctx) {
       await T.open('#/settings', 'Settings');
       await T.tab('Data');
       await T.choose(setting('Keep results for').locator('select'), '90');
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.retentionDays === 90, 'retention period is stored');
       await T.toast('Saved').waitFor();
       await T.settled();
       await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '90', 'retention period is saved');
@@ -271,6 +277,9 @@ export function settingsSuite(T, ctx) {
       const json = await T.download(() => T.press('JSON', setting('Export all results')));
       assert.ok(Array.isArray(JSON.parse(json)) || JSON.parse(json).data, 'the JSON export parses');
       await T.choose(setting('Keep results for').locator('select'), '365');
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.retentionDays === 365, 'default retention is restored');
+      await T.settled();
+      await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '365', 'the default retention period is restored');
       await T.toast('Saved').waitFor();
       await T.settled();
       await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '365', 'default retention period is restored');
