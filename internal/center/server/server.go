@@ -79,6 +79,8 @@ type Options struct {
 	OwnerResults OwnerResultsStore
 	// OwnerStats optionally serves the owner statistics API.
 	OwnerStats OwnerStatsStore
+	// OwnerUsage optionally serves measured traffic and monthly budget resources.
+	OwnerUsage OwnerUsageStore
 	// OwnerISP optionally serves ISP list, comparison, trend and plan APIs.
 	OwnerISP OwnerISPStore
 	// OwnerReport optionally serves the monthly ISP and plan report (JSON, CSV, PDF).

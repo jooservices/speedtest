@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/jooservices/speedtest/internal/center/usage"
 )
 
 const enrollmentLifetime = 24 * time.Hour
@@ -191,6 +192,9 @@ func (s *Service) createNodeTx(ctx context.Context, tx pgx.Tx, input Input) (any
 	}
 	interval, offset, err := insertNodeSchedules(ctx, tx, nodeID)
 	if err != nil {
+		return nil, err
+	}
+	if err := usage.ReconcileScheduleEdit(ctx, tx, nodeID, s.now()); err != nil {
 		return nil, err
 	}
 	credentialID, err := s.uuid()

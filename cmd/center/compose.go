@@ -31,6 +31,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/settings"
 	"github.com/jooservices/speedtest/internal/center/stats"
 	"github.com/jooservices/speedtest/internal/center/telemetry"
+	"github.com/jooservices/speedtest/internal/center/usage"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
 
@@ -51,6 +52,7 @@ type services struct {
 	OwnerResults       server.OwnerResultsStore
 	OwnerSchedules     server.OwnerSchedulesStore
 	OwnerStats         server.OwnerStatsStore
+	OwnerUsage         *usage.Store
 	OwnerISP           server.OwnerISPStore
 	OwnerReport        server.OwnerReportStore
 	Settings           settings.Store
@@ -86,12 +88,13 @@ func newOperationalStores(pool *pgxpool.Pool, cfg config.CenterConfig, logger *s
 	return operational, alertStore, retention
 }
 
-func backgroundServices(notifications *notify.Store, retention *jobs.Retention, mailer *report.Mailer, backfill *geo.Backfill, watcher *ipwatch.Watcher, dbip geo.DBIPConfig, alertStore *alerts.Store) func(context.Context) {
+func backgroundServices(notifications *notify.Store, retention *jobs.Retention, usageStore *usage.Store, logger *slog.Logger, mailer *report.Mailer, backfill *geo.Backfill, watcher *ipwatch.Watcher, dbip geo.DBIPConfig, alertStore *alerts.Store) func(context.Context) {
 	return func(ctx context.Context) {
 		if notifications != nil {
 			go notifications.Loop(ctx)
 		}
 		go retention.Loop(ctx)
+		go usageStore.Loop(ctx, logger)
 		go backfill.Loop(ctx)
 		if mailer != nil {
 			go mailer.Loop(ctx)
@@ -138,6 +141,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 	releases := &release.Catalog{Dir: cfg.ReleaseDir, PublicURL: cfg.PublicURL, Logger: logger}
 	owner := &ownerapi.Store{DB: pool, Releases: releases}
 	statsStore := &stats.Store{DB: pool}
+	usageStore := &usage.Store{DB: pool}
 	preferences, notifications, err := buildPreferences(pool, cfg, logger)
 	if err != nil {
 		cleanup()
@@ -176,12 +180,13 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		NodeCredential:     nodeService,
 		Pinger:             poolPinger{pool: pool},
 		Metrics:            metrics.Collector{DB: pool},
-		Agent:              &agentapi.Postgres{Pool: pool, Releases: releases, Hook: agentapi.ResultHookChain{watcher, alertStore}, Events: notifications},
+		Agent:              &agentapi.Postgres{Pool: pool, Releases: releases, Hook: agentapi.ResultHookChain{watcher, alertStore, usageStore}, Events: notifications},
 		OwnerNodes:         owner,
 		OwnerServers:       owner,
 		OwnerResults:       owner,
 		OwnerSchedules:     owner,
 		OwnerStats:         statsStore,
+		OwnerUsage:         usageStore,
 		OwnerISP:           &isp.Store{DB: pool},
 		OwnerReport:        &report.Store{DB: pool},
 		Settings:           preferences,
@@ -192,7 +197,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		Audit:              &audit.Store{DB: pool},
 		AccessTokens:       &apitoken.Store{DB: pool},
 		Installer:          installerService,
-		Background:         backgroundServices(notifications, retention, mailer, backfill, watcher, dbip, alertStore),
+		Background:         backgroundServices(notifications, retention, usageStore, logger, mailer, backfill, watcher, dbip, alertStore),
 	}, cleanup, nil
 }
 

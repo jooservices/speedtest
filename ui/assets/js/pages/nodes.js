@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
-  var detailTab = {};
+  var detailTab = {}, nodeSettingDrafts = {}, engineScheduleDrafts = {};
 
   /* ---------- List ---------- */
   ST.pages.nodes = function (root) {
@@ -402,7 +402,7 @@
     }
 
     if (tab === 'settings') {
-      var d = { name: n.name, label: n.label, down: n.expectedDown, up: n.expectedUp, threads: n.threads, server: n.server, note: n.note || '', ispPlanId: n.ispPlanId || '', downTouched: false, upTouched: false };
+      var d = nodeSettingDrafts[n.id] || (nodeSettingDrafts[n.id] = { name: n.name, label: n.label, down: n.expectedDown, up: n.expectedUp, threads: n.threads, server: n.server, note: n.note || '', ispPlanId: n.ispPlanId || '', downTouched: false, upTouched: false });
       var serverOpts = [{ value: 'auto', label: 'Choose the closest automatically' }].concat(ST.servers.map(function (s) { return { value: String(s.id), label: s.name + ' — ' + s.city }; }));
       var downInput = U.input(d.down, function (v) { d.down = v; d.downTouched = true; }, { type: 'number', min: 1 });
       var upInput = U.input(d.up, function (v) { d.up = v; d.upTouched = true; }, { type: 'number', min: 1 });
@@ -439,33 +439,38 @@
           if (!d.downTouched) delete patch.expectedDown;
           if (!d.upTouched) delete patch.expectedUp;
           if (ST.demo) patch.server = d.server;
-          Promise.resolve(ST.updateNode(n.id, patch)).then(function () { U.toast('Settings saved'); }, function (error) {
+          Promise.resolve(ST.updateNode(n.id, patch)).then(function () { delete nodeSettingDrafts[n.id]; U.toast('Settings saved'); ST.refresh(); }, function (error) {
             U.toast(error.status === 409 ? 'Another node already has this name.' : error.status === 412 ? 'This node was changed elsewhere. Reload and try again.' : error.message, 'error');
           });
-        } }), U.btn('Discard', { onClick: function () { ST.refresh(); } })));
+        } }), U.btn('Discard', { onClick: function () { delete nodeSettingDrafts[n.id]; delete engineScheduleDrafts[n.id]; if (ST.bandwidth) ST.bandwidth.clearDrafts(n.id); ST.refresh(); } })));
       root.appendChild(U.card('Node settings', null, form));
-      var available = n.engines || ['ookla', 'librespeed'], engineRows = ST.engineSchedules(n);
+      var available = n.engines || ['ookla', 'librespeed'], engineRows = engineScheduleDrafts[n.id] || (engineScheduleDrafts[n.id] = ST.engineSchedules(n).map(function (e) { return Object.assign({}, e); }));
       var engineForm = h('div', { class: 'stack', style: 'max-width:640px' });
+      var adviceHost = h('div');
+      var refreshAdvice = function () { U.clear(adviceHost); ST.bandwidth.advicePanel(adviceHost, n.id, engineRows); };
       ['ookla', 'librespeed'].forEach(function (name) {
         var current = engineRows.filter(function (e) { return e.engine === name; })[0];
         var installed = available.indexOf(name) !== -1;
         var draft = Object.assign({ engine: name, interval: 60, offset: 0, enabled: false }, current || {});
-        if (!current && installed) engineRows.push(draft); else if (current) draft = current;
+        if (ST.bandwidth) draft.interval = ST.bandwidth.draftInterval(n.id, name, draft.interval);
+        if (!current && installed) engineRows.push(draft); else if (current) { current.interval = draft.interval; draft = current; }
         var label = name === 'ookla' ? 'Ookla' : 'LibreSpeed';
         engineForm.appendChild(h('div', { class: 'setting engine-setting' },
           h('div', null, h('strong', null, label), h('p', { class: 'hint' }, installed ? 'Installed on this node' : 'Not installed. Repair the agent installation, then wait for its heartbeat.')),
-          installed ? h('div', { class: 'row wrap' }, U.field(label + ' interval', U.input(draft.interval, function (v) { draft.interval = +v; }, { type: 'number', min: 5, max: 1440, 'aria-label': label + ' interval' }), 'minutes'),
+            installed ? h('div', { class: 'row wrap' }, U.field(label + ' interval', U.input(draft.interval, function (v) { draft.interval = +v; if (ST.bandwidth) ST.bandwidth.setDraftInterval(n.id, name, +v); }, { type: 'number', min: 5, max: 1440, 'aria-label': label + ' interval', onBlur: function () { if (ST.bandwidth) { ST.bandwidth.setDraftInterval(n.id, name, draft.interval); refreshAdvice(); } } }), 'minutes'),
             U.toggle(draft.enabled, function (v) { draft.enabled = v; }, label + ' enabled')) : null,
           installed && !ST.demo ? serverPicker(n.id, name, label) : null));
       });
       var saveEngines = U.btn('Save engine schedules', { variant: 'primary', onClick: function () {
         if (engineRows.some(function (e) { return !Number.isInteger(+e.interval) || +e.interval < 5 || +e.interval > 1440; })) { U.toast('Intervals must be whole minutes between 5 and 1440.', 'error'); return; }
         saveEngines.disabled = true;
-        ST.saveEngineSchedules(n.id, engineRows).then(function () { U.toast('Engine schedules saved'); }, function (error) { U.toast(error.status === 412 ? 'Schedules changed elsewhere. Reload and try again.' : error.message, 'error'); }).finally(function () { saveEngines.disabled = false; });
+        ST.saveEngineSchedules(n.id, engineRows).then(function () { delete engineScheduleDrafts[n.id]; if (ST.bandwidth) ST.bandwidth.clearDrafts(n.id); U.toast('Engine schedules saved'); ST.refresh(); }, function (error) { U.toast(error.status === 412 ? 'Schedules changed elsewhere. Reload and try again.' : error.message, 'error'); }).finally(function () { saveEngines.disabled = false; });
       } });
       engineForm.appendChild(h('p', { class: 'hint' }, 'Engines run one at a time. When nodes share a public IP, use a longer Ookla interval to avoid its rate limit.'));
       engineForm.appendChild(saveEngines);
       root.appendChild(U.card('Test engines', 'Each engine has its own schedule. Results remain separate.', engineForm));
+      refreshAdvice();
+      root.appendChild(adviceHost);
       root.appendChild(h('div', { class: 'mt' }, U.card('Remove this node', 'Stops testing and removes the program from the machine.', h('div', null,
         h('p', { class: 'text-2', style: 'margin-bottom:10px' }, 'The results already collected for this node are deleted from the dashboard.'),
         U.btn('Remove ' + n.name, { variant: 'danger', icon: 'trash', onClick: function () {

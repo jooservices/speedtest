@@ -94,6 +94,9 @@ func ownerAreas(o Options, auth *serverAuth) routeTable {
 	if o.OwnerSchedules != nil {
 		t.addToken(newOwnerSchedulesHandler(o.OwnerSchedules, auth), onPath(ownerSchedulesRoute), operationScope)
 	}
+	if o.OwnerUsage != nil {
+		t.add(newOwnerUsageHandler(o.OwnerUsage, auth), onPath(ownerUsageRoute))
+	}
 	if o.OwnerJobs != nil {
 		t.addToken(newOwnerJobsHandler(o.OwnerJobs, auth), onPath(ownerJobsRoute), operationScope)
 	}
