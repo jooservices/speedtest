@@ -1,7 +1,7 @@
 /* Nodes: list, add-node wizard (guided install), node detail with settings and agent controls. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
   var detailTab = {}, nodeSettingDrafts = {}, engineScheduleDrafts = {};
 
   /* ---------- List ---------- */
@@ -429,15 +429,16 @@
         h('div', { class: 'field-row' }, U.field('Node name', U.input(d.name, function (v) { d.name = v; })), U.field('What does it measure?', U.input(d.label, function (v) { d.label = v; }))),
         n.isp && n.isp.id && !ST.demo ? planField : null,
         h('div', { class: 'field-row' }, U.field('Expected download', U.suffix(downInput, 'Mbps')), U.field('Expected upload', U.suffix(upInput, 'Mbps'))),
-        h('div', { class: 'field-row' }, U.field('Test server', U.select(serverOpts, d.server, function (v) { d.server = v; }), 'Which speed test server this node talks to.'),
-          U.field('Parallel connections', U.select([1, 2, 4, 6, 8, 12, 16, 32].map(function (x) { return { value: x, label: String(x) }; }), d.threads, function (v) { d.threads = +v; }), 'Use more for fast links or when the node goes through a load balancer.')),
+        h('div', { class: 'field-row' }, ST.demo ? U.field('Test server', U.select(serverOpts, d.server, function (v) { d.server = v; }), 'Which speed test server this node talks to.') : null,
+          U.field('Parallel connections', U.select([1, 2, 4, 6, 8, 12, 16, 32].map(function (x) { return { value: x, label: String(x) }; }), d.threads, function (v) { d.threads = +v; }), 'Number of simultaneous download connections.')),
         U.field('Notes', h('textarea', { class: 'input', rows: 3, onInput: function (e) { d.note = e.target.value; } }, d.note)),
         h('div', { class: 'row' }, U.btn('Save changes', { variant: 'primary', onClick: function () {
           if (!d.name.trim()) { U.toast('Node name cannot be empty', 'error'); return; }
           if (!(+d.down > 0) || !(+d.up > 0)) { U.toast('Expected speeds must be above zero', 'error'); return; }
-          var patch = { name: d.name.trim(), label: d.label.trim(), ispPlanId: d.ispPlanId || null, expectedDown: +d.down, expectedUp: +d.up, threads: d.threads, server: ST.demo || d.server === 'auto' ? d.server : +d.server, note: d.note };
+          var patch = { name: d.name.trim(), label: d.label.trim(), ispPlanId: d.ispPlanId || null, expectedDown: +d.down, expectedUp: +d.up, threads: d.threads, note: d.note };
           if (!d.downTouched) delete patch.expectedDown;
           if (!d.upTouched) delete patch.expectedUp;
+          if (ST.demo) patch.server = d.server;
           Promise.resolve(ST.updateNode(n.id, patch)).then(function () { delete nodeSettingDrafts[n.id]; U.toast('Settings saved'); ST.refresh(); }, function (error) {
             U.toast(error.status === 409 ? 'Another node already has this name.' : error.status === 412 ? 'This node was changed elsewhere. Reload and try again.' : error.message, 'error');
           });
@@ -454,10 +455,11 @@
         if (ST.bandwidth) draft.interval = ST.bandwidth.draftInterval(n.id, name, draft.interval);
         if (!current && installed) engineRows.push(draft); else if (current) { current.interval = draft.interval; draft = current; }
         var label = name === 'ookla' ? 'Ookla' : 'LibreSpeed';
-        engineForm.appendChild(h('div', { class: 'setting' },
+        engineForm.appendChild(h('div', { class: 'setting engine-setting' },
           h('div', null, h('strong', null, label), h('p', { class: 'hint' }, installed ? 'Installed on this node' : 'Not installed. Repair the agent installation, then wait for its heartbeat.')),
             installed ? h('div', { class: 'row wrap' }, U.field(label + ' interval', U.input(draft.interval, function (v) { draft.interval = +v; if (ST.bandwidth) ST.bandwidth.setDraftInterval(n.id, name, +v); }, { type: 'number', min: 5, max: 1440, 'aria-label': label + ' interval', onBlur: function () { if (ST.bandwidth) { ST.bandwidth.setDraftInterval(n.id, name, draft.interval); refreshAdvice(); } } }), 'minutes'),
-            U.toggle(draft.enabled, function (v) { draft.enabled = v; }, label + ' enabled')) : null));
+            U.toggle(draft.enabled, function (v) { draft.enabled = v; }, label + ' enabled')) : null,
+          installed && !ST.demo ? serverPicker(n.id, name, label) : null));
       });
       var saveEngines = U.btn('Save engine schedules', { variant: 'primary', onClick: function () {
         if (engineRows.some(function (e) { return !Number.isInteger(+e.interval) || +e.interval < 5 || +e.interval > 1440; })) { U.toast('Intervals must be whole minutes between 5 and 1440.', 'error'); return; }
@@ -500,4 +502,51 @@
         h('div', null, h('div', { class: 'label', style: 'margin-bottom:6px' }, 'Recent activity'), logBox))));
     }
   };
+
+  function serverPicker(nodeId, engineName, label) {
+    var query = '', catalog = null, error = '', busy = false;
+    var list = h('div'), status = h('span', { class: 'hint' }, 'Loading server list…');
+    var search = U.input('', function (value) { query = value.toLowerCase().trim(); drawRows(); }, { type: 'search', placeholder: 'Search name, city or ISP', 'aria-label': 'Search ' + label + ' servers' });
+    var refresh = U.btn('Refresh server list', { icon: 'refresh', onClick: refreshList });
+    var automatic = U.btn('Use automatic selection', { onClick: function () { select('auto'); } });
+    var controls = h('div', { class: 'row wrap' }, refresh, automatic, status);
+    var root = h('div', { class: 'stack server-picker', style: 'width:100%' }, U.field('Search ' + label + ' servers', search, 'Search by server name, city or ISP.'), controls, list);
+
+    function refreshList() {
+      if (busy) return;
+      busy = true; error = ''; refresh.disabled = true; refresh.textContent = 'Finding servers…';
+      ST.refreshServerCatalog(nodeId, engineName).then(function (found) { catalog = found; })
+        .catch(function (failure) { error = failure.message; })
+        .finally(function () { busy = false; refresh.disabled = false; refresh.textContent = 'Refresh server list'; drawRows(); });
+    }
+    function select(serverId) {
+      if (!catalog || busy) return;
+      busy = true; automatic.disabled = true; error = '';
+      ST.selectServer(nodeId, engineName, serverId, catalog.etag).then(function (selection) { catalog = selection; U.toast(label + ' server selection saved'); })
+        .catch(function (failure) { error = failure.status === 412 ? 'Node settings changed elsewhere. Reload this page and try again.' : failure.message; U.toast(error, 'error'); })
+        .finally(function () { busy = false; automatic.disabled = false; drawRows(); });
+    }
+    function drawRows() {
+      U.clear(list);
+      if (error) { status.textContent = 'Server list unavailable'; list.appendChild(U.callout(error + ' Try refreshing the list.', 'warn', 'alert')); return; }
+      if (!catalog) { status.textContent = 'Loading server list…'; return; }
+      var rows = (catalog.servers || []).filter(function (server) {
+        return [server.name, server.city, server.isp, server.distanceKm].join(' ').toLowerCase().indexOf(query) >= 0;
+      });
+      if (engineName === 'ookla') rows.sort(function (a, b) { return (a.distanceKm == null ? Infinity : a.distanceKm) - (b.distanceKm == null ? Infinity : b.distanceKm) || a.name.localeCompare(b.name); });
+      status.textContent = rows.length + ' servers' + (catalog.refreshedAt ? ' · updated ' + F.rel(Date.parse(catalog.refreshedAt)) : ' · not refreshed yet');
+      if (!rows.length) { list.appendChild(U.empty(catalog.servers.length ? 'No servers match' : 'No server list yet', catalog.servers.length ? 'Try a shorter search.' : 'Refresh the list from the node first.')); return; }
+      var columns = [
+        { key: 'name', label: 'Server', render: function (server) { return server.name + ' (#' + server.id + ')'; } },
+        { key: 'city', label: 'City', render: function (server) { return server.city || '—'; } },
+        { key: 'isp', label: 'ISP', render: function (server) { return server.isp || '—'; } }
+      ];
+      if (engineName === 'ookla') columns.push({ key: 'distance', label: 'Distance', num: true, render: function (server) { return server.distanceKm == null ? '—' : F.num(server.distanceKm, 1) + ' km'; } });
+      columns.push({ key: 'select', label: '', render: function (server) { return U.btn(Number(catalog.serverId) === server.id ? 'Pinned' : 'Pin', { size: 'sm', disabled: busy || Number(catalog.serverId) === server.id, onClick: function () { select(server.id); } }); } });
+      list.appendChild(U.table({ columns: columns, rows: rows, cards: true }));
+    }
+    ST.serverCatalog(nodeId, engineName).then(function (found) { catalog = found; drawRows(); })
+      .catch(function (failure) { error = failure.message; drawRows(); });
+    return root;
+  }
 })();

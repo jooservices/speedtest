@@ -1,13 +1,13 @@
 /* Same-origin JSON transport. Session secrets and cached responses stay in memory. */
 (function () {
   'use strict';
-  var ST = window.ST = window.ST || {};
+  var ST = (/** @type {any} */ (window)).ST = (/** @type {any} */ (window)).ST || {};
   var cache = new Map(), csrf = null, generation = 0;
-  var API = ST.api = {};
+  var API = /** @type {any} */ (ST.api = {});
 
   function problem(status, detail, fields) {
     var error = new Error(detail);
-    error.status = status;
+    /** @type {any} */ (error).status = status;
     return Object.assign(error, fields || {});
   }
   API.signIn = function () {
@@ -87,7 +87,9 @@
     var rows = [], page = 1, last = 1;
     do {
       var url = new URL(path, location.href);
+      // @ts-expect-error URLSearchParams stringifies the numeric page counter.
       url.searchParams.set('page', page);
+      // @ts-expect-error URLSearchParams stringifies the numeric page size.
       url.searchParams.set('size', 100);
       var result = await API.request(url.pathname + url.search, options);
       var pagination = result.meta.pagination;

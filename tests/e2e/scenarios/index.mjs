@@ -52,7 +52,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-ALR-03', area: 'alerts', title: 'alerts can be acknowledged, reopened and filtered', covers: 'ack, reopen, ack all, filters', run: S.alerts.activityAcknowledge },
 
     { id: 'SC-SET-01', area: 'settings', title: 'preferences are saved and survive a reload', covers: 'decimals, units, time zone, 12-hour, range, theme', run: S.settings.preferences },
-    { id: 'SC-SET-02', area: 'settings', title: 'speed test and location settings are kept; the licence key is write-only', covers: 'engine, location', run: S.settings.engineAndLocation },
+    { id: 'SC-SET-02', area: 'settings', title: 'speed test and location settings are kept; provider budgets are visible and keys stay write-only', covers: 'engine, location, provider enabled state and daily usage', run: S.settings.engineAndLocation },
     { id: 'SC-SET-03', area: 'settings', title: 'notification secrets are write-only and encrypted', covers: 'secrets', run: S.settings.notificationSecrets },
     { id: 'SC-SET-04', area: 'settings', title: 'a test notification reaches the configured channel', covers: 'webhook test, unset channel refused', run: S.settings.notificationTest },
     { id: 'SC-SET-09', area: 'settings', title: 'notification events and templates can be configured globally and per node', covers: 'event catalog toggles, quality consecutive-test threshold, per-node override, template editor, live preview and reset', run: S.settings.notificationEventCatalog },
@@ -64,6 +64,7 @@ export function scenarios({ T, S }) {
 
     // Adds a real agent and a node; the removal scenario below deletes it again.
     { id: 'SC-NODE-05', area: 'nodes', title: 'a node is added with the install command, reports and recovers from provider limits', covers: 'wizard, 60-minute default, real agent enrolment/sync, test-success and manual notifications, rule failure/recovery delivery, node offline/online recovery with downtime, rate-limit classification and restart backoff', run: S.nodes.addWithCommandAndRunTest },
+    { id: 'SC-NODE-09', area: 'nodes', title: 'server discovery, per-engine pinning and automatic fallback work', covers: 'captured LibreSpeed v1.0.14 list format, successful JSON null for an unavailable pinned server, same-host endpoint identity, per-engine catalog pin, fallback warning and history/detail mismatch', run: S.nodes.discoverPinAndFallback },
     { id: 'SC-NODE-06', area: 'nodes', title: 'a node can be removed from the dashboard', covers: 'node removal', run: () => S.nodes.removeFromDashboard('E2E-1') },
 
     { id: 'SC-SET-08', area: 'settings', title: 'the activity log lists owner changes without secrets', covers: 'audit log, filter, no secrets', run: S.settings.activityLog },
@@ -71,6 +72,6 @@ export function scenarios({ T, S }) {
     { id: 'SC-AUTH-02', area: 'auth', title: 'the owner can change the password', covers: 'change password, old password refused, new one works', run: () => S.auth.changePassword('a brand new passphrase 2026') },
     { id: 'SC-AUTH-04', area: 'auth', title: 'two-factor sign-in can be turned on, used and turned off', covers: 'authenticator setup, code at sign-in, recovery code once, turn off', run: () => S.auth.twoFactor(process.env.E2E_ONLY ? undefined : 'a brand new passphrase 2026') },
     { id: 'SC-AUTH-03', area: 'auth', title: 'signing out ends the session', covers: 'sign out, API refuses visitor', run: S.auth.signOutEndsSession },
-    { id: 'SC-NODE-09', area: 'nodes', title: 'demo-mode nodes start with a 60-minute schedule and zero offset', covers: 'demo wizard, new-node default, schedules display', run: S.nodes.demoNodeDefault },
+    { id: 'SC-NODE-10', area: 'nodes', title: 'demo-mode nodes start with a 60-minute schedule and zero offset', covers: 'demo wizard, new-node default, schedules display', run: S.nodes.demoNodeDefault },
   ];
 }

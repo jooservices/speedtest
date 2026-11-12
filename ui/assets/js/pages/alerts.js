@@ -9,10 +9,10 @@
     return error.message;
   }
   function settle(result, ok, fail) {
-    if (result && typeof result.then === 'function') return result.then(ok, fail || function (error) { window.ST.ui.toast(friendly(error), 'error'); });
+    if (result && typeof result.then === 'function') return result.then(ok, fail || function (error) { (/** @type {any} */ (window)).ST.ui.toast(friendly(error), 'error'); });
     return ok(result);
   }
-  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt;
   var q = { tab: 'events', show: 'open', sev: 'all', ispId: '' };
   var METRICS = [
     { value: 'down_pct', label: 'Download (% of expected)', unit: '%', ops: ['<'] },

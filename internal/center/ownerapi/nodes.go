@@ -325,6 +325,16 @@ func (s *Store) Update(ctx context.Context, id string, patch map[string]json.Raw
 		}
 		return nil, "", err
 	}
+	if _, changed := patch["server"]; changed {
+		if err := syncPrimaryServerPin(ctx, tx, id, n.PrimaryEngine, in.ServerID); err != nil {
+			return nil, "", err
+		}
+	}
+	if _, changed := patch["server"]; changed {
+		if err := syncPrimaryServerPin(ctx, tx, id, n.PrimaryEngine, in.ServerID); err != nil {
+			return nil, "", err
+		}
+	}
 	view, updated, err := s.one(ctx, tx, id, false)
 	if err != nil {
 		return nil, "", err
@@ -333,6 +343,12 @@ func (s *Store) Update(ctx context.Context, id string, patch map[string]json.Raw
 		return nil, "", err
 	}
 	return view, ETag(updated.Revision), nil
+}
+
+func syncPrimaryServerPin(ctx context.Context, tx pgx.Tx, nodeID, engine string, serverID *int) error {
+	_, err := tx.Exec(ctx, `INSERT INTO node_engine_servers(node_id,engine,pinned_server_id) VALUES($1,$2,$3)
+		ON CONFLICT(node_id,engine) DO UPDATE SET pinned_server_id=EXCLUDED.pinned_server_id`, nodeID, engine, serverID)
+	return err
 }
 
 func applyISPPlanUpdate(ctx context.Context, tx interface {
@@ -478,22 +494,23 @@ func (s *Store) Delete(ctx context.Context, id, ifMatch string) error {
 
 var commandTypes = map[string]bool{"run_now": true, "pause": true, "resume": true, "update_config": true, "update_agent": true}
 
-const commandColumns = `id::text, node_id::text, type, version, status, created_at, acked_at, phase, pct, result_id::text, error`
+const commandColumns = `id::text, node_id::text, type, engine, version, status, created_at, acked_at, phase, pct, result_id::text, error`
 
 func scanCommand(row pgx.Row) (map[string]any, error) {
 	var id, nodeID, typ, status, phase string
+	var engine *string
 	var version, resultID, errText *string
 	var created time.Time
 	var acked *time.Time
 	var pct float64
-	if err := row.Scan(&id, &nodeID, &typ, &version, &status, &created, &acked, &phase, &pct, &resultID, &errText); err != nil {
+	if err := row.Scan(&id, &nodeID, &typ, &engine, &version, &status, &created, &acked, &phase, &pct, &resultID, &errText); err != nil {
 		return nil, err
 	}
 	var ackedAt any
 	if acked != nil {
 		ackedAt = acked.UTC().Format(time.RFC3339Nano)
 	}
-	return map[string]any{"id": id, "nodeId": nodeID, "type": typ, "version": nullable(version), "status": status,
+	return map[string]any{"id": id, "nodeId": nodeID, "type": typ, "engine": nullable(engine), "version": nullable(version), "status": status,
 		"createdAt": created.UTC().Format(time.RFC3339Nano), "ackedAt": ackedAt, "phase": phase, "pct": pct,
 		"resultId": nullable(resultID), "error": nullable(errText)}, nil
 }

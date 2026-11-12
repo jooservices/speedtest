@@ -117,6 +117,7 @@ func buildHandler(cfg config.CenterConfig, svc services, logger *slog.Logger, ui
 	return server.NewHandler(server.Options{
 		Install:              installHandler,
 		OwnerNodes:           svc.OwnerNodes,
+		OwnerServers:         svc.OwnerServers,
 		OwnerResults:         svc.OwnerResults,
 		OwnerSchedules:       svc.OwnerSchedules,
 		OwnerStats:           svc.OwnerStats,

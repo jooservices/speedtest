@@ -3,6 +3,7 @@ package agentapi
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,7 @@ import (
 	"net/netip"
 	"net/url"
 	"reflect"
+	"sort"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -25,36 +27,38 @@ var (
 
 // Result preserves nullable measurements and original engine details.
 type Result struct {
-	Engine          string   `json:"engine,omitempty"`
-	ID              string   `json:"id"`
-	TS              string   `json:"ts"`
-	Status          string   `json:"status"`
-	Down            *float64 `json:"down"`
-	Up              *float64 `json:"up"`
-	Ping            *float64 `json:"ping"`
-	Jitter          *float64 `json:"jitter"`
-	DLat            *float64 `json:"dLat"`
-	ULat            *float64 `json:"uLat"`
-	Loss            *float64 `json:"loss"`
-	ServerID        *int     `json:"serverId"`
-	IP              *string  `json:"ip"`
-	Threads         int      `json:"threads"`
-	BytesDown       int64    `json:"bytesDown"`
-	BytesUp         int64    `json:"bytesUp"`
-	Duration        float64  `json:"duration"`
-	Error           *string  `json:"error"`
-	FailureClass    string   `json:"failureClass,omitempty"`
-	classOmitted    bool
-	Manual          bool            `json:"manual"`
-	Raw             json.RawMessage `json:"raw"`
-	LoadedDown      *LoadedLatency  `json:"loadedDown"`
-	LoadedUp        *LoadedLatency  `json:"loadedUp"`
-	Server          *Server         `json:"server"`
-	EngineISP       *string         `json:"engineISP"`
-	EngineResultID  *string         `json:"engineResultId"`
-	EngineResultURL *string         `json:"engineResultUrl"`
-	EngineIP        *string         `json:"engineIp"`
-	Warnings        []string        `json:"warnings"`
+	Engine               string   `json:"engine,omitempty"`
+	ID                   string   `json:"id"`
+	TS                   string   `json:"ts"`
+	Status               string   `json:"status"`
+	Down                 *float64 `json:"down"`
+	Up                   *float64 `json:"up"`
+	Ping                 *float64 `json:"ping"`
+	Jitter               *float64 `json:"jitter"`
+	DLat                 *float64 `json:"dLat"`
+	ULat                 *float64 `json:"uLat"`
+	Loss                 *float64 `json:"loss"`
+	ServerID             *int     `json:"serverId"`
+	IP                   *string  `json:"ip"`
+	Threads              int      `json:"threads"`
+	BytesDown            int64    `json:"bytesDown"`
+	BytesUp              int64    `json:"bytesUp"`
+	Duration             float64  `json:"duration"`
+	Error                *string  `json:"error"`
+	FailureClass         string   `json:"failureClass,omitempty"`
+	classOmitted         bool
+	Manual               bool            `json:"manual"`
+	Raw                  json.RawMessage `json:"raw"`
+	LoadedDown           *LoadedLatency  `json:"loadedDown"`
+	LoadedUp             *LoadedLatency  `json:"loadedUp"`
+	Server               *Server         `json:"server"`
+	EngineISP            *string         `json:"engineISP"`
+	EngineResultID       *string         `json:"engineResultId"`
+	EngineResultURL      *string         `json:"engineResultUrl"`
+	EngineIP             *string         `json:"engineIp"`
+	Warnings             []string        `json:"warnings"`
+	ServerSelectionKnown bool            `json:"serverSelectionKnown"`
+	PinnedServerID       *int64          `json:"pinnedServerId,omitempty"`
 }
 
 type LoadedLatency struct {
@@ -64,11 +68,23 @@ type LoadedLatency struct {
 }
 
 type Server struct {
-	ID      *int   `json:"id,omitempty"`
-	Name    string `json:"name"`
-	City    string `json:"city"`
-	Sponsor string `json:"sponsor"`
-	Host    string `json:"host,omitempty"`
+	ID       *int   `json:"id,omitempty"`
+	Name     string `json:"name"`
+	City     string `json:"city"`
+	Sponsor  string `json:"sponsor"`
+	Host     string `json:"host,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+}
+
+// ServerOption is one discovered target that an owner can pin for an engine.
+type ServerOption struct {
+	ID         int64    `json:"id"`
+	Name       string   `json:"name"`
+	City       string   `json:"city"`
+	ISP        string   `json:"isp"`
+	Host       string   `json:"host"`
+	Endpoint   string   `json:"endpoint,omitempty"`
+	DistanceKM *float64 `json:"distanceKm,omitempty"`
 }
 
 // Decode rejects unknown fields, trailing JSON, missing required keys and null
@@ -218,7 +234,7 @@ func ParseResult(data []byte) (Result, error) {
 			return r, ErrInvalid
 		}
 	}
-	if r.Loss != nil && *r.Loss > 100 || r.ServerID != nil && *r.ServerID < 1 {
+	if r.Loss != nil && *r.Loss > 100 || r.ServerID != nil && *r.ServerID < 1 || r.PinnedServerID != nil && (*r.PinnedServerID < 1 || *r.PinnedServerID > math.MaxInt32 || !r.ServerSelectionKnown) {
 		return r, ErrInvalid
 	}
 	if err := r.validateStatus(); err != nil {
@@ -309,28 +325,60 @@ func ParseHeartbeat(data []byte) (Heartbeat, error) {
 }
 
 type Ack struct {
-	Status   string   `json:"status"`
-	Phase    *string  `json:"phase,omitempty"`
-	Pct      *float64 `json:"pct,omitempty"`
-	ResultID *string  `json:"resultId,omitempty"`
-	Error    *string  `json:"error,omitempty"`
+	Status   string          `json:"status"`
+	Phase    *string         `json:"phase,omitempty"`
+	Pct      *float64        `json:"pct,omitempty"`
+	ResultID *string         `json:"resultId,omitempty"`
+	Error    *string         `json:"error,omitempty"`
+	Servers  *[]ServerOption `json:"servers,omitempty"`
 }
 
 func ParseAck(data []byte) (Ack, error) {
 	var a Ack
-	if Decode(data, &a, "status") != nil || !nonNull(data, "status", "phase", "pct") || !text(a.Phase, 200) || !text(a.Error, 2000) || !number(a.Pct) || a.Pct != nil && *a.Pct > 100 || a.ResultID != nil && !UUID(*a.ResultID) {
+	if Decode(data, &a, "status") != nil || !nonNull(data, "status", "phase", "pct", "servers") || !text(a.Phase, 200) || !text(a.Error, 2000) || !number(a.Pct) || a.Pct != nil && *a.Pct > 100 || a.ResultID != nil && !UUID(*a.ResultID) || !validServerOptions(a.Servers) {
 		return a, ErrInvalid
 	}
 	if a.Status != "running" && a.Status != "succeeded" && a.Status != "failed" || a.Status == "failed" && (a.Error == nil || strings.TrimSpace(*a.Error) == "") {
 		return a, ErrInvalid
 	}
+	if a.Servers != nil && a.Status != "succeeded" {
+		return a, ErrInvalid
+	}
 	return a, nil
 }
+
+func validServerOptions(servers *[]ServerOption) bool {
+	if servers == nil {
+		return true
+	}
+	if len(*servers) > 1000 {
+		return false
+	}
+	seen := make(map[int64]bool, len(*servers))
+	for _, server := range *servers {
+		if server.ID < 1 || server.ID > math.MaxInt32 || seen[server.ID] || strings.TrimSpace(server.Name) == "" || !textValue(server.Name, 200) || !textValue(server.City, 120) || !textValue(server.ISP, 200) || !textValue(server.Host, 255) || !validServerEndpoint(server.Endpoint) || server.DistanceKM != nil && !number(server.DistanceKM) {
+			return false
+		}
+		seen[server.ID] = true
+	}
+	return true
+}
+
+func validServerEndpoint(value string) bool {
+	if value == "" {
+		return true
+	}
+	u, err := url.Parse(value)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && len(value) <= 2048
+}
+
+func textValue(value string, max int) bool { return utf8.RuneCountInString(value) <= max }
 
 type Command struct {
 	ID        string     `json:"id"`
 	NodeID    string     `json:"nodeId"`
 	Type      string     `json:"type"`
+	Engine    string     `json:"engine,omitempty"`
 	Version   *string    `json:"version"`
 	Status    string     `json:"status"`
 	CreatedAt time.Time  `json:"createdAt"`
@@ -339,6 +387,7 @@ type Command struct {
 	Pct       float64    `json:"pct"`
 	ResultID  *string    `json:"resultId"`
 	Error     *string    `json:"error"`
+	AckDigest []byte     `json:"-"`
 }
 
 // ApplyAck enforces monotonic progress and immutable terminal acknowledgements.
@@ -356,6 +405,13 @@ func ApplyAck(c Command, a Ack) (Command, error) {
 		next.ResultID = &id
 	}
 	next.Error = a.Error
+	if a.Servers != nil {
+		digest, err := serverOptionsDigest(*a.Servers)
+		if err != nil {
+			return c, ErrInvalid
+		}
+		next.AckDigest = digest
+	}
 	terminal := c.Status == "succeeded" || c.Status == "failed"
 	if next.Pct < c.Pct || terminal && !sameAck(c, next) {
 		return c, ErrConflict
@@ -363,9 +419,20 @@ func ApplyAck(c Command, a Ack) (Command, error) {
 	return next, nil
 }
 func sameAck(a, b Command) bool {
-	return a.Status == b.Status && a.Phase == b.Phase && a.Pct == b.Pct && equalString(a.ResultID, b.ResultID) && equalString(a.Error, b.Error)
+	return a.Status == b.Status && a.Phase == b.Phase && a.Pct == b.Pct && equalString(a.ResultID, b.ResultID) && equalString(a.Error, b.Error) && bytes.Equal(a.AckDigest, b.AckDigest)
 }
 func equalString(a, b *string) bool { return a == nil && b == nil || a != nil && b != nil && *a == *b }
+
+func serverOptionsDigest(servers []ServerOption) ([]byte, error) {
+	ordered := append([]ServerOption(nil), servers...)
+	sort.Slice(ordered, func(i, j int) bool { return ordered[i].ID < ordered[j].ID })
+	payload, err := json.Marshal(ordered)
+	if err != nil {
+		return nil, err
+	}
+	digest := sha256.Sum256(payload)
+	return digest[:], nil
+}
 
 func (r Result) validateDetails(fields map[string]json.RawMessage) error {
 	for key, loaded := range map[string]*LoadedLatency{"loadedDown": r.LoadedDown, "loadedUp": r.LoadedUp} {
@@ -377,7 +444,7 @@ func (r Result) validateDetails(fields map[string]json.RawMessage) error {
 	}
 	if r.Server != nil {
 		serverFields, err := decodeFields(fields["server"], new(Server))
-		if err != nil || !nonNullFields(serverFields, "id", "name", "city", "sponsor", "host") || (r.Server.ID != nil && *r.Server.ID < 1) || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || utf8.RuneCountInString(r.Server.Host) > 255 {
+		if err != nil || !nonNullFields(serverFields, "id", "name", "city", "sponsor", "host", "endpoint") || (r.Server.ID != nil && *r.Server.ID < 1) || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || utf8.RuneCountInString(r.Server.Host) > 255 || !validServerEndpoint(r.Server.Endpoint) {
 			return ErrInvalid
 		}
 	}

@@ -1,7 +1,7 @@
 /* Statistics: summary table, trend, time-of-day, weekly heatmap and distribution. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
   var q = { nodes: null, metric: 'down', heatNode: null, sum: false, table: false, isp: '', ispDraft: '', ispId: '' };
   var DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 

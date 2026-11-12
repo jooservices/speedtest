@@ -51,6 +51,17 @@ has changed the database default to 60.
 `00020_audit_authentication_source.sql` records whether each audited change used
 a session or bearer credential and stores only the non-secret bearer token ID.
 Token creation audit targets also retain the newly created token ID.
+`00021_isp_entities.sql` adds ASN-derived ISP entities, plans and links from
+results, addresses, IP history and alert events. `00022_isp_plan_default_provenance.sql`
+tracks download and upload defaults independently so plan changes update only
+speeds that still follow the advertised values. Existing rows start with both
+flags false; the migration does not infer provenance from numeric equality.
+`00025_node_engine_servers.sql` adds per-node/per-engine server catalogs,
+engine-scoped discovery commands and pins. Existing engine pins are backfilled
+from `nodes.server_id`; the legacy column remains synchronized for older agents.
+Results store whether the measurement-time selection and pin are known; old rows
+remain unknown. Terminal catalog acknowledgements store a payload digest to reject
+conflicting retries without replacing a newer catalog refresh.
 `00033_bandwidth_usage_budgets.sql` adds a monthly per-node/engine byte rollup
 refreshed when a budget is configured and maintained by an insert trigger while
 budgets exist (so older center writers remain compatible),
@@ -62,6 +73,12 @@ still follow the advertised defaults. Existing rows start with both flags false;
 the migration does not infer default provenance from numeric equality. Owners can
 clear and reassign a plan to opt an existing node into advertised defaults. Its
 down migration removes those flags and leaves node speeds and plan assignments
+otherwise intact.
+`00034_geo_provider_usage.sql` adds durable online-provider usage, cooldowns
+and a resumable node-first geolocation refresh cursor. Its down migration
+preserves cached locations and address history. `00035_geo_provider_rolling_window.sql`
+adds the persisted next-request time used to enforce ip-api's 15-per-minute batch
+limit across minute boundaries; its down migration drops only that column.
 otherwise intact. Usage down preserves the 60-minute schedule default from
 00015 and restores overrides without changing rows that were not overridden.
 SQL files are embedded by
@@ -126,7 +143,7 @@ that a subsequent up can reapply version 1.
 | `sessions` | Hashed opaque token and CSRF token, optional user for anonymous bootstrap, expiry |
 | `nodes` | Independent node settings, expected speeds, binding, revision and heartbeat |
 | `node_credentials` | Hashed single-use enrollment tokens and bearer credentials, expiration/revocation |
-| `results` | Client UUID, normalized nullable measurements, original engine JSON and metadata, fixed failure class |
+| `results` | Client UUID, normalized nullable measurements, original engine JSON and metadata, failure class, and measurement-time server pin snapshot |
 | `ip_addresses` | IPv4/IPv6 host address and cached geolocation JSON |
 | `node_ip_history` | Measurement-ordered address boundaries per node (initial row has null from_ip) |
 | `node_ip_addresses` | Per-node/address counts, first/last measurement time and speed sums |
@@ -141,6 +158,7 @@ that a subsequent up can reapply version 1.
 | `monthly_report_runs` | Durable scheduled-report delivery attempts, retry time, and expiring claim lease |
 | `api_idempotency` | Hashed request identity and encrypted one-time issuance responses, expiring after 24 hours |
 | `agent_commands` | Per-node command lifecycle and progress |
+| `node_engine_servers` | Per-node/per-engine discovered server JSON, pin and refresh timestamp |
 | `installer_probes` | Expiring unauthenticated SSH host-key observations; one use per install |
 | `installer_probe_idempotency` | Probe replay identity and request digest, expiring after 24 hours |
 | `installer_jobs` | Owner-scoped installation state; at most one active job per node |
@@ -188,7 +206,8 @@ node UUID arrays in alert rules are deliberately a configuration value; the
 future API validates existence/uniqueness, as well as channel uniqueness and
 other cross-field rules. No WAN, peer-node or load-balancer relationship exists.
 
-`server_id IS NULL` means automatic server selection in node configuration;
+`node_engine_servers.pinned_server_id IS NULL` means automatic server selection for that engine;
+the legacy `nodes.server_id` mirrors the primary engine's pin for compatibility;
 `interval`/`offset` wire fields map to `schedules.interval_minutes` and
 `offset_minutes`. Node APIs join schedules; they must not duplicate schedule
 state in nodes. Global settings and quiet hours are keyed JSON values rather
@@ -274,3 +293,11 @@ assigns `other` to existing rows. On a verified disposable worktree database,
 existing-row defaults, accepted classes, rejection of unknown values, and result
 retention. Rehearse any production rollback on a protected realistic-data copy
 under the owner's separate deployment decision.
+
+## Version 21 rollback
+
+Migration 21 is additive. Its down migration removes `list_servers` commands,
+the new per-engine catalog table and the command `engine` column; it preserves legacy
+node settings and results. Reapplying the migration backfills a primary-engine pin
+from `nodes.server_id`. `TestServerCatalogMigrationUpDownIntegration` verifies the
+backfill, down schema and preservation of the legacy pin on the disposable worktree DB.

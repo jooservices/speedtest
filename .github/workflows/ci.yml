@@ -37,6 +37,7 @@ jobs:
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
+          args: --enable=funlen --enable=gocyclo
 
       - name: Set up Node for UI checks
         uses: actions/setup-node@v6
@@ -48,8 +49,12 @@ jobs:
         run: |
           npm ci
           npm run lint
+          npm run typecheck
           npm run test:coverage
           npm audit
+
+      - name: Python unit tests
+        run: python3 -m unittest discover -s tests/lib
 
       - name: UI browser smoke (demo and contract API)
         run: |

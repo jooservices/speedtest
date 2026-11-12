@@ -49,7 +49,7 @@ func TestEngineMigrationBackfillLegacyWritesAndRollback(t *testing.T) {
 		t.Fatal("rollback lost legacy data", results, interval, offset, enabled, err)
 	}
 	dbtest.MigrateUp(t, pool)
-	t.Log("PASS: existing schedule/results backfilled; old result inserts succeed; down preserves both result rows and unchanged legacy schedule; up reapplies")
+	t.Log("PASS: existing schedule/results backfilled; old result inserts succeed; geo usage and engine schedule rollbacks preserve legacy data; up reapplies")
 }
 
 func TestNotificationMigrationsUpgradeExistingEngineSchemaIntegration(t *testing.T) {

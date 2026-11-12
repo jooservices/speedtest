@@ -295,3 +295,28 @@ func TestMarkedToolsRejectsEmptyCatalog(t *testing.T) {
 		t.Fatal("empty MCP tool catalog was accepted")
 	}
 }
+
+func TestNodeServerOperationsDeclareTokenScopes(t *testing.T) {
+	operations, err := Operations()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]Scope{
+		"getNodeServerCatalog":     ScopeRead,
+		"refreshNodeServerCatalog": ScopeReadWrite,
+		"setNodeServerSelection":   ScopeReadWrite,
+	}
+	for _, operation := range operations {
+		expected, ok := want[operation.ID]
+		if !ok {
+			continue
+		}
+		if operation.Scope != expected {
+			t.Errorf("%s scope = %q, want %q", operation.ID, operation.Scope, expected)
+		}
+		delete(want, operation.ID)
+	}
+	if len(want) != 0 {
+		t.Errorf("missing server operations: %v", want)
+	}
+}
