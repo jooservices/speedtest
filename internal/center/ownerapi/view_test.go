@@ -233,7 +233,7 @@ func (r ownerScanRow) Scan(dest ...any) error {
 	values := []any{"result-id", "node-id", now, "ok", ptrFloat(100), ptrFloat(50), ptrFloat(5), ptrFloat(1), ptrFloat(20), ptrFloat(25), ptrFloat(0), &serverID,
 		[]byte(`{"name":"London"}`), &ip, int32(4), ptrInt64(1000), ptrInt64(500), ptrFloat(10), ptrString(""), true,
 		[]byte(`{"download":true}`), []byte(`{"p95":20}`), []byte(`{"p95":25}`), ptrString("Example ISP"), &resultID, ptrString("https://example.test/result"), &engineIP,
-		[]byte(`["warning"]`), "ookla", "other", ptrString("isp-id"), "extra value"}
+		[]byte(`["warning"]`), "ookla", "other", true, ptrInt64(7), ptrString("isp-id"), "extra value"}
 	for i, target := range dest {
 		value := reflect.ValueOf(target).Elem()
 		if values[i] == nil {
