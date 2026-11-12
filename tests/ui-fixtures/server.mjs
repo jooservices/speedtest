@@ -82,7 +82,23 @@ export async function startServer() {
       if (req.method !== 'GET') {
         if (req.headers['x-csrf-token'] !== 'fixture-csrf') { send(403, problem(403)); return; }
         const input = body ? JSON.parse(body) : {};
-        if (['PUT', 'PATCH', 'DELETE'].includes(req.method) && !req.headers['if-match']) { send(428, problem(428)); return; }
+        if (url.pathname.startsWith('/api/notifications/')) {
+          const parts = url.pathname.split('/').slice(3);
+          if (req.method === 'PATCH' && parts.length === 2 && parts[0] === 'events') {
+            send(200, envelope({ key: parts[1], enabled: input.enabled, severity: input.severity || 'info', channels: input.channels || ['telegram'] })); return;
+          }
+          if (req.method === 'PUT' && parts.length === 4 && parts[0] === 'events' && parts[2] === 'nodes') {
+            send(200, envelope({ enabled: input.enabled })); return;
+          }
+          if (parts[0] === 'templates' && parts.length >= 3) {
+            const [key, channel, action] = parts.slice(1);
+            const template = { eventKey: key, channel, body: 'Hello {node}', isDefault: action === 'resets' };
+            if (req.method === 'PUT' && parts.length === 3) { send(200, envelope({ ...template, body: input.body, isDefault: false })); return; }
+            if (req.method === 'POST' && action === 'previews') { send(200, envelope({ channel, body: 'Hello Viettel Fast 50', sample: { node: 'Viettel Fast 50' } })); return; }
+            if (req.method === 'POST' && action === 'resets') { send(200, envelope(template)); return; }
+          }
+        }
+        if (['PUT', 'PATCH', 'DELETE'].includes(req.method) && !req.headers['if-match'] && !url.pathname.startsWith('/api/notifications/')) { send(428, problem(428)); return; }
         if (url.pathname === '/api/installer/probes') {
           send(201, envelope({ id: 'c0ffee00-0000-4000-8000-000000000001', fingerprint: 'SHA256:fixtureFingerprint0123456789', expiresAt: new Date(Date.now() + 600000).toISOString() }, {}, 201)); return;
         }
@@ -128,10 +144,11 @@ export async function startServer() {
         send(status, envelope(output, {}, status)); return;
       }
       if (url.pathname.startsWith('/api/stats/')) {
-        const id = data.node.id, summary = { n: 1, mean: 90, median: 90, min: 90, max: 90, p5: 90, p95: 90, std: 0 };
+        const id = data.node.id, summary = { n: 1, mean: 90, median: 90, min: 90, max: 90, p5: 90, p50: 90, p95: 90, p99: 90, std: 0 };
         const node = { count: 1, ok: 1, failed: 0, rateLimited: 0, successRate: 100, down: summary, up: summary, ping: summary, jitter: summary, loss: summary, ipCount: 1, downPct: 90, upPct: 80, stability: 100 };
         const day = new Date().toISOString().slice(0, 10) + 'T00:00:00Z', kind = url.pathname.split('/').pop();
-        const body = kind === 'summary' ? [{ nodeId: id, current: node, previous: node }]
+        const body = kind === 'events' ? { items: [], truncated: false }
+          : kind === 'summary' ? [{ nodeId: id, current: node, previous: node }]
           : kind === 'trend' ? [{ nodeId: id, name: data.node.name, metric: 'down', unit: 'Mbps', points: [{ ts: day, value: 90, count: 1 }], summary }]
           : kind === 'hour-of-day' ? [{ nodeId: id, hours: Array.from({ length: 24 }, (_, hour) => ({ hour, value: hour === 3 ? 90 : null, count: hour === 3 ? 1 : 0 })) }]
           : kind === 'heatmap' ? { nodeId: id, metric: 'down', timezone: 'UTC', cells: Array.from({ length: 168 }, (_, i) => ({ weekday: Math.floor(i / 24), hour: i % 24, value: i === 3 ? 90 : null, count: i === 3 ? 1 : 0 })) }
@@ -145,6 +162,16 @@ export async function startServer() {
       }
       if (url.pathname.startsWith('/api/isps/')) { send(200, envelope(data.isp)); return; }
       if (url.pathname === '/api/settings') { send(200, envelope(data.settings)); return; }
+      if (url.pathname === '/api/notifications/events') {
+        send(200, envelope([{ key: 'test.success', title: 'Test success', enabled: true, severity: 'info', channels: ['telegram'], nodeScoped: true }])); return;
+      }
+      if (/^\/api\/notifications\/events\/[^/]+\/nodes\/[^/]+$/.test(url.pathname)) {
+        send(200, envelope({ enabled: true })); return;
+      }
+      if (url.pathname.startsWith('/api/notifications/templates/')) {
+        const [, , , key, channel] = url.pathname.split('/');
+        send(200, envelope({ eventKey: key, channel, body: 'Hello {node}', isDefault: true })); return;
+      }
       if (url.pathname === '/api/schedules') { send(200, envelope(data.schedules)); return; }
       if (url.pathname.startsWith('/api/schedules/')) { send(200, envelope(data.schedules.nodes[0])); return; }
       if (/\/commands\/[^/]+$/.test(url.pathname)) {

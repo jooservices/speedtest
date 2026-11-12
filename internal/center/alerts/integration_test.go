@@ -23,6 +23,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/center/geo"
 	"github.com/jooservices/speedtest/internal/center/ipwatch"
+	"github.com/jooservices/speedtest/internal/center/notify"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
 
@@ -153,10 +154,16 @@ func TestRateLimitedResultsPreserveMeasurementAlertStateIntegration(t *testing.T
 		item.Engine = "ookla"
 		if class == "rate_limited" {
 			item.FailureClass = "rate_limited"
+		} else {
+			item.FailureClass = "timeout"
 		}
 		saveAlertResult(t, ctx, agent, item)
 	}
 	assertAlertActive(t, ctx, pool, failRule)
+	var failurePayload map[string]string
+	if err := pool.QueryRow(ctx, `SELECT payload FROM alert_events WHERE rule_id=$1 AND resolved_at IS NULL`, failRule).Scan(&failurePayload); err != nil || failurePayload["failure_reason"] != "Timeout" {
+		t.Fatalf("classified failure payload = %#v %v", failurePayload, err)
+	}
 	if scalar(t, ctx, pool, `SELECT consecutive_count FROM alert_state WHERE rule_id=$1 AND node_id=$2`, failRule, testNodeID) != 2 {
 		t.Fatal("rate-limited failure changed the consecutive failure count")
 	}
@@ -170,6 +177,198 @@ func TestRateLimitedResultsPreserveMeasurementAlertStateIntegration(t *testing.T
 		}
 	}
 	t.Log("PASS: normal recovery results still resolve active measurement alerts")
+}
+
+func TestFailedMeasurementsDoNotRecoverQualityAlertsIntegration(t *testing.T) {
+	pool, ctx := integrationDB(t)
+	addNode(t, ctx, pool, testNodeID, "quality-failure-edge", time.Now().UTC().Add(-time.Hour), 30)
+	store := &alerts.Store{DB: pool, AppKey: []byte(appKey)}
+	agent := &agentapi.Postgres{Pool: pool, Hook: store}
+	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	for index := 0; index < 2; index++ {
+		item := qualityMeasurements(fmt.Sprintf("74100000-0000-4000-8000-%012x", index+1), base.Add(time.Duration(index)*time.Minute), 40, 10, 40, 15, 3)
+		saveAlertResult(t, ctx, agent, item)
+	}
+	if got := activeQualityRules(t, ctx, pool); got != 5 {
+		t.Fatalf("active quality rules = %d, want 5", got)
+	}
+	failed := testResult("74100000-0000-4000-8000-000000000003", base.Add(2*time.Minute), "failed", nil, 0)
+	failed.FailureClass = "timeout"
+	saveAlertResult(t, ctx, agent, failed)
+	staleFailed := testResult("74100000-0000-4000-8000-000000000006", base.Add(90*time.Second), "failed", nil, 0)
+	staleFailed.FailureClass = "timeout"
+	saveAlertResult(t, ctx, agent, staleFailed)
+	var evaluated time.Time
+	if err := pool.QueryRow(ctx, `SELECT s.last_evaluated_at FROM alert_state s JOIN alert_rules r ON r.id=s.rule_id
+		WHERE s.node_id=$1 AND r.metric='ping' AND r.node_ids IS NULL AND r.engine IS NULL`, testNodeID).Scan(&evaluated); err != nil || !evaluated.Equal(base.Add(2*time.Minute)) {
+		t.Fatalf("unobserved metric timestamp = %s, want monotonic %s: %v", evaluated, base.Add(2*time.Minute), err)
+	}
+	rateLimited := testResult("74100000-0000-4000-8000-000000000004", base.Add(3*time.Minute), "failed", nil, 0)
+	rateLimited.FailureClass = "rate_limited"
+	saveAlertResult(t, ctx, agent, rateLimited)
+	if got := activeQualityRules(t, ctx, pool); got != 5 {
+		t.Fatalf("failed measurements resolved quality rules: %d remain active", got)
+	}
+	recovery := qualityMeasurements("74100000-0000-4000-8000-000000000005", base.Add(4*time.Minute), 90, 45, 5, 2, 0)
+	saveAlertResult(t, ctx, agent, recovery)
+	if got := activeQualityRules(t, ctx, pool); got != 0 {
+		t.Fatalf("valid recovery measurement left %d quality rules active", got)
+	}
+	if got := scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE event_key='quality.recovered'`); got != 5 {
+		t.Fatalf("quality recovery messages = %d, want 5", got)
+	}
+}
+
+func TestBandwidthBudgetEventUsesMonthlyResultBytesIntegration(t *testing.T) {
+	pool, ctx := integrationDB(t)
+	addNode(t, ctx, pool, testNodeID, "bandwidth-budget", time.Now().UTC().Add(-time.Hour), 30)
+	store := &alerts.Store{DB: pool, AppKey: []byte(appKey)}
+	if _, err := (&notify.EventStore{DB: pool}).UpdateEvent(ctx, "bandwidth.budget_80", notify.EventPatch{
+		Thresholds: map[string]float64{"monthly_gb": 100},
+	}); err != nil {
+		t.Fatal("configure monthly budget:", err)
+	}
+	agent := &agentapi.Postgres{Pool: pool, Hook: store}
+	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+	first := qualityMeasurements("74300000-0000-4000-8000-000000000001", base, 90, 45, 8, 2, 0)
+	first.BytesDown, first.BytesUp = 70_000_000_000, 0
+	saveAlertResult(t, ctx, agent, first)
+	second := qualityMeasurements("74300000-0000-4000-8000-000000000002", base.Add(time.Hour), 90, 45, 8, 2, 0)
+	second.BytesDown, second.BytesUp = 11_000_000_000, 0
+	saveAlertResult(t, ctx, agent, second)
+	var payload map[string]string
+	if err := pool.QueryRow(ctx, `SELECT payload FROM alert_events WHERE event_key='bandwidth.budget_80'`).Scan(&payload); err != nil {
+		t.Fatal("read crossed budget event:", err)
+	}
+	if payload["value"] != "81" || payload["expected"] != "100" || payload["pct"] != "81" {
+		t.Fatalf("bandwidth event payload = %#v", payload)
+	}
+	if got := scalar(t, ctx, pool, `SELECT count(*) FROM alert_notification_outbox o JOIN alert_events e ON e.id=o.event_id WHERE e.event_key='bandwidth.budget_80'`); got != 1 {
+		t.Fatalf("bandwidth delivery count = %d, want 1", got)
+	}
+}
+
+func TestTestSuccessCooldownSuppressesDeliveryButKeepsHistoryIntegration(t *testing.T) {
+	pool, ctx := integrationDB(t)
+	addNode(t, ctx, pool, testNodeID, "test-success-cooldown", time.Now().UTC().Add(-time.Hour), 30)
+	cooldown := 300
+	if _, err := (&notify.EventStore{DB: pool}).UpdateEvent(ctx, "test.success", notify.EventPatch{CooldownSeconds: &cooldown}); err != nil {
+		t.Fatal("configure success cooldown:", err)
+	}
+	store := &alerts.Store{DB: pool, AppKey: []byte(appKey)}
+	agent := &agentapi.Postgres{Pool: pool, Hook: store}
+	base := time.Now().UTC().Add(-2 * time.Minute).Truncate(time.Second)
+	for index := 0; index < 2; index++ {
+		result := qualityMeasurements(fmt.Sprintf("74400000-0000-4000-8000-%012x", index+1), base.Add(time.Duration(index)*time.Minute), 90, 45, 8, 2, 0)
+		saveAlertResult(t, ctx, agent, result)
+	}
+	if events := scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE event_key='test.success'`); events != 2 {
+		t.Fatalf("success history rows = %d, want 2", events)
+	}
+	if deliveries := scalar(t, ctx, pool, `SELECT count(*) FROM alert_notification_outbox o JOIN alert_events e ON e.id=o.event_id WHERE e.event_key='test.success'`); deliveries != 1 {
+		t.Fatalf("success deliveries = %d, want cooldown to suppress the second send", deliveries)
+	}
+}
+
+func qualityMeasurements(id string, ts time.Time, down, up, ping, jitter, loss float64) agentapi.Result {
+	ip := "203.0.113.100"
+	item := testResult(id, ts, "ok", &ip, down)
+	item.Up, item.Ping, item.Jitter, item.Loss = &up, &ping, &jitter, &loss
+	return item
+}
+
+func activeQualityRules(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int {
+	t.Helper()
+	return scalar(t, ctx, pool, `SELECT count(*) FROM alert_state s JOIN alert_rules r ON r.id=s.rule_id
+		WHERE s.node_id=$1 AND s.active AND r.metric IN ('down_pct','up_pct','ping','jitter','loss')`, testNodeID)
+}
+
+func TestEventThresholdScopesEditsAndEnginePayloadIntegration(t *testing.T) {
+	pool, ctx := integrationDB(t)
+	addNode(t, ctx, pool, testNodeID, "quality-engine-edge", time.Now().UTC().Add(-time.Hour), 30)
+	if _, err := pool.Exec(ctx, `UPDATE nodes SET installed_engines=ARRAY['ookla','librespeed'] WHERE id=$1`, testNodeID); err != nil {
+		t.Fatal(err)
+	}
+	store := &alerts.Store{DB: pool, AppKey: []byte(appKey)}
+	settings := &notify.EventStore{DB: pool}
+	_, err := settings.UpdateEvent(ctx, "quality.download_low", notify.EventPatch{Thresholds: map[string]float64{"down_pct": 70.5, "for_tests": 3}})
+	if err != nil {
+		t.Fatal("configure global quality event:", err)
+	}
+	_, err = settings.UpdateEvent(ctx, "quality.ping_high", notify.EventPatch{Thresholds: map[string]float64{"ping": 10, "for_tests": 4}})
+	if err != nil {
+		t.Fatal("configure global ping event:", err)
+	}
+	var downloadRuleID, pingRuleID string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM alert_rules WHERE metric='down_pct' AND node_ids IS NULL AND engine IS NULL`).Scan(&downloadRuleID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE alert_rules SET value=200,updated_at=clock_timestamp() WHERE metric='ping' AND node_ids IS NULL AND engine IS NULL`); err != nil {
+		t.Fatal(err)
+	}
+	pingRuleID = addRule(t, ctx, store, "quality-node-ping", alerts.RuleInput{Name: "Node ping", Metric: "ping", Op: ">", Value: 50, ForTests: 1,
+		NodeIDs: []string{testNodeID}, Severity: "warn", Channels: []string{"email"}, Enabled: true})
+	engineRuleID := addRule(t, ctx, store, "quality-engine-download", alerts.RuleInput{Name: "LibreSpeed download", Metric: "down_pct", Op: "<", Value: 90, ForTests: 1,
+		AllNodes: true, Engine: "librespeed", Severity: "warn", Channels: []string{"email"}, Enabled: true})
+	addRule(t, ctx, store, "quality-engine-ping", alerts.RuleInput{Name: "LibreSpeed ping", Metric: "ping", Op: ">", Value: 40, ForTests: 1,
+		AllNodes: true, Engine: "librespeed", Severity: "warn", Channels: []string{"email"}, Enabled: true})
+	addRule(t, ctx, store, "quality-engine-jitter", alerts.RuleInput{Name: "LibreSpeed jitter", Metric: "jitter", Op: ">", Value: 20, ForTests: 1,
+		AllNodes: true, Engine: "librespeed", Severity: "warn", Channels: []string{"email"}, Enabled: true})
+	addRule(t, ctx, store, "quality-engine-loss", alerts.RuleInput{Name: "LibreSpeed loss", Metric: "loss", Op: ">", Value: 5, ForTests: 1,
+		AllNodes: true, Engine: "librespeed", Severity: "warn", Channels: []string{"email"}, Enabled: true})
+	agent := &agentapi.Postgres{Pool: pool, Hook: store}
+	base := time.Now().UTC().Add(-time.Hour).Truncate(time.Second)
+	for index := 0; index < 3; index++ {
+		saveAlertResult(t, ctx, agent, qualityMeasurements(fmt.Sprintf("74200000-0000-4000-8000-%012x", index+1), base.Add(time.Duration(index)*time.Minute), 70, 20, 5, 2, 0))
+	}
+	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE rule_id=$1 AND resolved_at IS NULL`, downloadRuleID) != 1 {
+		t.Fatal("event threshold override did not require three consecutive measurements")
+	}
+	var payload map[string]string
+	if err := pool.QueryRow(ctx, `SELECT payload FROM alert_events WHERE rule_id=$1 AND resolved_at IS NULL`, downloadRuleID).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["threshold"] != "70.5% of expected" || payload["expected"] != "100 Mbps" || payload["value"] != "70 Mbps" {
+		t.Fatalf("fractional quality trigger payload = %#v", payload)
+	}
+	ping := qualityMeasurements("74200000-0000-4000-8000-000000000004", base.Add(3*time.Minute), 90, 45, 60, 2, 0)
+	saveAlertResult(t, ctx, agent, ping)
+	if err := pool.QueryRow(ctx, `SELECT payload FROM alert_events WHERE rule_id=$1 AND resolved_at IS NULL`, pingRuleID).Scan(&payload); err != nil || payload["threshold"] != "50 ms" {
+		t.Fatalf("node-specific threshold was overridden: %#v %v", payload, err)
+	}
+	libre := qualityMeasurements("74200000-0000-4000-8000-000000000005", base.Add(4*time.Minute), 85, 25, 35, 15, 4)
+	libre.Engine = "librespeed"
+	saveAlertResult(t, ctx, agent, libre)
+	if err := pool.QueryRow(ctx, `SELECT payload FROM alert_events WHERE rule_id=$1`, engineRuleID).Scan(&payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["engine"] != "librespeed" || payload["download_limit"] != "90% of expected" || payload["ping_limit"] != "40" || payload["jitter_limit"] != "20" || payload["loss_limit"] != "5" || payload["expected"] != "100 Mbps" {
+		t.Fatalf("LibreSpeed event used wrong measurements or limits: %#v", payload)
+	}
+	zone, _ := time.LoadLocation("Asia/Bangkok")
+	wantSince := base.Add(4 * time.Minute).In(zone).Format(time.RFC3339)
+	if _, err := time.Parse(time.RFC3339, payload["since"]); err != nil || payload["since"] != wantSince {
+		t.Fatalf("quality onset is not an owner-zone timestamp: %q %v", payload["since"], err)
+	}
+	libreRecovery := qualityMeasurements("74200000-0000-4000-8000-000000000008", base.Add(5*time.Minute), 95, 45, 35, 15, 4)
+	libreRecovery.Engine = "librespeed"
+	saveAlertResult(t, ctx, agent, libreRecovery)
+	if err := pool.QueryRow(ctx, `SELECT payload FROM alert_events WHERE event_key='quality.recovered' AND trigger_result_id=$1`, libreRecovery.ID).Scan(&payload); err != nil {
+		t.Fatal("read LibreSpeed recovery payload:", err)
+	}
+	if payload["engine"] != "librespeed" || payload["download_limit"] != "90% of expected" || payload["ping_limit"] != "40" || payload["jitter_limit"] != "20" || payload["loss_limit"] != "5" {
+		t.Fatalf("LibreSpeed recovery used wrong engine limits: %#v", payload)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE alert_rules SET value=72,for_tests=1,updated_at=clock_timestamp()+interval '1 second' WHERE id=$1`, downloadRuleID); err != nil {
+		t.Fatal(err)
+	}
+	recovery := qualityMeasurements("74200000-0000-4000-8000-000000000006", base.Add(5*time.Minute), 90, 45, 5, 2, 0)
+	saveAlertResult(t, ctx, agent, recovery)
+	changed := qualityMeasurements("74200000-0000-4000-8000-000000000007", base.Add(6*time.Minute), 71, 20, 5, 2, 0)
+	saveAlertResult(t, ctx, agent, changed)
+	if err := pool.QueryRow(ctx, `SELECT payload FROM alert_events WHERE rule_id=$1 ORDER BY ts DESC LIMIT 1`, downloadRuleID).Scan(&payload); err != nil || payload["threshold"] != "72% of expected" {
+		t.Fatalf("subsequent rule edit was hidden by migrated event settings: %#v %v", payload, err)
+	}
 }
 
 func testResult(id string, ts time.Time, status string, ip *string, down float64) agentapi.Result {
@@ -252,10 +451,20 @@ func TestIncrementalStreakRestartResolutionAndRuleLifecycleIntegration(t *testin
 		t.Fatal("save streak-breaking result:", err)
 	}
 	events, total, err := restarted.ListEvents(ctx, alerts.EventFilter{State: "all"}, 1, 25)
-	if err != nil || total != 1 || events[0].ResolvedAt == nil {
-		t.Fatalf("streak-breaking result did not resolve the event: total=%d events=%+v err=%v", total, events, err)
+	if err != nil {
+		t.Fatalf("list events: %v", err)
 	}
-	event, etag, err := restarted.GetEvent(ctx, events[0].ID)
+	var ruleEvent *alerts.Event
+	for i := range events {
+		if events[i].RuleID != nil && *events[i].RuleID == id {
+			ruleEvent = &events[i]
+			break
+		}
+	}
+	if ruleEvent == nil || ruleEvent.ResolvedAt == nil || total < 1 {
+		t.Fatalf("streak-breaking result did not resolve the event: total=%d events=%+v", total, events)
+	}
+	event, etag, err := restarted.GetEvent(ctx, ruleEvent.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,8 +478,15 @@ func TestIncrementalStreakRestartResolutionAndRuleLifecycleIntegration(t *testin
 	if _, _, err = restarted.Acknowledge(ctx, event.ID, false, newETag); err != nil {
 		t.Fatal("reopen acknowledgement:", err)
 	}
-	if _, total, err = restarted.ListEvents(ctx, alerts.EventFilter{State: "open"}, 1, 25); err != nil || total != 1 {
-		t.Fatalf("reopened event was not in open activity: total=%d err=%v", total, err)
+	openEvents, total, err := restarted.ListEvents(ctx, alerts.EventFilter{State: "open"}, 1, 25)
+	reopened := false
+	for _, candidate := range openEvents {
+		if candidate.ID == event.ID && !candidate.Acked && candidate.ResolvedAt != nil {
+			reopened = true
+		}
+	}
+	if err != nil || total < 1 || !reopened {
+		t.Fatalf("reopened event was not in open activity: total=%d reopened=%t err=%v", total, reopened, err)
 	}
 	jobID, err := restarted.AcknowledgeAll(ctx)
 	if err != nil || jobID == "" {
@@ -311,8 +527,54 @@ func TestIncrementalStreakRestartResolutionAndRuleLifecycleIntegration(t *testin
 	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE id=$1 AND rule_id IS NULL`, event.ID) != 1 {
 		t.Fatal("deleting a rule did not preserve its event history")
 	}
-	if rows, count, err := restarted.ListRules(ctx, 1, 25); err != nil || count != 0 || len(rows) != 0 {
-		t.Fatalf("deleted rule remains visible: count=%d rows=%d err=%v", count, len(rows), err)
+	rows, count, err := restarted.ListRules(ctx, 1, 25)
+	deletedRuleVisible := false
+	for _, listed := range rows {
+		if listed.ID == id {
+			deletedRuleVisible = true
+		}
+	}
+	if err != nil || count != 8 || deletedRuleVisible {
+		t.Fatalf("deleted rule remains visible: count=%d deleted=%t err=%v", count, deletedRuleVisible, err)
+	}
+}
+
+func TestObservedNetworkAndMedianEventsIntegration(t *testing.T) {
+	pool, ctx := integrationDB(t)
+	addNode(t, ctx, pool, testNodeID, "observed-edge", time.Now().UTC().Add(-time.Hour), 30)
+	if _, err := pool.Exec(ctx, `UPDATE nodes SET server_id=2 WHERE id=$1`, testNodeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO notification_event_settings(event_key,enabled,severity,channels,thresholds) VALUES
+		('network.server_differs',true,'warn',ARRAY['email'],'{}'),
+		('quality.drop_vs_median',true,'warn',ARRAY['email'],'{"drop_pct":30}')`); err != nil {
+		t.Fatal(err)
+	}
+	store := &alerts.Store{DB: pool, AppKey: []byte(appKey)}
+	start := time.Date(2026, 11, 3, 10, 0, 0, 0, time.UTC)
+	ip := "203.0.113.30"
+	for i := 0; i < 3; i++ {
+		result := testResult(fmt.Sprintf("30000000-0000-4000-8000-%012d", i+1), start.Add(time.Duration(i)*time.Hour), "ok", &ip, 100)
+		isp := "Alpha ISP"
+		result.EngineISP = &isp
+		if _, err := (&agentapi.Postgres{Pool: pool, Hook: store}).SaveResult(ctx, testNodeID, result); err != nil {
+			t.Fatal("save baseline:", err)
+		}
+	}
+	result := testResult("30000000-0000-4000-8000-000000000004", start.Add(3*time.Hour), "ok", &ip, 30)
+	isp := "Beta ISP"
+	result.EngineISP = &isp
+	if _, err := (&agentapi.Postgres{Pool: pool, Hook: store}).SaveResult(ctx, testNodeID, result); err != nil {
+		t.Fatal("save changed result:", err)
+	}
+	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE node_id=$1 AND event_key='network.server_differs'`, testNodeID) != 4 {
+		t.Fatal("pinned server mismatch events were not emitted")
+	}
+	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE node_id=$1 AND event_key='network.isp_changed' AND payload->>'old_isp'='Alpha ISP' AND payload->>'isp'='Beta ISP'`, testNodeID) != 1 {
+		t.Fatal("ISP change payload was not emitted")
+	}
+	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE node_id=$1 AND event_key='quality.drop_vs_median' AND payload->>'threshold'='70.0'`, testNodeID) != 1 {
+		t.Fatal("seven-day median drop event was not emitted")
 	}
 }
 
@@ -341,6 +603,10 @@ func TestIPSignalDeduplicationAndRestartDrainIntegration(t *testing.T) {
 	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE rule_id=$1`, ruleID) != 1 || scalar(t, ctx, pool, `SELECT count(*) FROM ip_change_signals WHERE consumed_at IS NULL`) != 0 {
 		t.Fatal("newest IP change was not turned into exactly one event and consumed signal")
 	}
+	var detail string
+	if err := pool.QueryRow(ctx, `SELECT detail FROM alert_events WHERE rule_id=$1`, ruleID).Scan(&detail); err != nil || detail != "Changed from 203.0.113.1 to 203.0.113.2 (Fixture city)" {
+		t.Fatalf("the IP change event must name the old and the new address: %q %v", detail, err)
+	}
 	latePath := &agentapi.Postgres{Pool: pool, Hook: watcher}
 	lateIP := "203.0.113.3"
 	late := testResult("31000000-0000-4000-8000-000000000004", timestamp.Add(90*time.Minute), "ok", &lateIP, 80)
@@ -356,6 +622,9 @@ func TestIPSignalDeduplicationAndRestartDrainIntegration(t *testing.T) {
 	}
 	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE rule_id=$1`, ruleID) != 2 || scalar(t, ctx, pool, `SELECT count(*) FROM alert_notification_outbox WHERE event_id IN (SELECT id FROM alert_events WHERE rule_id=$1)`, ruleID) != 2 {
 		t.Fatal("restart drain did not create exactly one event handoff for the new IP signal")
+	}
+	if err := pool.QueryRow(ctx, `SELECT detail FROM alert_events WHERE rule_id=$1 ORDER BY ts DESC LIMIT 1`, ruleID).Scan(&detail); err != nil || detail != "Changed from 203.0.113.2 to 203.0.113.3 (Fixture city)" {
+		t.Fatalf("the drained IP change event must name the old and the new address: %q %v", detail, err)
 	}
 	if _, err := restarted.DrainSignals(ctx); err != nil {
 		t.Fatal("empty repeated signal drain:", err)
@@ -394,17 +663,11 @@ func TestOfflineRuleUsesThreeScheduleIntervalsIntegration(t *testing.T) {
 	if scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE rule_id=$1`, ruleID) != 1 || scalar(t, ctx, pool, `SELECT count(*) FROM alert_notification_outbox WHERE event_id IN (SELECT id FROM alert_events WHERE rule_id=$1)`, ruleID) != 1 {
 		t.Fatal("three missed intervals did not open one offline alert and handoff")
 	}
-	events, total, err := store.ListEvents(ctx, alerts.EventFilter{State: "all", ISPID: ispID}, 1, 25)
-	if err != nil || total != 1 || events[0].ISPID == nil || *events[0].ISPID != ispID {
-		t.Fatalf("result-less offline event ISP attribution: total=%d events=%+v err=%v", total, events, err)
-	}
+	assertAlertRuleEventISP(t, store, ctx, ruleID, ispID)
 	if _, err := pool.Exec(ctx, `DELETE FROM results WHERE id=$1`, resultID); err != nil {
 		t.Fatal("delete retained trigger context result:", err)
 	}
-	events, total, err = store.ListEvents(ctx, alerts.EventFilter{State: "all", ISPID: ispID}, 1, 25)
-	if err != nil || total != 1 || events[0].ISPID == nil || *events[0].ISPID != ispID {
-		t.Fatalf("result-less event lost ISP after result retention: total=%d events=%+v err=%v", total, events, err)
-	}
+	assertAlertRuleEventISP(t, store, ctx, ruleID, ispID)
 	if _, err := pool.Exec(ctx, `UPDATE nodes SET last_seen_at=$2 WHERE id=$1`, testNodeID, now); err != nil {
 		t.Fatal("restore node heartbeat")
 	}
@@ -415,6 +678,78 @@ func TestOfflineRuleUsesThreeScheduleIntervalsIntegration(t *testing.T) {
 	var resolved time.Time
 	if err := pool.QueryRow(ctx, `SELECT resolved_at FROM alert_events WHERE rule_id=$1`, ruleID).Scan(&resolved); err != nil || resolved.IsZero() {
 		t.Fatalf("offline event did not resolve after heartbeat recovery: %v", err)
+	}
+}
+
+func assertAlertRuleEventISP(t *testing.T, store *alerts.Store, ctx context.Context, ruleID, ispID string) {
+	t.Helper()
+	events, total, err := store.ListEvents(ctx, alerts.EventFilter{State: "all", ISPID: ispID}, 1, 25)
+	if err != nil {
+		t.Fatal("list events by ISP:", err)
+	}
+	for _, event := range events {
+		if event.RuleID != nil && *event.RuleID == ruleID && event.ISPID != nil && *event.ISPID == ispID {
+			return
+		}
+	}
+	t.Fatalf("result-less offline event ISP attribution: total=%d events=%+v", total, events)
+}
+
+func TestOfflineCooldownRepeatsAndRebreachesRemainTrackedIntegration(t *testing.T) {
+	pool, ctx := integrationDB(t)
+	base := time.Now().UTC().Add(-2 * time.Hour).Truncate(time.Second)
+	addNode(t, ctx, pool, testNodeID, "offline-repeat-edge", base, 5)
+	if _, err := pool.Exec(ctx, `INSERT INTO notification_event_settings(event_key,enabled,severity,channels,thresholds,cooldown_seconds,repeat_seconds)
+		VALUES('node.offline',true,'crit',ARRAY['email'],'{}',300,60)`); err != nil {
+		t.Fatal(err)
+	}
+	var ruleID string
+	if err := pool.QueryRow(ctx, `SELECT id::text FROM alert_rules WHERE metric='offline' AND node_ids IS NULL AND engine IS NULL`).Scan(&ruleID); err != nil {
+		t.Fatal(err)
+	}
+	now := base.Add(16 * time.Minute)
+	store := &alerts.Store{DB: pool, AppKey: []byte(appKey), Now: func() time.Time { return now }}
+	agentOfflineCheck(t, store, ctx)
+	now = now.Add(61 * time.Second)
+	agentOfflineCheck(t, store, ctx)
+	assertOfflineRepeatRows(t, ctx, pool, ruleID, 2, 1, 1)
+	if _, err := pool.Exec(ctx, `UPDATE nodes SET last_seen_at=$2 WHERE id=$1`, testNodeID, now); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	agentOfflineCheck(t, store, ctx)
+	if _, err := pool.Exec(ctx, `UPDATE nodes SET last_seen_at=$2 WHERE id=$1`, testNodeID, base.Add(6*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	now = base.Add(21 * time.Minute)
+	agentOfflineCheck(t, store, ctx)
+	assertOfflineRepeatRows(t, ctx, pool, ruleID, 3, 1, 2)
+	now = now.Add(61 * time.Second)
+	agentOfflineCheck(t, store, ctx)
+	assertOfflineRepeatRows(t, ctx, pool, ruleID, 4, 1, 2)
+	if _, err := pool.Exec(ctx, `UPDATE nodes SET last_seen_at=$2 WHERE id=$1`, testNodeID, now); err != nil {
+		t.Fatal(err)
+	}
+	now = now.Add(time.Minute)
+	agentOfflineCheck(t, store, ctx)
+	assertOfflineRepeatRows(t, ctx, pool, ruleID, 4, 0, 2)
+	t.Log("PASS: offline cooldown suppresses delivery without losing the open event; repeat events resolve; recovery and rebreach stay tracked")
+}
+
+func agentOfflineCheck(t *testing.T, store *alerts.Store, ctx context.Context) {
+	t.Helper()
+	if err := store.EvaluateOffline(ctx); err != nil {
+		t.Fatal("offline evaluation:", err)
+	}
+}
+
+func assertOfflineRepeatRows(t *testing.T, ctx context.Context, pool *pgxpool.Pool, ruleID string, wantEvents, wantOpen, wantOutbox int) {
+	t.Helper()
+	events := scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE rule_id=$1`, ruleID)
+	open := scalar(t, ctx, pool, `SELECT count(*) FROM alert_events WHERE rule_id=$1 AND resolved_at IS NULL`, ruleID)
+	outbox := scalar(t, ctx, pool, `SELECT count(*) FROM alert_notification_outbox WHERE event_id IN (SELECT id FROM alert_events WHERE rule_id=$1)`, ruleID)
+	if events != wantEvents || open != wantOpen || outbox != wantOutbox {
+		t.Fatalf("offline event counts = %d/%d/%d, want %d/%d/%d", events, open, outbox, wantEvents, wantOpen, wantOutbox)
 	}
 }
 
@@ -507,6 +842,22 @@ type eventSignature struct {
 	Acked                    bool
 }
 
+func missingEventSignatures(want, got []eventSignature) []eventSignature {
+	counts := make(map[eventSignature]int, len(got))
+	for _, event := range got {
+		counts[event]++
+	}
+	var missing []eventSignature
+	for _, event := range want {
+		if counts[event] == 0 {
+			missing = append(missing, event)
+			continue
+		}
+		counts[event]--
+	}
+	return missing
+}
+
 func deref(value *string) string {
 	if value == nil {
 		return ""
@@ -594,12 +945,18 @@ func TestThirtyDayReplayMatchesApprovedUIPreviewIntegration(t *testing.T) {
 	}
 	actualSet := make([]eventSignature, 0, len(actual))
 	for _, event := range actual {
+		if event.RuleID == nil {
+			continue // catalog-only notifications (test.success/recovery) are outside the preview alert fixture
+		}
+		if _, fixtureRule := fixtureRuleID(ruleIDs, *event.RuleID); !fixtureRule {
+			continue // migration-seeded defaults are outside the preview rule set
+		}
 		var ts time.Time
 		ts, err := time.Parse(time.RFC3339Nano, event.TS)
 		if err != nil {
 			t.Fatal(err)
 		}
-		signature := eventSignature{RuleID: deref(event.RuleID), NodeID: event.NodeID, Severity: event.Severity, TS: ts.UnixMilli(), Title: event.Title, Detail: event.Detail, Acked: event.Acked}
+		signature := eventSignature{RuleID: deref(event.RuleID), NodeID: deref(event.NodeID), Severity: event.Severity, TS: ts.UnixMilli(), Title: event.Title, Detail: event.Detail, Acked: event.Acked}
 		if event.ResolvedAt != nil {
 			resolved, parseErr := time.Parse(time.RFC3339Nano, *event.ResolvedAt)
 			if parseErr != nil {
@@ -633,7 +990,8 @@ func TestThirtyDayReplayMatchesApprovedUIPreviewIntegration(t *testing.T) {
 	order(actualSet)
 	order(expectedSet)
 	if len(actualSet) != len(expectedSet) {
-		t.Fatalf("30-day replay event count differs: center=%d preview=%d", len(actualSet), len(expectedSet))
+		t.Fatalf("30-day replay event count differs: center=%d preview=%d missing=%+v extra=%+v",
+			len(actualSet), len(expectedSet), missingEventSignatures(expectedSet, actualSet), missingEventSignatures(actualSet, expectedSet))
 	}
 	for i := range actualSet {
 		if actualSet[i] != expectedSet[i] {
@@ -641,4 +999,13 @@ func TestThirtyDayReplayMatchesApprovedUIPreviewIntegration(t *testing.T) {
 		}
 	}
 	t.Logf("PASS: replayed %d fixture results; center and preview produced %d identical alert events", len(fixture.Results), len(actualSet))
+}
+
+func fixtureRuleID(ruleIDs map[string]string, id string) (string, bool) {
+	for previewID, storedID := range ruleIDs {
+		if storedID == id {
+			return previewID, true
+		}
+	}
+	return "", false
 }

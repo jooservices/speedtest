@@ -50,6 +50,53 @@ test('demo mode seeds and persists locally without making API calls', () => {
   ST.updateNode('n1', { name: 'Local demo' });
   assert.equal(ST.node('n1').name, 'Local demo'); assert.ok(storage.has('st.demo.v1'));
 });
+test('percentiles and week changes use interpolated values and preserve undefined cases', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  const summary = ST.stats.summary([10, 20, 30, 40, 50]);
+  assert.equal(summary.p50, 30); assert.equal(summary.median, summary.p50);
+  assert.equal(summary.p95, 48); assert.equal(summary.p99, 49.6);
+  assert.equal(ST.stats.summary([]).p50, null); assert.equal(ST.stats.summary([]).p99, null);
+  assert.equal(ST.stats.summary([7]).p50, 7); assert.equal(ST.stats.summary([7]).p99, 7);
+  assert.equal(ST.stats.weekChange(120, 100), 20);
+  assert.equal(ST.stats.weekChange(100, 0), null); assert.equal(ST.stats.weekChange(null, 100), null);
+});
+test('effective ISP prefers the trimmed engine value and falls back to cached IP organisation', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  assert.equal(ST.stats.effectiveISP({ engineISP: '  Engine ISP  ', ip: '203.0.113.9' }), 'Engine ISP');
+  assert.equal(ST.stats.effectiveISP({ engineISP: ' ', ip: '203.0.113.9' }), 'Viettel Group');
+  assert.equal(ST.stats.effectiveISP({ ip: '192.0.2.99' }), 'VNPT Corp');
+  assert.equal(ST.stats.effectiveISP({ status: 'failed', failureClass: 'rate_limited', ip: null }), null);
+  assert.equal(ST.stats.effectiveISP({ ip: '203.0.114.9' }), null);
+  const filtered = ST.results({ nodeIds: ['n1'], isp: 'viettel group' });
+  assert.ok(filtered.length > 0);
+  assert.ok(filtered.every(result => ST.stats.effectiveISP(result).toLowerCase() === 'viettel group'));
+  assert.equal(ST.results({ nodeIds: ['n1'], isp: 'unknown isp' }).length, 0);
+});
+test('demo IP marks compare known results within one engine across nulls and range edges', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  const interleaved = [
+    { id: 'a', ts: 1, engine: 'ookla', ip: '203.0.113.1' },
+    { id: 'b', ts: 2, engine: 'librespeed', ip: '203.0.113.2' },
+    { id: 'c', ts: 3, engine: 'ookla', ip: '203.0.113.1' },
+    { id: 'd', ts: 4, engine: 'ookla', ip: '203.0.113.1' },
+    { id: 'e', ts: 5, engine: 'librespeed', ip: '203.0.113.2' },
+    { id: 'f', ts: 6, engine: 'ookla', ip: '203.0.113.2' },
+  ];
+  const interleavedChanges = Array.from(ST.stats.ipChanges(interleaved, 'ookla', 0, 7), change => [change.from, change.result.ip]);
+  assert.equal(JSON.stringify(interleavedChanges), JSON.stringify([['203.0.113.1', '203.0.113.2']]));
+  const boundaryAndNull = [
+    { id: 'before', ts: 0, engine: 'ookla', ip: '203.0.113.3' },
+    { id: 'start', ts: 1, engine: 'ookla', ip: '203.0.113.4' },
+    { id: 'null', ts: 2, engine: 'ookla', ip: null },
+    { id: 'after-null', ts: 3, engine: 'ookla', ip: '203.0.113.5' },
+    { id: 'end', ts: 5, engine: 'ookla', ip: '203.0.113.6' },
+  ];
+  const boundaryChanges = Array.from(ST.stats.ipChanges(boundaryAndNull, 'ookla', 1, 5), change => [change.result.id, change.from, change.result.ip]);
+  assert.equal(JSON.stringify(boundaryChanges), JSON.stringify([
+    ['start', '203.0.113.3', '203.0.113.4'],
+    ['after-null', '203.0.113.4', '203.0.113.5'],
+  ]));
+});
 test('engine selector updates the selected engine and refreshes demo data', () => {
   const { ST } = runtime('http://localhost', { demo: true });
   let refreshes = 0;
@@ -230,6 +277,8 @@ test('demo rate-limited results preserve failed and numeric alert streaks', asyn
   const failure = { ...limited, failureClass: 'other', error: 'fixture failure' };
   await run(ping); await run(limited); await run(ping); await run(limited);
   assert.ok(ST.events().some(event => event.ruleId === pingRule.id && !event.resolvedAt), 'rate limit between and after high ping results preserves the numeric alert');
+  await run(failure); await run(ping);
+  assert.ok(ST.events().some(event => event.ruleId === pingRule.id && !event.resolvedAt), 'a failed measurement does not recover a numeric alert');
   await run(failure); await run(limited); await run(failure); await run(limited);
   assert.ok(ST.events().some(event => event.ruleId === failedRule.id && !event.resolvedAt), 'rate limit between and after failures preserves the failed-test alert');
 });
@@ -239,6 +288,8 @@ test('remote schedules, rules, stagger, key rotation, agent update, manual tests
   await ST.load();
   assert.equal(ST.scheduleInfo().rules.maxConcurrent, 1);
   assert.equal(ST.scheduleInfo().nodes[0].nodeId, data.node.id);
+  assert.equal(JSON.stringify(ST.engineSchedules(data.node)), JSON.stringify([{ engine: 'ookla', interval: 30, offset: 0, enabled: true }]));
+  assert.equal(ST.engineSchedules({ id: 'unconfigured' }).length, 0);
   await ST.saveSchedule(data.node.id, { interval: 60, offset: 5, enabled: true });
   const put = control.requests.find(r => r.method === 'PUT' && r.path === '/api/schedules/' + data.node.id);
   assert.deepEqual(put.body, { interval: 60, offset: 5, enabled: true }); assert.equal(put.headers['if-match'], '"fixture-v1"');
@@ -267,6 +318,37 @@ test('remote engine schedule queries select the node and default legacy entries 
   assert.equal(rows[0].engine, 'ookla'); assert.equal(rows[0].interval, 30);
   assert.equal(rows[0].offset, 0); assert.equal(rows[0].enabled, true);
   assert.equal(ST.engineSchedules({ id: 'missing' }).length, 0);
+});
+
+test('notification catalog and template methods use their REST endpoints', async t => {
+  const { ST, control } = await setup(t);
+  await ST.load();
+  const events = await ST.notificationEvents();
+  assert.equal(events[0].key, 'test.success');
+  await ST.updateNotificationEvent('test.success', { enabled: false, severity: 'warn', channels: ['webhook'] });
+  assert.equal(await ST.notificationNodeEnabled('test.success', 'node/contract'), true);
+  assert.equal((await ST.setNotificationNodeEnabled('test.success', 'node/contract', false)).enabled, false);
+  await ST.notificationTemplate('test.success', 'telegram');
+  await ST.saveNotificationTemplate('test.success', 'telegram', 'Hello {node}');
+  const preview = await ST.previewNotificationTemplate('test.success', 'telegram', 'Hello {node}');
+  assert.equal(preview.body, 'Hello Viettel Fast 50');
+  const reset = await ST.resetNotificationTemplate('test.success', 'telegram');
+  assert.equal(reset.body, 'Hello {node}');
+  const calls = control.requests.filter(r => r.path.startsWith('/api/notifications/'));
+  assert.deepEqual(calls.map(r => `${r.method} ${r.path}`), [
+    'GET /api/notifications/events',
+    'PATCH /api/notifications/events/test.success',
+    'GET /api/notifications/events/test.success/nodes/node%2Fcontract',
+    'PUT /api/notifications/events/test.success/nodes/node%2Fcontract',
+    'GET /api/notifications/templates/test.success/telegram',
+    'PUT /api/notifications/templates/test.success/telegram',
+    'POST /api/notifications/templates/test.success/telegram/previews',
+    'POST /api/notifications/templates/test.success/telegram/resets',
+  ]);
+  assert.deepEqual(calls[3].body, { enabled: false });
+  assert.deepEqual(calls[5].body, { body: 'Hello {node}' });
+  assert.deepEqual(calls[6].body, { body: 'Hello {node}' });
+  assert.equal(calls[1].headers['x-csrf-token'], 'fixture-csrf');
 });
 
 test('a manual test follows the command to its result and reports a failed command plainly', async t => {

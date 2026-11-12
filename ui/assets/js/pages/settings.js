@@ -71,6 +71,207 @@
         body.appendChild(row(c.name, null, h('div', { class: 'stack', style: 'gap:8px' }, controls)));
       });
       body.appendChild(h('p', { class: 'hint', style: 'margin-top:12px' }, 'Secrets are stored encrypted and are never shown again. Leave a secret empty to keep the saved one.'));
+      body.appendChild(h('h3', { style: 'margin:24px 0 8px;font-size:1rem' }, 'Events and message templates'));
+      body.appendChild(h('p', { class: 'hint', style: 'margin:0 0 12px' }, 'Turn events on or off, then edit the wording per channel. Select a channel and load its template before editing. Placeholders use curly braces, for example {node} and {download}.'));
+      var catalog = h('div', { class: 'stack', style: 'gap:12px', 'aria-busy': 'true' }, h('p', { class: 'hint' }, 'Loading events…'));
+      body.appendChild(catalog);
+      ST.notificationEvents().then(function (events) {
+        U.clear(catalog); catalog.removeAttribute('aria-busy');
+        events.forEach(function (ev) { catalog.appendChild(eventCard(ev)); });
+      }, function (error) {
+        U.clear(catalog); catalog.removeAttribute('aria-busy');
+        catalog.appendChild(U.callout(error.message || 'Could not load notification events.', 'crit', 'alert'));
+      });
+    }
+    function eventCard(ev) {
+      var channel = 'telegram';
+      var loadSequence = 0, previewSequence = 0, previewTimer = 0;
+      var nodeSelect, nodeInput, nodeHint, nodeRequest = 0, nodeLoading = false, nodeLoaded = false;
+      var editor = h('textarea', { class: 'input', rows: 6, style: 'width:100%;font-family:var(--mono,monospace)', 'aria-label': 'Template for ' + ev.title, placeholder: 'Load a template to edit it.', disabled: true, value: '' });
+      var preview = h('pre', { class: 'hint', style: 'white-space:pre-wrap;margin:0;min-height:4em', role: 'status', 'aria-live': 'polite' }, 'Preview appears here.');
+      var loadButton = U.btn('Load', { size: 'sm', onClick: loadTemplate });
+      var previewButton = U.btn('Preview now', { size: 'sm', disabled: true, onClick: function () { previewTemplate(0); } });
+      var saveButton = U.btn('Save template', { size: 'sm', variant: 'primary', disabled: true, onClick: function () {
+        var requestedChannel = channel, request = loadSequence;
+        saveButton.disabled = true;
+        ST.saveNotificationTemplate(ev.key, requestedChannel, editor.value).then(function () {
+          if (request === loadSequence && requestedChannel === channel) U.toast('Template saved');
+        }, fail).finally(function () { if (request === loadSequence) saveButton.disabled = false; });
+      } });
+      var resetButton = U.btn('Reset to default', { size: 'sm', disabled: true, onClick: function () {
+        var requestedChannel = channel, request = loadSequence;
+        resetButton.disabled = true;
+        ST.resetNotificationTemplate(ev.key, requestedChannel).then(function (t) {
+          if (request !== loadSequence || requestedChannel !== channel) return;
+          editor.value = t.body; preview.textContent = 'Preview appears here.'; U.toast('Template reset'); previewTemplate(450);
+        }, fail).finally(function () { if (request === loadSequence) resetButton.disabled = false; });
+      } });
+      var testButton = U.btn('Send test', { size: 'sm', disabled: true, onClick: function () {
+        var requestedChannel = channel, request = loadSequence;
+        testButton.disabled = true;
+        ST.sendEventTemplateTest(ev.key, requestedChannel).then(function (delivery) {
+          if (request !== loadSequence || requestedChannel !== channel) return;
+          U.toast(delivery.status === 'sent' ? 'Test message delivered' : delivery.error || 'Test message failed', delivery.status === 'sent' ? null : 'error');
+        }, fail).finally(function () { if (request === loadSequence) testButton.disabled = false; });
+      } });
+      function syncNodeToggle() {
+        if (!nodeInput) return;
+        nodeInput.disabled = nodeLoading || !nodeLoaded || !ev.enabled;
+        nodeHint.textContent = ev.enabled ? 'This node follows the global event setting unless you turn it off here.' : 'Turn on the event above before changing its node settings.';
+      }
+      function loadNodeSetting() {
+        if (!nodeSelect || !ev.enabled) return;
+        var nodeID = nodeSelect.value, request = ++nodeRequest;
+        nodeLoading = true; nodeLoaded = false; nodeInput.checked = false; syncNodeToggle();
+        ST.notificationNodeEnabled(ev.key, nodeID).then(function (enabled) {
+          if (request !== nodeRequest) return;
+          nodeInput.checked = enabled; nodeLoading = false; nodeLoaded = true; syncNodeToggle();
+        }, function (error) {
+          if (request !== nodeRequest) return;
+          nodeLoading = false; nodeLoaded = false; syncNodeToggle(); fail(error);
+        });
+      }
+      function saveNodeSetting(enabled) {
+        if (!nodeSelect || !ev.enabled) return;
+        var nodeID = nodeSelect.value, request = ++nodeRequest;
+        nodeLoading = true; syncNodeToggle();
+        ST.setNotificationNodeEnabled(ev.key, nodeID, enabled).then(function () {
+          if (request !== nodeRequest) return;
+          nodeInput.checked = enabled; nodeLoading = false; nodeLoaded = true; syncNodeToggle(); U.toast('Saved');
+        }, function (error) {
+          if (request !== nodeRequest) return;
+          nodeInput.checked = !enabled; nodeLoading = false; nodeLoaded = true; syncNodeToggle(); fail(error);
+        });
+      }
+      function nodeOverrides() {
+        if (!ev.nodeScoped) return null;
+        var nodes = ST.nodes();
+        if (!nodes.length) return U.callout('Add a node before setting per-node event preferences.', null, 'info');
+        nodeSelect = U.select(nodes.map(function (node) { return { value: node.id, label: node.name }; }), nodes[0].id, loadNodeSetting);
+        nodeInput = U.toggle(false, saveNodeSetting, 'Enable ' + ev.title + ' for ' + nodes[0].name).querySelector('input');
+        nodeHint = h('p', { class: 'hint' }, 'Loading this node setting…');
+        var toggle = h('span', { class: 'switch' }, nodeInput, h('i'));
+        nodeSelect.addEventListener('change', function () {
+          var node = nodes.find(function (item) { return item.id === nodeSelect.value; });
+          nodeInput.setAttribute('aria-label', 'Enable ' + ev.title + ' for ' + (node ? node.name : 'selected node'));
+        });
+        var section = h('div', { class: 'stack', 'data-node-event-key': ev.key },
+          U.field('Node', nodeSelect), row('Send for this node', 'The event must also be enabled globally.', toggle), nodeHint);
+        if (ev.enabled) loadNodeSetting(); else syncNodeToggle();
+        return section;
+      }
+      var severitySelect = U.select(['info', 'warn', 'crit'], ev.severity);
+      severitySelect.setAttribute('aria-label', 'Severity for ' + ev.title);
+      var channelToggles = ['telegram', 'email', 'slack', 'webhook'].map(function (name) {
+        var control = h('input', { type: 'checkbox', checked: ev.channels.indexOf(name) >= 0, 'aria-label': 'Route ' + ev.title + ' to ' + name });
+        return { name: name, control: control, label: h('label', { class: 'check' }, control, name.charAt(0).toUpperCase() + name.slice(1)) };
+      });
+      var thresholdInputs = {};
+      var thresholdFields = Object.keys(ev.thresholds || {}).map(function (name) {
+        var input = U.input(ev.thresholds[name], null, { type: 'number', min: name === 'for_tests' ? 1 : 0, max: name === 'for_tests' ? 100 : name.indexOf('_pct') >= 0 ? 100 : null, step: name === 'for_tests' ? 1 : 'any', 'aria-label': 'Threshold ' + name.replaceAll('_', ' ') + ' for ' + ev.title });
+        thresholdInputs[name] = input;
+        return U.field('Threshold ' + name.replaceAll('_', ' '), input);
+      });
+      var cooldownInput = U.input(ev.cooldownSeconds || 0, null, { type: 'number', min: 0, max: 604800, step: 1, 'aria-label': 'Cooldown seconds for ' + ev.title });
+      var repeatInput = U.input(ev.repeatSeconds || 0, null, { type: 'number', min: 0, max: 604800, step: 1, 'aria-label': 'Repeat interval seconds for ' + ev.title });
+      var maintenanceStart = U.input(ev.maintenanceStart || '', null, { type: 'time', 'aria-label': 'Maintenance starts for ' + ev.title });
+      var maintenanceEnd = U.input(ev.maintenanceEnd || '', null, { type: 'time', 'aria-label': 'Maintenance ends for ' + ev.title });
+      var maintenanceTimezone = U.input(ev.maintenanceTimezone || 'UTC', null, { 'aria-label': 'Maintenance time zone for ' + ev.title, placeholder: 'Asia/Bangkok' });
+      var ispScope = U.input((ev.ispScopes || []).join(', '), null, { 'aria-label': 'ISP scope for ' + ev.title, placeholder: 'Leave empty for every ISP' });
+      var saveEventButton = U.btn('Save event settings', { size: 'sm', variant: 'primary', onClick: saveEventSettings });
+      function saveEventSettings() {
+        var selected = channelToggles.filter(function (item) { return item.control.checked; }).map(function (item) { return item.name; });
+        if (!selected.length) { U.toast('Select at least one delivery channel.', 'error'); return; }
+        var thresholds = {};
+        var invalidThreshold = Object.keys(thresholdInputs).some(function (name) {
+          var raw = thresholdInputs[name].value;
+          if (!raw || !Number.isFinite(Number(raw))) return true;
+          thresholds[name] = Number(raw);
+          if (name === 'for_tests' && !Number.isInteger(thresholds[name])) return true;
+          return false;
+        });
+        if (invalidThreshold) { U.toast('Enter a valid value for every threshold.', 'error'); return; }
+        var body = {
+          severity: severitySelect.value, channels: selected, thresholds: thresholds,
+          cooldownSeconds: Number(cooldownInput.value), repeatSeconds: Number(repeatInput.value),
+          maintenanceStart: maintenanceStart.value, maintenanceEnd: maintenanceEnd.value,
+          maintenanceTimezone: maintenanceTimezone.value.trim(),
+          ispScopes: ispScope.value.split(',').map(function (value) { return value.trim(); }).filter(Boolean)
+        };
+        saveEventButton.disabled = true;
+        ST.updateNotificationEvent(ev.key, body).then(function (updated) {
+          ev.severity = updated.severity; ev.channels = updated.channels; ev.thresholds = updated.thresholds;
+          ev.cooldownSeconds = updated.cooldownSeconds; ev.repeatSeconds = updated.repeatSeconds;
+          ev.maintenanceStart = updated.maintenanceStart; ev.maintenanceEnd = updated.maintenanceEnd;
+          ev.maintenanceTimezone = updated.maintenanceTimezone; ev.ispScopes = updated.ispScopes;
+          U.toast('Event settings saved');
+        }, fail).finally(function () { saveEventButton.disabled = false; });
+      }
+      var channelSelect = U.select([{ value: 'telegram', label: 'Telegram' }, { value: 'email', label: 'Email' }, { value: 'slack', label: 'Slack' }, { value: 'webhook', label: 'Webhook' }], channel, function (value) { channel = value; loadTemplate(); });
+      channelSelect.setAttribute('aria-label', 'Template channel for ' + ev.title);
+      var templateActions = h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' }, loadButton, previewButton, saveButton, resetButton, testButton);
+      var editorFields = h('details', { class: 'stack', style: 'gap:8px' }, h('summary', null, 'Severity, delivery and rule settings'),
+        U.field('Severity', severitySelect), h('div', { class: 'stack', 'aria-label': 'Delivery channels for ' + ev.title }, channelToggles.map(function (item) { return item.label; })),
+        thresholdFields, U.field('Cooldown (seconds)', cooldownInput), U.field('Repeat interval (seconds)', repeatInput),
+        h('div', { class: 'row', style: 'gap:8px;flex-wrap:wrap' }, U.field('Maintenance starts', maintenanceStart), U.field('Maintenance ends', maintenanceEnd)),
+        U.field('Maintenance time zone', maintenanceTimezone), U.field('ISP scopes', ispScope, 'Comma-separated ISP names; leave empty to match every ISP.'), saveEventButton);
+      var globalToggle = U.toggle(ev.enabled, function (v) {
+        ST.updateNotificationEvent(ev.key, { enabled: v }).then(function (updated) {
+          ev.enabled = updated.enabled;
+          if (ev.enabled) loadNodeSetting(); else { nodeRequest++; nodeLoading = false; nodeLoaded = false; if (nodeInput) nodeInput.checked = false; syncNodeToggle(); }
+          U.toast('Saved');
+        }, function (error) { globalToggle.querySelector('input').checked = ev.enabled; fail(error); });
+      }, 'Enable ' + ev.title);
+      var box = h('div', { class: 'stack', style: 'gap:8px;padding-top:8px;border-top:1px solid var(--border)', 'data-event-key': ev.key },
+        h('div', { class: 'row', style: 'justify-content:space-between;gap:12px;align-items:center' },
+          h('div', null, h('div', { style: 'font-weight:600' }, ev.title), h('div', { class: 'hint' }, ev.key + ' · ' + ev.category)),
+          globalToggle), nodeOverrides(),
+        editorFields, U.field('Template channel', channelSelect), templateActions, editor, preview);
+      editor.addEventListener('input', function () { previewTemplate(450); });
+
+      function loadTemplate() {
+        var requestedChannel = channel, request = ++loadSequence;
+        previewSequence++;
+        if (previewTimer) clearTimeout(previewTimer);
+        loadButton.disabled = true;
+        editor.disabled = true;
+        previewButton.disabled = true;
+        saveButton.disabled = true;
+        resetButton.disabled = true;
+        editor.value = '';
+        preview.textContent = 'Preview appears here.';
+        ST.notificationTemplate(ev.key, requestedChannel).then(function (t) {
+          if (request !== loadSequence) return;
+          editor.value = t.body;
+          editor.disabled = false;
+          previewButton.disabled = false;
+          saveButton.disabled = false;
+          resetButton.disabled = false;
+          testButton.disabled = false;
+          previewTemplate(300);
+        }, function (error) {
+          if (request === loadSequence) fail(error);
+        }).finally(function () {
+          if (request !== loadSequence) return;
+          loadButton.disabled = false;
+        });
+      }
+      function previewTemplate(delay) {
+        var request = ++previewSequence, requestedChannel = channel, body = editor.value;
+        if (previewTimer) clearTimeout(previewTimer);
+        previewTimer = setTimeout(function () {
+          preview.textContent = 'Updating preview…';
+          ST.previewNotificationTemplate(ev.key, requestedChannel, body).then(function (result) {
+            if (request !== previewSequence || requestedChannel !== channel || body !== editor.value) return;
+            preview.textContent = result.body;
+          }, function (error) {
+            if (request === previewSequence && requestedChannel === channel && body === editor.value) {
+              preview.textContent = error.message || 'Preview could not be updated.';
+            }
+          });
+        }, delay);
+      }
+      return box;
     }
     function withChannel(key, patch) {
       var notify = JSON.parse(JSON.stringify(pending.notify || s.notify));

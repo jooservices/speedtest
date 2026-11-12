@@ -14,6 +14,21 @@ Its down migration preserves results, cached locations and derived history; see
 `00007_ssh_installations.sql` adds short-lived host-key probes, installation job
 state and replayable progress events, with hashed idempotency keys and an active
 installation limit per node. It stores no SSH credentials or enrollment tokens.
+`00010_engine_schedules.sql` adds per-engine schedules and result identity;
+existing nodes and results backfill to Ookla. Develop migrations 19–22 add API
+tokens, audit authentication metadata and ISP management. JOOST-78 migrations
+start after that baseline: `00026_alert_event_payload.sql` adds event keys and
+placeholder payloads to alert history; `00027_notification_events.sql` adds
+event overrides, per-node switches and templates; `00028_alert_streak_timestamps.sql`
+adds event thresholds, cooldowns, repeat intervals and maintenance windows;
+`00029_notification_defaults.sql` seeds missing default rules and quiet-hour
+defaults without replacing owner rules; `00030_system_notification_events.sql`
+permits events without a node; `00031_notification_escalation.sql` records
+delivery escalation time; and `00032_notification_auth_activity.sql` stores
+bounded login-failure counts and new sign-in IPs without retaining credentials.
+Upgrading from develop migration 22 applies versions 23–32 in order. These
+changes are additive; the 1.0.0 binary continues to use its existing tables and
+columns.
 
 `00006_notification_deliveries.sql` adds durable per-event/channel attempts and retry scheduling.
 `00019_api_access_tokens.sql` adds owner-scoped API tokens with named permissions,
@@ -126,8 +141,13 @@ that a subsequent up can reapply version 1.
 | `installer_jobs` | Owner-scoped installation state; at most one active job per node |
 | `installer_events` | Safe, replayable plain-language progress events |
 | `installer_idempotency` | HMAC-protected install request digest and job link, expiring after 24 hours |
-| `api_access_tokens` | Owner-scoped bearer token metadata, expiry and last-use timestamps, and unique SHA-256 digest |
 | `audit_log` | Owner changes, authentication method, optional bearer credential ID, and resolved client address; never bearer values |
+| `notification_event_settings` | Owner overrides for event enabled state, severity and channels |
+| `notification_event_node_settings` | Per-node enable overrides for node-scoped events |
+| `notification_templates` | Per-event, per-channel owner template overrides |
+| `notification_login_failures` | Source IP and timestamp for failed-login burst thresholds; rows older than one day are pruned on new failures |
+| `notification_signin_locations` | Previously seen owner identifier/IP pairs for first-seen sign-in notifications |
+| `api_access_tokens` | Owner-scoped bearer token metadata, expiry and last-use timestamps, and unique SHA-256 digest |
 
 All IDs are UUIDs. A result ID has **no server default**, so retries cannot
 accidentally obtain another identity. The primary key rejects duplicate UUIDs;
