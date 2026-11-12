@@ -63,6 +63,12 @@ func Reset(t testReporter, pool *pgxpool.Pool) {
 			t.Fatal("could not reset test database")
 		}
 	}
+	if _, err := pool.Exec(ctx, `DROP FUNCTION IF EXISTS speedtest_record_monthly_usage()`); err != nil {
+		t.Fatal("could not reset usage trigger function")
+	}
+	if _, err := pool.Exec(ctx, `DROP FUNCTION IF EXISTS speedtest_lock_usage_budget_changes()`); err != nil {
+		t.Fatal("could not reset usage lifecycle lock function")
+	}
 	var count int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE'").Scan(&count); err != nil || count != 0 {
 		t.Fatal("test database reset did not leave an empty schema")

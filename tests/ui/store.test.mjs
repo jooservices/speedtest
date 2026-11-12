@@ -50,6 +50,17 @@ test('demo mode seeds and persists locally without making API calls', () => {
   ST.updateNode('n1', { name: 'Local demo' });
   assert.equal(ST.node('n1').name, 'Local demo'); assert.ok(storage.has('st.demo.v1'));
 });
+test('demo bandwidth budgets survive reload and reset with the rest of demo state', () => {
+  const first = runtime('http://localhost', { demo: true });
+  const budget = { scopeKey: 'global', monthlyBytes: 4096, action: 'pause', widenMultiplier: 2 };
+  first.ST.setDemoBandwidthBudgets([budget]);
+  assert.equal(JSON.stringify(first.ST.demoBandwidthBudgets()), JSON.stringify([budget]));
+  const reloaded = runtime('http://localhost', { demo: true, storage: first.storage });
+  assert.equal(JSON.stringify(reloaded.ST.demoBandwidthBudgets()), JSON.stringify([budget]));
+  reloaded.ST.resetDemo();
+  const reset = runtime('http://localhost', { demo: true, storage: first.storage });
+  assert.equal(JSON.stringify(reset.ST.demoBandwidthBudgets()), '[]');
+});
 test('percentiles and week changes use interpolated values and preserve undefined cases', () => {
   const { ST } = runtime('http://localhost', { demo: true });
   const summary = ST.stats.summary([10, 20, 30, 40, 50]);
@@ -233,7 +244,7 @@ test('demo public queries, statistics, formatting and mutations retain their beh
   assert.equal(F.date(null), '—'); assert.equal(F.parts(Date.parse('2026-11-02T00:00:00Z')).wd, 0);
   assert.equal(F.rel(null), '—');
   for (const delta of [-100000, 0, 100000, 4000000, 100000000]) assert.equal(typeof F.rel(Date.now() - delta), 'string');
-  for (const duration of [1000, 100000, 10000000]) assert.equal(typeof F.dur(duration), 'string');
+  for (const duration of [1000, 100000, 10000000, 100000000]) assert.equal(typeof F.dur(duration), 'string');
   assert.equal(F.num(null), '—'); assert.equal(F.num(1.5, 1), '1.5');
   for (const units of ['auto', 'Mbps', 'MBps', 'Gbps']) {
     ST.setSettings({ units }, true);
@@ -241,9 +252,15 @@ test('demo public queries, statistics, formatting and mutations retain their beh
     assert.ok(F.axisUnit());
   }
   assert.equal(F.ms(null), '—'); assert.equal(F.ms(0), '0.0 ms'); assert.equal(F.pct(null), '—'); F.pct(1, 2);
-  assert.equal(F.bytes(0), '—'); F.bytes(1); F.bytes(4096);
+  assert.equal(F.bytes(null), '—'); assert.equal(F.bytes(0), '0 B'); F.bytes(1); F.bytes(4096);
+  assert.equal(F.bytesTotal(null, 10), null); assert.equal(F.bytesTotal(20, 10), 30);
   for (const metric of ['down', 'ping', 'loss', 'unknown']) { F.metric(metric, 1); F.metric(metric, null); }
-  assert.ok(ST.csv([{ ...ST.results()[0], error: 'quoted,"value"\nnext' }]).includes('"quoted,""value""\nnext"'));
+  const csv = ST.csv([{ ...ST.results()[0], bytesDown: 100, bytesUp: 50, error: 'quoted,"value"\nnext' }]);
+  assert.ok(csv.startsWith('time,node,status,download_mbps,upload_mbps,ping_ms,jitter_ms,packet_loss_pct,bytes_down,bytes_up,bytes_total'));
+  assert.ok(csv.includes(',100,50,150,'));
+  const missingBytes = ST.csv([{ ...ST.results()[0], bytesDown: null, bytesUp: null }]).split('\n')[1].split(',');
+  assert.deepEqual(missingBytes.slice(8, 11), ['', '', ''], 'missing counters keep the total empty');
+  assert.ok(csv.includes('"quoted,""value""\nnext"'));
   assert.ok(ST.csv([{ ...ST.results()[0], nodeId: 'missing', serverId: -1 }]).includes('missing'));
 });
 test('demo manual test reports progress and inserts a result without network access', async () => {
@@ -288,11 +305,14 @@ test('remote schedules, rules, stagger, key rotation, agent update, manual tests
   await ST.load();
   assert.equal(ST.scheduleInfo().rules.maxConcurrent, 1);
   assert.equal(ST.scheduleInfo().nodes[0].nodeId, data.node.id);
+  control.requests.length = 0;
   assert.equal(JSON.stringify(ST.engineSchedules(data.node)), JSON.stringify([{ engine: 'ookla', interval: 30, offset: 0, enabled: true }]));
   assert.equal(ST.engineSchedules({ id: 'unconfigured' }).length, 0);
   await ST.saveSchedule(data.node.id, { interval: 60, offset: 5, enabled: true });
   const put = control.requests.find(r => r.method === 'PUT' && r.path === '/api/schedules/' + data.node.id);
   assert.deepEqual(put.body, { interval: 60, offset: 5, enabled: true }); assert.equal(put.headers['if-match'], '"fixture-v1"');
+  assert.equal(control.requests.filter(r => r.path === '/api/schedules').length, 1, 'refreshes schedule data after save');
+  assert.equal(control.requests.some(r => r.path.startsWith('/api/results')), false, 'does not reload result history for a schedule edit');
   await ST.saveScheduleRules({ maxConcurrent: 3, quietStart: '23:00', quietEnd: '05:00' });
   const rules = control.requests.find(r => r.path === '/api/schedules/rules' && r.method === 'PUT').body;
   assert.equal(rules.maxConcurrent, 3); assert.equal(rules.stagger, true); assert.equal(rules.quiet.quietStart, '23:00');

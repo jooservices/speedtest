@@ -19,6 +19,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
+	"github.com/jooservices/speedtest/internal/center/usage"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
 
@@ -82,7 +83,7 @@ func TestStatisticsQueriesMeetLatencyTargetOnOneYearDataset(t *testing.T) {
  FROM generate_series(1, $1::int) AS node(node_no)
  CROSS JOIN generate_series(1, $2::int) AS sample(sample_no)
 )
-INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,loss_percent,server_id,server,ip,threads,error,engine,engine_isp)
+INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,loss_percent,server_id,server,ip,threads,error,engine,engine_isp,bytes_down,bytes_up)
 SELECT g.result_id, n.id, $3::timestamptz + (g.sample_no - 1) * interval '30 minutes', g.status,
        CASE WHEN g.status='failed' THEN NULL ELSE 100 + g.node_no * 10 + (g.sample_no % 100) END,
        CASE WHEN g.status='failed' THEN NULL ELSE 20 + g.node_no + (g.sample_no % 30) END,
@@ -93,7 +94,9 @@ SELECT g.result_id, n.id, $3::timestamptz + (g.sample_no - 1) * interval '30 min
        CASE WHEN g.status='failed' THEN NULL ELSE '{"id":1,"name":"Fixture","city":"C","sponsor":"P"}'::jsonb END, $4::inet, 4,
        CASE WHEN g.status='failed' THEN 'performance fixture failure' ELSE NULL END,
        CASE WHEN g.sample_no % 2=0 THEN 'librespeed' ELSE 'ookla' END,
-       CASE WHEN g.sample_no % 4 < 2 THEN 'Carrier A' ELSE 'Carrier B' END
+       CASE WHEN g.sample_no % 4 < 2 THEN 'Carrier A' ELSE 'Carrier B' END,
+       CASE WHEN g.status='failed' THEN NULL ELSE 1000000 + g.sample_no END,
+       CASE WHEN g.status='failed' THEN NULL ELSE 500000 + g.node_no END
 FROM generated g JOIN nodes n ON n.name = 'Perf-' || g.node_no`, nodeCount, samplesPerNode, start, ip)
 	if err != nil {
 		t.Fatal("could not generate one-year benchmark data")
@@ -121,6 +124,16 @@ FROM results WHERE engine='ookla' AND engine_isp='Carrier A' ORDER BY ts,id LIMI
 			measureStatisticsQueries(t, store, ctx, benchmark.query, nodeIDs[0], nodeCount, totalSamples, end)
 		})
 	}
+	verifyBandwidthUsageLatency(t, pool, ctx, baseQuery.From, end, totalSamples, func(name string, run func() error) {
+		t.Helper()
+		p50, p95, _, err := statisticsLatency(run, time.Now)
+		if err != nil {
+			t.Fatalf("%s query failed: %v", name, err)
+		}
+		if p50 >= 300*time.Millisecond || p95 >= 300*time.Millisecond {
+			t.Fatalf("%s p50=%s p95=%s; both must stay under 300 ms", name, p50, p95)
+		}
+	})
 }
 
 func logStatisticsPlans(t *testing.T, pool *pgxpool.Pool, ctx context.Context, q Query, totalSamples int) {
@@ -331,4 +344,20 @@ func containsRelation(nodes []string, relation string) bool {
 		}
 	}
 	return false
+}
+
+// The bandwidth usage query over a year of results stays under the same 300 ms target as the statistics queries.
+func verifyBandwidthUsageLatency(t *testing.T, pool *pgxpool.Pool, ctx context.Context, start, end time.Time, samples int, measure func(string, func() error)) {
+	t.Helper()
+	store := &usage.Store{DB: pool, Now: func() time.Time { return end }}
+	query := usage.Query{From: start, To: end, Group: "month"}
+	var result usage.Response
+	measure("bandwidth usage (12 months)", func() error {
+		var err error
+		result, err = store.Usage(ctx, query)
+		return err
+	})
+	if result.Totals.Total <= 0 || len(result.ByNodeEngine) < 5 || len(result.Series) > 65 {
+		t.Fatalf("usage over %d results: bytes=%d node-engine rows=%d month buckets=%d", samples, result.Totals.Total, len(result.ByNodeEngine), len(result.Series))
+	}
 }

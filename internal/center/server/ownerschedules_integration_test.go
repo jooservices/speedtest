@@ -126,6 +126,10 @@ func TestOwnerSchedulesHTTPFlowIntegration(t *testing.T) {
 		interval != 60 || offset < 0 || offset >= interval || revision < 3 {
 		t.Fatalf("stored schedule: %d %d rev %d %v", interval, offset, revision, err)
 	}
+	var distinctOffsets int
+	if err := pool.QueryRow(ctx, `SELECT count(DISTINCT offset_minutes) FROM schedules WHERE node_id=ANY($1::uuid[])`, ids).Scan(&distinctOffsets); err != nil || distinctOffsets != 2 {
+		t.Fatalf("staggered offsets = %d %v", distinctOffsets, err)
+	}
 	var quiet string
 	if err := pool.QueryRow(ctx, `SELECT value #>> '{}' FROM settings WHERE key='timezone'`).Scan(&quiet); err != nil || quiet != "Asia/Ho_Chi_Minh" {
 		t.Fatalf("stored timezone = %q %v", quiet, err)
