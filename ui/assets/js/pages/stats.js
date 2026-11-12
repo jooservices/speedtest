@@ -12,6 +12,19 @@
   }
   function axisFmt(m) { return ST.metrics[m].unit === 'speed' ? F.axisSpeed : function (v) { return F.num(v, m === 'loss' ? 1 : 0); }; }
   function axisUnit(m) { return ST.metrics[m].unit === 'speed' ? F.axisUnit() : ST.metrics[m].unit === 'ms' ? 'ms' : '%'; }
+  function sparseTrendNotice(metric, nodes, data, hourly, showSum) {
+    var groups = nodes.map(function (n) { return { id: n.id, name: n.name, samples: data.dist[n.id] ? data.dist[n.id].n : 0 }; });
+    if (showSum && nodes.length > 1) groups.push({ id: 'sum', name: 'Combined total', samples: groups.reduce(function (total, x) { return total + x.samples; }, 0) });
+    var sparse = groups.map(function (x) {
+      var series = data.trend.filter(function (s) { return s.id === x.id; })[0];
+      x.buckets = series ? series.points.filter(function (p) { return p[1] != null; }).length : 0;
+      return x;
+    }).filter(function (x) { return x.buckets < 3; });
+    if (!sparse.length) return null;
+    var bucket = hourly ? 'hourly bucket' : 'daily bucket';
+    return U.callout('Not enough data yet. A ' + ST.metrics[metric].label.toLowerCase() + ' trend needs at least three valid ' + (hourly ? 'hourly buckets. ' : 'daily buckets. ') +
+      sparse.map(function (x) { return x.name + ': ' + x.samples + (x.samples === 1 ? ' sample' : ' samples') + ' in ' + x.buckets + ' plotted ' + bucket + (x.buckets === 1 ? '' : 's'); }).join('; ') + '.', 'info', 'info');
+  }
 
 
   /* ---- data: computed in the browser for the demo, fetched from /api/stats/* for the real center ---- */
@@ -83,13 +96,13 @@
         if (!e) { e = map[key] = { t: 0, n: 0, v: 0 }; order.push(key); }
         e.t += r.ts; e.n++; e.v += v;
       });
-      out.trend.push({ id: n.id, name: n.name, color: ST.nodeColor(n), points: order.map(function (k) { var e = map[k]; return [e.t / e.n, e.v / e.n, k]; }) });
+      out.trend.push({ id: n.id, name: n.name, color: ST.nodeColor(n), points: order.map(function (k) { var e = map[k]; return [e.t / e.n, e.v / e.n, k, e.n]; }) });
       out.dist[n.id] = binsOf(values);
     });
     if (showSum) {
       var sumMap = {};
-      out.trend.forEach(function (s) { s.points.forEach(function (p) { var e = sumMap[p[2]] || (sumMap[p[2]] = { t: p[0], v: 0 }); e.v += p[1]; }); });
-      out.trend.push({ id: 'sum', name: 'Combined total', color: 'var(--text)', dashed: true, points: Object.keys(sumMap).map(function (k) { return [sumMap[k].t, sumMap[k].v]; }).sort(function (a, b) { return a[0] - b[0]; }) });
+      out.trend.forEach(function (s) { s.points.forEach(function (p) { var e = sumMap[p[2]] || (sumMap[p[2]] = { t: p[0], v: 0, n: 0 }); e.v += p[1]; e.n += p[3] || 0; }); });
+      out.trend.push({ id: 'sum', name: 'Combined total', color: 'var(--text)', dashed: true, points: Object.keys(sumMap).map(function (k) { return [sumMap[k].t, sumMap[k].v, k, sumMap[k].n]; }).sort(function (a, b) { return a[0] - b[0]; }) });
     }
     var vals = [], counts = []; for (var d = 0; d < 7; d++) { vals.push([]); counts.push([]); for (var hr = 0; hr < 24; hr++) { vals[d].push([]); counts[d].push(0); } }
     ST.results({ nodeIds: [heatNode.id], from: now - 30 * ST.DAY, status: 'ok', isp: isp, ispId: ispId }).forEach(function (r) { var p = F.parts(r.ts), v = S.metricValue(r, m); if (v != null) vals[p.wd][p.hour].push(v); });
@@ -124,7 +137,7 @@
         r[1].data.forEach(function (x) {
           var node = x.nodeId ? ST.node(x.nodeId) : null;
           data.trend.push({ id: x.nodeId || 'sum', name: node ? node.name : 'Combined total', color: node ? ST.nodeColor(node) : 'var(--text)', dashed: !node,
-            points: x.points.filter(function (p) { return p.value != null; }).map(function (p) { return [Date.parse(p.ts), p.value, p.ts]; }) });
+            points: x.points.filter(function (p) { return p.value != null; }).map(function (p) { return [Date.parse(p.ts), p.value, p.ts, p.count]; }) });
         });
         r[2].data.forEach(function (x) { data.hours[x.nodeId] = x.hours.map(function (hh) { return hh.value; }); });
         var cells = r[3].data.cells, matrix = [], counts = [];
@@ -195,7 +208,9 @@
       { key: 'std', label: 'Variation (±)', num: true, render: function (r) { return fmtM(m, r.s[m].std); } }];
     if (m === 'down' || m === 'up') tableCols.push({ key: 'pe', label: 'Of expected', num: true, render: function (r) { return F.pct(m === 'down' ? r.s.downPct : r.s.upPct, 0); } });
     tableCols.push({ key: 'st', label: 'Stability', num: true, render: function (r) { return r.s.stability == null ? '—' : F.num(r.s.stability, 0) + '/100'; } });
-    root.appendChild(U.card('Summary by node', 'P50 is the median; p50, p95 and p99 use linear interpolation of nonfailed results.', h('div', { style: 'margin:0 -18px -18px' }, U.table({ columns: tableCols, rows: sums, onRow: function (r) { location.hash = '#/nodes/' + r.n.id; } }))));
+    root.appendChild(U.card('Summary by node', 'P50 is the median; p50, p95 and p99 use linear interpolation of nonfailed results.', h('div', { style: 'margin:0 -18px -18px' }, U.table({ columns: tableCols, rows: sums, onRow: function (r) { location.hash = '#/nodes/' + r.n.id; }, rowAction: {
+      column: 'n', href: function (r) { return '#/nodes/' + r.n.id; }
+    } }))));
 
     var weekRows = sel.map(function (n) { return { n: n, w: data.week[n.id] || { current: null, previous: null } }; });
     root.appendChild(h('div', { class: 'mt' }, U.card('Week over week', 'Selected metric mean for the latest seven days versus the preceding seven days, independent of the page range.', U.table({ columns: [
@@ -237,7 +252,10 @@
         })), rows: ts.slice(0, 60) }));
         return;
       }
-      ST.charts.line(trendHost, { series: trendSeries, events: data.events.items, x: { type: 'time', min: from, max: now }, y: { min: 0, format: axisFmt(m), unit: axisUnit(m) }, height: 300, label: ST.metrics[m].label + ' trend', tipValue: function (s, v) { return fmtM(m, v); } });
+      var notice = sparseTrendNotice(m, sel, data, hourly, showSum), chartHost = h('div');
+      if (notice) trendHost.appendChild(notice);
+      trendHost.appendChild(chartHost);
+      ST.charts.line(chartHost, { series: trendSeries, events: data.events.items, x: { type: 'time', min: from, max: now }, y: { min: 0, format: axisFmt(m), unit: axisUnit(m) }, height: 300, label: ST.metrics[m].label + ' trend', tipValue: function (s, v) { return fmtM(m, v); } });
     }
     root.appendChild(h('div', { class: 'mt' }, U.card('Trend', (hourly ? 'Hourly' : 'Daily') + ' average of ' + ST.metrics[m].label.toLowerCase(), trendHost, trendCtl)));
     drawTrend();
@@ -262,13 +280,15 @@
 
     /* ---- heatmap ---- */
     var heatHost = h('div'), matrix = data.heat.matrix, counts = data.heat.counts;
+    var heatNodeSelect = U.select(all.map(function (n) { return { value: n.id, label: ST.nodeTitle(n) }; }), q.heatNode, function (v) { q.heatNode = v; ST.refresh(); }, 'auto');
+    heatNodeSelect.setAttribute('aria-label', 'Heatmap node');
     var heatCount = counts.reduce(function (total, row) { return total + row.reduce(function (sum, count) { return sum + count; }, 0); }, 0);
     var heatContent = h('div', null, heatCount ? null : U.empty('No data in the last 30 days', 'No successful tests have values for this metric in the selected time zone.'), heatHost,
       h('p', { class: 'muted stats-zone' }, 'Rolling 30 days · ' + ST.metrics[m].label + ' (' + axisUnit(m) + ') · ' + ST.timezone()),
       h('div', { class: 'heat-legend', style: 'margin-top:10px' }, h('span', null, 'Lowest'), h('span', { class: 'ramp' }), h('span', null, 'Highest')));
     root.appendChild(h('div', { class: 'mt' }, U.card('Week at a glance', 'Average ' + ST.metrics[m].label.toLowerCase() + ' for each weekday and hour over the rolling 30-day window.',
       h('div', null, heatContent),
-      [U.select(all.map(function (n) { return { value: n.id, label: ST.nodeTitle(n) }; }), q.heatNode, function (v) { q.heatNode = v; ST.refresh(); }, 'auto')])));
+      [heatNodeSelect])));
     ST.charts.heat(heatHost, { rows: DAYS, cols: Array.apply(null, Array(24)).map(function (_, i) { return (i < 10 ? '0' : '') + i; }), values: matrix, counts: counts, name: ST.metrics[m].label, format: function (v) { return fmtM(m, v); }, label: 'Heatmap for ' + heatNode.name });
 
     /* ---- distribution ---- */

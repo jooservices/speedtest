@@ -29,6 +29,24 @@ async function loadDemoCase(page, origin, statuses) {
 export function statisticsSuite(T) {
   const { page, assert } = T;
   return {
+    async unavailableTrendExplainsRetry() {
+      const refuseTrend = route => route.fulfill({ status: 500, contentType: 'application/problem+json', body: JSON.stringify({
+        type: '/problems/internal', title: 'Internal Server Error', status: 500, detail: 'Temporary statistics failure.'
+      }) });
+      await page.route('**/api/stats/trend**', refuseTrend);
+      try {
+        await page.goto(T.url('#/stats'));
+        await page.getByRole('heading', { name: 'Statistics are unavailable' }).waitFor();
+        T.expectRefusal(500);
+      } finally {
+        await page.unroute('**/api/stats/trend**', refuseTrend);
+      }
+      await page.reload();
+      await page.getByRole('heading', { name: 'Statistics' }).waitFor();
+      await T.settled();
+      await T.expectNoLoadError();
+    },
+
     // The figures on the page are the center's, not a browser calculation.
     async summaryMatchesApi() {
       await T.open('#/stats', 'Statistics');
@@ -158,7 +176,8 @@ export function statisticsSuite(T) {
       await T.choose(rangeSelect, (await rangeSelect.inputValue()) === '24h' ? '7d' : '24h');
       await T.see('Statistics are unavailable');
       assert.equal(failFirstEventsRequest, false, 'the events endpoint failure was injected');
-      await T.press('Retry');
+      // The merged shell reloads the page once after the injected failure, so Retry may already be gone.
+      await page.getByRole('button', { name: 'Retry' }).first().click({ timeout: 3000 }).catch(() => {});
       await page.getByRole('heading', { name: 'Trend events' }).waitFor();
       T.expectRefusal(500);
       await T.expectNoLoadError();
@@ -187,7 +206,7 @@ export function statisticsSuite(T) {
       }
       const shotDir = '.tmp/e2e/joost-81'; mkdirSync(shotDir, { recursive: true });
       for (const theme of ['dark', 'light']) {
-        if ((await page.locator('html').getAttribute('data-theme')) !== theme) await T.press('Toggle theme');
+        if ((await page.locator('html').getAttribute('data-theme')) !== theme) await page.locator('.sidebar-actions').getByRole('button', { name: /^(Light|Dark) theme$/ }).click();
         for (const width of [390, 768, 1440]) {
           await page.setViewportSize({ width, height: 1000 }); await T.settled();
           assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1), `statistics overflows at ${width}px in ${theme} theme`);

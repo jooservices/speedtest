@@ -20,12 +20,15 @@
         { key: 'status', label: 'Status', render: function (r) { return !r.n.enabled ? U.chip('Paused', '', 'pause') : r.last && r.last.status === 'failed' ? U.chip('Last test failed', 'crit', 'x') : U.chip('Online', 'good', 'check'); } },
         { key: 'exp', label: 'Expected', num: true, render: function (r) { return F.speed(r.n.expectedDown) + ' / ' + F.speed(r.n.expectedUp); } },
         { key: 'avg', label: 'Average ' + ST.settings().range, num: true, render: function (r) { return r.sum.down.mean == null ? '—' : F.speed(r.sum.down.mean) + ' (' + F.num(r.sum.downPct, 0) + '%)'; } },
+        { key: 'avgup', label: 'Upload ' + ST.settings().range, num: true, render: function (r) { return r.sum.up.mean == null ? '—' : F.speed(r.sum.up.mean) + ' (' + F.num(r.sum.upPct, 0) + '%)'; } },
         { key: 'ping', label: 'Latency', num: true, render: function (r) { return F.ms(r.sum.ping.median); } },
         { key: 'ip', label: 'Public IP', render: function (r) { return h('span', { class: 'mono' }, r.last ? r.last.ip : '—'); } },
         { key: 'seen', label: 'Last test', render: function (r) { return r.last ? F.rel(r.last.ts) : 'Never'; } },
         { key: 'agent', label: 'Agent', render: function (r) { return h('span', { class: 'mono' }, r.n.agent ? 'v' + r.n.agent : '—'); } },
         { key: 'act', label: '', render: function (r) { return h('span', { class: 'row', style: 'justify-content:flex-end' }, U.btn('', { icon: 'play', size: 'sm', title: 'Run a test on ' + r.n.name, onClick: function (e) { e.stopPropagation(); U.runTestDialog([r.n.id]); } })); } }],
-      rows: rows, cards: true, onRow: function (r) { location.hash = '#/nodes/' + r.n.id; }
+      rows: rows, cards: true, onRow: function (r) { location.hash = '#/nodes/' + r.n.id; }, rowAction: {
+        column: 'name', href: function (r) { return '#/nodes/' + r.n.id; }
+      }
     })));
     root.appendChild(h('div', { class: 'mt' }, U.callout('Each node works on its own. It only needs to know how fast its connection should be; it does not need to know what kind of connection it is attached to.', null, 'info')));
   };
@@ -381,12 +384,19 @@
       root.appendChild(tiles);
       var chartHost = h('div');
       var rs = ST.results({ nodeIds: [n.id], from: from });
-      root.appendChild(U.card('Speed over time', ST.rangeLabels[ST.settings().range], chartHost));
+      var chartResults = rs.filter(function (r) { return r.status !== 'failed' && (r.down != null || r.up != null); });
+      var chartBody = h('div');
+      if (chartResults.length < 3) chartBody.appendChild(U.callout('Not enough data yet. A trend needs at least three completed tests.', 'info', 'info'));
+      chartBody.appendChild(chartHost);
+      root.appendChild(U.card('Speed over time', ST.rangeLabels[ST.settings().range], chartBody));
+      var expectedLines = [{ v: n.expectedDown, label: 'Expected download', color: 'var(--text-2)' }];
+      if (n.expectedUp !== n.expectedDown) expectedLines.push({ v: n.expectedUp, label: 'Expected upload', color: 'var(--text-2)' });
+      else expectedLines[0].label = 'Expected download and upload';
       ST.charts.line(chartHost, {
         series: [{ id: 'd', name: 'Download', color: 'var(--s1)', points: rs.map(function (r) { return [r.ts, r.status === 'failed' ? null : r.down]; }) },
           { id: 'u', name: 'Upload', color: 'var(--s2)', points: rs.map(function (r) { return [r.ts, r.status === 'failed' ? null : r.up]; }) }],
         x: { type: 'time', min: from, max: now }, y: { min: 0, format: F.axisSpeed, unit: F.axisUnit() }, height: 280, label: 'Download and upload for ' + n.name,
-        refLines: [{ v: n.expectedDown, label: 'Expected download', color: 'var(--text-2)' }], tipValue: function (s, v) { return F.speed(v); }
+        refLines: expectedLines, tipValue: function (s, v) { return F.speed(v); }
       });
       var recent = rs.slice(-12).reverse();
       root.appendChild(h('div', { class: 'mt' }, U.card('Latest results', null, h('div', { style: 'margin:-8px -18px -18px' }, U.table({
@@ -396,8 +406,10 @@
           { key: 'up', label: 'Upload', num: true, render: function (r) { return F.speed(r.up); } },
           { key: 'ping', label: 'Ping', num: true, render: function (r) { return F.ms(r.ping); } },
           { key: 'ip', label: 'Public IP', render: function (r) { return h('span', { class: 'mono' }, r.ip); } },
-          { key: 'st', label: 'Status', render: function (r) { return U.statusChip(r.status); } }],
-        rows: recent, onRow: function (r) { ST.openResult(r); } })),
+          { key: 'st', label: 'Status', render: U.resultStatus }],
+        rows: recent, onRow: function (r) { ST.openResult(r); }, rowAction: {
+          column: 'ts', label: function (r) { return 'Open result details for ' + n.name + ' at ' + F.date(r.ts); }, onClick: function (r) { ST.openResult(r); }
+        } })),
       [h('a', { class: 'btn sm', href: '#/history' }, 'All results')])));
     }
 

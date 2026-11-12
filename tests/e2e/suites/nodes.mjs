@@ -1,3 +1,104 @@
+const UPLOAD_NODE_ID = '82000000-0000-4000-8000-000000000091';
+const UPLOAD_IP = '203.0.113.91';
+const SPARSE_IP = '203.0.113.92';
+const ONE_BUCKET_NODE_ID = '82000000-0000-4000-8000-000000000101';
+const TWO_BUCKET_NODE_ID = '82000000-0000-4000-8000-000000000102';
+const BUCKET_IP = '203.0.113.101';
+
+function refuseManualRun(route) {
+  return route.fulfill({ status: 409, contentType: 'application/problem+json', body: JSON.stringify({
+    type: '/problems/conflict', title: 'State, unique name or idempotency conflict', status: 409, detail: 'A test is already queued.'
+  }) });
+}
+
+function seedUploadFixture(T) {
+  T.db(`INSERT INTO ip_addresses(ip) VALUES ('${UPLOAD_IP}') ON CONFLICT DO NOTHING;
+    INSERT INTO nodes(id,name,label,expected_down_mbps,expected_up_mbps,color_slot,host,agent) VALUES
+      ('${UPLOAD_NODE_ID}','Upload fixture','Known expected speeds',400,75,8,'upload-fixture','test');
+    INSERT INTO schedules(node_id) VALUES ('${UPLOAD_NODE_ID}');
+    INSERT INTO engine_schedules(node_id,engine) VALUES ('${UPLOAD_NODE_ID}','ookla');
+    INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,bytes_down,bytes_up,duration_seconds,engine) VALUES
+      ('82000000-0000-4000-8000-000000000092','${UPLOAD_NODE_ID}',now()-interval '1 hour','ok',120,30,8,9,
+       '{"id":9,"name":"Upload fixture server"}'::jsonb,'${UPLOAD_IP}',4,1000,500,1,'ookla');`);
+}
+
+function cleanupUploadFixture(T) {
+  T.db(`DELETE FROM nodes WHERE id='${UPLOAD_NODE_ID}'; DELETE FROM ip_addresses WHERE ip='${UPLOAD_IP}' AND NOT EXISTS (SELECT 1 FROM results WHERE ip='${UPLOAD_IP}');`);
+}
+
+// VM3's two samples must land in ONE daily bucket whatever the time of day: they are pinned to 12:00 and 11:00 of the previous
+// day in the display zone (a fixed 'now minus 3 and 4 hours' straddles midnight between 00:00 and 04:00 and failed SC-QA-06).
+function seedSparseTrendFixture(T) {
+  T.db(`INSERT INTO ip_addresses(ip) VALUES ('${SPARSE_IP}') ON CONFLICT DO NOTHING;
+    INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,bytes_down,bytes_up,duration_seconds,error,engine)
+    SELECT gen_random_uuid(), n.id,
+      CASE WHEN n.name='VM3' THEN (date_trunc('day', now() AT TIME ZONE 'Asia/Bangkok') AT TIME ZONE 'Asia/Bangkok') - interval '12 hours' - make_interval(hours=>v.hours-3) ELSE now()-make_interval(hours=>v.hours) END, v.status,
+      CASE WHEN v.status='failed' THEN NULL ELSE n.expected_down_mbps*(0.4+v.seq/100.0) END,
+      CASE WHEN v.status='failed' THEN NULL ELSE n.expected_up_mbps*(0.4+v.seq/100.0) END,
+      CASE WHEN v.status='failed' THEN NULL ELSE 8+v.seq END,
+      CASE WHEN v.status='failed' THEN NULL ELSE 9 END,
+      CASE WHEN v.status='failed' THEN NULL ELSE '{"id":9,"name":"Sparse trend fixture"}'::jsonb END,
+      '${SPARSE_IP}',4,1000,500,1,CASE WHEN v.status='failed' THEN 'Synthetic sparse-series failure' ELSE NULL END,'librespeed'
+    FROM nodes n JOIN (VALUES
+      ('VM1',1,'failed',1),('VM2',2,'ok',1),('VM3',3,'ok',1),('VM3',4,'ok',2),
+      ('VM4',5,'ok',1),('VM4',29,'ok',2),('VM4',53,'ok',3),
+      ('VM5',2,'ok',1),('VM5',26,'ok',2),('VM5',50,'ok',3),('VM5',74,'ok',4)
+    ) AS v(name,hours,status,seq) ON n.name=v.name;`);
+}
+
+function cleanupSparseTrendFixture(T) {
+  T.db(`DELETE FROM results WHERE ip='${SPARSE_IP}' AND engine='librespeed'; DELETE FROM ip_addresses WHERE ip='${SPARSE_IP}' AND NOT EXISTS (SELECT 1 FROM results WHERE ip='${SPARSE_IP}');`);
+}
+
+function seedSparseBuckets(T) {
+  T.db(`INSERT INTO ip_addresses(ip) VALUES ('${BUCKET_IP}') ON CONFLICT DO NOTHING;
+    INSERT INTO nodes(id,name,label,expected_down_mbps,expected_up_mbps,color_slot,host,agent) VALUES
+      ('${ONE_BUCKET_NODE_ID}','One bucket fixture','Three samples',200,100,7,'one-bucket-fixture','test'),
+      ('${TWO_BUCKET_NODE_ID}','Two bucket fixture','Five samples',200,100,8,'two-bucket-fixture','test');
+    INSERT INTO engine_schedules(node_id,engine) VALUES ('${ONE_BUCKET_NODE_ID}','ookla'),('${TWO_BUCKET_NODE_ID}','ookla');
+    WITH base AS (SELECT date_trunc('day', now()) - interval '12 hours' AS anchor), samples AS (
+      SELECT '${ONE_BUCKET_NODE_ID}'::uuid AS node_id, anchor - v.hours * interval '1 hour' AS ts, v.seq FROM base CROSS JOIN (VALUES (0,1),(1,2),(2,3)) v(hours,seq)
+      UNION ALL
+      SELECT '${TWO_BUCKET_NODE_ID}'::uuid, anchor - v.hours * interval '1 hour', v.seq FROM base CROSS JOIN (VALUES (0,1),(1,2),(2,3)) v(hours,seq)
+      UNION ALL
+      SELECT '${TWO_BUCKET_NODE_ID}'::uuid, anchor - interval '1 day' - v.hours * interval '1 hour', v.seq FROM base CROSS JOIN (VALUES (0,4),(1,5)) v(hours,seq)
+    )
+    INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,bytes_down,bytes_up,duration_seconds,engine)
+    SELECT gen_random_uuid(), node_id, ts, 'ok', 100+seq, 50+seq, 10+seq, 9, '{"id":9,"name":"Bucket fixture"}'::jsonb, '${BUCKET_IP}', 4, 1000, 500, 1, 'ookla' FROM samples;`);
+}
+
+function cleanupSparseBuckets(T) {
+  T.db(`DELETE FROM results WHERE node_id IN ('${ONE_BUCKET_NODE_ID}','${TWO_BUCKET_NODE_ID}');
+    DELETE FROM engine_schedules WHERE node_id IN ('${ONE_BUCKET_NODE_ID}','${TWO_BUCKET_NODE_ID}');
+    DELETE FROM nodes WHERE id IN ('${ONE_BUCKET_NODE_ID}','${TWO_BUCKET_NODE_ID}');
+    DELETE FROM ip_addresses WHERE ip='${BUCKET_IP}' AND NOT EXISTS (SELECT 1 FROM results WHERE ip='${BUCKET_IP}');`);
+}
+
+async function checkNodeChartReferences(T, id, name, sparse) {
+  await T.open('#/nodes/' + id, new RegExp(name));
+  const card = T.page.locator('.card').filter({ hasText: 'Speed over time' }).first(), svg = card.locator('.chart svg').first();
+  await svg.waitFor();
+  const refs = svg.locator('line[stroke-dasharray="5 4"]');
+  const lines = await svg.locator('line').evaluateAll(items => items.map(line => ({ dash: line.getAttribute('stroke-dasharray'), y: line.getAttribute('y1') })));
+  T.assert.equal(await refs.count(), 2, `${name} shows separate expected download and upload lines; rendered lines: ${JSON.stringify(lines)}`);
+  const y = await refs.evaluateAll(lines => lines.map(line => Number(line.getAttribute('y1'))));
+  T.assert.ok(y.every(value => Number.isFinite(value) && value >= 24 && value <= 254), `${name} reference lines stay within the chart plot: ${y}`);
+  if (sparse) await T.see('Not enough data yet', card);
+  else T.assert.equal(await card.getByText(/Not enough data yet/).count(), 0, `${name} has enough data for a trend`);
+}
+
+async function hoverChartValue(page, cardName) {
+  const card = page.locator('.card').filter({ hasText: cardName }).first();
+  const hit = card.locator('.chart svg rect.hit').first();
+  await hit.scrollIntoViewIfNeeded();
+  const bounds = await hit.boundingBox();
+  for (let hour = 0; hour <= 23; hour++) {
+    await page.mouse.move(bounds.x + bounds.width * hour / 23, bounds.y + bounds.height / 2);
+    if (await card.locator('.tooltip.show').count()) return;
+  }
+  throw new Error(`${cardName} chart did not show a tooltip for any plotted time`);
+}
+
 let manualRunSequence = 0;
 
 async function runManual(T, name, message) {
@@ -198,8 +299,170 @@ export function nodesSuite(T, ctx) {
       const header = page.getByRole('columnheader', { name: 'Node' });
       await header.click();
       await T.expectNoLoadError();
-      await T.row('VM2').click();
+      await T.row('VM2').focus();
+      await page.keyboard.press('Enter');
       await page.getByRole('heading', { name: /VM2/, level: 1 }).waitFor();
+      await T.open('#/nodes', 'Nodes');
+      assert.equal(await page.getByRole('table').count(), 1, 'the node list keeps table semantics');
+      const openNode = T.row('VM1').getByRole('link', { name: /VM1.*Viettel Fast 50/ });
+      assert.equal(await openNode.count(), 1, 'the node row exposes its primary action in the accessibility tree');
+      await openNode.focus();
+      await page.keyboard.press('Enter');
+      await page.getByRole('heading', { name: /VM1/, level: 1 }).waitFor();
+      await T.open('#/nodes', 'Nodes');
+      const run = T.row('VM1').getByRole('button', { name: 'Run a test on VM1' });
+      await page.route('**/api/nodes/*/run', refuseManualRun);
+      try {
+        await run.focus();
+        await page.keyboard.press('Enter');
+        const dialog = page.getByRole('dialog');
+        await dialog.waitFor();
+        await T.see('Not started: the node is paused or already has a test waiting', dialog);
+        assert.equal(new URL(page.url()).hash, '#/nodes', 'Enter on a row action opens its dialog without opening the row');
+        T.expectRefusal(409);
+        await T.dismiss();
+      } finally {
+        await page.unroute('**/api/nodes/*/run', refuseManualRun);
+      }
+    },
+    async listShowsUpload() {
+      seedUploadFixture(T);
+      try {
+        assert.equal(T.db(`SELECT count(*) FROM nodes WHERE id='${UPLOAD_NODE_ID}'`), '1', 'the known-value node fixture was inserted');
+        const response = await T.api('/api/nodes'), apiNames = response.body && response.body.data ? response.body.data.map(node => node.name) : [];
+        assert.ok(apiNames.includes('Upload fixture'), `the authenticated nodes API includes the fixture: ${apiNames.join(', ')}`);
+        await T.open('#/nodes', 'Nodes');
+        await page.evaluate(() => window.ST.load());
+        await T.settled();
+        const names = await page.evaluate(() => window.ST.nodes().map(node => node.name));
+        assert.ok(names.includes('Upload fixture'), `the center snapshot includes the seeded upload fixture: ${names.join(', ')}`);
+        const row = T.row('Upload fixture');
+        await row.waitFor();
+        await T.expectCount(page.getByRole('columnheader', { name: /^Upload / }), 1, 'the list has one upload column');
+        assert.equal((await row.locator('td').nth(2).innerText()).trim(), '400 Mbps / 75 Mbps', 'the row shows the distinct expected download and upload values');
+        assert.equal((await row.locator('td').nth(3).innerText()).trim(), '120 Mbps (30%)', 'download is 120/400 Mbps = 30%');
+        assert.equal((await row.locator('td').nth(4).innerText()).trim(), '30 Mbps (40%)', 'upload is 30/75 Mbps = 40%');
+        await T.expectNoLoadError();
+      } finally {
+        cleanupUploadFixture(T);
+      }
+    },
+
+    async sparseTrendsExplainThreshold() {
+      seedSparseTrendFixture(T);
+      try {
+        await T.open('#/', 'Dashboard');
+        await T.choose(page.getByLabel('Engine', { exact: true }), 'librespeed');
+        await T.settled();
+        const dashboard = page.locator('.card').filter({ hasText: 'Compare connections' }).first();
+        const dashboardNote = dashboard.locator('.callout').filter({ hasText: 'Not enough data yet' });
+        const noteText = await dashboardNote.innerText();
+        for (const expected of ['A download trend', 'VM1 · Viettel Fast 50: 0', 'VM2 · Viettel Pro 600: 1', 'VM3 · VNPT Home 5 Super: 2']) assert.ok(noteText.includes(expected), `dashboard sparse state includes ${expected}: ${noteText}`);
+        assert.ok(!noteText.includes('VM4 · VNPT Home 2'), 'three valid measurements do not show a sparse warning');
+        for (const name of ['VM1', 'VM2', 'VM3']) await dashboard.locator('.legend button').filter({ hasText: name }).click();
+        assert.equal(await dashboard.locator('.callout').filter({ hasText: 'Not enough data yet' }).count(), 0, 'hidden sparse dashboard series do not keep the warning visible');
+        await T.choose(page.getByLabel('Engine', { exact: true }), '');
+        await T.settled();
+        assert.equal(await dashboard.locator('.callout').filter({ hasText: 'Not enough data yet' }).count(), 0, 'the primary-engine filter excludes sparse LibreSpeed measurements');
+
+        await T.open('#/stats', 'Statistics');
+        await T.choose(page.getByLabel('Engine', { exact: true }), 'librespeed');
+        await T.settled();
+        const trend = page.locator('.card').filter({ hasText: 'Trend' }).first();
+        const statsNote = trend.locator('.callout').filter({ hasText: 'Not enough data yet' });
+        const statsText = await statsNote.innerText();
+        for (const expected of ['A download trend', 'VM1: 0 samples in 0 plotted daily buckets', 'VM2: 1 sample in 1 plotted daily bucket', 'VM3: 2 samples in 1 plotted daily bucket']) assert.ok(statsText.includes(expected), `Statistics sparse state includes ${expected}: ${statsText}`);
+        assert.ok(!statsText.includes('VM4:'), 'three valid measurements do not show a Statistics warning');
+        for (const name of ['VM1', 'VM2', 'VM3']) {
+          await page.locator('.legend.mb button').filter({ hasText: name }).click();
+          await T.settled();
+        }
+        assert.equal(await trend.locator('.callout').filter({ hasText: 'Not enough data yet' }).count(), 0, 'unselected Statistics nodes do not keep the warning visible');
+        await checkNodeChartReferences(T, '10000000-0000-4000-8000-000000000001', 'VM1', true);
+        await checkNodeChartReferences(T, '10000000-0000-4000-8000-000000000003', 'VM3', true);
+        await checkNodeChartReferences(T, '10000000-0000-4000-8000-000000000004', 'VM4', false);
+      } finally {
+        cleanupSparseTrendFixture(T);
+        await page.goto(T.url('#/'));
+        await page.reload();
+        await T.heading('Dashboard').waitFor();
+      }
+    },
+    async sparseWarningsCountBuckets() {
+      seedSparseBuckets(T);
+      const previousDemo = await page.evaluate(() => localStorage.getItem('st.demo.v1'));
+      try {
+        await page.goto(T.url('#/'));
+        await page.reload();
+        await T.heading('Dashboard').waitFor();
+        await T.open('#/stats', 'Statistics');
+        await page.getByLabel('Time range').selectOption('7d');
+        await T.settled();
+        const apiTrend = page.locator('.card').filter({ hasText: 'Trend' }).first();
+        const apiNote = apiTrend.locator('.callout').filter({ hasText: 'Not enough data yet' });
+        const apiText = await apiNote.innerText();
+        assert.ok(apiText.includes('One bucket fixture: 3 samples in 1 plotted daily bucket'), `API mode reports raw samples and plotted buckets: ${apiText}`);
+        assert.ok(apiText.includes('Two bucket fixture: 5 samples in 2 plotted daily buckets'), `API mode handles two occupied buckets: ${apiText}`);
+        await T.summaryRow('One bucket fixture').locator('td').nth(1).click();
+        await page.getByRole('heading', { name: /One bucket fixture/ }).waitFor();
+        await T.open('#/stats', 'Statistics');
+
+        await page.goto(T.url('?demo=1#/stats'));
+        await page.waitForFunction(() => window.ST && ST.demo);
+        await page.evaluate(() => {
+          const one = ST.addNode({ name: 'One bucket fixture', label: 'Three samples', expectedDown: 200, expectedUp: 100 });
+          const two = ST.addNode({ name: 'Two bucket fixture', label: 'Five samples', expectedDown: 200, expectedUp: 100 });
+          const anchor = Date.now() - 12 * 60 * 60 * 1000;
+          const add = (node, hours, seq) => ({ id: 'bucket-' + node.id + '-' + seq, nodeId: node.id, ts: anchor - hours * 3600000,
+            status: 'ok', down: 100 + seq, up: 50 + seq, ping: 10 + seq, jitter: 1, loss: 0, dLat: 10, uLat: 10,
+            serverId: 1001, ip: '198.51.100.101', threads: 4, bytesDown: 1000, bytesUp: 500, duration: 1, engine: 'ookla' });
+          ST.state.settings.range = '7d';
+          ST.state.extra = [0, 1, 2].map(i => add(one, i, i + 1)).concat([0, 1, 2].map(i => add(two, i, i + 1)), [0, 1].map(i => add(two, 24 + i, i + 4)));
+          ST.persist();
+        });
+        await page.reload();
+        await T.heading('Statistics').waitFor();
+        await T.settled();
+        const demoTrend = page.locator('.card').filter({ hasText: 'Trend' }).first();
+        const demoText = await demoTrend.locator('.callout').filter({ hasText: 'Not enough data yet' }).innerText();
+        assert.ok(demoText.includes('One bucket fixture: 3 samples in 1 plotted daily bucket'), `demo mode reports raw samples and plotted buckets: ${demoText}`);
+        assert.ok(demoText.includes('Two bucket fixture: 5 samples in 2 plotted daily buckets'), `demo mode handles two occupied buckets: ${demoText}`);
+        await page.getByLabel('Add combined total').check();
+        await T.settled();
+        await hoverChartValue(page, 'Trend');
+        await hoverChartValue(page, 'Time of day');
+        const heatmap = page.locator('.card').filter({ hasText: 'Week at a glance' }).first();
+        const cell = heatmap.locator('svg rect[style*="--heat-"]').first();
+        await cell.waitFor();
+        const bounds = await cell.boundingBox();
+        await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
+        await heatmap.locator('.tooltip.show').waitFor();
+      } finally {
+        await page.evaluate(value => { if (value == null) localStorage.removeItem('st.demo.v1'); else localStorage.setItem('st.demo.v1', value); }, previousDemo);
+        cleanupSparseBuckets(T);
+        await page.goto(T.url('#/'));
+        await T.heading('Dashboard').waitFor();
+      }
+    },
+    async sparseChartShowsReference() {
+      const node = '82000000-0000-4000-8000-000000000082';
+      T.db(`INSERT INTO nodes(id,name,label,expected_down_mbps,expected_up_mbps,color_slot,host,agent) VALUES ('${node}','Sparse E2E','Two measurements',100,50,7,'sparse-e2e','test')`);
+      T.db(`INSERT INTO engine_schedules(node_id,engine) VALUES ('${node}','ookla')`);
+      T.db("INSERT INTO ip_addresses(ip) VALUES ('203.0.113.82') ON CONFLICT DO NOTHING");
+      T.db(`INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,bytes_down,bytes_up,duration_seconds,engine) VALUES
+        ('82000000-0000-4000-8000-000000000083','${node}',now()-interval '1 hour','ok',80,40,8,9,'{"id":9,"name":"Test server"}'::jsonb,'203.0.113.82',4,1000,500,1,'ookla'),
+        ('82000000-0000-4000-8000-000000000084','${node}',now()-interval '2 hours','ok',82,42,8,9,'{"id":9,"name":"Test server"}'::jsonb,'203.0.113.82',4,1000,500,1,'ookla')`);
+      try {
+        await page.evaluate(() => window.ST.load());
+        await page.goto(T.url('#/nodes/' + node));
+        await page.getByRole('heading', { name: /Sparse E2E/ }).waitFor();
+        await T.see('Not enough data yet');
+        await T.see('Expected download');
+        await T.see('Expected upload');
+        await T.expectNoLoadError();
+      } finally {
+        T.db(`DELETE FROM nodes WHERE id='${node}'`);
+      }
     },
 
     // The wizard with the one-line command, a real agent that enrols with the shown key, the first result, a manual run.

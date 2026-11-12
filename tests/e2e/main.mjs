@@ -1,7 +1,7 @@
 // Browser end-to-end scenarios against a real command center, real agents and a seeded database.
 // Run with `make e2e` (needs a worktree .env, psql, Go and a Chromium; see docs/e2e.md).
 import { chromium } from 'playwright';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import http from 'node:http';
 import { startStack, startAgent, fetchAgentConfig, submitScheduledResult, submitFailedResult, sendAgentHeartbeat, stopAll, query, root } from './lib.mjs';
@@ -24,11 +24,13 @@ import { trackCoverage } from '../lib/v8cov.mjs';
 
 const shots = join(root, '.tmp', 'e2e', 'shots');
 mkdirSync(shots, { recursive: true });
+const axeSource = readFileSync(join(root, 'node_modules', 'axe-core', 'axe.min.js'), 'utf8');
 const stack = await startStack();
 const browser = process.env.PW_TEST_CONNECT_WS_ENDPOINT ? await chromium.connect(process.env.PW_TEST_CONNECT_WS_ENDPOINT)
   : await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ? { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}) });
 const context = await browser.newContext({ viewport: { width: 1440, height: 900 }, acceptDownloads: true });
 const page = await context.newPage();
+await page.route('**/__e2e_axe.js', route => route.fulfill({ status: 200, contentType: 'text/javascript', headers: { 'cache-control': 'public, max-age=3600' }, body: axeSource }));
 const coverage = await trackCoverage(page);
 const problems = [];
 // Map tiles come from the internet in production; the suite answers them locally with a blank tile.
