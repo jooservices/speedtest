@@ -52,6 +52,16 @@ func TestNotificationCenterEndToEndIntegration(t *testing.T) {
 	dbtest.Reset(t, p)
 	t.Cleanup(func() { dbtest.Reset(t, p) })
 	dbtest.MigrateUp(t, p)
+	if _, err := p.Exec(t.Context(), `INSERT INTO settings(key,value) VALUES
+		('notifyQuietStart','""'),('notifyQuietEnd','""'),('notifyQuietTimezone','"UTC"')
+		ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`); err != nil {
+		t.Fatal("disable quiet hours for deterministic delivery test", err)
+	}
+	if _, err := p.Exec(t.Context(), `INSERT INTO notification_event_settings(event_key,enabled,severity,channels)
+		VALUES('security.signin_new',false,'warn',ARRAY['email']::text[])
+		ON CONFLICT(event_key) DO UPDATE SET enabled=false,channels=EXCLUDED.channels`); err != nil {
+		t.Fatal("disable unrelated sign-in delivery for deterministic sender test", err)
+	}
 	if err := runSeedAdmin(t.Context(), nil, io.Discard); err != nil {
 		t.Fatal("seed test owner", err)
 	}
@@ -220,7 +230,7 @@ func TestNotificationCenterEndToEndIntegration(t *testing.T) {
 		time.Sleep(100 * time.Millisecond)
 	}
 	if calls.Load() != 1 {
-		t.Fatal("test send count")
+		t.Fatalf("test send count = %d", calls.Load())
 	}
 	select {
 	case message := <-messages:
@@ -273,7 +283,8 @@ func TestNotificationCenterEndToEndIntegration(t *testing.T) {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("outbox did not deliver")
+			encoded, _ := json.Marshal(body)
+			t.Fatalf("outbox did not deliver: status=%d body=%s", status, encoded)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}

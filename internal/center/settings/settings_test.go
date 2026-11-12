@@ -212,22 +212,22 @@ func TestValidateNotificationChannels(t *testing.T) {
 func TestDefaultsMatchPreview(t *testing.T) {
 	got := Defaults("")
 	want := Settings{
-		Theme:           "dark",
-		Range:           "7d",
-		Units:           "auto",
-		Timezone:        "browser",
-		Hour12:          false,
-		Decimals:        1,
-		RetentionDays:   365,
-		GeoProvider:     "geolite2",
-		GeoFallback:     "ip-api",
-		GeoAutoUpdate:   true,
-		Engine:          "ookla",
-		DefaultThreads:  4,
-		ServerMode:      "auto",
-		MaxConcurrent:   1,
-		Stagger:         true,
-		NotifyQuietZone: "UTC", NotifyQuietCritical: true,
+		Theme:            "dark",
+		Range:            "7d",
+		Units:            "auto",
+		Timezone:         "browser",
+		Hour12:           false,
+		Decimals:         1,
+		RetentionDays:    365,
+		GeoProvider:      "geolite2",
+		GeoFallback:      "ip-api",
+		GeoAutoUpdate:    true,
+		Engine:           "ookla",
+		DefaultThreads:   4,
+		ServerMode:       "auto",
+		MaxConcurrent:    1,
+		Stagger:          true,
+		NotifyQuietStart: "23:00", NotifyQuietEnd: "07:00", NotifyQuietZone: "Asia/Bangkok", NotifyQuietCritical: true,
 		Notify: NotificationSettings{
 			Email: ChannelConfig{On: true, To: "ops@example.com"},
 		},
@@ -292,7 +292,7 @@ func TestValidateNotificationQuietHours(t *testing.T) {
 			}
 		})
 	}
-	if d := Defaults(""); !d.NotifyQuietCritical || d.NotifyQuietZone != "UTC" || d.NotifyQuietStart != "" {
+	if d := Defaults(""); !d.NotifyQuietCritical || d.NotifyQuietZone != "Asia/Bangkok" || d.NotifyQuietStart != "23:00" || d.NotifyQuietEnd != "07:00" {
 		t.Fatalf("defaults: %+v", d)
 	}
 }

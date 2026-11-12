@@ -242,8 +242,7 @@ func TestStoreTransactionsAndFailuresIntegration(t *testing.T) {
 	}
 	execSQL("INSERT INTO installer_events(id,installation_id,step,message,pct,status) VALUES($1,$2,'connect','Connecting',1,'running')", cursorID, jobID)
 	execSQL("INSERT INTO installer_idempotency(principal,key_hash,request_hash,installation_id,expires_at) VALUES('owner',$1,$2,$3,now()+interval '1 hour')", digest("populated"), digest("fixture"), jobID)
-	// Back to the schema before the installer migration (00007), whatever migrations were added since.
-	if err := db.MigrateDownTo(ctx, pool, 6); err != nil {
+	if err := db.MigrateDownTo(ctx, pool, 6); err != nil { // Restore the schema before the installer migration.
 		t.Fatal(err)
 	}
 	var removed, preserved bool
