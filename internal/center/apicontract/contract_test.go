@@ -44,30 +44,35 @@ func TestOperationsIncludeScopedAPIAndResolveNestedSchemas(t *testing.T) {
 	}
 }
 
-func TestISPOperationsDeclareLeastPrivilegeAccessTokenScopes(t *testing.T) {
+func TestNotificationOperationsDeclareAccessTokenScopes(t *testing.T) {
 	operations, err := Operations()
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[string]Scope{
-		"GET /api/isps": ScopeRead, "GET /api/isps/compare": ScopeRead,
-		"GET /api/isps/{id}": ScopeRead, "GET /api/isps/{id}/trend": ScopeRead,
-		"GET /api/isps/{id}/plans": ScopeRead, "POST /api/isps/{id}/plans": ScopeReadWrite,
-		"PUT /api/isps/{id}/plans/{planId}": ScopeReadWrite, "DELETE /api/isps/{id}/plans/{planId}": ScopeFull,
+		"listNotificationEvents":             ScopeRead,
+		"getNotificationEvent":               ScopeRead,
+		"updateNotificationEvent":            ScopeReadWrite,
+		"testNotificationEventTemplate":      ScopeReadWrite,
+		"getNotificationNodeEventSetting":    ScopeRead,
+		"updateNotificationNodeEventSetting": ScopeReadWrite,
+		"getNotificationTemplate":            ScopeRead,
+		"putNotificationTemplate":            ScopeReadWrite,
+		"previewNotificationTemplate":        ScopeRead,
+		"resetNotificationTemplate":          ScopeReadWrite,
 	}
 	for _, operation := range operations {
-		key := operation.Method + " " + operation.Path
-		expected, ok := want[key]
+		expected, ok := want[operation.ID]
 		if !ok {
 			continue
 		}
 		if operation.Scope != expected {
-			t.Errorf("%s scope = %q, want %q", key, operation.Scope, expected)
+			t.Errorf("%s scope = %q, want %q", operation.ID, operation.Scope, expected)
 		}
-		delete(want, key)
+		delete(want, operation.ID)
 	}
 	if len(want) != 0 {
-		t.Errorf("ISP operations missing from the API contract: %v", want)
+		t.Errorf("notification operations missing from contract: %v", want)
 	}
 }
 

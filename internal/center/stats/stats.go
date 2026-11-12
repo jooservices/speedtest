@@ -54,6 +54,7 @@ func (m Metric) unit() string {
 
 type Query struct {
 	Engine       string
+	ISP          string
 	NodeIDs      []string
 	NodesSet     bool
 	ISPIDs       []string
@@ -76,7 +77,9 @@ type MetricSummary struct {
 	Min         *float64 `json:"min"`
 	Max         *float64 `json:"max"`
 	P5          *float64 `json:"p5"`
+	P50         *float64 `json:"p50"`
 	P95         *float64 `json:"p95"`
+	P99         *float64 `json:"p99"`
 	Std         *float64 `json:"std"`
 	percentiles []float64
 }
@@ -276,7 +279,7 @@ func metricAggregate(column string) []string {
 		"min(" + column + ") FILTER (WHERE r.status <> 'failed')",
 		"max(" + column + ") FILTER (WHERE r.status <> 'failed')",
 		"stddev_pop(" + column + ") FILTER (WHERE r.status <> 'failed')",
-		"percentile_cont(ARRAY[0.05, 0.5, 0.95]) WITHIN GROUP (ORDER BY " + column + ") FILTER (WHERE " + valid + ")",
+		"percentile_cont(ARRAY[0.05, 0.5, 0.95, 0.99]) WITHIN GROUP (ORDER BY " + column + ") FILTER (WHERE " + valid + ")",
 	}
 }
 
@@ -285,10 +288,12 @@ func metricDest(m *MetricSummary) []any {
 }
 
 func (m *MetricSummary) setPercentiles() {
-	if len(m.percentiles) == 3 {
+	if len(m.percentiles) == 4 {
 		m.P5 = number(m.percentiles[0])
-		m.Median = number(m.percentiles[1])
+		m.P50 = number(m.percentiles[1])
+		m.Median = m.P50
 		m.P95 = number(m.percentiles[2])
+		m.P99 = number(m.percentiles[3])
 	}
 }
 
@@ -607,8 +612,10 @@ func summarizeValues(values []float64) MetricSummary {
 		variance += delta * delta
 	}
 	std := math.Sqrt(variance / float64(len(sorted)))
-	return MetricSummary{N: len(sorted), Mean: number(mean), Median: number(percentile(sorted, .5)), Min: number(sorted[0]),
-		Max: number(sorted[len(sorted)-1]), P5: number(percentile(sorted, .05)), P95: number(percentile(sorted, .95)), Std: number(std)}
+	p50 := number(percentile(sorted, .5))
+	return MetricSummary{N: len(sorted), Mean: number(mean), Median: p50, Min: number(sorted[0]), P50: p50,
+		Max: number(sorted[len(sorted)-1]), P5: number(percentile(sorted, .05)), P95: number(percentile(sorted, .95)),
+		P99: number(percentile(sorted, .99)), Std: number(std)}
 }
 
 func percentile(sorted []float64, p float64) float64 {

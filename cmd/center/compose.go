@@ -55,6 +55,7 @@ type services struct {
 	Settings           settings.Store
 	OwnerIP            server.OwnerIPStore
 	OwnerNotifications server.OwnerNotificationsStore
+	NotificationEvents server.NotificationEvents
 	OwnerDashboard     server.OwnerDashboardStore
 	OwnerAlerts        server.OwnerAlertsStore
 	OwnerJobs          server.OwnerJobsStore
@@ -141,6 +142,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		cleanup()
 		return services{}, nil, err
 	}
+	owner.Events = notifications
 	_, alertStore, retention := newOperationalStores(pool, cfg, logger, notifications, operational)
 	mailer := buildReportMailer(pool, notifications, logger)
 	dbip, err := geo.DBIPConfigFromEnv()
@@ -153,6 +155,13 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		cleanup()
 		return services{}, nil, err
 	}
+	if notifications != nil {
+		retention.OnComplete = func(ctx context.Context, result jobs.Result) error {
+			return notifications.PublishEvent(ctx, "platform.retention_ran", "", map[string]string{
+				"count": fmt.Sprint(result.Deleted + result.AuditDeleted), "duration": result.Duration.String(), "value": fmt.Sprint(result.RetentionDays),
+			})
+		}
+	}
 	installerService, err := buildInstaller(ctx, pool, cfg, nodeService, logger)
 	if err != nil {
 		cleanup()
@@ -161,11 +170,12 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 	return services{
 		Telemetry:          operational,
 		OwnerNotifications: ownerNotifications(notifications),
+		NotificationEvents: notifications,
 		Auth:               authService,
 		NodeCredential:     nodeService,
 		Pinger:             poolPinger{pool: pool},
 		Metrics:            metrics.Collector{DB: pool},
-		Agent:              &agentapi.Postgres{Pool: pool, Releases: releases, Hook: agentapi.ResultHookChain{watcher, alertStore}},
+		Agent:              &agentapi.Postgres{Pool: pool, Releases: releases, Hook: agentapi.ResultHookChain{watcher, alertStore}, Events: notifications},
 		OwnerNodes:         owner,
 		OwnerResults:       owner,
 		OwnerSchedules:     owner,

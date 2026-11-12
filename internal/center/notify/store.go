@@ -45,10 +45,12 @@ type Store struct {
 	// ObserveRun reports pass success without changing worker behavior.
 	ObserveRun func(bool)
 	DB         *pgxpool.Pool
-	Settings   Preferences
-	Sender     Sender
-	Now        func() time.Time
-	Logger     *slog.Logger
+	// EventsDB optionally replaces DB for catalog override helpers (unit tests).
+	EventsDB eventDB
+	Settings Preferences
+	Sender   Sender
+	Now      func() time.Time
+	Logger   *slog.Logger
 }
 
 func (s *Store) now() time.Time {
@@ -197,6 +199,7 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 	next := now
 	attempts := d.Attempts
 	held := false
+	var attemptErr error
 	if now.Before(d.CreatedAt.Add(24*time.Hour)) && d.EventID != nil {
 		if held, err = heldByQuietHours(ctx, tx, *d.EventID, now); err != nil {
 			return false, err
@@ -211,11 +214,11 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 		text := "delivery expired after 24 hours"
 		safeError = &text
 	default:
-		sendErr := s.attempt(ctx, tx, d)
+		attemptErr = s.attempt(ctx, tx, d)
 		attempts++
 		last = &now
 		status = "sent"
-		if sendErr != nil {
+		if attemptErr != nil {
 			status = "pending"
 			text := "notification attempt failed"
 			safeError = &text
@@ -228,6 +231,11 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 	}
 	if _, err = tx.Exec(ctx, `UPDATE notification_deliveries SET status=$2,attempts=$3,last_attempt=$4,error=$5,next_attempt_at=$6 WHERE id=$1`, d.ID, status, attempts, last, safeError, next); err != nil {
 		return false, err
+	}
+	if attemptErr != nil && attempts >= 3 && d.EventID != nil {
+		if err := s.escalateDeliveryFailure(ctx, tx, d.ID, *d.EventID, d.Channel, attempts, now); err != nil {
+			return false, err
+		}
 	}
 	return true, tx.Commit(ctx)
 }
@@ -242,7 +250,7 @@ func heldByQuietHours(ctx context.Context, q interface {
 	if err != nil {
 		return false, err
 	}
-	var window schedules.Quiet
+	window := schedules.Quiet{Start: "23:00", End: "07:00", Timezone: "Asia/Bangkok"}
 	critical := true
 	for rows.Next() {
 		var key string
@@ -267,6 +275,13 @@ func heldByQuietHours(ctx context.Context, q interface {
 		return false, err
 	}
 	if !window.Contains(now) {
+		return false, nil
+	}
+	var templateTest bool
+	if err := q.QueryRow(ctx, `SELECT detail=$2 FROM alert_events WHERE id=$1`, eventID, templateTestDetail).Scan(&templateTest); err != nil {
+		return false, err
+	}
+	if templateTest {
 		return false, nil
 	}
 	if critical {
@@ -317,16 +332,14 @@ func (s *Store) Loop(ctx context.Context) {
 
 func (s *Store) attempt(ctx context.Context, tx pgx.Tx, d Delivery) error {
 	attemptCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
 	view, ch, secret, sendErr := s.configurationTx(attemptCtx, tx, d.Channel)
-	if sendErr == nil {
-		what, node, since, detail := "Test notification", "Command center", d.CreatedAt, ""
-		if d.EventID != nil {
-			sendErr = tx.QueryRow(attemptCtx, `SELECT e.title,n.name,e.ts,COALESCE(e.detail,'') FROM alert_events e JOIN nodes n ON n.id=e.node_id WHERE e.id=$1`, *d.EventID).Scan(&what, &node, &since, &detail)
-		}
-		if sendErr == nil {
-			sendErr = s.Sender.Send(attemptCtx, d.Channel, ch.To, secret, Message(what, node, since, view.CenterURL, detail))
-		}
+	if sendErr != nil {
+		return sendErr
 	}
-	cancel()
-	return sendErr
+	text, err := s.renderDelivery(attemptCtx, tx, d, view.CenterURL)
+	if err != nil {
+		return err
+	}
+	return s.Sender.Send(attemptCtx, d.Channel, ch.To, secret, text)
 }

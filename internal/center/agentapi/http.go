@@ -209,43 +209,87 @@ func (h Handler) results(w http.ResponseWriter, r *http.Request, node string) {
 		writeProblem(w, 413)
 		return
 	}
-	outcomes := make([]Outcome, 0, len(batch.Results))
-	for index, item := range batch.Results {
-		result, err := ParseResult(item)
-		outcome := Outcome{Index: index, Outcome: "rejected", Status: 422}
-		if err == nil {
-			id := result.ID
-			outcome.ID = &id
-		} else if id := validResultID(item); id != "" {
-			outcome.ID = &id
+	parsed := parseResultBatch(batch.Results)
+	ctx := r.Context()
+	if preparer, ok := h.Store.(ResultBatchPreparer); ok {
+		if prepared, err := preparer.PrepareResultBatch(ctx, node, parsed.validResults); err == nil && prepared != nil {
+			ctx = prepared
 		}
-		if err == nil {
-			var duplicate bool
-			duplicate, err = h.Store.SaveResult(r.Context(), node, result)
-			switch {
-			case err == nil:
-				outcome.Status = 201
-				outcome.Outcome = "accepted"
-				if duplicate {
-					outcome.Status = 200
-					outcome.Outcome = "duplicate"
-				}
-			case errors.Is(err, ErrConflict):
-				outcome.Status = 409
-			default:
+	}
+	for index := range batch.Results {
+		outcome := parsed.outcomes[index]
+		if parsed.parseErrors[index] == nil {
+			saved, err := h.saveResult(ctx, node, outcome, parsed.results[index])
+			if err != nil {
 				observeIngest(r.Context(), "rejected")
 				storeError(w, err)
 				return
 			}
+			outcome = saved
 		}
-		if outcome.Outcome == "rejected" {
-			p := problem(outcome.Status, w.Header().Get("X-Request-ID"))
-			outcome.Problem = &p
-		}
+		outcome = completeResultOutcome(w, outcome)
 		observeIngest(r.Context(), outcome.Outcome)
-		outcomes = append(outcomes, outcome)
+		parsed.outcomes[index] = outcome
 	}
-	success(w, 207, outcomes)
+	success(w, 207, parsed.outcomes)
+}
+
+type resultBatch struct {
+	outcomes     []Outcome
+	results      []Result
+	parseErrors  []error
+	validResults []Result
+}
+
+func parseResultBatch(items []json.RawMessage) resultBatch {
+	batch := resultBatch{outcomes: make([]Outcome, len(items)), results: make([]Result, len(items)), parseErrors: make([]error, len(items)), validResults: make([]Result, 0, len(items))}
+	for index, item := range items {
+		result, err := ParseResult(item)
+		batch.results[index], batch.parseErrors[index] = result, err
+		if err == nil {
+			batch.validResults = append(batch.validResults, result)
+		}
+		batch.outcomes[index] = Outcome{Index: index, ID: resultIdentity(item, result), Outcome: "rejected", Status: 422}
+	}
+	return batch
+}
+
+func resultIdentity(item json.RawMessage, result Result) *string {
+	identity := result.ID
+	if !UUID(identity) {
+		var fields map[string]json.RawMessage
+		_ = json.Unmarshal(item, &fields)
+		_ = json.Unmarshal(fields["id"], &identity)
+	}
+	if !UUID(identity) {
+		return nil
+	}
+	identity = strings.ToLower(identity)
+	return &identity
+}
+
+func (h Handler) saveResult(ctx context.Context, node string, outcome Outcome, result Result) (Outcome, error) {
+	duplicate, err := h.Store.SaveResult(ctx, node, result)
+	if errors.Is(err, ErrConflict) {
+		outcome.Status = 409
+		return outcome, nil
+	}
+	if err != nil {
+		return outcome, err
+	}
+	outcome.Status, outcome.Outcome = 201, "accepted"
+	if duplicate {
+		outcome.Status, outcome.Outcome = 200, "duplicate"
+	}
+	return outcome, nil
+}
+
+func completeResultOutcome(w http.ResponseWriter, outcome Outcome) Outcome {
+	if outcome.Outcome == "rejected" {
+		p := problem(outcome.Status, w.Header().Get("X-Request-ID"))
+		outcome.Problem = &p
+	}
+	return outcome
 }
 
 func validResultID(item json.RawMessage) string {

@@ -250,6 +250,9 @@ func (s *Store) ReplaceSchedule(ctx context.Context, id string, in ScheduleInput
 	if ifMatch != nodeScheduleETag(rows) {
 		return nil, "", ErrStale
 	}
+	if err := s.publishWidenedSchedules(ctx, tx, id, rows, []EngineSchedule{{Engine: "ookla", Interval: slot.Interval, Enabled: in.Enabled}}); err != nil {
+		return nil, "", err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE schedules SET interval_minutes=$2, offset_minutes=$3, enabled=$4, revision=revision+1, updated_at=now() WHERE node_id=$1`,
 		id, slot.Interval, slot.Offset, in.Enabled); err != nil {
 		return nil, "", err
@@ -261,6 +264,32 @@ func (s *Store) ReplaceSchedule(ctx context.Context, id string, in ScheduleInput
 		return nil, "", err
 	}
 	return s.Schedule(ctx, id)
+}
+
+func (s *Store) publishWidenedSchedules(ctx context.Context, tx pgx.Tx, node string, current []scheduleRow, next []EngineSchedule) error {
+	if s.Events == nil {
+		return nil
+	}
+	previous := make(map[string]scheduleRow, len(current))
+	for _, schedule := range current {
+		previous[schedule.Engine] = schedule
+	}
+	for _, schedule := range next {
+		old, exists := previous[schedule.Engine]
+		if !exists || (schedule.Interval <= old.Interval && (schedule.Enabled || !old.Enabled)) {
+			continue
+		}
+		newInterval := fmt.Sprint(schedule.Interval) + " minutes"
+		if !schedule.Enabled {
+			newInterval = "paused"
+		}
+		if err := s.Events.PublishEventTx(ctx, tx, "bandwidth.interval_widened", node, map[string]string{
+			"engine": schedule.Engine, "old_interval": fmt.Sprint(old.Interval) + " minutes", "new_interval": newInterval,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func upsertSetting(ctx context.Context, tx pgx.Tx, key string, value any) error {

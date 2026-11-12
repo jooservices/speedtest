@@ -14,8 +14,12 @@ func TestEngineMigrationBackfillLegacyWritesAndRollback(t *testing.T) {
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	dbtest.MigrateUp(t, pool)
-	// The v1.0.0 schema (00008, before two-factor and engine schedules), whatever migrations were added since.
-	if err := db.MigrateDownTo(ctx, pool, 8); err != nil {
+	for currentMigrationVersion(t, ctx, pool) > 9 {
+		if err := db.Migrate(ctx, pool, "down"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Migrate(ctx, pool, "down"); err != nil {
 		t.Fatal(err)
 	}
 	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES ('00000000-0000-4000-8000-000000000071','legacy',300,100);
@@ -31,8 +35,12 @@ func TestEngineMigrationBackfillLegacyWritesAndRollback(t *testing.T) {
 	// A v1.0.0 result insert has no engine; legacy schedule queries still address exactly one row.
 	exec(t, ctx, pool, `INSERT INTO results(id,node_id,ts,status,threads,error) SELECT '00000000-0000-4000-8000-000000000073',id,now(),'failed',4,'old binary insert' FROM nodes;
  INSERT INTO engine_schedules(node_id,engine) SELECT id,'librespeed' FROM nodes;`)
-	// The v1.0.0 schema (00008, before two-factor and engine schedules), whatever migrations were added since.
-	if err := db.MigrateDownTo(ctx, pool, 8); err != nil {
+	for currentMigrationVersion(t, ctx, pool) > 9 {
+		if err := db.Migrate(ctx, pool, "down"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := db.Migrate(ctx, pool, "down"); err != nil {
 		t.Fatal(err)
 	}
 	var results, interval, offset int
@@ -42,4 +50,37 @@ func TestEngineMigrationBackfillLegacyWritesAndRollback(t *testing.T) {
 	}
 	dbtest.MigrateUp(t, pool)
 	t.Log("PASS: existing schedule/results backfilled; old result inserts succeed; geo usage and engine schedule rollbacks preserve legacy data; up reapplies")
+}
+
+func TestNotificationMigrationsUpgradeExistingEngineSchemaIntegration(t *testing.T) {
+	pool, ctx := testPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	for currentMigrationVersion(t, ctx, pool) > 10 {
+		if err := db.Migrate(ctx, pool, "down"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES ('00000000-0000-4000-8000-000000000078','engine fixture',300,100);
+INSERT INTO engine_schedules(node_id,engine,interval_minutes,offset_minutes) VALUES ('00000000-0000-4000-8000-000000000078','librespeed',30,5);
+INSERT INTO results(id,node_id,engine,ts,status,threads,error) VALUES ('00000000-0000-4000-8000-000000000079','00000000-0000-4000-8000-000000000078','librespeed',now(),'failed',4,'fixture');`)
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal("repeated up", err)
+	}
+	var preserved bool
+	if err := pool.QueryRow(ctx, `SELECT (SELECT engine='librespeed' FROM results WHERE id='00000000-0000-4000-8000-000000000079')
+		AND (SELECT interval_minutes=30 AND offset_minutes=5 FROM engine_schedules WHERE node_id='00000000-0000-4000-8000-000000000078' AND engine='librespeed')
+		AND to_regclass('notification_event_settings') IS NOT NULL
+		AND to_regclass('notification_templates') IS NOT NULL`).Scan(&preserved); err != nil || !preserved {
+		t.Fatal("upgrade from version 10 changed engine data or omitted notification tables", err)
+	}
+	var streakColumn bool
+	if err := pool.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_name='alert_state' AND column_name='streak_started_at')`).Scan(&streakColumn); err != nil || !streakColumn {
+		t.Fatal("upgrade omitted recovery streak timestamp", err)
+	}
+	t.Log("PASS: populated version 10 engine schema upgrades through notification versions without changing engine data")
 }

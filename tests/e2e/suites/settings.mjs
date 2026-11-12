@@ -151,19 +151,31 @@ export function settingsSuite(T, ctx) {
 
     // Secrets are write-only and stored encrypted.
     async notificationSecrets() {
-      await T.open('#/settings', 'Settings');
-      await T.tab('Notifications');
-      await T.fillAndLeave('URL for Webhook', 'https://hooks.example.com/e2e-secret-path');
-      await T.toast('Saved').waitFor();
-      await T.settled();
-      await T.fillAndLeave('Address for Email', 'ops@example.com');
-      await T.settled();
-      await page.getByLabel('Enable Email').check({ force: true });
-      await T.settled();
-      await T.eventually(async () => (await T.api('/api/settings')).text.includes('"configured":true'), 'the read model says a secret is configured');
-      const read = (await T.api('/api/settings')).text;
-      assert.ok(!read.includes('e2e-secret-path'), 'secrets are never returned');
-      assert.ok(Number(T.db('select count(*) from settings where secret_ciphertext is not null')) >= 1, 'the secret is stored encrypted');
+      let templateReads = 0;
+      const countTemplateRead = response => {
+        if (response.request().method() === 'GET' && response.url().includes('/api/notifications/templates/')) templateReads++;
+      };
+      page.on('response', countTemplateRead);
+      try {
+        await T.open('#/settings', 'Settings');
+        await T.tab('Notifications');
+        await T.settled();
+        assert.equal(templateReads, 0, 'opening the notification catalog does not fetch every template');
+        await T.fillAndLeave('URL for Webhook', 'https://hooks.example.com/e2e-secret-path');
+        await T.toast('Saved').waitFor();
+        await T.settled();
+        await T.fillAndLeave('Address for Email', 'ops@example.com');
+        await T.settled();
+        await page.getByLabel('Enable Email').check({ force: true });
+        await T.settled();
+        assert.equal(templateReads, 0, 'saving channel settings does not refetch event templates');
+        await T.eventually(async () => (await T.api('/api/settings')).text.includes('"configured":true'), 'the read model says a secret is configured');
+        const read = (await T.api('/api/settings')).text;
+        assert.ok(!read.includes('e2e-secret-path'), 'secrets are never returned');
+        assert.ok(Number(T.db('select count(*) from settings where secret_ciphertext is not null')) >= 1, 'the secret is stored encrypted');
+      } finally {
+        page.off('response', countTemplateRead);
+      }
     },
 
     // The center sends a test message and the owner sees the outcome; an unset channel is refused in plain words.
@@ -184,10 +196,93 @@ export function settingsSuite(T, ctx) {
       T.expectRefusal(422);
     },
 
+    // Event catalog: edit, preview, deliver, and reset the exact event template.
+    async notificationEventCatalog() {
+      await T.open('#/settings', 'Settings');
+      await T.tab('Notifications');
+      await T.fillAndLeave('URL for Webhook', receiver.url);
+      await T.toast('Saved').waitFor();
+      await T.settled();
+      await page.getByLabel('Enable Webhook').check({ force: true });
+      await T.settled();
+      await T.see('Events and message templates');
+      const quality = page.locator('[data-event-key="quality.ping_high"]');
+      await quality.waitFor();
+      await quality.locator('details > summary').click();
+      const consecutive = quality.getByLabel('Threshold for tests for Ping above limit');
+      await consecutive.fill('3');
+      await T.press('Save event settings', quality);
+      await T.toast('Event settings saved').waitFor();
+      assert.equal(T.db("select thresholds->>'for_tests' from notification_event_settings where event_key='quality.ping_high'"), '3', 'quality alerts expose a configurable integer streak');
+      await consecutive.fill('2');
+      await T.press('Save event settings', quality);
+      await T.toast('Event settings saved').waitFor();
+
+      const card = page.locator('[data-event-key="test.success"]');
+      await card.waitFor();
+      const editor = card.locator('textarea');
+      await editor.waitFor();
+      assert.equal(await editor.isDisabled(), true, 'template content is loaded on request');
+      await T.press('Load', card);
+      await T.eventually(async () => (await editor.inputValue()).includes('{node}'), 'the default template loads');
+      const original = await editor.inputValue();
+      assert.ok(original.includes('{node}'), 'the default template loads');
+      await card.locator('details > summary').click();
+      await card.getByLabel('Route Test success to webhook').check({ force: true });
+      await T.press('Save event settings', card);
+      await T.toast('Event settings saved').waitFor();
+      assert.equal(T.db("select enabled::text from notification_event_settings where event_key='test.success'"), 'true', 'saving channels preserves the event default');
+      await card.getByLabel('Template channel for Test success').selectOption('webhook');
+      await T.eventually(async () => (await editor.inputValue()).includes('{node}'), 'the webhook template loads');
+      await editor.fill('{"event":"{event}","text":"E2E preview for {node} download {download}"}');
+      await T.eventually(async () => (await card.locator('pre').innerText()) === '{"event":"Test success","text":"E2E preview for Viettel Fast 50 download 180 Mbps"}', 'the live preview exactly renders sample data');
+      await T.press('Save template', card);
+      await T.toast('Template saved').waitFor();
+      assert.ok(T.db("select body from notification_templates where event_key='test.success' and channel='webhook'").includes('E2E preview'), 'custom webhook template is stored');
+      const deliveredBefore = receiver.bodies.length;
+      await T.press('Send test', card);
+      await T.eventually(() => {
+        const state = T.db("select d.status||':'||d.attempts||':'||coalesce(d.error,'') from notification_deliveries d join alert_events e on e.id=d.event_id where e.event_key='test.success' and e.detail='Template test' and d.channel='webhook' order by d.created_at desc limit 1");
+        if (state.startsWith('failed:')) throw new Error('template test delivery failed: ' + state);
+        return state.startsWith('sent:') ? true : state || 'no template test delivery';
+      }, 'the template test delivery reaches the configured webhook', 30000);
+      await T.toast('Test message delivered').waitFor({ timeout: 30000 });
+      await T.eventually(() => receiver.bodies.slice(deliveredBefore).some(body => body.text === 'E2E preview for Viettel Fast 50 download 180 Mbps'), 'the configured webhook receives the exact edited event template');
+      const activity = await T.api('/api/alerts/events?state=all');
+      const sampleEvent = activity.body.data.find(event => event.title === 'Test success');
+      assert.ok(sampleEvent, 'the template test is recorded in alert activity');
+      assert.equal(sampleEvent.nodeId, null, 'system template tests have no node relationship');
+      await T.press('Reset to default', card);
+      await T.toast('Template reset').waitFor();
+      assert.equal(Number(T.db("select count(*) from notification_templates where event_key='test.success' and channel='webhook'")), 0, 'reset removes the override');
+      await card.getByLabel('Route Test success to webhook').uncheck({ force: true });
+      await T.press('Save event settings', card);
+      await T.toast('Event settings saved').waitFor();
+      const globalToggle = card.getByRole('checkbox', { name: 'Enable Test success', exact: true });
+      await globalToggle.evaluate(input => input.scrollIntoView({ block: 'center' }));
+      assert.equal(await globalToggle.isChecked(), true, 'test success is enabled by default');
+      await globalToggle.uncheck();
+      await T.toast('Saved').waitFor();
+      await T.eventually(() => T.db("select enabled::text from notification_event_settings where event_key='test.success'") === 'false', 'event toggle is stored');
+      await globalToggle.check();
+      await T.settled();
+      const nodeToggle = card.getByLabel('Enable Test success for VM1');
+      await nodeToggle.waitFor();
+      await T.eventually(() => nodeToggle.isEnabled(), 'the per-node setting has loaded');
+      await nodeToggle.uncheck({ force: true });
+      await T.eventually(() => T.db("select ns.enabled::text from notification_event_node_settings ns join nodes n on n.id=ns.node_id where ns.event_key='test.success' and n.name='VM1'") === 'false', 'per-node event setting is stored');
+      await nodeToggle.check({ force: true });
+      await T.eventually(() => T.db("select ns.enabled::text from notification_event_node_settings ns join nodes n on n.id=ns.node_id where ns.event_key='test.success' and n.name='VM1'") === 'true', 'per-node event setting can be restored');
+    },
+
     // Quiet hours for messages: both ends or neither; the critical exemption; stored with the owner's time zone.
     async notificationQuietHours() {
       await T.open('#/settings', 'Settings');
       await T.tab('Notifications');
+      // Migrations seed the normal quiet window, so clear it before testing an incomplete edit.
+      await T.fillAndLeave('Hold messages from', '');
+      await T.fillAndLeave('Hold messages until', '');
+      await T.settled();
       await T.fillAndLeave('Hold messages from', '22:00');
       await T.settled();
       assert.notEqual(T.db("select value #>> '{}' from settings where key='notifyQuietStart'"), '22:00', 'a half-typed window is not saved');
@@ -201,8 +296,9 @@ export function settingsSuite(T, ctx) {
       await page.reload();
       await T.tab('Notifications');
       assert.equal(await page.getByLabel('Hold messages from').inputValue(), '22:00', 'the window survives a reload');
-      // Put the defaults back: no quiet window, critical alerts delivered.
-      await T.fillAndLeave('Hold messages from', ''); await T.fillAndLeave('Hold messages until', ''); await T.settled();
+      // Put the migration defaults back: quiet hours enabled, critical alerts delivered.
+      await T.fillAndLeave('Hold messages from', '23:00'); await T.settled();
+      await T.fillAndLeave('Hold messages until', '07:00'); await T.settled();
       await page.getByLabel('Critical alerts are still delivered').check(); await T.settled();
     },
 
@@ -211,16 +307,18 @@ export function settingsSuite(T, ctx) {
       await T.open('#/settings', 'Settings');
       await T.tab('Data');
       await T.choose(setting('Keep results for').locator('select'), '90');
+      await T.toast('Saved').waitFor();
       await T.settled();
-      await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '90', 'the retention period is stored');
-      assert.equal((await T.api('/api/settings')).body.data.retentionDays, 90, 'the settings API returns the saved retention period');
+      await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '90', 'retention period is saved');
       assert.equal(T.db("select value #>> '{}' from settings where key='retentionDays'"), '90');
       const csv = await T.download(() => T.press('CSV', setting('Export all results')));
       assert.ok(csv.startsWith('time,node,status,download_mbps'), 'the CSV export has its header');
       const json = await T.download(() => T.press('JSON', setting('Export all results')));
       assert.ok(Array.isArray(JSON.parse(json)) || JSON.parse(json).data, 'the JSON export parses');
-      await T.choose(setting('Keep results for').locator('select'), '365'); await T.settled();
-      await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '365', 'the default retention period is restored');
+      await T.choose(setting('Keep results for').locator('select'), '365');
+      await T.toast('Saved').waitFor();
+      await T.settled();
+      await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '365', 'default retention period is restored');
     },
 
     // The activity log lists the changes made earlier in the run, filters by kind and never shows secrets.

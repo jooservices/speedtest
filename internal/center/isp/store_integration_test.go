@@ -354,9 +354,8 @@ func TestISPMigrationBackfillsASNAndSurvivesRollbackIntegration(t *testing.T) {
 
 func rollbackThroughISPEntities(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
-	// Back to the schema before the ISP entities migration (00021), whatever newer migrations exist.
 	if err := db.MigrateDownTo(ctx, pool, 20); err != nil {
-		t.Fatalf("roll back through the ISP entities migration: %v", err)
+		t.Fatalf("roll back to pre-ISP schema: %v", err)
 	}
 }
 
