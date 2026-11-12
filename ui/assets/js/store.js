@@ -1,7 +1,7 @@
 /* State, persistence (localStorage), formatting, queries, statistics, alert evaluation. */
 (function () {
   'use strict';
-  var ST = window.ST;
+  var ST = (/** @type {any} */ (window)).ST;
   var KEY = 'st.demo.v1';
   ST.demo = new URLSearchParams(location.search).get('demo') === '1';
   var MIN = 60000, HOUR = 3600000, DAY = 86400000;
@@ -37,7 +37,7 @@
     ];
   };
 
-  var state = ST.state = { nodes: [], results: [], settings: defaultSettings(), rules: defaultRules(), acked: {}, events: [], now: Date.now() };
+  var state = /** @type {any} */ (ST.state = { nodes: [], results: [], isps: [], settings: defaultSettings(), rules: defaultRules(), acked: {}, events: [], bandwidthBudgets: [], now: Date.now() });
 
   function load() {
     var saved = {};
@@ -48,6 +48,7 @@
     state.settings.notify = Object.assign(defaultSettings().notify, (saved.settings || {}).notify || {});
     state.rules = saved.rules || defaultRules();
     state.acked = saved.acked || {};
+    state.bandwidthBudgets = saved.bandwidthBudgets || [];
     state.extra = saved.extra || [];
     var seedNodes = ST.seedNodes();
     var seeded = ST.buildSeedResults(seedNodes, state.now);
@@ -60,11 +61,13 @@
   function persist() {
     if (!ST.demo) return;
     try {
-      localStorage.setItem(KEY, JSON.stringify({ nodes: state.nodes, settings: state.settings, rules: state.rules, acked: state.acked, extra: state.extra }));
+      localStorage.setItem(KEY, JSON.stringify({ nodes: state.nodes, settings: state.settings, rules: state.rules, acked: state.acked, bandwidthBudgets: state.bandwidthBudgets, extra: state.extra }));
     } catch (e) { /* storage full or disabled: demo keeps working in memory */ }
   }
   ST.persist = persist;
   ST.resetDemo = function () { if (!ST.demo) return; try { localStorage.removeItem(KEY); } catch (e) {} location.reload(); };
+  ST.demoBandwidthBudgets = function () { return state.bandwidthBudgets.map(function (budget) { return Object.assign({}, budget); }); };
+  ST.setDemoBandwidthBudgets = function (items) { state.bandwidthBudgets = items.map(function (budget) { return Object.assign({}, budget); }); persist(); ST.emit('data'); };
 
   var byNode = {};
   function reindex() {
@@ -75,8 +78,30 @@
 
   /* ---------- Settings / nodes API ---------- */
   ST.settings = function () { return state.settings; };
+  ST.timezone = function () {
+    var zone = state.settings.timezone;
+    return zone && zone !== 'browser' ? zone : (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
+  };
   ST.setSettings = function (patch, silent) { Object.assign(state.settings, patch); persist(); if (!silent) ST.emit('settings'); };
   ST.nodes = function () { return state.nodes; };
+  ST.isps = function () {
+    if (!ST.demo) return state.isps || [];
+    var byASN = {};
+    state.results.forEach(function (r) {
+      if (!r.ip) return; // failed tests (for example rate-limited ones) have no public address
+      var geo = ST.geo(r.ip), asn = geo && +geo.asn;
+      if (!asn) return;
+      var id = 'as' + asn;
+      byASN[id] = byASN[id] || { id: id, asn: asn, name: geo.isp || geo.asnOrg || id.toUpperCase(), organisation: geo.asnOrg || geo.isp || '' };
+    });
+    return Object.keys(byASN).map(function (id) { return byASN[id]; }).sort(function (a, b) { return a.name.localeCompare(b.name); });
+  };
+  ST.ispOptions = function () { return ST.isps().map(function (isp) { return { value: isp.id, label: isp.name + ' (AS' + isp.asn + ')' }; }); };
+  ST.resultISP = function (result) {
+    if (result && result.ispId) return result.ispId;
+    var geo = result && result.ip ? ST.geo(result.ip) : null;
+    return geo && geo.asn ? 'as' + geo.asn : null;
+  };
   ST.node = function (id) { return state.nodes.filter(function (n) { return n.id === id; })[0]; };
   ST.nodeColor = function (node) { return 'var(--' + ST.palette[((node.colorSlot - 1) % 8) + 1] + ')'; };
   ST.nodeTitle = function (n) { return n.name + ' · ' + n.label; };
@@ -86,7 +111,7 @@
     var slot = 1; while (used.indexOf(slot) >= 0) slot++;
     var id = 'n' + (Math.max.apply(null, state.nodes.map(function (x) { return +x.id.slice(1); }).concat([0])) + 1);
     var node = Object.assign({
-      id: id, colorSlot: slot, interval: 30, offset: state.nodes.length * 3 % 30, threads: 4, server: 'auto', enabled: true,
+      id: id, colorSlot: slot, interval: 60, offset: 0, threads: 4, server: 'auto', enabled: true,
       agent: '1.4.2', note: '', createdAt: Date.now(), pref: [1001, 2001],
       profile: { effD: .88, effU: .86, cong: .15, ping: 13, jit: 2, loss: .05 },
       ipModel: { kind: 'dynamic', prefix: '198.51.100', segSlots: 7 * 48, off: 3 + state.nodes.length * 17 }
@@ -121,6 +146,12 @@
   /* ---------- Queries ---------- */
   ST.now = function () { return Date.now(); };
   ST.nodeResults = function (id) { return ST.results({nodeIds:[id]}); };
+  function effectiveISP(result) {
+    var value = String(result.engineISP || '').trim();
+    var geo = result.geo || (result.ip && ST.geo && ST.geo(result.ip)) || {};
+    if (!value) value = String(geo.organisation || geo.asnOrg || geo.isp || '').trim();
+    return value || null;
+  }
   ST.results = function (o) {
     o = o || {};
     var ids = o.nodeIds || state.nodes.map(function (n) { return n.id; });
@@ -131,7 +162,9 @@
         var r = arr[i];
         if (r.ts < from || r.ts > to) continue;
         if ((r.engine || 'ookla') !== (o.engine || ST.selectedEngine || (ST.node(id) || {}).primaryEngine || 'ookla')) continue;
+        if (o.isp && (!effectiveISP(r) || effectiveISP(r).toLowerCase() !== o.isp.toLowerCase())) continue;
         if (o.status && o.status !== 'all' && r.status !== o.status) continue;
+        if (o.ispId && ST.resultISP(r) !== o.ispId) continue;
         out.push(r);
       }
     });
@@ -144,7 +177,7 @@
   ST.server = function (id) { return ST.servers.filter(function (s) { return s.id === id; })[0] || { id: id, name: 'Unknown server', city: '', sponsor: '' }; };
 
   /* ---------- Statistics ---------- */
-  var S = ST.stats = {};
+  var S = /** @type {any} */ (ST.stats = {});
   S.mean = function (a) { return a.length ? a.reduce(function (x, y) { return x + y; }, 0) / a.length : null; };
   S.sum = function (a) { return a.reduce(function (x, y) { return x + y; }, 0); };
   S.pct = function (sorted, p) {
@@ -152,11 +185,26 @@
     var i = (sorted.length - 1) * p, lo = Math.floor(i), hi = Math.ceil(i);
     return sorted[lo] + (sorted[hi] - sorted[lo]) * (i - lo);
   };
+  S.effectiveISP = effectiveISP;
+  S.ipChanges = function (results, engine, from, to) {
+    var previous = null, changes = [];
+    results.filter(function (result) { return (result.engine || 'ookla') === engine && result.ip != null; })
+      .slice().sort(function (a, b) { return a.ts - b.ts || String(a.id).localeCompare(String(b.id)); })
+      .forEach(function (result) {
+        if (previous && result.ts >= from && result.ts < to && previous.ip !== result.ip) changes.push({ result: result, from: previous.ip });
+        previous = result;
+      });
+    return changes;
+  };
+  S.weekChange = function (current, previous) {
+    return current == null || previous == null || previous === 0 ? null : (current - previous) / previous * 100;
+  };
   S.std = function (a) { if (a.length < 2) return 0; var m = S.mean(a); return Math.sqrt(S.mean(a.map(function (x) { return (x - m) * (x - m); }))); };
   S.summary = function (values) {
     var v = values.filter(function (x) { return x != null; }).sort(function (a, b) { return a - b; });
-    if (!v.length) return { n: 0, mean: null, median: null, min: null, max: null, p5: null, p95: null, std: null };
-    return { n: v.length, mean: S.mean(v), median: S.pct(v, .5), min: v[0], max: v[v.length - 1], p5: S.pct(v, .05), p95: S.pct(v, .95), std: S.std(v) };
+    if (!v.length) return { n: 0, mean: null, median: null, min: null, max: null, p5: null, p50: null, p95: null, p99: null, std: null };
+    var p50 = S.pct(v, .5);
+    return { n: v.length, mean: S.mean(v), median: p50, min: v[0], max: v[v.length - 1], p5: S.pct(v, .05), p50: p50, p95: S.pct(v, .95), p99: S.pct(v, .99), std: S.std(v) };
   };
   S.metricValue = function (r, m) {
     if (r.status === 'failed') return null;
@@ -175,11 +223,14 @@
     jitter: { label: 'Jitter', short: 'Jitter', unit: 'ms', good: 'low' },
     loss: { label: 'Packet loss', short: 'Loss', unit: '%', good: 'low' }
   };
-  S.nodeSummary = function (id, from, to) {
-    var rs = ST.results({ nodeIds: [id], from: from, to: to }), ok = rs.filter(function (r) { return r.status !== 'failed'; }), n = ST.node(id);
+  S.nodeSummary = function (id, from, to, isp, ispId) {
+    var rs = ST.results({ nodeIds: [id], from: from, to: to, isp: isp || null, ispId: ispId || null }), ok = rs.filter(function (r) { return r.status !== 'failed'; }), n = ST.node(id);
+    var rateLimited = rs.filter(function (r) { return r.status === 'failed' && r.failureClass === 'rate_limited'; }).length;
+    var eligible = rs.length - rateLimited;
     var ips = {}; rs.forEach(function (r) { ips[r.ip] = 1; });
     var sum = {
-      count: rs.length, ok: ok.length, failed: rs.length - ok.length, successRate: rs.length ? ok.length / rs.length * 100 : null,
+      count: rs.length, ok: ok.length, failed: rs.length - ok.length, rateLimited: rateLimited,
+      successRate: eligible ? ok.length / eligible * 100 : null,
       down: S.summary(ok.map(function (r) { return r.down; })), up: S.summary(ok.map(function (r) { return r.up; })),
       ping: S.summary(ok.map(function (r) { return r.ping; })), jitter: S.summary(ok.map(function (r) { return r.jitter; })),
       loss: S.summary(ok.map(function (r) { return r.loss; })), ipCount: Object.keys(ips).length
@@ -207,9 +258,15 @@
   };
 
   /* ---------- Alert evaluation ---------- */
+  // Same text as the center's alert event (internal/center/alerts ipChangeDetail): the old and the new address, then the city when known.
+  function ipChangeText(from, to) {
+    var geo = ST.geo(to);
+    return (from ? 'Changed from ' + from + ' to ' + to : 'Now ' + to) + (geo ? ' (' + geo.city + ')' : '');
+  }
+
   function ruleMatch(rule, r, node, prevIp) {
     switch (rule.metric) {
-      case 'failed': return r.status === 'failed';
+      case 'failed': return r.status === 'failed' && r.failureClass !== 'rate_limited';
       case 'ip_changed': return prevIp != null && prevIp !== r.ip;
       default:
         if (r.status === 'failed') return false;
@@ -233,15 +290,18 @@
         if (rule.nodes !== 'all' && rule.nodes.indexOf(node.id) < 0) return;
         var streak = 0, open = null, prevIp = null;
         (byNode[node.id] || []).forEach(function (r) {
-          var hit = ruleMatch(rule, r, node, prevIp);
+          if (r.status === 'failed' && (r.failureClass === 'rate_limited' || rule.metric !== 'failed')) return;
+          var before = prevIp, hit = ruleMatch(rule, r, node, prevIp);
           prevIp = r.ip;
           if (hit) {
             streak++;
             if (streak === rule.forTests) {
               open = {
-                id: rule.id + ':' + node.id + ':' + r.ts, ruleId: rule.id, nodeId: node.id, severity: rule.severity, ts: r.ts, resolvedAt: null,
+                id: rule.id + ':' + node.id + ':' + r.ts, ruleId: rule.id, nodeId: node.id, ispId: ST.resultISP(r), severity: rule.severity, ts: r.ts, resolvedAt: null,
                 title: rule.name,
-                detail: rule.metric === 'ip_changed' ? 'Now ' + r.ip + (ST.geo(r.ip) ? ' (' + ST.geo(r.ip).city + ')' : '') : ST.ruleText(rule)
+                detail: rule.metric === 'ip_changed' ? ipChangeText(before, r.ip) : ST.ruleText(rule),
+                triggerResultId: r.id,
+                engine: r.engine || node.primaryEngine || 'ookla'
               };
               events.push(open);
             }
@@ -264,7 +324,7 @@
   ST.ackAll = function () { state.events.forEach(function (e) { state.acked[e.id] = 1; }); persist(); ST.recomputeEvents(); ST.emit('data'); };
 
   /* ---------- Formatting ---------- */
-  var F = ST.fmt = {};
+  var F = /** @type {any} */ (ST.fmt = {});
   function tz() { var t = state.settings.timezone; return t === 'browser' ? undefined : t; }
   var dtCache = {};
   function dtf(opts) {
@@ -280,11 +340,6 @@
       case 'dayfull': return dtf({ weekday: 'short', day: '2-digit', month: 'short' }).format(ts);
       default: return dtf({ day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(ts);
     }
-  };
-  F.failureReason = function (error) {
-    var reason = typeof error === 'string' ? error.replace(/\s+/g, ' ').trim() : '';
-    if (!reason) return 'Reason unavailable';
-    return reason.length > 32 ? reason.slice(0, 31).trimEnd() + '…' : reason;
   };
   var partsFmt = {};
   F.parts = function (ts) {
@@ -330,7 +385,8 @@
   F.speed = function (mbps) { var p = F.speedParts(mbps); return mbps == null ? '—' : p.v + ' ' + p.u; };
   F.ms = function (v) { return v == null ? '—' : F.num(v, 1) + ' ms'; };
   F.pct = function (v, d) { return v == null ? '—' : F.num(v, d == null ? 0 : d) + '%'; };
-  F.bytes = function (b) { if (!b) return '—'; var u = ['B', 'KB', 'MB', 'GB']; var i = 0; while (b >= 1024 && i < 3) { b /= 1024; i++; } return F.num(b, i ? 1 : 0) + ' ' + u[i]; };
+  F.bytes = function (b) { if (b == null || !Number.isFinite(b) || b < 0) return '—'; var u = ['B', 'KB', 'MB', 'GB']; var i = 0; while (b >= 1024 && i < 3) { b /= 1024; i++; } return F.num(b, i ? 1 : 0) + ' ' + u[i]; };
+  F.bytesTotal = function (down, up) { return down == null || up == null ? null : down + up; };
   F.metric = function (m, v) {
     if (v == null) return '—';
     var info = ST.metrics[m]; if (!info) return F.num(v, 1);
@@ -373,11 +429,11 @@
   };
 
   ST.csv = function (rows) {
-    var head = ['time', 'node', 'status', 'download_mbps', 'upload_mbps', 'ping_ms', 'jitter_ms', 'packet_loss_pct', 'loaded_latency_down_ms', 'loaded_latency_up_ms', 'server', 'public_ip', 'error', 'engine'];
+    var head = ['time', 'node', 'status', 'download_mbps', 'upload_mbps', 'ping_ms', 'jitter_ms', 'packet_loss_pct', 'bytes_down', 'bytes_up', 'bytes_total', 'loaded_latency_down_ms', 'loaded_latency_up_ms', 'server', 'public_ip', 'error', 'failure_class', 'engine'];
     var esc = function (v) { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     return [head.join(',')].concat(rows.map(function (r) {
       var n = ST.node(r.nodeId), s = ST.server(r.serverId);
-      return [new Date(r.ts).toISOString(), n ? n.name + ' ' + n.label : r.nodeId, r.status, r.down, r.up, r.ping, r.jitter, r.loss, r.dLat, r.uLat, s.name + ' - ' + s.city, r.ip, r.error, r.engine || 'ookla'].map(esc).join(',');
+      return [new Date(r.ts).toISOString(), n ? n.name + ' ' + n.label : r.nodeId, r.status, r.down, r.up, r.ping, r.jitter, r.loss, r.bytesDown, r.bytesUp, F.bytesTotal(r.bytesDown, r.bytesUp), r.dLat, r.uLat, s.name + ' - ' + s.city, r.ip, r.error, r.failureClass || 'other', r.engine || 'ookla'].map(esc).join(',');
     })).join('\n');
   };
 
@@ -428,6 +484,7 @@
           API.list('/api/alerts/rules', options),
           // state=all: acknowledged alerts stay visible under "All" and can be reopened (the center's default is open only).
           API.list('/api/alerts/events?state=all&range=' + encodeURIComponent(range), options),
+          API.request('/api/isps?range=' + encodeURIComponent(range) + ST.engineQuery(), options),
           API.list('/api/ip/addresses', options),
           API.list('/api/ip/history', options),
           API.request('/api/schedules', options)
@@ -444,12 +501,13 @@
         state.results.forEach(remember);
         state.rules = snapshot[2];
         state.events = snapshot[3].map(function (e) { return Object.assign({}, e, { ts: timestamp(e.ts), resolvedAt: timestamp(e.resolvedAt) }); });
-        addresses = snapshot[4].map(function (a) {
+        state.isps = snapshot[4].data;
+        addresses = snapshot[5].map(function (a) {
           if (a.geo) geos[a.ip] = a.geo;
           return Object.assign({}, a, { first: timestamp(a.first), last: timestamp(a.last) });
         });
-        changes = snapshot[5].map(function (c) { return Object.assign({}, c, { ts: timestamp(c.ts) }); });
-        schedules = snapshot[6].data;
+        changes = snapshot[6].map(function (c) { return Object.assign({}, c, { ts: timestamp(c.ts) }); });
+        schedules = snapshot[7].data;
         reindex();
         ST.remote = { status: 'ready', error: null };
         ST.emit('settings');
@@ -492,6 +550,10 @@
     ST.updateNode = function (id, patch) {
       return editable('/api/nodes/' + encodeURIComponent(id), 'PATCH', patch, 'application/merge-patch+json');
     };
+    ST.listISPPlans = function (id) {
+      if (!id) return Promise.resolve([]);
+      return API.request('/api/isps/' + encodeURIComponent(id) + '/plans').then(function (r) { return r.data; });
+    };
     ST.addNode = function (node) { return mutation('/api/nodes', 'POST', node, { idempotencyKey: API.key() }); };
     ST.removeNode = function (id) {
       var path = '/api/nodes/' + encodeURIComponent(id);
@@ -531,6 +593,32 @@
       return schedules.nodes.filter(function (x) { return x.nodeId === node.id; }).map(function (x) { return Object.assign({ engine: x.engine || 'ookla' }, x.config); });
     };
     ST.saveEngineSchedules = function (id, engines) { return ST.saveSchedule(id, { engines: engines }); };
+    ST.serverCatalog = function (id, engine) {
+      var path = '/api/nodes/' + encodeURIComponent(id) + '/servers?engine=' + encodeURIComponent(engine);
+      return API.request(path).then(function (response) { return Object.assign({}, response.data, { etag: response.etag }); });
+    };
+    ST.refreshServerCatalog = function (id, engine) {
+      var path = '/api/nodes/' + encodeURIComponent(id) + '/servers?engine=' + encodeURIComponent(engine);
+      return API.request(path, { method: 'POST' }).then(function (response) {
+        return waitForServerCommand(id, response.data.id, Date.now() + 120000).then(function () { return ST.serverCatalog(id, engine); });
+      });
+    };
+    function waitForServerCommand(id, commandId, deadline) {
+      var path = '/api/nodes/' + encodeURIComponent(id) + '/commands/' + encodeURIComponent(commandId);
+      return API.request(path).then(function (response) {
+        var command = response.data;
+        if (command.status === 'succeeded') return command;
+        if (command.status === 'failed') throw new Error(command.error || 'The agent could not retrieve its server list.');
+        if (Date.now() >= deadline) throw new Error('Server discovery is still running. Retry the server list refresh.');
+        return new Promise(function (resolve) { setTimeout(resolve, 500); }).then(function () { return waitForServerCommand(id, commandId, deadline); });
+      });
+    }
+    ST.selectServer = function (id, engine, serverId, etag) {
+      var path = '/api/nodes/' + encodeURIComponent(id) + '/server-selection';
+      return API.request(path, { method: 'PUT', ifMatch: etag, body: { engine: engine, serverId: serverId } }).then(function (response) {
+        return ST.load().then(function () { return Object.assign({}, response.data, { etag: response.etag }); });
+      });
+    };
     function quietZone() {
       var zone = state.settings.timezone;
       if (zone && zone !== 'browser') return zone;
@@ -548,7 +636,19 @@
     };
     ST.saveSchedule = function (id, input) {
       var path = '/api/schedules/' + encodeURIComponent(id);
-      return conditional(path, function (response) { return mutation(path, 'PUT', input, { ifMatch: response.etag }); });
+      return conditional(path, function (response) { return API.request(path, { method: 'PUT', body: input, ifMatch: response.etag }); }).then(function (saved) {
+        return API.request('/api/schedules').then(function (response) {
+          schedules = response.data;
+          var node = state.nodes.filter(function (item) { return item.id === id; })[0];
+          if (node) ['interval', 'offset', 'enabled'].forEach(function (key) { if (Object.prototype.hasOwnProperty.call(input, key)) node[key] = input[key]; });
+          ST.emit('data');
+          return saved.data;
+        }, function (error) {
+          ST.remote = { status: 'error', error: error };
+          ST.emit('remote');
+          return saved.data;
+        });
+      });
     };
     ST.saveScheduleRules = function (patch) {
       return conditional('/api/schedules', function (response) {
@@ -557,7 +657,7 @@
         var rules = Object.assign({ stagger: current.stagger, maxConcurrent: current.maxConcurrent,
           quietStart: current.quiet.quietStart, quietEnd: current.quiet.quietEnd }, patch);
         return mutation('/api/schedules/rules', 'PUT', { stagger: !!rules.stagger, maxConcurrent: +rules.maxConcurrent,
-          quiet: { quietStart: rules.quietStart || '', quietEnd: rules.quietEnd || '', timezone: quietZone() } }, { ifMatch: response.etag });
+          quiet: { quietStart: rules.quietStart || '', quietEnd: rules.quietEnd || '', timezone: ST.timezone() } }, { ifMatch: response.etag });
       });
     };
     ST.staggerSchedules = function () {
@@ -582,6 +682,46 @@
           })();
         });
       });
+    };
+    ST.notificationEvents = function () { return API.request('/api/notifications/events').then(function (r) { return r.data; }); };
+    ST.sendEventTemplateTest = function (key, channel) {
+      var path = '/api/notifications/events/' + encodeURIComponent(key) + '/tests/' + encodeURIComponent(channel);
+      return API.request(path, { method: 'POST', idempotencyKey: API.key() }).then(function (queued) {
+        var started = Date.now(), deliveryPath = '/api/notifications/deliveries/' + encodeURIComponent(queued.data.id);
+        return new Promise(function (resolve, reject) {
+          (function poll() {
+            API.request(deliveryPath).then(function (reply) {
+              var delivery = reply.data;
+              if (delivery.status === 'sent' || delivery.status === 'failed') { resolve(delivery); return; }
+              if (Date.now() - started > 30000) { resolve({ status: 'failed', error: 'no answer from the center in time' }); return; }
+              setTimeout(poll, 1000);
+            }, reject);
+          })();
+        });
+      });
+    };
+    ST.updateNotificationEvent = function (key, patch) {
+      return API.request('/api/notifications/events/' + encodeURIComponent(key), { method: 'PATCH', body: patch }).then(function (r) { return r.data; });
+    };
+    ST.notificationNodeEnabled = function (key, node) {
+      var path = '/api/notifications/events/' + encodeURIComponent(key) + '/nodes/' + encodeURIComponent(node);
+      return API.request(path).then(function (r) { return r.data.enabled; });
+    };
+    ST.setNotificationNodeEnabled = function (key, node, enabled) {
+      var path = '/api/notifications/events/' + encodeURIComponent(key) + '/nodes/' + encodeURIComponent(node);
+      return API.request(path, { method: 'PUT', body: { enabled: !!enabled } }).then(function (r) { return r.data; });
+    };
+    ST.notificationTemplate = function (key, channel) {
+      return API.request('/api/notifications/templates/' + encodeURIComponent(key) + '/' + encodeURIComponent(channel)).then(function (r) { return r.data; });
+    };
+    ST.saveNotificationTemplate = function (key, channel, body) {
+      return API.request('/api/notifications/templates/' + encodeURIComponent(key) + '/' + encodeURIComponent(channel), { method: 'PUT', body: { body: body } }).then(function (r) { return r.data; });
+    };
+    ST.previewNotificationTemplate = function (key, channel, body) {
+      return API.request('/api/notifications/templates/' + encodeURIComponent(key) + '/' + encodeURIComponent(channel) + '/previews', { method: 'POST', body: { body: body } }).then(function (r) { return r.data; });
+    };
+    ST.resetNotificationTemplate = function (key, channel) {
+      return API.request('/api/notifications/templates/' + encodeURIComponent(key) + '/' + encodeURIComponent(channel) + '/resets', { method: 'POST' }).then(function (r) { return r.data; });
     };
     // Follows an installation or removal job. Progress arrives as server-sent events; if the stream drops after the job has
     // ended, its final state is read instead. onEvent receives {id, message, pct, status}; the last call has a terminal status.

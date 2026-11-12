@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/shared/testenv"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/db"
@@ -22,9 +24,7 @@ func openPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	if err != nil {
 		t.Fatal("a configured worktree .env is required")
 	}
-	for k, v := range values {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid test configuration")
@@ -50,9 +50,15 @@ func TestStoreRecordsAndListsNewestFirst(t *testing.T) {
 	now := time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC)
 	clock := now
 	s := &Store{DB: pool, Now: func() time.Time { return clock }}
+	credentialID := "10000000-0000-4000-8000-000000000104"
 	for i, action := range []string{"node.create", "node.update", "settings.update", "alert.rule.create"} {
 		clock = now.Add(time.Duration(i) * time.Minute)
-		if err := s.Record(ctx, Entry{Actor: "owner@example.com", Action: action, TargetType: "x", Summary: strings.Repeat("s", 400), Remote: "203.0.113.5"}); err != nil {
+		entry := Entry{Actor: "owner@example.com", Action: action, TargetType: "x", Summary: strings.Repeat("s", 400), Remote: "203.0.113.5"}
+		if i == 3 {
+			entry.AuthMethod = AuthMethodBearer
+			entry.CredentialID = credentialID
+		}
+		if err := s.Record(ctx, entry); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -69,6 +75,9 @@ func TestStoreRecordsAndListsNewestFirst(t *testing.T) {
 	if !items[0].TS.Equal(now.Add(3*time.Minute)) || items[0].TS.Location() != time.UTC {
 		t.Fatalf("timestamps are UTC: %v", items[0].TS)
 	}
+	if items[0].AuthMethod != AuthMethodBearer || items[0].CredentialID != credentialID {
+		t.Fatalf("bearer authentication metadata was not retained: %+v", items[0])
+	}
 	items, total, err = s.List(ctx, Filter{}, 2, 3)
 	if err != nil || total != 4 || len(items) != 1 || items[0].Action != "node.create" {
 		t.Fatalf("page 2: %+v total %d err %v", items, total, err)
@@ -83,5 +92,34 @@ func TestStoreRecordsAndListsNewestFirst(t *testing.T) {
 	}
 	if items, total, _ := s.List(ctx, Filter{Action: "nothing"}, 1, 10); total != 0 || items == nil || len(items) != 0 {
 		t.Fatalf("empty result is an empty list, not null: %+v", items)
+	}
+}
+
+func TestAuthenticationSourceMigrationRollsBackAndReapplies(t *testing.T) {
+	pool, ctx := openPool(t)
+	// Migration 20 adds these columns; restore version 19 regardless of newer migrations.
+	var columns int
+	if err := db.MigrateDownTo(ctx, pool, 19); err != nil {
+		t.Fatal("roll back through audit authentication source migration:", err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='audit_log' AND column_name IN ('auth_method','credential_id')`).Scan(&columns); err != nil {
+		t.Fatal(err)
+	}
+	if columns != 0 {
+		t.Fatalf("rolled-back audit columns = %d", columns)
+	}
+	for range 4 {
+		if err := db.Migrate(ctx, pool, "up"); err != nil {
+			t.Fatal("reapply audit authentication source migration:", err)
+		}
+	}
+	store := &Store{DB: pool}
+	entry := Entry{Actor: "owner@example.com", Action: "node.update"}
+	if err := store.Record(ctx, entry); err != nil {
+		t.Fatal("record after reapplying audit migration:", err)
+	}
+	items, _, err := store.List(ctx, Filter{}, 1, 1)
+	if err != nil || len(items) != 1 || items[0].AuthMethod != AuthMethodSession || items[0].CredentialID != "" {
+		t.Fatalf("session defaults after migration: items=%+v err=%v", items, err)
 	}
 }

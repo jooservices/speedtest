@@ -76,11 +76,21 @@ func TestAlertRuleToAgentEventHTTPFlowIntegration(t *testing.T) {
 	var eventList struct {
 		Data []alerts.Event `json:"data"`
 	}
-	if listResponse.Code != http.StatusOK || json.Unmarshal(listResponse.Body.Bytes(), &eventList) != nil || len(eventList.Data) != 1 {
+	if listResponse.Code != http.StatusOK || json.Unmarshal(listResponse.Body.Bytes(), &eventList) != nil {
 		t.Fatalf("open alert activity = %d %s", listResponse.Code, listResponse.Body.String())
 	}
-	event := eventList.Data[0]
-	if event.RuleID == nil || *event.RuleID != ruleID || event.NodeID != nodeID || event.Acked || event.ResolvedAt != nil {
+	var event alerts.Event
+	matched := 0
+	for _, candidate := range eventList.Data {
+		if candidate.RuleID != nil && *candidate.RuleID == ruleID {
+			event = candidate
+			matched++
+		}
+	}
+	if matched != 1 {
+		t.Fatalf("open alert activity contains %d events for created rule, want one: %s", matched, listResponse.Body.String())
+	}
+	if event.RuleID == nil || *event.RuleID != ruleID || event.NodeID == nil || *event.NodeID != nodeID || event.Acked || event.ResolvedAt != nil {
 		t.Fatalf("opened alert event = %+v", event)
 	}
 
@@ -107,15 +117,16 @@ func TestAlertRuleToAgentEventHTTPFlowIntegration(t *testing.T) {
 	openAgain.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session})
 	openAgainResponse := httptest.NewRecorder()
 	handler.ServeHTTP(openAgainResponse, openAgain)
-	var cleared struct {
-		Meta struct {
-			Pagination struct {
-				Total int `json:"total"`
-			} `json:"pagination"`
-		} `json:"meta"`
+	var stillOpen struct {
+		Data []alerts.Event `json:"data"`
 	}
-	if openAgainResponse.Code != http.StatusOK || json.Unmarshal(openAgainResponse.Body.Bytes(), &cleared) != nil || cleared.Meta.Pagination.Total != 0 {
-		t.Fatalf("acknowledged alert remains open: %d %s", openAgainResponse.Code, openAgainResponse.Body.String())
+	if openAgainResponse.Code != http.StatusOK || json.Unmarshal(openAgainResponse.Body.Bytes(), &stillOpen) != nil {
+		t.Fatalf("open alert activity after acknowledgement = %d %s", openAgainResponse.Code, openAgainResponse.Body.String())
+	}
+	for _, candidate := range stillOpen.Data {
+		if candidate.RuleID != nil && *candidate.RuleID == ruleID {
+			t.Fatalf("acknowledged alert remains open: %s", openAgainResponse.Body.String())
+		}
 	}
 	t.Log("PASS: owner session creates a rule; authenticated agent failures open one durable event; owner acknowledges it with ETag and open activity clears")
 }

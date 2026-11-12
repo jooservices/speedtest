@@ -1,7 +1,7 @@
 /* Schedules: per-node interval and offset, avoid-overlap option, upcoming runs, data usage estimate. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
   var INTERVALS = [5, 10, 15, 30, 60, 120, 240, 360, 720, 1440];
   function ivLabel(m) { return m < 60 ? 'Every ' + m + ' minutes' : m === 60 ? 'Every hour' : m < 1440 ? 'Every ' + m / 60 + ' hours' : 'Once a day'; }
 
@@ -117,6 +117,7 @@
     root.appendChild(h('div', { class: 'grid cols-2 mt' },
       U.card('Coming up', 'The next tests across all nodes.', upList),
       U.card('Data used by tests', 'Estimated from recent results. Shorter intervals use more data — check this if your plan has a data cap.', h('div', { style: 'margin:-8px -18px -18px' }, usageTable))));
+    ST.bandwidth.advicePanel(root);
 
     function tickCountdowns() {
       var t = Date.now();

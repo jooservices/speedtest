@@ -14,8 +14,11 @@ import (
 func fixture(t *testing.T, kind string) []byte {
 	t.Helper()
 	name := "GeoIP2-City-Test.mmdb"
-	if kind == "ASN" {
+	switch kind {
+	case "ASN":
 		name = "GeoLite2-ASN-Test.mmdb"
+	case "IPinfo":
+		name = "IPinfo-Lite-Test.mmdb"
 	}
 	data, err := os.ReadFile(filepath.Join("../../../.tmp", name))
 	if err != nil {

@@ -1,6 +1,6 @@
 GO ?= go
 
-.PHONY: build test vet lint ci run-center run-agent release test-install shellcheck
+.PHONY: build test vet lint ci run-center run-agent release test-install test-docker-staging shellcheck typecheck test-timing python-tests
 
 ## build compiles every package.
 build:
@@ -20,7 +20,7 @@ lint:
 	golangci-lint run
 
 ## ci runs the same checks as CI: vet, test, build and lint.
-ci: vet test build lint test-install test-matrix
+ci: vet test build lint test-install test-docker-staging test-matrix typecheck python-tests
 
 ## run-center starts the command center from the current .env.
 run-center:
@@ -46,11 +46,31 @@ test-db:
 
 ## shellcheck lints the shell scripts shipped or used by the project.
 shellcheck:
-	shellcheck internal/center/install/install.sh scripts/test-install.sh internal/center/installer/*_remote.sh deploy/prod/prod.sh deploy/prod/entrypoint.sh deploy/observability/observe.sh deploy/observability/probe.sh
+	shellcheck internal/center/install/install.sh scripts/test-install.sh tests/install-systemd/run.sh tests/install-systemd/in-container.sh internal/center/installer/*_remote.sh deploy/prod/prod.sh deploy/prod/entrypoint.sh deploy/observability/observe.sh deploy/observability/probe.sh deploy/docker/entrypoint.sh deploy/docker/node-entrypoint.sh deploy/docker/nodes.sh scripts/test-docker-staging.sh
 
 ## test-install runs ShellCheck and the installer test against a fake download server.
 test-install: shellcheck
 	sh scripts/test-install.sh
+
+## test-docker-staging checks the staging interval defaults with fake psql, curl, docker and speedtest binaries.
+test-docker-staging:
+	bash scripts/test-docker-staging.sh
+
+## test-install-systemd runs the installer and uninstall path under real systemd in Docker.
+test-install-systemd:
+	bash tests/install-systemd/run.sh
+
+## typecheck validates the UI JavaScript with JSDoc types and emits no build output.
+typecheck:
+	npm run typecheck
+
+## python-tests runs the repository-local Python unit tests.
+python-tests:
+	python3 -m unittest discover -s tests/lib
+
+## test-timing runs the unit suite and checks each package against its timing budget.
+test-timing: python-tests
+	python3 scripts/test-timing.py
 
 VERSION ?= $(shell git describe --tags --exact-match 2>/dev/null | sed 's/^v//' || true)
 ifeq ($(strip $(VERSION)),)

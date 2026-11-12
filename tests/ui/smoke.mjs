@@ -13,7 +13,7 @@ try {
     await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ?
       { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}) });
 } catch (error) { await server.close(); throw error; }
-const routes = ['/', '/nodes', '/nodes/node-contract', '/history', '/stats', '/network', '/schedules', '/alerts', '/settings'];
+const routes = ['/', '/nodes', '/nodes/node-contract', '/history', '/stats', '/network', '/isps', '/schedules', '/alerts', '/settings'];
 const diagnostics = [];
 const page = await browser.newPage();
 const coverage = await trackCoverage(page);
@@ -52,8 +52,40 @@ try {
         }
       }
     }
-    console.log(`PASS smoke run ${run}: all 9 routes, demo/API, dark/light, 390/768/1440px`);
+    console.log(`PASS smoke run ${run}: all 10 routes, demo/API, dark/light, 390/768/1440px`);
   }
+  await goto('/isps', true);
+  await page.getByRole('button', { name: /^Show trend for .* \(AS\d+\)$/ }).first().click();
+  await page.locator('#view .grid-2 svg[role="img"]').waitFor();
+
+  await goto('/isps', false);
+  const ispSelect = () => page.getByRole('button', { name: 'Show trend for Fixture ISP (AS64500)' });
+  await ispSelect().waitFor();
+  server.control.empty = true;
+  await ispSelect().click();
+  await page.getByText('No samples').waitFor();
+  server.control.empty = false;
+  await ispSelect().click();
+  await page.locator('#view .grid-2 svg[aria-label="Fixture ISP download trend"]').waitFor();
+  const trendPath = `/api/isps/${server.data.isp.id}/trend`;
+  server.control.failPaths.add(trendPath);
+  await ispSelect().click();
+  await page.getByText('Could not load trend').waitFor();
+  server.control.failPaths.delete(trendPath);
+  await ispSelect().click();
+  await page.locator('#view .grid-2 svg[aria-label="Fixture ISP download trend"]').waitFor();
+
+  server.control.failPaths.add('/api/isps');
+  await page.getByRole('link', { name: 'Nodes', exact: true }).click();
+  await page.waitForURL('**/#/nodes');
+  await page.getByRole('link', { name: 'ISPs', exact: true }).click();
+  await page.waitForURL('**/#/isps');
+  await page.waitForFunction(() => ST.remote.status === 'ready');
+  await page.getByText('Could not load ISPs').waitFor();
+  server.control.failPaths.delete('/api/isps');
+  await page.getByRole('button', { name: 'Retry', exact: true }).click();
+  await ispSelect().waitFor();
+
   for (const route of routes) {
     // Delay each bootstrap so loading is observable on every route.
     server.control.delay = 50;

@@ -21,6 +21,7 @@ import (
 	"github.com/jooservices/speedtest/internal/agent/sched"
 	"github.com/jooservices/speedtest/internal/agent/update"
 	"github.com/jooservices/speedtest/internal/shared/agentid"
+	"github.com/jooservices/speedtest/internal/shared/failureclass"
 )
 
 // restartDelay lets the acknowledgement of an update command reach the center before the process exits.
@@ -30,11 +31,12 @@ var restartDelay = 3 * time.Second
 var watchdogInterval = 5 * time.Second
 
 type measurementConfig struct {
-	engine  engine.Engine
-	binding netpath.Binding
-	server  int64
-	threads int
-	name    string
+	engine          engine.Engine
+	binding         netpath.Binding
+	server          int64
+	threads         int
+	name            string
+	serverSnapshots bool
 }
 
 type commandState struct {
@@ -51,10 +53,12 @@ type Loop struct {
 	stop          atomic.Pointer[context.CancelFunc]
 	spool         *report.Spool
 	reporter      *report.Reporter
+	rateLimits    *report.RateLimitGate
 	logger        *slog.Logger
 	center        string
 	credential    string
 	mu            sync.Mutex
+	measurementMu sync.Mutex
 	cfg           measurementConfig
 	engineConfigs map[string]measurementConfig
 	commands      map[string]commandState
@@ -81,11 +85,7 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 	if _, err = netpath.NewRunner(runner, center.String(), credential, binding); err != nil {
 		return nil, err
 	}
-	sc, err := report.SpoolConfigFromEnv()
-	if err != nil {
-		return nil, err
-	}
-	spool, err := report.Open(sc, logger)
+	spool, rateLimits, err := openRateLimitSpool(logger)
 	if err != nil {
 		return nil, err
 	}
@@ -97,8 +97,9 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 			threads = ec.Concurrent
 		}
 	}
-	l := &Loop{spool: spool, logger: logger, center: center.String(), credential: credential,
-		cfg: measurementConfig{runner, binding, cfg.ServerID, threads, cfg.Engine}, commands: make(map[string]commandState), notify: make(chan struct{}, 1), fatal: make(chan error, 1)}
+	l := &Loop{spool: spool, rateLimits: rateLimits, logger: logger, center: center.String(), credential: credential,
+		cfg:      measurementConfig{engine: runner, binding: binding, server: cfg.ServerID, threads: threads, name: cfg.Engine},
+		commands: make(map[string]commandState), notify: make(chan struct{}, 1), fatal: make(chan error, 1)}
 	if err := l.restoreCommands(); err != nil {
 		return nil, err
 	}
@@ -109,12 +110,36 @@ func New(cfg agentconfig.Config, center *url.URL, credential, version string, lo
 	l.Controller.Engines = installedEngines
 	l.Controller.ApplyConfig = l.applyConfig
 	l.Controller.RunCommand = l.command
+	l.Controller.ListServers = l.listServers
 	l.Updater = &update.Agent{Paths: update.DefaultPaths(), Version: version, Logger: logger, Restart: l.restartSoon}
 	l.Controller.UpdateResult = l.Updater.Result
 	l.Controller.HeartbeatOK = l.Updater.Confirm
 	l.Controller.OfferUpdate = func(c control.AgentConfig) { l.Updater.Offer(c.AutoUpdate, c.Release) }
 	l.Controller.UpdateAgent = l.updateAgent
 	return l, nil
+}
+
+func openRateLimitSpool(logger *slog.Logger) (*report.Spool, *report.RateLimitGate, error) {
+	sc, err := report.SpoolConfigFromEnv()
+	if err != nil {
+		return nil, nil, err
+	}
+	backoff, err := report.RateLimitBackoffConfigFromEnv()
+	if err != nil {
+		return nil, nil, err
+	}
+	spool, err := report.Open(sc, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	states, err := spool.RateLimitStates()
+	if err != nil {
+		_ = spool.Close()
+		return nil, nil, err
+	}
+	gate := report.NewRateLimitGate(backoff, nil)
+	gate.Restore(states)
+	return spool, gate, nil
 }
 
 // Close releases the spool after all workers have joined.
@@ -172,6 +197,92 @@ func (l *Loop) updateAgent(cmd control.Command, cfg control.AgentConfig) control
 		return control.CommandAck{Status: "failed", Error: &msg}
 	}
 	return control.CommandAck{Status: "succeeded", Phase: "restarting to install", Pct: 100}
+}
+
+func (l *Loop) listServers(ctx context.Context, name string) ([]engine.ServerOption, error) {
+	if name != "ookla" && name != "librespeed" {
+		return nil, errors.New("unsupported engine")
+	}
+	l.mu.Lock()
+	cfg, configured := l.engineConfigs[name]
+	if !configured {
+		cfg = l.cfg
+	}
+	l.mu.Unlock()
+	if !configured {
+		cfg.name = name
+		var err error
+		cfg.engine, err = engine.NewConfigured(name, cfg.threads)
+		if err != nil {
+			return nil, err
+		}
+	}
+	lister, ok := cfg.engine.(engine.ServerLister)
+	if !ok {
+		return nil, errors.New("engine does not support server discovery")
+	}
+	path, err := netpath.Resolve(cfg.binding)
+	if err != nil {
+		return nil, err
+	}
+	options := engine.Options{InterfaceName: path.Interface}
+	if path.SourceIP != nil {
+		options.SourceIP = path.SourceIP.String()
+	}
+	return lister.ListServers(ctx, options)
+}
+
+func runWithServerFallback(ctx context.Context, runner *netpath.Runner, serverID int64) (netpath.RunResult, error) {
+	return runWithServerFallbackForEngine(ctx, runner, serverID, engine.DefaultTimeout, true)
+}
+
+func runWithServerFallbackTimeout(ctx context.Context, runner *netpath.Runner, serverID int64, timeout time.Duration) (netpath.RunResult, error) {
+	return runWithServerFallbackForEngine(ctx, runner, serverID, timeout, false)
+}
+
+func runWithServerFallbackForEngine(ctx context.Context, runner *netpath.Runner, serverID int64, timeout time.Duration, resolveServerID bool) (netpath.RunResult, error) {
+	out, err := runner.Run(ctx, engine.Options{ServerID: serverID})
+	if !retryAutomaticServer(ctx, err, serverID) {
+		return out, err
+	}
+	var servers []engine.ServerOption
+	if resolveServerID {
+		servers, _ = runner.ListServers(ctx)
+	}
+	fallbackCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	out, err = runner.Run(fallbackCtx, engine.Options{})
+	identifyFallbackServer(&out, servers)
+	out.Warnings = append(out.Warnings, "Pinned server was unreachable; the engine selected a server automatically.")
+	return out, err
+}
+
+func identifyFallbackServer(result *netpath.RunResult, servers []engine.ServerOption) {
+	if result.Measurement.Server == nil || result.Measurement.Server.ID > 0 || result.Measurement.Server.Endpoint == "" {
+		return
+	}
+	var match int64
+	for _, server := range servers {
+		if server.Endpoint != result.Measurement.Server.Endpoint {
+			continue
+		}
+		if match != 0 {
+			return
+		}
+		match = server.ID
+	}
+	result.Measurement.Server.ID = match
+}
+
+func retryAutomaticServer(ctx context.Context, err error, serverID int64) bool {
+	if serverID < 1 || ctx.Err() != nil {
+		return false
+	}
+	var runErr *engine.RunError
+	if !errors.As(err, &runErr) {
+		return false
+	}
+	return runErr.Class == engine.ServerUnavailable || runErr.Class == engine.NoRoute || runErr.Class == engine.Timeout
 }
 
 // watchUpdate makes a freshly installed version that cannot confirm itself exit with an error, which lets the
@@ -235,6 +346,12 @@ func (l *Loop) RunEngine(ctx context.Context, name string) error {
 }
 
 func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
+	l.measurementMu.Lock()
+	defer l.measurementMu.Unlock()
+	return l.measureEngineLocked(ctx, id, name)
+}
+
+func (l *Loop) measureEngineLocked(ctx context.Context, id, name string) error {
 	l.mu.Lock()
 	cfg := l.cfg
 	if name != "" {
@@ -245,6 +362,21 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 			return errors.New("engine schedule was removed")
 		}
 	}
+	engineName := cfg.name
+	if engineName == "" {
+		engineName = name
+	}
+	if l.rateLimits != nil && l.rateLimits.Blocked(engineName) {
+		deadline, _ := l.rateLimits.Deadline(engineName)
+		l.mu.Unlock()
+		if id != "" {
+			message := fmt.Sprintf("Test deferred: %s provider rate-limit backoff is active until %s UTC", engineName, deadline.UTC().Format(time.RFC3339))
+			l.failCommand(id, &message)
+		} else {
+			l.logger.Info("skipping scheduled test during rate-limit backoff", "engine", engineName)
+		}
+		return nil
+	}
 	l.progress(id, "testing", 20)
 	l.mu.Unlock()
 	runner, err := netpath.NewRunner(cfg.engine, l.center, l.credential, cfg.binding)
@@ -252,7 +384,7 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 		l.fail(errors.New("invalid measurement coordinator"))
 		return err
 	}
-	out, runErr := runner.Run(ctx, engine.Options{ServerID: cfg.server})
+	out, runErr := runWithServerFallbackForEngine(ctx, runner, cfg.server, engine.DefaultTimeout, engineName == "librespeed")
 	if runErr != nil && out.Measurement.Error == "" {
 		out.Measurement.Error = "speedtest: network path unavailable"
 	}
@@ -265,8 +397,44 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 		l.fail(errors.New("measurement could not be represented by reporting contract"))
 		return err
 	}
-	res.Engine = cfg.name
-	res.Warnings = out.Warnings
+	applyMeasurementMetadata(&res, out, cfg)
+	if _, err := l.spoolMeasurementResult(engineName, id, res); err != nil {
+		return err
+	}
+	return runErr
+}
+
+func (l *Loop) spoolMeasurementResult(engineName, id string, res report.Result) (bool, error) {
+	var update *report.RateLimitStateUpdate
+	var next *report.RateLimitState
+	if res.Status == report.StatusFailed && l.rateLimits != nil {
+		record, state := l.rateLimits.PlanFailure(engineName, res.FailureClass)
+		if !record {
+			l.logger.Info("rate-limited failure already recorded in backoff window", "engine", engineName, "class", failureclass.RateLimited)
+			if id != "" {
+				l.failCommand(id, res.Error)
+			}
+			return false, nil
+		}
+		if state != nil {
+			next = state
+			update = &report.RateLimitStateUpdate{Engine: engineName, State: state}
+		}
+	} else if res.Status != report.StatusFailed && l.rateLimits != nil {
+		update = &report.RateLimitStateUpdate{Engine: engineName}
+	}
+	if err := l.spoolResult(id, res, update); err != nil {
+		return false, err
+	}
+	if next != nil {
+		l.rateLimits.CommitFailure(engineName, *next)
+	} else if res.Status != report.StatusFailed && l.rateLimits != nil {
+		l.rateLimits.ObserveSuccess(engineName)
+	}
+	return true, nil
+}
+
+func (l *Loop) spoolResult(id string, res report.Result, update *report.RateLimitStateUpdate) error {
 	// Enqueue is independent of cancellation: an interrupted test is still durable.
 	l.mu.Lock()
 	var state commandState
@@ -276,7 +444,7 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 		state.Ack = control.CommandAck{Status: "running", Phase: "reporting", Pct: 80}
 	}
 	data, _ := json.Marshal(state)
-	err = l.spool.AppendWithState(res, id, data)
+	err := l.spool.AppendWithMetadata(res, id, data, update)
 	if err != nil {
 		l.mu.Unlock()
 		l.fail(errors.New("result spool write failed"))
@@ -286,9 +454,35 @@ func (l *Loop) measureEngine(ctx context.Context, id, name string) error {
 		l.commands[id] = state
 	}
 	l.mu.Unlock()
-	l.logger.Info("result spooled", "id", res.ID, "status", res.Status)
+	l.logger.Info("result spooled", "id", res.ID, "status", res.Status, "failureClass", res.FailureClass)
 	l.wake()
-	return runErr
+	return nil
+}
+
+func (l *Loop) failCommand(id string, detail *string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	state := l.commands[id]
+	state.Ack = control.CommandAck{Status: "failed", Error: detail, Phase: "rate limited", Pct: 100}
+	data, _ := json.Marshal(state)
+	if err := l.spool.SaveCommand(id, data); err != nil {
+		l.fail(errors.New("command journal write failed"))
+		return
+	}
+	l.commands[id] = state
+}
+
+func applyMeasurementMetadata(result *report.Result, out netpath.RunResult, cfg measurementConfig) {
+	result.Engine = cfg.name
+	result.Warnings = out.Warnings
+	if !cfg.serverSnapshots {
+		return
+	}
+	result.ServerSelectionKnown = true
+	if cfg.server > 0 {
+		pinnedServerID := cfg.server
+		result.PinnedServerID = &pinnedServerID
+	}
 }
 
 // progress is called with mu held. Engine CLIs expose final output only, so
@@ -394,6 +588,7 @@ func (l *Loop) applyConfig(remote control.AgentConfig, schedule sched.Schedule) 
 			cfg.binding.SourceIP = *remote.Binding.SourceIP
 		}
 	}
+	cfg.serverSnapshots = remote.ServerSelectionSnapshots
 	if _, err := netpath.Resolve(cfg.binding); err != nil {
 		return fmt.Errorf("invalid binding: %w", err)
 	}
@@ -466,6 +661,15 @@ func configuredEngines(inputs []control.ScheduleInput, cfg measurementConfig, sc
 		seen[input.Engine] = true
 		next := cfg
 		next.name = input.Engine
+		if len(input.ServerID) > 0 {
+			var err error
+			next.server, err = configuredServer(input.ServerID)
+			if err != nil {
+				return nil, nil, err
+			}
+		} else if input.Engine != cfg.name {
+			next.server = 0
+		}
 		var err error
 		next.engine, err = engine.NewConfigured(next.name, next.threads)
 		if err != nil {
@@ -480,4 +684,19 @@ func configuredEngines(inputs []control.ScheduleInput, cfg measurementConfig, sc
 		engineSchedules = append(engineSchedules, sch)
 	}
 	return configs, engineSchedules, nil
+}
+
+func configuredServer(raw json.RawMessage) (int64, error) {
+	var name string
+	if json.Unmarshal(raw, &name) == nil {
+		if name == "auto" {
+			return 0, nil
+		}
+		return 0, errors.New("invalid engine server selection")
+	}
+	var id int64
+	if json.Unmarshal(raw, &id) != nil || id < 1 {
+		return 0, errors.New("invalid engine server selection")
+	}
+	return id, nil
 }

@@ -23,15 +23,31 @@ var (
 // Location is a combination of City and ASN data, using English place names.
 // Country is the ISO 3166-1 alpha-2 code; accuracy radius is in kilometres.
 type Location struct {
-	City           string  `json:"city"`
-	Region         string  `json:"region"`
-	Country        string  `json:"country"`
-	Latitude       float64 `json:"latitude"`
-	Longitude      float64 `json:"longitude"`
-	TimeZone       string  `json:"time_zone"`
-	AccuracyRadius uint16  `json:"accuracy_radius"`
-	ASN            uint    `json:"asn"`
-	Organisation   string  `json:"organisation"`
+	City           string       `json:"city"`
+	Region         string       `json:"region"`
+	Country        string       `json:"country"`
+	Latitude       float64      `json:"latitude"`
+	Longitude      float64      `json:"longitude"`
+	TimeZone       string       `json:"time_zone"`
+	AccuracyRadius uint16       `json:"accuracy_radius"`
+	ASN            uint         `json:"asn"`
+	Organisation   string       `json:"organisation"`
+	QualityScore   int          `json:"quality_score"`
+	FieldSources   FieldSources `json:"field_sources"`
+	AgeDays        int          `json:"-"`
+}
+
+// FieldSources keeps per-field provenance comparable with Location, which is
+// useful to callers that treat locations as value objects.
+type FieldSources struct {
+	City           string `json:"city,omitempty"`
+	Region         string `json:"region,omitempty"`
+	Country        string `json:"country,omitempty"`
+	TimeZone       string `json:"time_zone,omitempty"`
+	Organisation   string `json:"organisation,omitempty"`
+	Coordinates    string `json:"coordinates,omitempty"`
+	ASN            string `json:"asn,omitempty"`
+	AccuracyRadius string `json:"accuracy_radius,omitempty"`
 }
 
 // Geo is the offline lookup boundary used by the command center.
@@ -46,6 +62,7 @@ type Reader struct {
 	updateMu   sync.Mutex
 	cfg        Config
 	city, asn  *geoip2.Reader
+	info       *maxminddb.Reader
 	log        *slog.Logger
 	missing    sync.Once
 	keyMissing sync.Once
@@ -54,18 +71,24 @@ type Reader struct {
 // Open permits missing or invalid databases: lookups return ErrNotFound and a
 // single warning. A later successful update makes the same Reader usable.
 func Open(cfg Config, logger *slog.Logger) (*Reader, error) {
-	if cfg.CityPath == "" || cfg.ASNPath == "" {
-		return nil, errors.New("city and ASN paths are required")
+	if (cfg.CityPath == "" || cfg.ASNPath == "") && cfg.IPInfoPath == "" {
+		return nil, errors.New("at least one offline geolocation database path is required")
 	}
-	city, err := filepath.Abs(cfg.CityPath)
-	if err != nil {
-		return nil, errors.New("invalid City path")
+	var city, asn string
+	var err error
+	if cfg.CityPath != "" {
+		city, err = filepath.Abs(cfg.CityPath)
+		if err != nil {
+			return nil, errors.New("invalid City path")
+		}
 	}
-	asn, err := filepath.Abs(cfg.ASNPath)
-	if err != nil {
-		return nil, errors.New("invalid ASN path")
+	if cfg.ASNPath != "" {
+		asn, err = filepath.Abs(cfg.ASNPath)
+		if err != nil {
+			return nil, errors.New("invalid ASN path")
+		}
 	}
-	if city == asn {
+	if city != "" && city == asn {
 		return nil, errors.New("city and ASN paths must differ")
 	}
 	if logger == nil {
@@ -74,7 +97,8 @@ func Open(cfg Config, logger *slog.Logger) (*Reader, error) {
 	r := &Reader{cfg: cfg, log: logger}
 	r.city = load(cfg.CityPath, "City")
 	r.asn = load(cfg.ASNPath, "ASN")
-	if r.city == nil || r.asn == nil {
+	r.info = loadIPInfo(cfg.IPInfoPath)
+	if (r.city == nil || r.asn == nil) && r.info == nil {
 		r.warnMissing()
 	}
 	return r, nil
@@ -113,6 +137,26 @@ func decode(data []byte, kind string) (*geoip2.Reader, error) {
 	return db, nil
 }
 
+func loadIPInfo(path string) *maxminddb.Reader {
+	if path == "" {
+		return nil
+	}
+	db, err := maxminddb.Open(path)
+	if err != nil {
+		return nil
+	}
+	typeName := strings.ToLower(db.Metadata.DatabaseType)
+	if !strings.Contains(typeName, "ipinfo") || !strings.Contains(typeName, "lite") {
+		_ = db.Close()
+		return nil
+	}
+	if err := db.Verify(); err != nil {
+		_ = db.Close()
+		return nil
+	}
+	return db
+}
+
 // editionMatches accepts MaxMind editions ("GeoLite2-City") and the DB-IP Lite editions in the same format ("DBIP-City-Lite", "DBIP-ASN-Lite (compat=GeoLite2-ASN)").
 func editionMatches(databaseType, kind string) bool {
 	databaseType = strings.TrimSuffix(databaseType, " (compat=GeoLite2-"+kind+")")
@@ -133,31 +177,61 @@ func (r *Reader) Lookup(ctx context.Context, address string) (Location, error) {
 	}
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if r.city == nil || r.asn == nil {
+	if r.city == nil && r.asn == nil && r.info == nil {
 		r.warnMissing()
 		return Location{}, ErrNotFound
 	}
-	city, err := r.city.City(ip)
-	if err != nil {
-		return Location{}, errors.New("city lookup failed")
+	var result Location
+	if r.city != nil {
+		city, err := r.city.City(ip)
+		if err != nil {
+			return Location{}, errors.New("city lookup failed")
+		}
+		result = Location{City: city.City.Names["en"], Country: city.Country.IsoCode,
+			Latitude: city.Location.Latitude, Longitude: city.Location.Longitude,
+			TimeZone: city.Location.TimeZone, AccuracyRadius: city.Location.AccuracyRadius}
+		if len(city.Subdivisions) > 0 {
+			result.Region = city.Subdivisions[0].Names["en"]
+		}
 	}
-	asn, err := r.asn.ASN(ip)
-	if err != nil {
-		return Location{}, errors.New("ASN lookup failed")
+	if r.asn != nil {
+		asn, err := r.asn.ASN(ip)
+		if err != nil {
+			return Location{}, errors.New("ASN lookup failed")
+		}
+		result.ASN, result.Organisation = asn.AutonomousSystemNumber, asn.AutonomousSystemOrganization
 	}
-	if city.Country.IsoCode == "" && city.City.GeoNameID == 0 && asn.AutonomousSystemNumber == 0 {
+	result.FieldSources = sourcesFor(result, GeoLiteSource)
+	if r.info != nil {
+		var record struct {
+			CountryCode string `maxminddb:"country_code"`
+			ASN         string `maxminddb:"asn"`
+			ASName      string `maxminddb:"as_name"`
+		}
+		if err := r.info.Lookup(ip, &record); err != nil {
+			if emptyLocation(result) {
+				return Location{}, errors.New("IPinfo Lite database lookup failed")
+			}
+		} else if info, err := parseIPInfoLiteRecord(record.CountryCode, record.ASN, record.ASName); err == nil {
+			result, _ = MergeLocations(result, GeoLiteSource, info, "ipinfo-lite-mmdb")
+		}
+	}
+	if emptyLocation(result) {
 		return Location{}, ErrNotFound
 	}
-	result := Location{
-		City: city.City.Names["en"], Country: city.Country.IsoCode,
-		Latitude: city.Location.Latitude, Longitude: city.Location.Longitude,
-		TimeZone: city.Location.TimeZone, AccuracyRadius: city.Location.AccuracyRadius,
-		ASN: asn.AutonomousSystemNumber, Organisation: asn.AutonomousSystemOrganization,
-	}
-	if len(city.Subdivisions) > 0 {
-		result.Region = city.Subdivisions[0].Names["en"]
-	}
 	return result, nil
+}
+
+func parseIPInfoLiteRecord(countryCode, rawASN, asName string) (Location, error) {
+	location := Location{Country: strings.ToUpper(strings.TrimSpace(countryCode)), Organisation: strings.TrimSpace(asName)}
+	if asn, _ := parseAS(strings.TrimSpace(rawASN), ""); asn > 0 {
+		location.ASN = asn
+	}
+	if err := validateLocation(location); err != nil || emptyLocation(location) {
+		return Location{}, ErrNotFound
+	}
+	location.FieldSources = sourcesFor(location, "ipinfo-lite-mmdb")
+	return location, nil
 }
 
 // Close releases readers and is safe to call repeatedly. The lifecycle owner
@@ -174,6 +248,10 @@ func (r *Reader) Close() error {
 	if r.asn != nil {
 		_ = r.asn.Close()
 		r.asn = nil
+	}
+	if r.info != nil {
+		_ = r.info.Close()
+		r.info = nil
 	}
 	return nil
 }

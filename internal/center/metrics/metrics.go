@@ -15,6 +15,7 @@ import (
 // Querier is the subset of the pool used for the gauges.
 type Querier interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 }
 
 // Collector reads the gauges.
@@ -34,6 +35,20 @@ type Snapshot struct {
 	DeliveriesFailed                 int64
 	OldestPendingDeliveryAgeSeconds  float64
 	OpenAlerts                       int64
+	Bandwidth                        []BandwidthUsage
+	BandwidthBudgetRatios            []BandwidthBudgetRatio
+}
+
+// BandwidthUsage is the current UTC month's measured traffic for one node and engine.
+type BandwidthUsage struct {
+	NodeID, Engine string
+	Bytes          float64
+}
+
+// BandwidthBudgetRatio is one configured monthly budget's current utilization.
+type BandwidthBudgetRatio struct {
+	Scope, NodeID string
+	Ratio         float64
 }
 
 const query = `
@@ -62,7 +77,60 @@ func (c Collector) Collect(ctx context.Context) (Snapshot, error) {
 	err := c.DB.QueryRow(ctx, query, now.Add(-after), now).Scan(&s.NodesEnabled, &s.NodesOffline,
 		&s.LastResultAgeSeconds, &s.ResultsTotal, &s.OutboxPending, &s.DeliveriesPending,
 		&s.DeliveriesFailed, &s.OldestPendingDeliveryAgeSeconds, &s.OpenAlerts)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if s.Bandwidth, err = bandwidthUsage(ctx, c.DB, now); err != nil {
+		return Snapshot{}, err
+	}
+	s.BandwidthBudgetRatios, err = bandwidthBudgetRatios(ctx, c.DB, now)
 	return s, err
+}
+
+func bandwidthUsage(ctx context.Context, db Querier, now time.Time) ([]BandwidthUsage, error) {
+	rows, err := db.Query(ctx, `SELECT node_id::text,engine,
+ COALESCE(sum(COALESCE(bytes_down,0)::numeric+COALESCE(bytes_up,0)::numeric),0)::float8
+ FROM results WHERE ts >= $1 AND ts < $2 GROUP BY node_id,engine ORDER BY node_id,engine`, monthStart(now), now.UTC())
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BandwidthUsage{}
+	for rows.Next() {
+		var item BandwidthUsage
+		if err := rows.Scan(&item.NodeID, &item.Engine, &item.Bytes); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func bandwidthBudgetRatios(ctx context.Context, db Querier, now time.Time) ([]BandwidthBudgetRatio, error) {
+	rows, err := db.Query(ctx, `SELECT CASE WHEN b.scope_key='global' THEN 'global' ELSE 'node' END,COALESCE(b.node_id::text,''),
+ COALESCE(used.bytes,0)::float8/b.monthly_bytes
+ FROM usage_budgets b LEFT JOIN LATERAL (
+   SELECT sum(t.bytes_down::numeric+t.bytes_up::numeric) AS bytes FROM usage_monthly_totals t
+   WHERE t.period_start=$1::date AND (b.scope_key='global' OR t.node_id=b.node_id)
+ ) used ON true ORDER BY b.scope_key`, monthStart(now))
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []BandwidthBudgetRatio{}
+	for rows.Next() {
+		var item BandwidthBudgetRatio
+		if err := rows.Scan(&item.Scope, &item.NodeID, &item.Ratio); err != nil {
+			return nil, err
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
+func monthStart(now time.Time) time.Time {
+	year, month, _ := now.UTC().Date()
+	return time.Date(year, month, 1, 0, 0, 0, 0, time.UTC)
 }
 
 // Write renders the snapshot in the Prometheus text exposition format.
@@ -79,4 +147,14 @@ func (s Snapshot) Write(w io.Writer) {
 	g("speedtest_notification_deliveries_failed", "Notifications that exhausted their retries.", s.DeliveriesFailed)
 	g("speedtest_notification_oldest_pending_age_seconds", "Age of the oldest pending notification.", s.OldestPendingDeliveryAgeSeconds)
 	g("speedtest_alerts_open", "Alert rules currently not ok.", s.OpenAlerts)
+	_, _ = fmt.Fprintln(w, "# HELP speedtest_bandwidth_month_to_date_bytes Measured UTC month-to-date test traffic by node and engine.")
+	_, _ = fmt.Fprintln(w, "# TYPE speedtest_bandwidth_month_to_date_bytes gauge")
+	for _, usage := range s.Bandwidth {
+		_, _ = fmt.Fprintf(w, "speedtest_bandwidth_month_to_date_bytes{node_id=%q,engine=%q} %g\n", usage.NodeID, usage.Engine, usage.Bytes)
+	}
+	_, _ = fmt.Fprintln(w, "# HELP speedtest_bandwidth_budget_ratio Fraction of a configured monthly traffic budget used.")
+	_, _ = fmt.Fprintln(w, "# TYPE speedtest_bandwidth_budget_ratio gauge")
+	for _, budget := range s.BandwidthBudgetRatios {
+		_, _ = fmt.Fprintf(w, "speedtest_bandwidth_budget_ratio{scope=%q,node_id=%q} %g\n", budget.Scope, budget.NodeID, budget.Ratio)
+	}
 }

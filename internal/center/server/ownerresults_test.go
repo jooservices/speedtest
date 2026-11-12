@@ -147,7 +147,7 @@ func TestOwnerResultsRejectInvalidParameters(t *testing.T) {
 func TestOwnerResultsExportCSV(t *testing.T) {
 	rows := []ownerapi.ResultRow{
 		{NodeName: "VM1", NodeLabel: "Home", Result: map[string]any{"ts": "2026-11-03T01:00:00Z", "status": "ok", "down": 250.5, "up": 90.25, "ping": 12.0, "jitter": 1.5,
-			"loss": 0.0, "dLat": 20.5, "uLat": 25.0, "ip": "203.0.113.5", "error": nil, "server": map[string]any{"name": "Viettel", "city": "Hanoi"}}},
+			"loss": 0.0, "bytesDown": int64(100), "bytesUp": int64(50), "dLat": 20.5, "uLat": 25.0, "ip": "203.0.113.5", "error": nil, "server": map[string]any{"name": "Viettel", "city": "Hanoi"}}},
 		{NodeName: "=cmd|' /C calc'!A0", NodeLabel: "x", Result: map[string]any{"ts": "2026-11-03T01:30:00Z", "status": "failed", "down": nil, "ip": nil,
 			"error": "@SUM(1,2), \"quoted\"\nnext", "server": map[string]any{"name": "", "city": "Da Nang"}}},
 	}
@@ -164,11 +164,11 @@ func TestOwnerResultsExportCSV(t *testing.T) {
 	if strings.Join(records[0], ",") != strings.Join(csvHeader, ",") {
 		t.Fatalf("header = %v", records[0])
 	}
-	if got := strings.Join(records[1], "|"); got != "2026-11-03T01:00:00Z|VM1 Home|ok|250.5|90.25|12|1.5|0|20.5|25|Viettel - Hanoi|203.0.113.5||" {
+	if got := strings.Join(records[1], "|"); got != "2026-11-03T01:00:00Z|VM1 Home|ok|250.5|90.25|12|1.5|0|100|50|150|20.5|25|Viettel - Hanoi|203.0.113.5||other|" {
 		t.Fatalf("row 1 = %s", got)
 	}
 	second := records[2]
-	if !strings.HasPrefix(second[1], "'=cmd") || second[12] != "'@SUM(1,2), \"quoted\"\nnext" || second[3] != "" || second[11] != "" || second[10] != "Da Nang" {
+	if !strings.HasPrefix(second[1], "'=cmd") || second[15] != "'@SUM(1,2), \"quoted\"\nnext" || second[3] != "" || second[8] != "" || second[9] != "" || second[10] != "" || second[12] != "" || second[13] != "Da Nang" || second[16] != "other" {
 		t.Fatalf("row 2 must neutralise formulas and keep quoting: %q", second)
 	}
 }
@@ -193,6 +193,21 @@ func TestOwnerResultsExportEmptyAndFailures(t *testing.T) {
 	}()
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	t.Fatal("handler returned normally")
+}
+
+func TestCompletedExportsPublishReadyEvents(t *testing.T) {
+	store := &fakeOwnerResults{rows: []ownerapi.ResultRow{{Result: map[string]any{"status": "ok"}}, {Result: map[string]any{"status": "failed"}}}}
+	events := &fakeNotificationEvents{}
+	h := newNodeHandler(Options{OwnerResults: store, NotificationEvents: events, NodeCredentials: &fakeNodeCredentialService{}})
+	for _, path := range []string{"/api/export/results.csv", "/api/export/results.json"} {
+		if rec := do(h, http.MethodGet, path, "", ownerRead); rec.Code != http.StatusOK {
+			t.Fatalf("%s export = %d", path, rec.Code)
+		}
+	}
+	if len(events.published) != 2 || events.published[0].key != "platform.export_ready" || events.published[0].payload["format"] != "csv" ||
+		events.published[1].payload["format"] != "json" || events.published[0].payload["count"] != "2" {
+		t.Fatalf("export completion events = %+v", events.published)
+	}
 }
 
 func TestOwnerResultsRouteMatching(t *testing.T) {

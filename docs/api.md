@@ -31,6 +31,37 @@ Login failures use the same 401 problem for an unknown email
 and an incorrect password. New passwords must contain at least 12 Unicode
 characters and at most 1024 UTF-8 bytes.
 
+Owner API access tokens are separate named credentials created and revoked at
+`/api/access-tokens` from an authenticated session. A token is returned only in
+its creation response; PostgreSQL stores its SHA-256 digest, and token metadata
+never includes the bearer value or digest. Tokens can expire and successful
+uses update `lastUsedAt`. Revocation blocks new requests immediately; an open
+installation event stream closes at its next 10-second credential check. Keep
+the bearer value in a secret store and send it as
+`Authorization: Bearer <token>` over HTTPS. Bearer requests do not need the
+session cookie, Origin or CSRF header.
+The per-token request bucket defaults to 120 requests per minute with a burst
+of 20, configured by `SPEEDTEST_API_TOKEN_REQUESTS_PER_MINUTE`.
+
+The scopes are `read` (safe owner operations), `read-write` (read plus
+non-destructive changes), and `full` (all operations, including destructive
+changes). Every operation declares its required scope in
+`docs/openapi.yaml` using `x-access-token-scope`; a token must meet that
+operation's scope before its handler runs. Agent credentials and auth/session
+endpoints are not API-token operations. Creating and revoking a token creates a
+safe audit entry. Audit rows retain the authentication method, the non-secret
+credential ID for bearer writes, and the created token ID as the creation
+target, so operators can distinguish tokens owned by the same account. MCP
+tool writes retain the incoming client address using the same trusted-proxy
+rules as REST writes. Access logs omit request headers and query data; bearer
+values are never written to the audit log or application logs.
+
+The Streamable HTTP MCP endpoint is `/mcp`. Its tools are generated from the
+OpenAPI operations marked with `x-mcp-tool`, including their input schemas and
+scope requirements; it does not return integration secrets. The separate
+`speedtest-mcp` executable exposes the same remote tools over stdio for MCP
+clients. See [MCP setup and tool reference](mcp.md).
+
 Run `go run ./cmd/center seed-admin` to ensure the documented default owner is
 present in local or test environments. `APP_ENV` must be `local` or `test`; the
 command refuses staging, production and unknown values. It inserts only when the
@@ -164,15 +195,44 @@ replay by the same node is `duplicate` (200) and cannot create another row.
 Changed content for that UUID, or a UUID already owned by another node, is a
 per-item 409 conflict with a generic diagnostic that reveals no other-node data. Retry transport failures/429/5xx with backoff and jitter;
 never discard unacknowledged spool entries. Failed results require an error and
-allow null measurements and `ip: null` when the address is unavailable. Never invent an IP or reuse a stale one. IP history hooks skip null-IP results; consumers display "unavailable".
-Successful/degraded results require down/up/ping, a non-null IP, a server object with a nonblank name or host, and `error: null`. Numeric `serverId` is optional for every status, positive when present (LibreSpeed automatic selection has no numeric ID). Engines may omit
+allow null measurements and `ip: null` when the address is unavailable. They also
+carry `failureClass` (omitted values are classified from the error text). Never invent an IP or reuse a stale one. IP history hooks skip null-IP results; consumers display "unavailable".
+Successful/degraded results require down/up/ping, a non-null IP, a server object with a nonblank name or host, and `error: null`. Numeric `serverId` is optional for every status and positive when present. LibreSpeed results include the sanitized server endpoint URL when available; its path distinguishes servers that share a hostname. Automatic results resolve their numeric ID against the agent's measurement-time server list when that endpoint is present there. Engines may omit
 loss/jitter/loaded latency even on success; preserve those as null. Optional
 loadedDown/loadedUp retain low/iqm/high; engine details retain ISP, result ID/URL,
 external IP and mismatch warnings, with remaining original fields in raw.
+New centers advertise `serverSelectionSnapshots: true` in agent config. Agents that
+receive it include `serverSelectionKnown` and the pinned server ID captured when
+the test started. Older agents may omit both fields; those stored results remain
+unknown instead of inheriting a later pin. The result read model returns that
+snapshot in `pinnedServerId`, not the node's current pin.
 After each measurement, including engine failures, the agent calls `GET /api/agent/ip` over the
 same selected interface/source IP. The center-observed `data.ip` is the result's
 public IP; preserve the engine-reported address as `engineIp` and add a `warnings`
 entry when the two addresses differ.
+
+## Server discovery and selection (JOOST-76)
+
+Each installed engine has its own server catalog and pin. `GET /api/nodes/{id}/servers?engine=ookla`
+reads the stored Ookla catalog; use `engine=librespeed` for LibreSpeed. `POST` to the same URL queues
+a `list_servers` command for that engine and returns `202` with a `Location` to poll. A successful
+agent acknowledgement replaces only that engine's catalog. A failed refresh leaves its prior catalog
+and pin intact. The catalog response ETag is the node configuration revision.
+
+Use `PUT /api/nodes/{id}/server-selection` with that ETag in `If-Match` and a CSRF token to set
+`{"engine":"ookla","serverId":54321}` or clear the pin with `"serverId":"auto"`. A numeric ID must
+be present in the selected engine's discovered catalog. The center stores pins independently for
+Ookla and LibreSpeed, advances the configuration revision, and queues an agent configuration refresh.
+Each agent schedule includes its own `serverId`, so one engine's pin cannot affect the other engine.
+
+The picker searches server name, city and ISP. Ookla distance is displayed when the server list
+provides it; LibreSpeed has no coordinates, so it is sorted by server name and shows no distance.
+When a pinned server cannot be reached, the agent retries with automatic selection and attaches a
+warning to the result. Result reads include the server actually used in `serverId` and the pin snapshot
+for that measurement in `pinnedServerId`; the UI identifies a mismatch and shows any fallback warning.
+LibreSpeed automatic results omit the numeric server ID. The center resolves it from the stored catalog
+only when the reported host matches exactly one catalog entry; missing or ambiguous matches remain
+unknown.
 
 Agent config advertises the latest release URL/version/sha256 and defaults
 autoUpdate to false. The owner enables it per node; verify checksums, replace
@@ -183,6 +243,9 @@ Poll commands oldest-first, up to 100 per call. Redeliver until terminal ack;
 agents remember command IDs to prevent duplicate execution. Running a manual
 test returns a Command to poll; progress acks carry phase/pct/resultId/error.
 Terminal acks replay idempotently; conflicting terminal changes return 409.
+Successful `list_servers` acks include the catalog payload; identical retries remain
+idempotent even after a later refresh, while a changed payload for the same command
+returns 409 and leaves the newer catalog intact.
 Each agent gets only its own configuration, effective offset and quiet hours.
 The center coordinates offsets; there is no WAN, load-balancer or peer-node model.
 
@@ -195,11 +258,18 @@ The center coordinates offsets; there is no WAN, load-balancer or peer-node mode
 | Dashboard, JOOST-27/38 | `/api/dashboard`, `/api/series`; `Fleet` current/previous, `NodeCard` summary/sparkline/latestGood/current IP/city, latest results/open alerts/count, `Series.summary` for table mode |
 | Nodes and wizard, JOOST-25/41/43/44 | node CRUD/run/commands, installer probes/installations/uninstallations and SSE; `Node`, `Enrollment`, `Install`, `InstallEvent`, pinned fingerprint, `Command` progress |
 | Results, JOOST-24/32/38 | results list/detail/filtered CSV and full CSV/JSON exports; `Result` includes every measured field, `Server`, `Geo`, raw JSON and manual flag; search/sort/range/download/status filters |
+| Statistics, JOOST-26/39/81 | `/api/stats/{summary,trend,hour-of-day,heatmap,distribution,events}`; `SummaryComparison`, percentiles, engine and ISP filters, bounded event marks; combined total is display-only |
+| ISPs, JOOST-74 | `/api/isps`, `/api/isps/compare`, `/api/isps/{id}`, `/api/isps/{id}/trend`, `/api/isps/{id}/plans`; entities from uint32 ASN/organisation; engine-isolated aggregates; optional plans; `isps`/`isp` filters on results, statistics and alert events |
+| Monthly report, JOOST-79 | `GET /api/reports/monthly?month=YYYY-MM&format=json|csv|pdf&isp=&engine=`; per ISP and node; UTC month; explicit unknown-ISP rows; current downtime bounded by `generatedAt`; CSV protects formula cells; PDF preserves Unicode and wraps long names |
+| Results, JOOST-24/32/38/80 | results list/detail/filtered CSV and full CSV/JSON exports; `Result` includes every measured field, bytes down/up/total, `Server`, `Geo`, raw JSON and manual flag; search/sort/range/download/status filters |
 | Statistics, JOOST-26/39 | `/api/stats/{summary,trend,hour-of-day,heatmap,distribution}`; `SummaryComparison`, `MetricSummary`, `Series`, `HourSeries`, `Heatmap` counts, `Distribution` edges/count/percent; combined total is display-only |
+| ISPs, JOOST-74 | `/api/isps`, `/api/isps/compare`, `/api/isps/{id}`, `/api/isps/{id}/trend`, `/api/isps/{id}/plans`; entities from uint32 ASN/organisation; engine-isolated aggregates; optional plans; `isps`/`isp` filters on results, statistics, usage and alert events |
 | IP & location, JOOST-33/34/35/36/39/42 | `/api/ip/{history,addresses,lookup,map}` (location database updates run on the center's schedule; manual update/refresh/status endpoints are not part of v1); `IPChange`, `IPAddress`, `Geo` (all location/ASN/ISP/accuracy/source fields), `MapLocation`, database timestamp/cache count, maintenance `Job` |
 | Schedules, JOOST-28/39 | `/api/schedules`, per-node GET/PUT, rules PUT, stagger POST; `ScheduleInput`, `ScheduleRules`, `Schedules` clashes/upcoming/nextRun/bytesPerDay/bytesPerMonth |
 | Alerts, JOOST-29/40 | rules CRUD, events list/detail/ack, snapshot acknowledge-all job; `AlertRule`, `AlertEvent` title/detail/severity/ts/resolvedAt/acked; reopen means acked=false |
+| Settings/notifications, JOOST-30/31/40/78 | Settings GET/PUT/key rotation, test-channel POST, delivery logs/status, event catalog and node overrides, template get/update/preview/reset; `Settings`, `NotificationSettings`, `NotificationEvent`, `NotificationTemplate`, `Delivery`, issuance-only `IssuedKey` |
 | Settings/notifications, JOOST-30/31/40 | Settings GET/PUT/key rotation, test-channel POST, delivery logs/status; `Settings`, `NotificationSettings`, `Delivery`, issuance-only `IssuedKey` |
+| Bandwidth, JOOST-80 | `/api/usage`, `/api/usage/advice`, `/api/usage/budgets`; UTC totals and day/week/month buckets stay separated by node and engine; optional global/node budgets |
 | Installer distribution, JOOST-46 | public `GET /install.sh`; checksum-verifying shell script |
 
 The alert engine's rule validation, per-result streak semantics, offline checks,
@@ -210,7 +280,7 @@ part of this OpenAPI contract.
 Field names follow `seed.js` and `store.js`: Node `name`, `label`, `provider`,
 `plan`, `colorSlot`, `expectedDown`, `expectedUp`, `interval`, `offset`, `threads`,
 `server`, `enabled`, `host`, `agent`, `note`, `createdAt`; Result `id`, `nodeId`,
-`ts`, `serverId`, `threads`, `ip`, `status`, `error`, `down`, `up`, `ping`, `jitter`,
+`ts`, `serverId`, `threads`, `ip`, `status`, `error`, `failureClass`, `down`, `up`, `ping`, `jitter`,
 `loss`, `dLat`, `uLat`, `bytesDown`, `bytesUp`, `duration`, `manual`. Real IDs are
 opaque (result IDs are UUIDs); demo IDs are not wire IDs. `profile`, `ipModel`,
 `pref`, `OUTAGES` and RNG state are simulation inputs, never API fields. Demo
@@ -221,10 +291,16 @@ Reset demo data remains a local preview action, with no destructive API endpoint
 
 Statistics follow the UI formulas: summaries include nonfailed samples;
 trend/hour-of-day/heatmap/distribution include only `ok` samples as `stats.js`
-does. Percentiles interpolate at `(n-1)*p`, standard deviation is population,
+does. Every `MetricSummary` keeps its existing fields and adds nullable `p50`
+and `p99`; `p50` equals `median`. Percentiles interpolate at `(n-1)*p`,
+standard deviation is population,
 and stability is `clamp(100-220*std/mean,0,100)`, null for zero/no mean. Counts
-include failures; success rate includes degraded tests. Fleet percentages are
-unweighted means of node percentages; fleet latency is median of ok-only pings.
+include failures; success rate includes degraded tests and excludes
+`failureClass=rate_limited` (shown separately as `rateLimited`). Fleet
+percentages are unweighted means of node percentages; fleet latency is median of
+ok-only pings. Alert rules with metric `failed` also ignore rate-limited results.
+`failureClass` is the fixed vocabulary `rate_limited`, `no_network`,
+`server_unreachable`, `engine_missing`, `timeout`, `other`.
 Summary previous periods have equal adjacent duration. Missing chart buckets
 have null value/count=0. Timezone grouping uses IANA local calendar boundaries,
 including DST; heatmap is Monday=0..Sunday=6 × hour 0..23, last 30 days. Combined
@@ -233,7 +309,7 @@ persist topology.
 
 ### Statistics endpoints (JOOST-26)
 
-All five endpoints require an authenticated UI session and return the standard
+All statistics endpoints require an authenticated UI session and return the standard
 success envelope. Omit `nodes` to include every node; `nodes=` selects none.
 Explicit `from` and `to` are an inclusive/exclusive RFC 3339 interval, must be
 given together, and cannot be combined with `range`. Analytics intervals are
@@ -246,14 +322,25 @@ GET /api/stats/trend?from=<RFC3339>&to=<RFC3339>&metric=down&bucket=hour&timezon
 GET /api/stats/hour-of-day?range=7d&metric=ping&timezone=Asia/Ho_Chi_Minh
 GET /api/stats/heatmap?node=<node-id>&metric=down&timezone=Asia/Ho_Chi_Minh
 GET /api/stats/distribution?range=30d&metric=down&bins=12
+GET /api/stats/events?range=7d&nodes=<node-id>&engine=ookla&isp=Viettel
 ```
 
+All statistics endpoints accept optional `engine` and `isp` filters. An omitted
+engine selects each node's primary engine, so different engines are never mixed.
+`isp` is one trimmed 1–200 character, case-insensitive exact match; repeated or
+whitespace-only values return 422. Effective ISP uses the trimmed result
+`engine_isp`, then the cached organisation for that result's IP. A specific ISP
+filter excludes results with unknown ISP. Cached geolocation can be refreshed,
+so historical ISP attribution may change. `isp` is applied before every
+aggregate and comparison, including the heatmap and event marks.
+
 `summary` returns current and immediately previous intervals of equal length.
-Its counts include failed tests; `ok` and success rate include both `ok` and
-`degraded` results. Each metric's `n` counts its non-null measurements from
-those nonfailed results. Download and upload expected percentages use that
-node's configured expected speed. Stability uses download's population standard
-deviation. Empty values are null, and a single value has standard deviation 0.
+Its counts include failed tests; `ok` includes both `ok` and `degraded` results.
+Success rate is `ok/(count-rateLimited)*100`. Each metric's `n` counts its
+non-null measurements from those nonfailed results. Download and upload expected
+percentages use that node's configured expected speed. Stability uses download's
+population standard deviation. Empty values are null, and a single value has
+standard deviation 0.
 
 Trend, hour-of-day, heatmap, and distribution use only status `ok`. Trend uses
 calendar `hour` or `day` buckets in the supplied IANA zone (`UTC` by default),
@@ -268,19 +355,104 @@ summaries use raw source measurements rather than averages of buckets.
 Hour-of-day always returns all 24 hours. Heatmap requires one node and returns
 168 weekday/hour cells for the rolling 30 days ending at the request snapshot.
 
+### Bandwidth usage and budgets (JOOST-80)
+
+`GET /api/usage` requires an authenticated session. Omit `from` and `to` for
+the trailing 30 days ending at the request snapshot; otherwise provide both as
+RFC 3339 timestamps, inclusive `from` and exclusive `to`, at most 366 days.
+`group` is `day` (default), `week` or `month`; `node`, `engine` and `isp` are optional.
+The ISP filter uses each result's recorded ISP assignment, including historical
+results, and usage rows remain split by ISP as well as node and engine.
+When `engine` is omitted, each node/engine remains its own row and series; the
+center never blends different engines into an average. The response also
+contains month-to-date, previous calendar month, a month-end projection and
+configured budget status. The projection scales observed month-to-date usage
+by elapsed UTC calendar time.
+
+```text
+GET /api/usage?group=week&from=<RFC3339>&to=<RFC3339>&node=<node-id>&engine=ookla&isp=<isp-id>
+GET /api/usage/advice?node=<node-id>&engine=ookla&interval=60
+GET /api/usage/budgets
+PUT /api/usage/budgets/global
+PUT /api/usage/budgets/<node-id>
+DELETE /api/usage/budgets/<node-id>
+```
+
+Advice estimates daily and 30-day volume from the selected node/engine's
+average complete measured byte pairs per test over the prior 30 days and the
+requested interval. Missing counters and empty histories are unavailable, never
+zero-valued estimates. If `budgetBytes` is omitted, the node budget and global
+budget both constrain advice when configured; estimated monthly use by other
+enabled engines and nodes is reserved before recommending an interval. The response reports `recommendationStatus` as `feasible`,
+`infeasible`, or `unavailable`. A budget that cannot be met even at the
+maximum 1440-minute interval has no recommended interval and is marked
+`infeasible`; the UI tells the owner to increase the budget or reduce the test
+volume. An empty/incomplete history or missing measurements in another enabled
+schedule sharing the cap produces `unavailable` with an actionable explanation.
+
+Budgets are optional positive byte limits with `widen` or `pause` action. Read
+the collection ETag before writing; every PUT/DELETE requires that value in
+`If-Match`, and stale updates return 412. At 80% the center records one warning
+event per scope/month. At 100% it records a limit event, applies the configured
+schedule action transactionally, writes an audit entry and records a durable
+notification extension event. JOOST-78 can consume the named
+`PendingNotificationEvents` / `MarkNotificationEventPublished` extension point.
+If a widen policy reaches a schedule already at 1440 minutes, the center pauses
+that schedule and reports the fallback in the dashboard banner and event queue.
+The effective action is reconciled whenever a budget or schedule changes. A
+pause takes precedence over interval widening when global and node budgets
+overlap; otherwise the largest active widening multiplier applies. Owner
+schedule edits become the new restoration baseline, and deleting a budget
+restores the baseline when no remaining budget requires an override. The
+selected action applies until the next UTC month, when original intervals and
+enabled states are restored, including for paused nodes. New nodes default to a
+60-minute interval and immediately inherit an active global policy.
+
+The center exposes `speedtest_bandwidth_month_to_date_bytes{node_id,engine}`
+and `speedtest_bandwidth_budget_ratio{scope,node_id}` application gauges.
+These are scrape-time values from the current UTC month. System alert rules and
+notification infrastructure are maintained outside the application.
+
+The same query is available to MCP clients as the read-only `get_usage` tool (marked `x-mcp-tool` in `docs/openapi.yaml`; see the MCP section for the HTTP and stdio servers). It accepts optional `node`, `engine`, `isp`, `from`, `to` and `group` arguments with the same meanings and limits as `GET /api/usage`.
+
 Distribution accepts `bins` from 1 through 100 (default 15); the preview's
 current chart uses 12, so pass `bins=12` when comparing its histogram directly.
 Bin edges cover the sample minimum through maximum and the last upper edge is
 inclusive. Constant data uses a nonzero range centered on the value; no samples
 returns `bins: []` and `count: 0`.
 
+`GET /api/stats/events` accepts the same `range` or `from`+`to`, `nodes`,
+`engine` and `isp` filters. It returns `data.items` and `data.truncated`; items
+are newest-first with ties ordered by type and ID, capped at 500. A true
+`truncated` value means more matching events exist. IP changes compare
+consecutive known result IPs per node and selected engine, ordered by `(ts,id)`;
+null IPs are skipped and the selected engine's last known predecessor before
+the requested window is included. This avoids treating another engine's IP
+measurement as a transition for the selected engine. ISP changes compare
+consecutive known effective ISPs per node and engine, ordered by `(ts,id)`, and
+include the last known predecessor before the requested window. IP/ISP marks and
+alerts with a `trigger_result_id` use that result's engine and effective ISP.
+Unlinked alerts appear only without an ISP filter and are labelled `engine
+unknown`; event labels contain plain text. The endpoint reports alert openings,
+not inferred threshold anomalies.
+
+The Statistics page's week-over-week comparison requests `summary?range=7d`
+independently of the page range. It compares each selected node's selected
+metric mean over `[now-7d,now)` with `[now-14d,now-7d)`. The percent change is
+`(current-previous)/previous*100`; it is unavailable if either mean is null or
+the previous mean is zero.
+
 Settings defaults match the preview: dark, 7d, auto units, browser timezone,
-24-hour clock, one decimal, 365-day retention (0=forever), GeoLite2 + ip-api fallback,
+24-hour clock, one decimal, 365-day retention (0=forever), offline geolocation plus the configured quota-aware fallbacks,
 weekly updates, Ookla/auto server/4 threads, stagger on/maxConcurrent=1, empty
 quiet hours, email enabled to `ops@example.com`, other channels off/empty.
-Public center URL comes from deployment `.env`, not the demo URL. New nodes
-start at interval=30/offset=0, enabled, threads=4, server=auto. Schedule PUT clamps
-offset after interval changes; effective quiet timezone is explicit. Usage uses
+Public center URL comes from deployment `.env`, not the demo URL. `POST /api/nodes`
+does not accept an interval; its response and the new node's Ookla schedule use
+interval=60/offset=0, enabled, threads=4, server=auto. Newly enabled engine
+schedules also default to 60 when interval is omitted or zero. Legacy schedule
+PUT fields remain required. The 60-minute migration changes only the schedules
+column default, never existing rows; rollback restores that default to 30.
+Schedule PUT clamps offset after interval changes; effective quiet timezone is explicit. Usage uses
 up to 200 recent nonfailed results × tests/day, month=30 days; paused/no history=0.
 The UI should display null measurements/location as unavailable, not zero.
 
@@ -382,11 +554,16 @@ for (const response of Object.values(api.components.responses)) {
 const paths = [
   '/api/agent/enroll', '/api/agent/results', '/api/agent/config', '/api/agent/heartbeat',
   '/api/agent/commands', '/api/agent/commands/{id}/ack', '/api/agent/ip',
-  '/api/nodes', '/api/results', '/api/stats/summary', '/api/stats/trend',
+  '/api/nodes', '/api/results', '/api/isps', '/api/isps/compare', '/api/stats/summary', '/api/stats/trend',
   '/api/stats/hour-of-day', '/api/stats/heatmap', '/api/stats/distribution',
   '/api/dashboard', '/api/series', '/api/schedules/{node}', '/api/alerts/rules',
-  '/api/alerts/events', '/api/notifications/test/{channel}', '/api/settings',
+  '/api/alerts/events', '/api/notifications/test/{channel}', '/api/notifications/events',
+  '/api/notifications/events/{key}', '/api/notifications/events/{key}/nodes/{id}',
+  '/api/notifications/templates/{key}/{channel}', '/api/notifications/templates/{key}/{channel}/previews',
+  '/api/notifications/templates/{key}/{channel}/resets', '/api/settings',
   '/api/ip/history', '/api/ip/addresses', '/api/ip/lookup', '/api/ip/map',
+  '/api/alerts/events', '/api/notifications/test/{channel}', '/api/settings',
+  '/api/ip/history', '/api/ip/addresses', '/api/ip/lookup', '/api/ip/map', '/api/ip/providers',
   '/api/auth/login', '/api/auth/logout', '/api/auth/me', '/api/auth/password',
   '/api/auth/2fa', '/api/auth/2fa/setup', '/api/auth/2fa/enable', '/api/auth/2fa/disable'
 ];
@@ -492,7 +669,7 @@ and storage failures (500). An item failure contains only a safe generic problem
 
 `GET /api/results/export.csv` takes the same filter and sort parameters as `GET /api/results` (`nodes`, `range` or `from`+`to`, `status`, `q`, `minDown`, `maxDown`, `sort`, `dir`) and no pagination. It streams every matching row in the requested order (default `ts` descending) as `text/csv; charset=utf-8` with `Content-Disposition: attachment; filename="speedtest-results-YYYY-MM-DD.csv"`. With neither `range` nor `from`/`to` it covers the trailing 7 days, as the list does.
 
-Columns, in order: `time` (RFC 3339 UTC), `node` (name and label), `status`, `download_mbps`, `upload_mbps`, `ping_ms`, `jitter_ms`, `packet_loss_pct`, `loaded_latency_down_ms`, `loaded_latency_up_ms`, `server` (`name - city`), `public_ip`, `error`. Numbers are plain decimals and empty when the engine did not report them. Cells follow RFC 4180 quoting; a text cell that starts with `=`, `+`, `-`, `@`, tab or carriage return is prefixed with `'` so spreadsheets do not run it as a formula. A failure after the first row aborts the connection so a truncated download is never mistaken for a complete one.
+Columns, in order: `time` (RFC 3339 UTC), `node` (name and label), `status`, `download_mbps`, `upload_mbps`, `ping_ms`, `jitter_ms`, `packet_loss_pct`, `bytes_down`, `bytes_up`, `bytes_total`, `loaded_latency_down_ms`, `loaded_latency_up_ms`, `server` (`name - city`), `public_ip`, `error`, `engine`. Byte values are exact integers; missing measurements are empty. Numbers are plain decimals and empty when the engine did not report them. Cells follow RFC 4180 quoting; a text cell that starts with `=`, `+`, `-`, `@`, tab or carriage return is prefixed with `'` so spreadsheets do not run it as a formula. A failure after the first row aborts the connection so a truncated download is never mistaken for a complete one.
 
 ## Schedules
 
@@ -508,19 +685,21 @@ A daily job (03:15 UTC) deletes results older than the `retentionDays` setting (
 
 ## Dashboard and series
 
-`GET /api/dashboard?range=6h|24h|7d|30d` (default 7d) returns the whole dashboard in one call: `current` and `previous` fleet figures (the previous period is the same length, directly before), a card per node (node, summary for the window, 48-point 24 hour download sparkline), the 9 newest results, the 6 newest unacknowledged alert events and the unacknowledged count. Fleet figures follow the preview: `down`/`up` are the unweighted mean of each node's percentage of its expected speed (nodes without data are left out), `ping` is the median of every `ok` test's latency, `success` is non-failed over all tests, `ips` counts address changes (the first address a node ever reports is not a change). An empty fleet returns empty arrays, zero counts and null aggregates.
+`GET /api/dashboard?range=6h|24h|7d|30d` (default 7d) returns the whole dashboard in one call: `current` and `previous` fleet figures (the previous period is the same length, directly before), a card per node (node, summary for the window, 48-point 24 hour download sparkline), the 9 newest results, the 6 newest unacknowledged alert events and the unacknowledged count. Fleet figures follow the preview: `down`/`up` are the unweighted mean of each node's percentage of its expected speed (nodes without data are left out), `ping` is the median of every `ok` test's latency, `success` is non-failed eligible tests divided by all tests except `rate_limited` results, and `rateLimited` is reported separately. `ips` counts address changes (the first address a node ever reports is not a change). An empty fleet returns empty arrays, zero counts and null aggregates.
 
 `GET /api/series` returns comparison series with equally spaced buckets (`nodes`, `range` or `from`+`to`, `metric` down|up|ping|jitter|loss, `mode` absolute|percent, `maxPoints` 1–300, default 300; `timezone` is accepted for symmetry and does not change equal-width buckets). Each point is the mean of the non-failed samples in its bucket plus their count; a bucket without samples is a `null` gap. In percent mode each sample is divided by its own node's expected speed before it is averaged. The summary of a series is computed from the original samples of the window, not from the bucket means. Five 7-day series stay below 100 KB.
 
 ## IP and location views
 
-All four routes need a session and only read. `GET /api/ip/history?node=` lists address changes newest first (the first address a node ever reports is not a change), with the location of the old and new address (`fromGeo`, `toGeo`, null when unknown). `GET /api/ip/addresses?node=` lists the distinct addresses each node has used, most recently seen first, with first/last seen, number of tests and the average download/upload of the non-failed tests (null when there were none). `GET /api/ip/map?node=` gives the most recently observed address of each node with its location, leaving out nodes that never reported one. Locations come from the cache of `ip_addresses`; an address whose lookup has not happened or found nothing has `geo: null`, never invented coordinates. Lists are paginated with `page` and `size`.
+The IP history, addresses, map and lookup routes require a session and only read. `GET /api/ip/history?node=` lists address changes newest first (the first address a node ever reports is not a change), with the location of the old and new address (`fromGeo`, `toGeo`, null when unknown). `GET /api/ip/addresses?node=` lists the distinct addresses each node has used, most recently seen first, with first/last seen, number of tests and the average download/upload of the non-failed tests (null when there were none). `GET /api/ip/map?node=` gives the most recently observed address of each node with its location, leaving out nodes that never reported one. Locations come from the cache of `ip_addresses`; an address whose lookup has not happened or found nothing has `geo: null`, never invented coordinates. Known API locations include `qualityScore` and per-field `fieldSources`. Lists are paginated with `page` and `size`.
 
-`GET /api/ip/lookup?ip=` accepts only an IPv4 or IPv6 literal (host names, ports, prefixes and zones answer 422 before anything is looked up) and runs the geolocation chain: cache, offline GeoLite2, then the configured fallback providers; a found location is cached. An address no source knows returns `data: null` with status 200.
+`GET /api/ip/lookup?ip=` accepts only an IPv4 or IPv6 literal (host names, ports, prefixes and zones answer 422 before anything is looked up) and runs the geolocation chain: cache, offline databases, then at most one configured fallback provider for this interactive request; a found location is cached and includes its quality score and field sources. An address no source knows returns `data: null` with status 200.
+
+`GET /api/ip/providers` returns the configured provider list and today's durable request counts. Each item reports `name`, `enabled`, `keyConfigured`, `requestsToday` and `dailyBudget`; it never returns credential values. The endpoint requires an owner session. A `dailyBudget` of zero means no configured local daily cap. Background lookups may use at most 80% of each configured daily quota, keeping the rest available for interactive lookups.
 
 ## Settings
 
-`GET /api/settings` (session) returns the owner's preferences with `ETag`; `PUT /api/settings` (session, CSRF, origin, `If-Match`) replaces them and answers 422 with field-level `errors` for invalid values, 428 without `If-Match` and 412 when the tag is stale. Before anything is saved the ETag is `"0"`, so the first save always moves it. Defaults match the UI preview (dark theme, 7d range, auto units, 1 decimal, 365 days retention, GeoLite2 with ip-api fallback, Ookla, 4 threads, concurrency 1, stagger on).
+`GET /api/settings` (session) returns the owner's preferences with `ETag`; `PUT /api/settings` (session, CSRF, origin, `If-Match`) replaces them and answers 422 with field-level `errors` for invalid values, 428 without `If-Match` and 412 when the tag is stale. Before anything is saved the ETag is `"0"`, so the first save always moves it. Defaults match the UI preview (dark theme, 7d range, auto units, 1 decimal, 365 days retention, offline geolocation plus configured quota-aware fallbacks, Ookla, 4 threads, concurrency 1, stagger on).
 
 Secrets (the location-service key, email/Telegram/Slack credentials and the webhook URL) are write-only: they are encrypted with AES-GCM using `APP_KEY` from `.env` before they are stored and are never returned; the read model only says which are configured. Omitting a secret on PUT keeps the stored one.
 
@@ -537,6 +716,16 @@ page/size and optional event UUID, newest first. No delivery response exposes a
 destination, payload, URL or credential. Notification pages are limited to
 1,000,000. See [notification delivery](notifications.md) for transport Settings,
 retry/expiry behavior, the exactly-once transaction boundary and verification.
+
+## Notification catalog (JOOST-78)
+
+`GET /api/notifications/events` lists code defaults merged with owner settings.
+`GET|PATCH /api/notifications/events/{key}` reads or updates an event, and
+`GET|PUT /api/notifications/events/{key}/nodes/{id}` reads or updates enablement
+for node-scoped events. Templates use `GET|PUT /api/notifications/templates/{key}/{channel}`;
+preview and reset use `POST /previews` and `POST /resets` on that template path.
+Writes require the owner session, CSRF token and same-origin request. See
+[the notification catalog](notifications.md) for placeholders, formatting and defaults.
 
 ### Published agent releases
 
@@ -573,3 +762,20 @@ average. Full exports retain all measurements and their engine identity. CSV add
 `engine` as its final column. Alert rules optionally specify `engine`; omission
 selects the node's primary engine, so another engine cannot advance or reset its
 measurement streak.
+
+## ISP plans and page filters
+
+An assigned ISP plan supplies the node's expected download and upload speeds
+when those values are omitted. The center records default provenance separately
+for each speed. Editing a plan updates only values still using that plan default;
+an owner-entered value remains an override even when it equals the advertised
+speed. Existing assignments migrate as explicit values because their original
+provenance cannot be inferred from numeric equality. Clear and reassign a plan
+to opt an existing node into its advertised defaults. Clearing a plan keeps the
+current expected speeds as node settings.
+
+ISP trends use hourly buckets for windows up to 24 hours and daily buckets for
+longer windows. Each point is timestamped at the average time of its samples, so
+all points remain inside a rolling window, including across UTC midnight. The
+Results and Alerts ISP selectors filter their own page data; they do not narrow
+the shared snapshot used by dashboard, node, map or export views.

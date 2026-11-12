@@ -11,6 +11,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/schedules"
+	"github.com/jooservices/speedtest/internal/center/usage"
 )
 
 // ScheduleInput is the owner-editable part of one node's schedule.
@@ -240,6 +241,9 @@ func (s *Store) ReplaceSchedule(ctx context.Context, id string, in ScheduleInput
 		return nil, "", err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := usage.LockBudgetEvaluation(ctx, tx); err != nil {
+		return nil, "", err
+	}
 	rows, err := s.scheduleRows(ctx, tx, true, id)
 	if err != nil {
 		return nil, "", err
@@ -250,6 +254,9 @@ func (s *Store) ReplaceSchedule(ctx context.Context, id string, in ScheduleInput
 	if ifMatch != nodeScheduleETag(rows) {
 		return nil, "", ErrStale
 	}
+	if err := s.publishWidenedSchedules(ctx, tx, id, rows, []EngineSchedule{{Engine: "ookla", Interval: slot.Interval, Enabled: in.Enabled}}); err != nil {
+		return nil, "", err
+	}
 	if _, err := tx.Exec(ctx, `UPDATE schedules SET interval_minutes=$2, offset_minutes=$3, enabled=$4, revision=revision+1, updated_at=now() WHERE node_id=$1`,
 		id, slot.Interval, slot.Offset, in.Enabled); err != nil {
 		return nil, "", err
@@ -257,10 +264,39 @@ func (s *Store) ReplaceSchedule(ctx context.Context, id string, in ScheduleInput
 	if _, err := tx.Exec(ctx, `UPDATE engine_schedules SET interval_minutes=$2,offset_minutes=$3,enabled=$4,revision=revision+1 WHERE node_id=$1 AND engine='ookla'`, id, slot.Interval, slot.Offset, in.Enabled); err != nil {
 		return nil, "", err
 	}
+	if err := usage.ReconcileScheduleEdit(ctx, tx, id, s.now()); err != nil {
+		return nil, "", err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return nil, "", err
 	}
 	return s.Schedule(ctx, id)
+}
+
+func (s *Store) publishWidenedSchedules(ctx context.Context, tx pgx.Tx, node string, current []scheduleRow, next []EngineSchedule) error {
+	if s.Events == nil {
+		return nil
+	}
+	previous := make(map[string]scheduleRow, len(current))
+	for _, schedule := range current {
+		previous[schedule.Engine] = schedule
+	}
+	for _, schedule := range next {
+		old, exists := previous[schedule.Engine]
+		if !exists || (schedule.Interval <= old.Interval && (schedule.Enabled || !old.Enabled)) {
+			continue
+		}
+		newInterval := fmt.Sprint(schedule.Interval) + " minutes"
+		if !schedule.Enabled {
+			newInterval = "paused"
+		}
+		if err := s.Events.PublishEventTx(ctx, tx, "bandwidth.interval_widened", node, map[string]string{
+			"engine": schedule.Engine, "old_interval": fmt.Sprint(old.Interval) + " minutes", "new_interval": newInterval,
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func upsertSetting(ctx context.Context, tx pgx.Tx, key string, value any) error {
@@ -325,6 +361,9 @@ func (s *Store) ReplaceRules(ctx context.Context, in ScheduleRules, ifMatch stri
 		return nil, "", err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := usage.LockBudgetEvaluation(ctx, tx); err != nil {
+		return nil, "", err
+	}
 	_, etag, rows, _, err := s.collection(ctx, tx, true)
 	if err != nil {
 		return nil, "", err
@@ -366,6 +405,9 @@ func (s *Store) Stagger(ctx context.Context, ifMatch string) (map[string]any, st
 		return nil, "", err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := usage.LockBudgetEvaluation(ctx, tx); err != nil {
+		return nil, "", err
+	}
 	_, etag, rows, _, err := s.collection(ctx, tx, true)
 	if err != nil {
 		return nil, "", err

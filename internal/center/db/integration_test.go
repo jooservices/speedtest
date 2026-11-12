@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/shared/testenv"
+
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
@@ -28,9 +30,7 @@ func testPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	if err != nil {
 		t.Fatal("a configured worktree .env is required")
 	}
-	for k, v := range values {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid test configuration")
@@ -62,6 +62,15 @@ func exec(t *testing.T, ctx context.Context, p *pgxpool.Pool, sql string) {
 	}
 }
 
+func currentMigrationVersion(t *testing.T, ctx context.Context, p *pgxpool.Pool) int64 {
+	t.Helper()
+	var version int64
+	if err := p.QueryRow(ctx, `SELECT COALESCE(MAX(version_id) FILTER (WHERE is_applied),0) FROM goose_db_version`).Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	return version
+}
+
 func TestMigrations(t *testing.T) {
 	pool, ctx := testPool(t)
 	dbtest.Reset(t, pool)
@@ -76,10 +85,15 @@ func TestMigrations(t *testing.T) {
 	}()
 	t.Run("AllRequiredTables", func(t *testing.T) {
 		var got int
-		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor"}).Scan(&got); e != nil || got != 27 {
-			t.Fatalf("required tables: got %d want 27: %v", got, e)
+		tables := []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor", "api_access_tokens", "monthly_report_runs"} // every table a migration creates may be listed; the count follows the list
+		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", tables).Scan(&got); e != nil || got != len(tables) {
+			t.Fatalf("required tables: got %d want %d: %v", got, len(tables), e)
 		}
-		t.Log("PASS: 27 required tables created by embedded migrations")
+		var defaults int
+		if e := pool.QueryRow(ctx, `SELECT count(*) FROM alert_rules WHERE metric IN ('offline','failed','down_pct','up_pct','ping','jitter','loss','ip_changed')`).Scan(&defaults); e != nil || defaults != 8 {
+			t.Fatalf("seeded alert rules: got %d want 8: %v", defaults, e)
+		}
+		t.Log("PASS: 35 required tables and eight baseline alert rules created by embedded migrations")
 	})
 	t.Run("IndexesUUIDUnitsAndTimeTypes", func(t *testing.T) {
 		var got int
@@ -125,7 +139,7 @@ func TestMigrations(t *testing.T) {
 			{"LossAbove100", "UPDATE results SET loss_percent=101", "23514"},
 			{"MissingSuccessfulMeasurement", "UPDATE results SET down_mbps=NULL", "23514"},
 			{"FailedWithoutError", "UPDATE results SET status='failed',error=''", "23514"},
-			{"InvalidOffset", "INSERT INTO schedules(node_id,offset_minutes) VALUES ('" + node + "',30)", "23514"},
+			{"InvalidOffset", "INSERT INTO schedules(node_id,offset_minutes) VALUES ('" + node + "',60)", "23514"},
 			{"NoSecretOrSettingValue", "INSERT INTO settings(key) VALUES ('empty')", "23514"},
 			{"MixedSecretAndPublicValue", "INSERT INTO settings(key,value,secret_ciphertext) VALUES ('mixed','{}','ciphertext')", "23514"},
 			{"IPv4SubnetNotHost", "INSERT INTO ip_addresses(ip) VALUES ('203.0.113.0/24')", "23514"},
@@ -164,11 +178,10 @@ INSERT INTO notification_deliveries(id,event_id,channel) VALUES ('00000000-0000-
 INSERT INTO settings(key,value) VALUES ('display','{"theme":"dark"}');
 INSERT INTO settings(key,secret_ciphertext) VALUES ('integration',decode('aabb','hex'));
 INSERT INTO api_idempotency(principal,operation,key_hash,request_hash,response_ciphertext,expires_at) VALUES ('owner','create-node',repeat('a',64),repeat('b',64),decode(repeat('00',28),'hex'),now()+interval '1 hour');
+INSERT INTO api_access_tokens(id,user_id,name,scope,token_hash) VALUES ('00000000-0000-4000-8000-000000000017','00000000-0000-4000-8000-000000000010','rollback-fixture','read',decode(repeat('aa',32),'hex'));
 INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000-8000-000000000015',id,'run_now','00000000-0000-4000-8000-000000000002' FROM nodes;`)
-		for range 10 {
-			if e := db.Migrate(ctx, pool, "down"); e != nil {
-				t.Fatal(e)
-			}
+		if e := db.MigrateDownTo(ctx, pool, 0); e != nil {
+			t.Fatalf("rollback all migrations: %v", e)
 		}
 		var n int
 		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_type='BASE TABLE' AND table_name <> 'goose_db_version'").Scan(&n); e != nil || n != 0 {
@@ -202,10 +215,8 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		}
 	})
 	t.Run("TransactionalRollbackFailure", func(t *testing.T) {
-		for range 9 {
-			if e := db.Migrate(ctx, pool, "down"); e != nil {
-				t.Fatal(e)
-			}
+		if e := db.MigrateDownTo(ctx, pool, 1); e != nil {
+			t.Fatal(e)
 		}
 		exec(t, ctx, pool, "CREATE VIEW rollback_blocker AS SELECT id FROM users")
 		t.Cleanup(func() { exec(t, context.Background(), pool, "DROP VIEW IF EXISTS rollback_blocker") })
@@ -218,4 +229,155 @@ INSERT INTO agent_commands(id,node_id,type,result_id) SELECT '00000000-0000-4000
 		}
 		exec(t, ctx, pool, "DROP VIEW rollback_blocker")
 	})
+}
+
+func TestDevelopV22UpgradeAndRollbackIntegration(t *testing.T) {
+	pool, ctx := testPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MigrateDownTo(ctx, pool, 22); err != nil {
+		t.Fatal(err)
+	}
+	if version := currentMigrationVersion(t, ctx, pool); version != 22 {
+		t.Fatalf("develop baseline version = %d, want 22", version)
+	}
+	insertDevelopV20Fixtures(t, ctx, pool)
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	assertDevelopV20Rows(t, ctx, pool)
+	if err := db.MigrateDownTo(ctx, pool, 22); err != nil {
+		t.Fatal(err)
+	}
+	assertDevelopV20Rows(t, ctx, pool)
+	if version := currentMigrationVersion(t, ctx, pool); version != 22 {
+		t.Fatalf("rollback version = %d, want 22", version)
+	}
+	t.Log("PASS: populated develop-v22 upgrade/rollback preserves API token, audit columns and scoped alert rules")
+}
+
+func insertDevelopV20Fixtures(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	exec(t, ctx, pool, `INSERT INTO users(id,email,password_hash) VALUES('82000000-0000-4000-8000-000000000001','migration-owner@example.test','test-hash');
+INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES('82000000-0000-4000-8000-000000000002','migration-node',100,50);
+INSERT INTO api_access_tokens(id,user_id,name,scope,token_hash) VALUES('82000000-0000-4000-8000-000000000003','82000000-0000-4000-8000-000000000001','v20-token','read',decode(repeat('ab',32),'hex'));
+INSERT INTO audit_log(id,actor,action,target_type,target_id,auth_method,credential_id)
+VALUES('82000000-0000-4000-8000-000000000004','owner@example.test','fixture','token','fixture','bearer','82000000-0000-4000-8000-000000000003');
+INSERT INTO alert_rules(id,name,metric,op,value,for_tests,node_ids,severity,channels,engine) VALUES
+('82000000-0000-4000-8000-000000000011','Owner global download','down_pct','<',67.5,3,NULL,'warn',ARRAY['telegram'],NULL),
+('82000000-0000-4000-8000-000000000012','Node ping override','ping','>',81,4,ARRAY['82000000-0000-4000-8000-000000000002']::uuid[],'crit',ARRAY['email'],'ookla'),
+('82000000-0000-4000-8000-000000000013','Engine jitter override','jitter','>',22,5,NULL,'warn',ARRAY['slack'],'librespeed');`)
+}
+
+func assertDevelopV20Rows(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	var tokens, audits, authMethods, scopedRules int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM api_access_tokens WHERE id='82000000-0000-4000-8000-000000000003'`).Scan(&tokens); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*),count(*) FILTER (WHERE auth_method='bearer') FROM audit_log WHERE id='82000000-0000-4000-8000-000000000004'`).Scan(&audits, &authMethods); err != nil {
+		t.Fatal(err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM alert_rules WHERE id IN ('82000000-0000-4000-8000-000000000011','82000000-0000-4000-8000-000000000012','82000000-0000-4000-8000-000000000013') AND value IN (67.5,81,22)`).Scan(&scopedRules); err != nil {
+		t.Fatal(err)
+	}
+	if tokens != 1 || audits != 1 || authMethods != 1 || scopedRules != 3 {
+		t.Fatalf("v20 rows changed: token=%d audit=%d bearer=%d rules=%d", tokens, audits, authMethods, scopedRules)
+	}
+	if currentMigrationVersion(t, ctx, pool) > 26 {
+		var settingsThreshold float64
+		if err := pool.QueryRow(ctx, `SELECT (thresholds->>'down_pct')::float8 FROM notification_event_settings WHERE event_key='quality.download_low'`).Scan(&settingsThreshold); err != nil || settingsThreshold != 67.5 {
+			t.Fatalf("migrated global threshold = %v: %v", settingsThreshold, err)
+		}
+	}
+}
+
+func TestScheduleDefaultMigrationPreservesIntervalsIntegration(t *testing.T) {
+	pool, ctx := testPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	const nodeIDs = "'00000000-0000-4000-8000-000000000101','00000000-0000-4000-8000-000000000102','00000000-0000-4000-8000-000000000103'"
+	exec(t, ctx, pool, "INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) SELECT id,'schedule-'||row_number() OVER (),100,100 FROM unnest(ARRAY["+nodeIDs+"]::uuid[]) AS items(id)")
+	exec(t, ctx, pool, `INSERT INTO schedules(node_id,interval_minutes,offset_minutes)
+VALUES ('00000000-0000-4000-8000-000000000101',5,0),
+       ('00000000-0000-4000-8000-000000000102',30,7),
+       ('00000000-0000-4000-8000-000000000103',60,11)`)
+	if err := db.MigrateDownTo(ctx, pool, 14); err != nil { // Restore the schema before the 60-minute schedule default.
+		t.Fatal(err)
+	}
+	assertScheduleIntervals(t, ctx, pool, "5:0,30:7,60:11")
+	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps)
+VALUES ('00000000-0000-4000-8000-000000000104','before-upgrade',100,100);
+INSERT INTO schedules(node_id) VALUES ('00000000-0000-4000-8000-000000000104')`)
+	assertScheduleInterval(t, ctx, pool, "00000000-0000-4000-8000-000000000104", 30)
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	assertScheduleIntervals(t, ctx, pool, "5:0,30:7,60:11,30:0")
+	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps)
+VALUES ('00000000-0000-4000-8000-000000000105','after-upgrade',100,100);
+INSERT INTO schedules(node_id) VALUES ('00000000-0000-4000-8000-000000000105')`)
+	assertScheduleInterval(t, ctx, pool, "00000000-0000-4000-8000-000000000105", 60)
+	assertScheduleIntervals(t, ctx, pool, "5:0,30:7,60:11,30:0,60:0")
+	t.Log("PASS: migration up/down preserves 5/30/60-minute rows; rollback default is 30; upgraded default is 60")
+}
+
+func assertScheduleIntervals(t *testing.T, ctx context.Context, pool *pgxpool.Pool, want string) {
+	t.Helper()
+	var got string
+	err := pool.QueryRow(ctx, `SELECT string_agg(interval_minutes||':'||offset_minutes,',' ORDER BY node_id)
+FROM schedules WHERE node_id::text >= '00000000-0000-4000-8000-000000000101'
+  AND node_id::text <= '00000000-0000-4000-8000-000000000105'`).Scan(&got)
+	if err != nil || got != want {
+		t.Fatalf("schedule intervals = %q, want %q: %v", got, want, err)
+	}
+}
+
+func assertScheduleInterval(t *testing.T, ctx context.Context, pool *pgxpool.Pool, nodeID string, want int) {
+	t.Helper()
+	var got int
+	if err := pool.QueryRow(ctx, "SELECT interval_minutes FROM schedules WHERE node_id=$1", nodeID).Scan(&got); err != nil || got != want {
+		t.Fatalf("schedule default for %s = %d, want %d: %v", nodeID, got, want, err)
+	}
+}
+
+func TestNotificationDefaultsKeepDistinctGlobalThresholdsIntegration(t *testing.T) {
+	pool, ctx := testPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.MigrateDownTo(ctx, pool, 24); err != nil { // before the notification migrations (00026 and later; 00025 is the server catalogs of JOOST-76)
+		t.Fatal(err)
+	}
+	exec(t, ctx, pool, `DELETE FROM alert_rules;
+INSERT INTO alert_rules(id,name,metric,op,value,for_tests,node_ids,severity,channels,enabled,engine) VALUES
+ ('00000000-0000-4000-8000-000000000201','Download strict','down_pct','<',50,2,NULL,'warn',ARRAY['email'],true,NULL),
+ ('00000000-0000-4000-8000-000000000202','Download lenient','down_pct','<',80,3,NULL,'crit',ARRAY['email'],true,NULL),
+ ('00000000-0000-4000-8000-000000000203','Ping only','ping','>',40,2,NULL,'warn',ARRAY['email'],true,NULL)`)
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	var settings int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM notification_event_settings WHERE event_key='quality.download_low'`).Scan(&settings); err != nil || settings != 0 {
+		t.Fatalf("two global rules of one metric must not collapse into one event setting: %d %v", settings, err)
+	}
+	var ping float64
+	if err := pool.QueryRow(ctx, `SELECT (thresholds->>'ping')::float8 FROM notification_event_settings WHERE event_key='quality.ping_high'`).Scan(&ping); err != nil || ping != 40 {
+		t.Fatalf("a single global rule seeds its event setting: %v %v", ping, err)
+	}
+	var values string
+	if err := pool.QueryRow(ctx, `SELECT string_agg(value::text||'/'||for_tests::text,',' ORDER BY id) FROM alert_rules WHERE metric='down_pct'`).Scan(&values); err != nil || values != "50/2,80/3" {
+		t.Fatalf("both download rules keep their own threshold and streak: %q %v", values, err)
+	}
 }

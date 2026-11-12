@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 
-const ROUTES = [['#/', 'Dashboard'], ['#/nodes', 'Nodes'], ['#/history', 'Results'], ['#/stats', 'Statistics'], ['#/network', 'IP & location'], ['#/schedules', 'Schedules'], ['#/alerts', 'Alerts'], ['#/settings', 'Settings']];
+const ROUTES = [['#/', 'Dashboard'], ['#/nodes', 'Nodes'], ['#/history', 'Results'], ['#/stats', 'Statistics'], ['#/network', 'IP & location'], ['#/isps', 'ISPs'], ['#/schedules', 'Schedules'], ['#/alerts', 'Alerts'], ['#/settings', 'Settings']];
 
 export function qualitySuite(T) {
   const { page, assert } = T;

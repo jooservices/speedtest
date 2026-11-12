@@ -22,6 +22,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/shared/config"
+	"github.com/jooservices/speedtest/internal/shared/testenv"
 )
 
 func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
@@ -29,9 +30,7 @@ func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("a configured worktree .env is required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
@@ -67,6 +66,10 @@ func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
 	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "true")
 	t.Setenv("SPEEDTEST_GEO_IPAPI_URL", provider.URL)
 	t.Setenv("SPEEDTEST_GEO_IPINFO_ENABLED", "false")
+	for _, name := range []string{"IPWHO", "FREEIPAPI", "GEOJS", "RIPESTAT", "IPAPICO", "IPGEOLOCATION"} {
+		t.Setenv("SPEEDTEST_GEO_"+name+"_ENABLED", "false")
+	}
+	t.Setenv("SPEEDTEST_GEO_CONSENSUS", "false")
 	t.Setenv("SPEEDTEST_GEOIP_CITY_DB", t.TempDir()+"/missing-city.mmdb")
 	t.Setenv("SPEEDTEST_GEOIP_ASN_DB", t.TempDir()+"/missing-asn.mmdb")
 	address := freeTCPAddress(t)
@@ -140,9 +143,7 @@ func TestSeedAndStartupGuardsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("worktree configuration required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
@@ -276,9 +277,7 @@ func TestCreateOwnerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("worktree configuration required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
@@ -321,9 +320,7 @@ func TestResetOwnerPasswordIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("worktree configuration required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
@@ -382,9 +379,7 @@ func TestDisableTwoFactorIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("worktree configuration required")
 	}
-	for key, value := range values {
-		t.Setenv(key, value)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")

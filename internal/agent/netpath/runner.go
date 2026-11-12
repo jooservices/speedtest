@@ -86,6 +86,23 @@ func (r *Runner) Run(ctx context.Context, opts engine.Options) (RunResult, error
 	return result, runErr
 }
 
+// ListServers discovers targets on the same validated network path as Run.
+func (r *Runner) ListServers(ctx context.Context) ([]engine.ServerOption, error) {
+	path, err := Resolve(r.binding)
+	if err != nil {
+		return nil, fmt.Errorf("network path: %w", err)
+	}
+	lister, ok := r.engine.(engine.ServerLister)
+	if !ok {
+		return nil, fmt.Errorf("speed-test engine does not support server discovery")
+	}
+	options := engine.Options{InterfaceName: path.Interface}
+	if path.SourceIP != nil {
+		options.SourceIP = path.SourceIP.String()
+	}
+	return lister.ListServers(ctx, options)
+}
+
 // publicAddress reports whether ip could be a globally routable address.
 func publicAddress(ip net.IP) bool {
 	return ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified() && !ip.IsMulticast()

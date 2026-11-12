@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/jooservices/speedtest/internal/shared/failureclass"
 )
 
 // Status values a result can report to the command center.
@@ -35,11 +37,12 @@ type LoadedLatency struct {
 // engine's location string and Sponsor is empty because the engine does not
 // expose a distinct sponsor value.
 type Server struct {
-	ID      int64  `json:"id,omitempty"`
-	Name    string `json:"name"`
-	City    string `json:"city"`
-	Sponsor string `json:"sponsor"`
-	Host    string `json:"host,omitempty"`
+	ID       int64  `json:"id,omitempty"`
+	Name     string `json:"name"`
+	City     string `json:"city"`
+	Sponsor  string `json:"sponsor"`
+	Host     string `json:"host,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
 }
 
 // Result is one reportable result, mirroring the ResultInput wire schema in
@@ -61,25 +64,28 @@ type Result struct {
 	ULat   *float64 `json:"uLat"`
 	Loss   *float64 `json:"loss"`
 
-	ServerID  *int64  `json:"serverId"`
-	IP        string  `json:"ip"`
-	Threads   int     `json:"threads"`
-	BytesDown int64   `json:"bytesDown"`
-	BytesUp   int64   `json:"bytesUp"`
-	Duration  float64 `json:"duration"`
-	Error     *string `json:"error"`
-	Manual    bool    `json:"manual"`
+	ServerID     *int64  `json:"serverId"`
+	IP           string  `json:"ip"`
+	Threads      int     `json:"threads"`
+	BytesDown    int64   `json:"bytesDown"`
+	BytesUp      int64   `json:"bytesUp"`
+	Duration     float64 `json:"duration"`
+	Error        *string `json:"error"`
+	FailureClass string  `json:"failureClass,omitempty"`
+	Manual       bool    `json:"manual"`
 
 	Raw        json.RawMessage `json:"raw,omitempty"`
 	LoadedDown *LoadedLatency  `json:"loadedDown,omitempty"`
 	LoadedUp   *LoadedLatency  `json:"loadedUp,omitempty"`
 	Server     *Server         `json:"server,omitempty"`
 
-	EngineISP       string   `json:"engineISP,omitempty"`
-	EngineResultID  string   `json:"engineResultId,omitempty"`
-	EngineResultURL string   `json:"engineResultUrl,omitempty"`
-	EngineIP        string   `json:"engineIp,omitempty"`
-	Warnings        []string `json:"warnings,omitempty"`
+	EngineISP            string   `json:"engineISP,omitempty"`
+	EngineResultID       string   `json:"engineResultId,omitempty"`
+	EngineResultURL      string   `json:"engineResultUrl,omitempty"`
+	EngineIP             string   `json:"engineIp,omitempty"`
+	Warnings             []string `json:"warnings,omitempty"`
+	ServerSelectionKnown bool     `json:"serverSelectionKnown,omitempty"`
+	PinnedServerID       *int64   `json:"pinnedServerId,omitempty"`
 }
 
 // Validate checks that r satisfies the wire schema constraints, so an invalid
@@ -121,10 +127,22 @@ func (r Result) Validate() error {
 	if err := r.validateDetails(); err != nil {
 		return err
 	}
+	return r.validateStatus()
+}
+
+// validateStatus checks the rules that depend on the result status (failed needs an error and a class, ok needs the metrics).
+func (r Result) validateStatus() error {
 	switch r.Status {
 	case StatusFailed:
 		if r.Error == nil || *r.Error == "" {
 			return errors.New("a failed result requires a non-empty error")
+		}
+		class := r.FailureClass
+		if class == "" {
+			class = failureclass.FromText(*r.Error)
+		}
+		if !failureclass.Valid(class) {
+			return fmt.Errorf("unsupported failureClass %q", r.FailureClass)
 		}
 	case StatusOK, StatusDegraded:
 		if r.Error != nil {
@@ -135,6 +153,9 @@ func (r Result) Validate() error {
 		}
 		if r.Server == nil {
 			return errors.New("an ok or degraded result requires a server identity")
+		}
+		if r.FailureClass != "" && r.FailureClass != failureclass.Other {
+			return errors.New("an ok or degraded result must use failureClass other")
 		}
 	default:
 		return fmt.Errorf("result status must be ok, degraded or failed, got %q", r.Status)
@@ -194,7 +215,10 @@ func (r Result) validateDetails() error {
 	if r.ServerID != nil && *r.ServerID <= 0 {
 		return errors.New("serverId must be positive")
 	}
-	if r.Server != nil && (r.Server.ID < 0 || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || len([]rune(r.Server.Host)) > 255) {
+	if r.PinnedServerID != nil && (*r.PinnedServerID <= 0 || *r.PinnedServerID > math.MaxInt32 || !r.ServerSelectionKnown) {
+		return errors.New("pinnedServerId must be a known positive server ID")
+	}
+	if r.Server != nil && (r.Server.ID < 0 || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || len([]rune(r.Server.Host)) > 255 || !validServerEndpoint(r.Server.Endpoint)) {
 		return errors.New("invalid server identity")
 	}
 	if r.EngineIP != "" {
@@ -209,4 +233,12 @@ func (r Result) validateDetails() error {
 		}
 	}
 	return nil
+}
+
+func validServerEndpoint(value string) bool {
+	if value == "" {
+		return true
+	}
+	u, err := url.Parse(value)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && u.User == nil && u.RawQuery == "" && u.Fragment == "" && len(value) <= 2048
 }

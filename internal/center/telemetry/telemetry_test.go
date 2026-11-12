@@ -39,7 +39,7 @@ func TestRegistryIsolationAndOutcomes(t *testing.T) {
 	for _, status := range []string{"accepted", "duplicate", "rejected", "scanner"} {
 		meter.Ingest(status)
 	}
-	for _, job := range []string{"retention", "alerts", "notification"} {
+	for _, job := range []string{"retention", "alerts", "notification", "geo_backfill"} {
 		meter.Job(job, true)
 		meter.Job(job, false)
 	}
@@ -53,7 +53,7 @@ func TestRegistryIsolationAndOutcomes(t *testing.T) {
 			t.Fatal(m)
 		}
 	}
-	if len(f["speedtest_job_runs_total"].Metric) != 6 {
+	if len(f["speedtest_job_runs_total"].Metric) != 8 {
 		t.Fatal("unbounded jobs")
 	}
 	for _, m := range f["speedtest_job_runs_total"].Metric {
@@ -77,6 +77,37 @@ func TestRegistryIsolationAndOutcomes(t *testing.T) {
 		}
 	}
 }
+
+func TestGeoProviderUsesBoundedLabelsAndOutcomes(t *testing.T) {
+	meter := New("test")
+	meter.GeoProvider("ip-api", "success")
+	meter.GeoProvider("ipwho", "unsupported")
+	meter.GeoProvider("unknown-provider", "success")
+	meter.GeoProvider("ripestat", "budget_exhausted")
+	families := scrape(t, meter)
+	metrics := families["speedtest_geo_lookups_total"].Metric
+	recorded := 0
+	seen := map[string]bool{}
+	for _, metric := range metrics {
+		if metric.GetCounter().GetValue() == 0 {
+			continue
+		}
+		recorded++
+		labels := metric.GetLabel()
+		values := map[string]string{}
+		for _, label := range labels {
+			values[label.GetName()] = label.GetValue()
+		}
+		seen[values["provider"]+":"+values["outcome"]] = true
+		if metric.GetCounter().GetValue() != 1 {
+			t.Fatalf("geo counter = %v", metric)
+		}
+	}
+	if recorded != 3 || !seen["ip-api:success"] || !seen["ipwho:error"] || !seen["ripestat:budget_exhausted"] {
+		t.Fatalf("recorded geo outcomes = %v", seen)
+	}
+}
+
 func TestMiddlewareStatusFlightAndStreaming(t *testing.T) {
 	meter := New("test")
 	cases := []struct {
@@ -168,7 +199,7 @@ func TestAllDocumentedRoutesAndAssets(t *testing.T) {
 			t.Fatal(p)
 		}
 	}
-	for _, p := range []string{"/healthz", "/readyz", "/metrics"} {
+	for _, p := range []string{"/healthz", "/readyz", "/metrics", "/mcp", "/api/access-tokens"} {
 		if Route(p) != p {
 			t.Fatal(p)
 		}
@@ -178,6 +209,18 @@ func TestAllDocumentedRoutesAndAssets(t *testing.T) {
 			if Route(p) != "other" {
 				t.Fatal(p)
 			}
+		}
+	}
+	for _, tc := range []struct{ path, want string }{
+		{"/api/notifications/events/test.success", "/api/notifications/events/{id}"},
+		{"/api/notifications/events/test.success/nodes/00000000-0000-4000-8000-000000000001", "/api/notifications/events/{id}/nodes/{id}"},
+		{"/api/notifications/templates/test.success/telegram", "/api/notifications/templates/{id}/{id}"},
+		{"/api/notifications/templates/test.success/telegram/previews", "/api/notifications/templates/{id}/{id}/previews"},
+		{"/api/notifications/templates/test.success/telegram/resets", "/api/notifications/templates/{id}/{id}/resets"},
+		{"/api/notifications/templates/unknown/channel/extra", "other"},
+	} {
+		if got := Route(tc.path); got != tc.want {
+			t.Fatalf("%s: %s != %s", tc.path, got, tc.want)
 		}
 	}
 }

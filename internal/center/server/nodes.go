@@ -41,6 +41,7 @@ type nodeInputWire struct {
 	Label        *string                `json:"label"`
 	Provider     *string                `json:"provider"`
 	Plan         *string                `json:"plan"`
+	ISPPlanID    *string                `json:"ispPlanId"`
 	ExpectedDown *float64               `json:"expectedDown"`
 	ExpectedUp   *float64               `json:"expectedUp"`
 	Threads      *int                   `json:"threads"`
@@ -52,11 +53,17 @@ type nodeInputWire struct {
 }
 
 func (wire nodeInputWire) input() (nodes.Input, error) {
-	if wire.Name == nil || wire.ExpectedDown == nil || wire.ExpectedUp == nil {
+	if wire.Name == nil || wire.ISPPlanID == nil && (wire.ExpectedDown == nil || wire.ExpectedUp == nil) {
 		return nodes.Input{}, nodes.ErrInvalidInput
 	}
-	i := nodes.Input{Name: *wire.Name, ExpectedDown: *wire.ExpectedDown, ExpectedUp: *wire.ExpectedUp,
+	i := nodes.Input{Name: *wire.Name, ISPPlanID: wire.ISPPlanID,
 		Label: "", Provider: "", Plan: "", Threads: 4, Enabled: true, Binding: nodes.Binding{}, AutoUpdate: false}
+	if wire.ExpectedDown != nil {
+		i.ExpectedDown = *wire.ExpectedDown
+	}
+	if wire.ExpectedUp != nil {
+		i.ExpectedUp = *wire.ExpectedUp
+	}
 	if wire.Label != nil {
 		i.Label = *wire.Label
 	}
