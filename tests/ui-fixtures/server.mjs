@@ -12,6 +12,7 @@ export function fixture() {
   const result = { id: 'a4bbcf7b-8938-4e90-8128-59047d35b087', nodeId: node.id, ts,
     serverId: 1, pinnedServerId: null, serverSelectionKnown: false, threads: 4, ip: '203.0.113.9', status: 'ok', error: null, failureClass: 'other', ispId: null, down: 90, up: 40, ping: 0,
     jitter: null, loss: null, dLat: null, uLat: null, bytesDown: 1000, bytesUp: 500, duration: 1,
+    failureClass: 'other', ispId: null,
     manual: false, raw: {}, server: { id: 1, name: 'Fixture server', city: '', sponsor: '' }, geo: null };
   node.latest = result; node.latestGood = result;
   const isp = { id: '9c96b615-8275-4df5-96e6-1ba67e5a16c7', asn: 64500, organisation: 'Fixture Network',
