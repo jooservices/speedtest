@@ -1,9 +1,9 @@
 /* DOM helpers and shared components. Text is always inserted with textContent (no innerHTML) so data cannot inject markup. */
 (function () {
   'use strict';
-  var ST = window.ST;
+  var ST = (/** @type {any} */ (window)).ST;
   ST.pages = ST.pages || {};
-  var U = (ST.ui = {});
+  var U = /** @type {any} */ (ST.ui = {});
 
   U.h = function (tag, props) {
     var el = document.createElement(tag);

@@ -1,7 +1,7 @@
 /* Results: filter, sort, paginate, export. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt;
   var q = { nodes: null, allNodes: true, status: 'all', ispId: '', text: '', minDown: '', maxDown: '', range: null, sort: 'ts', dir: 'desc', page: 1, size: 25 };
 
   ST.pages.history = function (root) {
