@@ -304,6 +304,8 @@ export function nodesSuite(T, ctx) {
       const online = JSON.parse(T.db(`select payload::text from alert_events where node_id='${nodeID}' and event_key='node.online' order by ts desc limit 1`));
       assert.ok(online.duration, 'the node recovery includes its downtime');
       await T.eventually(() => receiver.bodies.slice(recoveryBefore).some(message => /Node back online/.test(message.text || '')), 'node-online notification reaches the webhook', 75000);
+      // The next scenario (server discovery) needs this node's agent running: the node-offline steps above stopped it.
+      await agent.restart({ scenario: 'success' });
 
       await T.open('#/history', 'Results');
       await T.selectWith('Any status').selectOption('all');

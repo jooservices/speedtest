@@ -292,7 +292,6 @@ func completeResultOutcome(w http.ResponseWriter, outcome Outcome) Outcome {
 	return outcome
 }
 
-
 func (h Handler) config(w http.ResponseWriter, r *http.Request, node string) {
 	config, err := h.Store.Config(r.Context(), node)
 	if err != nil {
