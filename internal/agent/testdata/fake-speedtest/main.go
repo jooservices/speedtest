@@ -17,6 +17,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -26,6 +27,9 @@ import (
 	"syscall"
 	"time"
 )
+
+//go:embed librespeed-servers-v1.0.14.txt
+var libreSpeedServerList string
 
 // speedtestResult mirrors the JSON produced by the Ookla CLI for
 // `--format=json`. Bandwidth is bytes per second; latency and jitter are
@@ -111,9 +115,23 @@ func main() {
 // code: 0 for a successful measurement, 1 when the timeout scenario is
 // cancelled, 2 for usage or engine errors.
 func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
+	if hasArg(args, "--servers") {
+		return writeServerList(stdout)
+	}
+	if hasArg(args, "--list") {
+		_, _ = io.WriteString(stdout, libreSpeedServerList)
+		return 0
+	}
+	if hasArg(args, "--json") {
+		return runLibreSpeed(args, stdout, stderr)
+	}
 	cfg, err := parseFlags(args, stderr)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "speedtest: %v\n", err)
+		return 2
+	}
+	if cfg.serverID == 54321 {
+		_, _ = fmt.Fprintln(stderr, "speedtest: specified server unavailable")
 		return 2
 	}
 
@@ -134,6 +152,25 @@ func run(ctx context.Context, args []string, stdout, stderr io.Writer) int {
 		}
 		return 0
 	}
+}
+
+func runLibreSpeed(args []string, stdout, stderr io.Writer) int {
+	if argumentValue(args, "--server") == "52" {
+		_, _ = fmt.Fprintln(stdout, "null")
+		return 0
+	}
+	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	_, _ = fmt.Fprintf(stdout, `{"timestamp":%q,"server":{"name":"Hanoi, Vietnam (Hanoi Speedtest)","url":"https://hn.example.test/backend"},"client":{"ip":"203.0.113.10","isp":"Example ISP"},"bytes_sent":1000,"bytes_received":5000,"ping":3.5,"jitter":0.5,"upload":20,"download":100,"share":""}`+"\n", timestamp)
+	return 0
+}
+
+func argumentValue(args []string, name string) string {
+	for i := 0; i+1 < len(args); i++ {
+		if args[i] == name {
+			return args[i+1]
+		}
+	}
+	return ""
 }
 
 // parseFlags parses the command line into a resolved config. Explicit flags
@@ -183,6 +220,26 @@ func parseFlags(args []string, errw io.Writer) (config, error) {
 	})
 
 	return cfg, nil
+}
+
+func hasArg(args []string, want string) bool {
+	for _, arg := range args {
+		if arg == want {
+			return true
+		}
+	}
+	return false
+}
+
+func writeServerList(stdout io.Writer) int {
+	servers := map[string]any{"servers": []map[string]any{
+		{"id": 12345, "name": "Singapore Gateway", "host": "sg.example", "location": "Singapore", "sponsor": "Ookla Singapore", "distance": 4.2},
+		{"id": 54321, "name": "Gateway Central", "host": "hn.example", "location": "Hanoi", "sponsor": "Ookla ISP", "distance": 22.8},
+	}}
+	if err := json.NewEncoder(stdout).Encode(servers); err != nil {
+		return 2
+	}
+	return 0
 }
 
 // scenarioDefaults returns the preset measurement for a scenario.
@@ -237,10 +294,10 @@ func buildResult(cfg config) speedtestResult {
 		},
 		Server: server{
 			ID:       cfg.serverID,
-			Host:     "speedtest.hanoi.example",
+			Host:     "speedtest.singapore.example",
 			Port:     8080,
-			Name:     "Hanoi",
-			Location: "Hanoi",
+			Name:     "Singapore Gateway",
+			Location: "Singapore",
 			Country:  "Vietnam",
 			IP:       "203.0.113.20",
 		},

@@ -1,7 +1,7 @@
 /* App shell: sidebar, top bar, hash router, theme. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h;
   ST.pages = ST.pages || {};
 
   var NAV = [

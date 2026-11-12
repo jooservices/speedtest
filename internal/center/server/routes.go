@@ -82,6 +82,9 @@ func ownerAreas(o Options, auth *serverAuth) routeTable {
 	if o.Installer != nil {
 		t.addToken(newInstallerHandler(o.Installer, auth, o.AgentRateLimit), onPath(installerRoute), operationScope)
 	}
+	if o.OwnerServers != nil {
+		t.add(newOwnerServersHandler(o.OwnerServers, auth), onPath(ownerServersRoute))
+	}
 	if o.OwnerNodes != nil {
 		// Creating a node belongs to the enrolment handler.
 		t.addToken(newOwnerNodesHandler(o.OwnerNodes, auth), func(r *http.Request) bool {

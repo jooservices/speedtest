@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/nodes"
 )
 
@@ -216,5 +218,48 @@ func TestJSONHelpersAndUUID(t *testing.T) {
 	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	if !(&Store{Now: func() time.Time { return fixed }}).now().Equal(fixed) {
 		t.Fatal("injected clock")
+	}
+}
+
+type ownerScanRow struct{ err error }
+
+func (r ownerScanRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	serverID, ip := int32(7), "203.0.113.4"
+	resultID, engineIP := "result-ref", "203.0.113.5"
+	values := []any{"result-id", "node-id", now, "ok", ptrFloat(100), ptrFloat(50), ptrFloat(5), ptrFloat(1), ptrFloat(20), ptrFloat(25), ptrFloat(0), &serverID,
+		[]byte(`{"name":"London"}`), &ip, int32(4), ptrInt64(1000), ptrInt64(500), ptrFloat(10), ptrString(""), true,
+		[]byte(`{"download":true}`), []byte(`{"p95":20}`), []byte(`{"p95":25}`), ptrString("Example ISP"), &resultID, ptrString("https://example.test/result"), &engineIP,
+		[]byte(`["warning"]`), "ookla", "other", true, ptrInt64(7), ptrString("isp-id"), "extra value"}
+	for i, target := range dest {
+		value := reflect.ValueOf(target).Elem()
+		if values[i] == nil {
+			value.SetZero()
+			continue
+		}
+		value.Set(reflect.ValueOf(values[i]))
+	}
+	return nil
+}
+
+func ptrFloat(value float64) *float64 { return &value }
+func ptrInt64(value int64) *int64     { return &value }
+func ptrString(value string) *string  { return &value }
+
+func TestScanResultMapsColumnsAndErrors(t *testing.T) {
+	var extra string
+	view, err := ScanResult(ownerScanRow{}, &extra)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if view.IP != "203.0.113.4" || view.Object["id"] != "result-id" || view.Object["nodeId"] != "node-id" || view.Object["status"] != "ok" ||
+		view.Object["engine"] != "ookla" || view.Object["failureClass"] != "other" || view.Object["manual"] != true || view.Object["geo"] != nil || view.Object["server"].(map[string]any)["name"] != "London" || extra != "extra value" {
+		t.Fatalf("result view = %+v extra=%q", view, extra)
+	}
+	if _, err := ScanResult(ownerScanRow{err: pgx.ErrNoRows}); !errors.Is(err, pgx.ErrNoRows) {
+		t.Fatalf("scan error = %v", err)
 	}
 }

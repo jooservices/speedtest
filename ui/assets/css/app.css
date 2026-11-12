@@ -138,7 +138,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .cols-main { grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); }
 .row { display: flex; align-items: center; gap: 8px; }
 .row.wrap { max-width: 100%; flex-wrap: wrap; }
-.stack { min-width: 0; display: grid; gap: 12px; }
+.stack { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; }
 .between { justify-content: space-between; }
 .mt { margin-top: 16px; }
 .mb { margin-bottom: 16px; }
@@ -171,7 +171,7 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; }
   background-position: calc(100% - 15px) 14px, calc(100% - 10px) 14px; background-size: 5px 5px; background-repeat: no-repeat; }
 .select.auto, .input.auto { width: auto; }
 .input:focus { border-color: var(--accent); }
-.field { display: grid; gap: 5px; }
+.field { min-width: 0; display: grid; gap: 5px; }
 .field > label, .label { font-weight: 600; font-size: 13px; }
 .hint { color: var(--muted); font-size: 12.5px; }
 .access-token-id, .audit-auth { display: block; overflow-wrap: anywhere; }
@@ -355,6 +355,10 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
 .callout.crit { background: var(--crit-soft); }
 .setting { display: flex; justify-content: space-between; gap: 20px; align-items: center; padding: 12px 0; border-bottom: 1px solid var(--line); }
 .setting:last-child { border-bottom: 0; }
+.setting.engine-setting { flex-wrap: wrap; }
+.setting.engine-setting > .server-picker { flex: 1 0 100%; min-width: 0; }
+/* The server list has up to five columns inside a narrow setting row: tighter cells keep it inside its box at desktop width. */
+.server-picker table.data th, .server-picker table.data td { padding-left: 8px; padding-right: 8px; }
 .setting .s-ctl { width: 260px; flex: none; }
 .setting .s-ctl .switch { float: right; }
 .list-row { display: flex; align-items: center; gap: 12px; padding: 11px 0; border-bottom: 1px solid var(--line); }
@@ -391,7 +395,9 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
   .cols-3, .cols-2 { grid-template-columns: 1fr; }
   .cols-5, .cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .field-row { grid-template-columns: 1fr; }
-  .setting { flex-direction: column; align-items: stretch; gap: 8px; }
+  .setting { min-width: 0; flex-direction: column; align-items: stretch; gap: 8px; }
+  .setting > * { min-width: 0; max-width: 100%; }
+  .setting.engine-setting > .server-picker { flex: none; width: 100%; }
   .setting .s-ctl { width: 100%; }
 }
 @media (max-width: 560px) {

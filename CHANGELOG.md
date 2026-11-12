@@ -10,9 +10,11 @@ All notable changes to Speedtest are recorded here. The format follows
 
 ### Added
 - Statistics analytics now include p50/p95/p99, an ISP filter, a fixed-window heatmap, week-over-week means and bounded IP/ISP/alert events.
+- JOOST-83 (B1): Go function complexity limits, a systemd installer test, UI JavaScript type checking, per-package test timing budgets, and a flaky-test log.
 - Monthly ISP and plan report (JOOST-79): per-ISP/per-node metrics, destination-attributed IP changes, an explicit unknown-attribution row, a Unicode PDF and CSV export, a populated UI preview, and optional previous-month e-mail with a renewable lease and stale-claim recovery.
 - IP change notifications and alert events now say which address changed to which ("Changed from 203.0.113.1 to 203.0.113.2 (city)"), and every delivered notification carries the event detail line (JOOST-91).
 - Configurable application notification events, per-channel templates, preview and reset controls, test-success and recovery deliveries, and security, bandwidth-budget and export event producers.
+- Per-engine server catalogs and pins, automatic fallback warnings, and result-time pin snapshots with mismatch reporting.
 - Bandwidth accounting by result, node, engine, recorded ISP and UTC period, with monthly projections, optional shared budgets, threshold events and interval cost advice.
 - Optional two-factor sign-in with an authenticator app (TOTP) and ten one-time recovery codes, in Settings > Access; the operator command `disable-2fa` is the recovery path.
 - Geolocation: ipwho.is, ipapi.co and ipgeolocation.io providers (off by default), consensus mode, and a built-in monthly DB-IP Lite database updater.

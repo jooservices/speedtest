@@ -9,13 +9,15 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jooservices/speedtest/internal/center/geo"
 )
 
 // ResultColumns lists the columns scanned by ScanResult, qualified with the alias r.
 const ResultColumns = `r.id::text, r.node_id::text, r.ts, r.status, r.down_mbps, r.up_mbps, r.ping_ms, r.jitter_ms,
 	r.down_latency_ms, r.up_latency_ms, r.loss_percent, r.server_id, r.server, host(r.ip), r.threads, r.bytes_down,
 	r.bytes_up, r.duration_seconds, r.error, r.manual, r.raw, r.loaded_down, r.loaded_up, r.engine_isp,
-	r.engine_result_id, r.engine_result_url, host(r.engine_ip), r.warnings, r.engine, r.failure_class, r.isp_id::text`
+	r.engine_result_id, r.engine_result_url, host(r.engine_ip), r.warnings, r.engine, r.failure_class,
+	r.server_selection_known, r.pinned_server_id_at_test, r.isp_id::text`
 
 // ResultView is a result in the shape of the contract plus the IP used to attach its location.
 type ResultView struct {
@@ -35,9 +37,11 @@ func ScanResult(row pgx.Row, extra ...any) (ResultView, error) {
 	var ip, errText, engineISP, engineResultID, engineResultURL, engineIP, ispID *string
 	var manual bool
 	var sid *int32
+	var selectionKnown bool
+	var pinnedSID *int64
 	dest := []any{&id, &nodeID, &ts, &status, &down, &up, &ping, &jitter, &dLat, &uLat, &loss, &sid, &server, &ip,
 		&threads, &bytesDown, &bytesUp, &duration, &errText, &manual, &raw, &loadedDown, &loadedUp, &engineISP,
-		&engineResultID, &engineResultURL, &engineIP, &warnings, &engine, &failureClass, &ispID}
+		&engineResultID, &engineResultURL, &engineIP, &warnings, &engine, &failureClass, &selectionKnown, &pinnedSID, &ispID}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return ResultView{}, err
 	}
@@ -54,7 +58,8 @@ func ScanResult(row pgx.Row, extra ...any) (ResultView, error) {
 		"raw": jsonObject(raw), "server": jsonOrNil(server), "geo": nil,
 		"loadedDown": jsonOrNil(loadedDown), "loadedUp": jsonOrNil(loadedUp),
 		"engineISP": nullable(engineISP), "engineResultId": nullable(engineResultID),
-		"engineResultUrl": nullable(engineResultURL), "engineIp": nullable(engineIP), "warnings": jsonArray(warnings), "ispId": nullable(ispID),
+		"engineResultUrl": nullable(engineResultURL), "engineIp": nullable(engineIP), "warnings": jsonArray(warnings), "pinnedServerId": nullable(pinnedSID),
+		"serverSelectionKnown": selectionKnown, "ispId": nullable(ispID),
 	}
 	obj["bytesTotal"] = totalBytes(bytesDown, bytesUp)
 	view := ResultView{Object: obj}
@@ -108,20 +113,27 @@ func jsonArray(raw []byte) any {
 
 // stored mirrors the JSON written to ip_addresses.geo by the geolocation package.
 type stored struct {
-	City           string  `json:"city"`
-	Region         string  `json:"region"`
-	Country        string  `json:"country"`
-	Latitude       float64 `json:"latitude"`
-	Longitude      float64 `json:"longitude"`
-	TimeZone       string  `json:"time_zone"`
-	AccuracyRadius float64 `json:"accuracy_radius"`
-	ASN            uint    `json:"asn"`
-	Organisation   string  `json:"organisation"`
+	City           string            `json:"city"`
+	Region         string            `json:"region"`
+	Country        string            `json:"country"`
+	Latitude       float64           `json:"latitude"`
+	Longitude      float64           `json:"longitude"`
+	TimeZone       string            `json:"time_zone"`
+	AccuracyRadius float64           `json:"accuracy_radius"`
+	ASN            uint              `json:"asn"`
+	Organisation   string            `json:"organisation"`
+	QualityScore   int               `json:"quality_score"`
+	FieldSources   map[string]string `json:"field_sources"`
 }
 
 // GeoObject converts a stored geolocation record into the contract Geo object.
 // It returns nil for an address that has no stored location.
 func GeoObject(ip string, source string, raw []byte) map[string]any {
+	return GeoObjectAt(ip, source, raw, 0)
+}
+
+// GeoObjectAt adds a live quality score and inferred field sources to a stored record.
+func GeoObjectAt(ip string, source string, raw []byte, ageDays int) map[string]any {
 	parsed := net.ParseIP(ip)
 	if parsed == nil {
 		return nil
@@ -137,7 +149,25 @@ func GeoObject(ip string, source string, raw []byte) map[string]any {
 	if source == "" {
 		source = "unknown"
 	}
-	obj := map[string]any{"ip": parsed.String(), "version": version, "source": source}
+	return geoObjectFromStored(parsed.String(), version, source, g, ageDays)
+}
+
+func geoObjectFromStored(ip string, version int, source string, g stored, ageDays int) map[string]any {
+	obj := map[string]any{"ip": ip, "version": version, "source": source}
+	location := geo.Location{City: g.City, Region: g.Region, Country: g.Country, Latitude: g.Latitude, Longitude: g.Longitude,
+		TimeZone: g.TimeZone, AccuracyRadius: uint16(max(0, min(int(g.AccuracyRadius), 65535))), ASN: g.ASN, Organisation: g.Organisation,
+		FieldSources: sourceFields(g.FieldSources)}
+	if g.QualityScore == 0 || ageDays > 0 {
+		g.QualityScore = geo.QualityScore(location, source, ageDays)
+	}
+	obj["qualityScore"] = g.QualityScore
+	if len(g.FieldSources) == 0 {
+		merged, _ := geo.MergeLocations(location, source, geo.Location{}, "")
+		g.FieldSources = fieldSourcesMap(merged.FieldSources)
+	}
+	if len(g.FieldSources) > 0 {
+		obj["fieldSources"] = g.FieldSources
+	}
 	if g.ASN > 0 {
 		obj["asn"] = g.ASN
 	}
@@ -167,4 +197,20 @@ func GeoObject(ip string, source string, raw []byte) map[string]any {
 		obj["radiusKm"] = g.AccuracyRadius
 	}
 	return obj
+}
+
+func sourceFields(values map[string]string) geo.FieldSources {
+	return geo.FieldSources{City: values["city"], Region: values["region"], Country: values["country"], TimeZone: values["time_zone"],
+		Organisation: values["organisation"], Coordinates: values["coordinates"], ASN: values["asn"], AccuracyRadius: values["accuracy_radius"]}
+}
+
+func fieldSourcesMap(s geo.FieldSources) map[string]string {
+	values := map[string]string{"city": s.City, "region": s.Region, "country": s.Country, "time_zone": s.TimeZone,
+		"organisation": s.Organisation, "coordinates": s.Coordinates, "asn": s.ASN, "accuracy_radius": s.AccuracyRadius}
+	for key, value := range values {
+		if value == "" {
+			delete(values, key)
+		}
+	}
+	return values
 }

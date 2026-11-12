@@ -1,5 +1,44 @@
 import { createHash } from 'node:crypto';
 import { request as apiRequest } from 'playwright';
+import { join } from 'node:path';
+
+async function checkLocationSettingsLayout(page, assert) {
+	const originalTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme') || 'dark');
+	const originalViewport = page.viewportSize();
+	if (process.env.E2E_SHOTS) {
+		await page.waitForFunction(() => document.querySelectorAll('.toast').length === 0, null, { timeout: 10000 });
+	}
+	try {
+		for (const theme of ['dark', 'light']) {
+			for (const width of [390, 768, 1440]) {
+				await page.setViewportSize({ width, height: 900 });
+				await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), theme);
+				await page.waitForTimeout(220);
+				await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
+				const overflow = await page.evaluate(() => {
+					const sidebar = document.getElementById('sidebar').getBoundingClientRect();
+					const sidebarStyle = getComputedStyle(document.getElementById('sidebar'));
+					const wide = [...document.querySelectorAll('.content *')].filter(el => {
+						const box = el.getBoundingClientRect();
+						return box.width && box.right > document.documentElement.clientWidth + 1 && !el.closest('.tabs, .seg, pre');
+					}).slice(0, 3).map(el => el.tagName + '.' + el.className);
+					return { page: document.documentElement.scrollWidth - document.documentElement.clientWidth, sidebarRight: sidebar.right,
+						sidebarClass: document.getElementById('sidebar').className, transform: sidebarStyle.transform, innerWidth, clientWidth: document.documentElement.clientWidth,
+						mobile: matchMedia('(max-width: 900px)').matches, wide };
+				});
+				assert.ok(overflow.page <= 1, `Location settings overflow by ${overflow.page}px at ${width}px (${theme})`);
+				assert.ok(width > 900 || overflow.sidebarRight <= 1, `Location settings menu covers the page at ${width}px (${theme}): ${JSON.stringify(overflow)}`);
+				assert.deepEqual(overflow.wide, [], `Location settings elements overflow at ${width}px (${theme}): ${overflow.wide.join(', ')}`);
+				if (process.env.E2E_SHOTS) {
+					await page.screenshot({ path: join(process.env.E2E_SHOTS, `${theme}-${width}-settings-location.png`), fullPage: true });
+				}
+			}
+		}
+	} finally {
+		await page.setViewportSize(originalViewport);
+		await page.evaluate(t => document.documentElement.setAttribute('data-theme', t), originalTheme);
+	}
+}
 
 export function settingsSuite(T, ctx) {
   const { page, assert } = T;
@@ -58,16 +97,17 @@ export function settingsSuite(T, ctx) {
       assert.equal(T.db("select value->>'decimals' from settings where key='display'"), '2');
       await T.settled();
       await T.choose(setting('Speed units').locator('select'), 'Mbps');
-      await T.settled();
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.units === 'Mbps', 'speed units are stored');
       await T.choose(setting('Time zone').locator('select'), 'UTC');
-      await T.settled();
-      await setting('12-hour clock').locator('.switch').click();
-      await T.settled();
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.timezone === 'UTC', 'time zone is stored');
+      const clock = setting('12-hour clock').locator('input[type=checkbox]');
+      if (!(await clock.isChecked())) await setting('12-hour clock').locator('.switch').click();
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.hour12 === true, '12-hour clock is enabled');
       await T.choose(setting('Default time range').locator('select'), '24h');
-      await T.settled();
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.range === '24h', 'default time range is stored');
       await page.getByRole('radio', { name: 'Light' }).or(page.getByRole('tab', { name: 'Light' })).first().click();
-      await T.settled();
-      assert.deepEqual(JSON.parse(T.db("select value from settings where key='display'")).hour12, true);
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.theme === 'light', 'light theme is stored');
+      assert.equal((await T.api('/api/settings')).body.data.hour12, true);
       await page.reload();
       await T.heading('Settings').waitFor();
       assert.equal(await setting('Decimal places').locator('select').inputValue(), '2', 'the preference survives a reload');
@@ -76,7 +116,8 @@ export function settingsSuite(T, ctx) {
       await T.choose(setting('Decimal places').locator('select'), '1'); await T.settled();
       await T.choose(setting('Speed units').locator('select'), 'auto'); await T.settled();
       await T.choose(setting('Time zone').locator('select'), 'browser'); await T.settled();
-      await setting('12-hour clock').locator('.switch').click(); await T.settled();
+      if (await clock.isChecked()) await setting('12-hour clock').locator('.switch').click();
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.hour12 === false, '12-hour clock default is restored');
       await T.choose(setting('Default time range').locator('select'), '7d'); await T.settled();
       await page.getByRole('radio', { name: 'Dark' }).or(page.getByRole('tab', { name: 'Dark' })).first().click(); await T.settled();
     },
@@ -86,12 +127,16 @@ export function settingsSuite(T, ctx) {
       await T.open('#/settings', 'Settings');
       await T.tab('Speed test');
       await T.choose(setting('Parallel connections').locator('select'), '8');
-      await T.toast('Saved').waitFor();
-      await T.settled();
-      await T.eventually(() => T.db("select value->>'defaultThreads' from settings where key='display'") === '8', 'the default parallel connections are stored');
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.defaultThreads === 8, 'parallel connections are stored');
       await T.choose(setting('Server choice').locator('select'), 'pinned');
-      await T.settled();
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.serverMode === 'pinned', 'server choice is stored');
       await T.tab('Location');
+      await T.see('Provider budgets');
+      await setting('Provider budgets').getByText('IPinfo Lite', { exact: true }).waitFor();
+		await checkLocationSettingsLayout(page, assert);
+      const providers = await T.api('/api/ip/providers');
+      assert.ok(Array.isArray(providers.body.data) && providers.body.data.some(p => p.name === 'ipwho' && Number.isInteger(p.requestsToday)), 'provider switches and persisted usage are visible');
+      assert.ok(!providers.text.toLowerCase().includes('token'), 'provider status never returns a credential');
       await T.fillAndLeave('MaxMind license key', 'e2e-licence-key-123');
       await T.settled();
       await setting('Update the database weekly').locator('.switch').click();
@@ -101,8 +146,10 @@ export function settingsSuite(T, ctx) {
       await page.reload();
       await T.tab('Speed test');
       assert.equal(await setting('Parallel connections').locator('select').inputValue(), '8');
-      await T.choose(setting('Parallel connections').locator('select'), '4'); await T.settled();
-      await T.choose(setting('Server choice').locator('select'), 'auto'); await T.settled();
+      await T.choose(setting('Parallel connections').locator('select'), '4');
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.defaultThreads === 4, 'default parallel connections are restored');
+      await T.choose(setting('Server choice').locator('select'), 'auto');
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.serverMode === 'auto', 'automatic server choice is restored');
     },
 
     // Secrets are write-only and stored encrypted.
@@ -142,7 +189,10 @@ export function settingsSuite(T, ctx) {
       await T.toast('Saved').waitFor();
       await T.settled();
       await page.getByLabel('Enable Webhook').check({ force: true });
-      await T.settled();
+      await T.eventually(async () => {
+        const settings = (await T.api('/api/settings')).body.data;
+        return settings.notify.webhook.on && settings.notify.webhook.configured;
+      }, 'the webhook is enabled and configured');
       await T.press('Send a test', setting('Webhook'));
       await T.toast('Test message sent to Webhook').waitFor({ timeout: 30000 });
       assert.ok(receiver.bodies.length >= 1, 'the receiver got the message');
@@ -263,6 +313,7 @@ export function settingsSuite(T, ctx) {
       await T.open('#/settings', 'Settings');
       await T.tab('Data');
       await T.choose(setting('Keep results for').locator('select'), '90');
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.retentionDays === 90, 'retention period is stored');
       await T.toast('Saved').waitFor();
       await T.settled();
       await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '90', 'retention period is saved');
@@ -272,6 +323,9 @@ export function settingsSuite(T, ctx) {
       const json = await T.download(() => T.press('JSON', setting('Export all results')));
       assert.ok(Array.isArray(JSON.parse(json)) || JSON.parse(json).data, 'the JSON export parses');
       await T.choose(setting('Keep results for').locator('select'), '365');
+      await T.eventually(async () => (await T.api('/api/settings')).body.data.retentionDays === 365, 'default retention is restored');
+      await T.settled();
+      await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '365', 'the default retention period is restored');
       await T.toast('Saved').waitFor();
       await T.settled();
       await T.eventually(() => T.db("select value #>> '{}' from settings where key='retentionDays'") === '365', 'default retention period is restored');

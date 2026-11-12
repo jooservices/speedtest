@@ -1,7 +1,7 @@
 /* IP & location: public IP history per node, geolocation, map and lookup. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
   var q = { more: false, node: 'all', lookup: '', lookupRes: null };
 
   function geoLine(g) { return (g && [g.city, g.country].filter(Boolean).join(', ')) || 'Unknown location'; }
@@ -23,7 +23,7 @@
         ['Average download', F.speed(entry.avgDown)], ['Average upload', F.speed(entry.avgUp)]]),
       g ? h('div', null, h('h3', { style: 'margin:6px 0' }, 'Location'), U.kv(rows([row('City', g.city), row('Region', g.region), row('Country', has(g.country) ? g.country + (has(g.countryCode) ? ' (' + g.countryCode + ')' : '') : null),
         finite(g.lat) && finite(g.lon) ? ['Coordinates', g.lat + ', ' + g.lon] : null, finite(g.radiusKm) ? ['Accuracy', 'About ' + g.radiusKm + ' km'] : null, row('Time zone', g.timezone), row('Provider', g.isp),
-        has(g.asn) ? ['Network', 'AS' + g.asn + (has(g.asnOrg) ? ' · ' + g.asnOrg : '')] : null, row('Connection', g.connection), row('Looked up with', g.source)])))
+        has(g.asn) ? ['Network', 'AS' + g.asn + (has(g.asnOrg) ? ' · ' + g.asnOrg : '')] : null, row('Connection', g.connection), row('Looked up with', g.source), finite(g.qualityScore) ? ['Quality score', g.qualityScore + ' / 100'] : null])))
         : U.callout('No location data is available for this address.', 'warn', 'alert')) });
   }
 
@@ -77,7 +77,7 @@
       columns: [
         { key: 'ip', label: 'Address', render: function (r) { return h('span', { class: 'mono' }, r.e.ip); } },
         { key: 'node', label: 'Node', render: function (r) { return h('span', { class: 'row' }, U.dot(ST.nodeColor(r.n)), r.n.name); } },
-        { key: 'loc', label: 'Location', render: function (r) { return geoLine(r.e.geo); } },
+        { key: 'loc', label: 'Location', render: function (r) { return h('div', null, geoLine(r.e.geo), r.e.geo && finite(r.e.geo.qualityScore) ? h('div', { class: 'hint' }, 'Quality ' + r.e.geo.qualityScore + ' / 100 · ' + (r.e.geo.source || 'unknown source')) : null); } },
         { key: 'isp', label: 'Provider', render: function (r) { return r.e.geo ? r.e.geo.isp + ' · AS' + r.e.geo.asn : '—'; } },
         { key: 'first', label: 'First seen', render: function (r) { return F.date(r.e.first); } },
         { key: 'last', label: 'Last seen', render: function (r) { return F.rel(r.e.last); } },
@@ -89,7 +89,7 @@
     var resBox = h('div', { class: 'mt' });
     function showGeo(g) {
       resBox.appendChild(g ? h('div', { class: 'card card-pad' }, h('div', { class: 'row between' }, h('b', { class: 'mono' }, g.ip), U.chip(g.source || 'database', 'info')),
-        U.kv(rows([['Location', geoLine(g) + (finite(g.lat) && finite(g.lon) ? ' (' + g.lat + ', ' + g.lon + ')' : '')], has(g.isp) || has(g.asn) ? ['Provider', [g.isp, has(g.asn) ? 'AS' + g.asn : ''].filter(Boolean).join(' · ')] : null, finite(g.radiusKm) ? ['Accuracy', 'About ' + g.radiusKm + ' km'] : null])))
+        U.kv(rows([['Location', geoLine(g) + (finite(g.lat) && finite(g.lon) ? ' (' + g.lat + ', ' + g.lon + ')' : '')], has(g.isp) || has(g.asn) ? ['Provider', [g.isp, has(g.asn) ? 'AS' + g.asn : ''].filter(Boolean).join(' · ')] : null, finite(g.radiusKm) ? ['Accuracy', 'About ' + g.radiusKm + ' km'] : null, finite(g.qualityScore) ? ['Quality score', g.qualityScore + ' / 100'] : null])))
         : U.callout(ST.demo ? 'This preview only knows the sample addresses used by the demo nodes. The real service looks up any public address.' : 'No location is known for this address.', 'warn', 'info'));
     }
     function doLookup(v) {

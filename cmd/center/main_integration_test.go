@@ -66,6 +66,10 @@ func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
 	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "true")
 	t.Setenv("SPEEDTEST_GEO_IPAPI_URL", provider.URL)
 	t.Setenv("SPEEDTEST_GEO_IPINFO_ENABLED", "false")
+	for _, name := range []string{"IPWHO", "FREEIPAPI", "GEOJS", "RIPESTAT", "IPAPICO", "IPGEOLOCATION"} {
+		t.Setenv("SPEEDTEST_GEO_"+name+"_ENABLED", "false")
+	}
+	t.Setenv("SPEEDTEST_GEO_CONSENSUS", "false")
 	t.Setenv("SPEEDTEST_GEOIP_CITY_DB", t.TempDir()+"/missing-city.mmdb")
 	t.Setenv("SPEEDTEST_GEOIP_ASN_DB", t.TempDir()+"/missing-asn.mmdb")
 	address := freeTCPAddress(t)

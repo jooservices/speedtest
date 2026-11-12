@@ -197,14 +197,42 @@ per-item 409 conflict with a generic diagnostic that reveals no other-node data.
 never discard unacknowledged spool entries. Failed results require an error and
 allow null measurements and `ip: null` when the address is unavailable. They also
 carry `failureClass` (omitted values are classified from the error text). Never invent an IP or reuse a stale one. IP history hooks skip null-IP results; consumers display "unavailable".
-Successful/degraded results require down/up/ping, a non-null IP, a server object with a nonblank name or host, and `error: null`. Numeric `serverId` is optional for every status, positive when present (LibreSpeed automatic selection has no numeric ID). Engines may omit
+Successful/degraded results require down/up/ping, a non-null IP, a server object with a nonblank name or host, and `error: null`. Numeric `serverId` is optional for every status and positive when present. LibreSpeed results include the sanitized server endpoint URL when available; its path distinguishes servers that share a hostname. Automatic results resolve their numeric ID against the agent's measurement-time server list when that endpoint is present there. Engines may omit
 loss/jitter/loaded latency even on success; preserve those as null. Optional
 loadedDown/loadedUp retain low/iqm/high; engine details retain ISP, result ID/URL,
 external IP and mismatch warnings, with remaining original fields in raw.
+New centers advertise `serverSelectionSnapshots: true` in agent config. Agents that
+receive it include `serverSelectionKnown` and the pinned server ID captured when
+the test started. Older agents may omit both fields; those stored results remain
+unknown instead of inheriting a later pin. The result read model returns that
+snapshot in `pinnedServerId`, not the node's current pin.
 After each measurement, including engine failures, the agent calls `GET /api/agent/ip` over the
 same selected interface/source IP. The center-observed `data.ip` is the result's
 public IP; preserve the engine-reported address as `engineIp` and add a `warnings`
 entry when the two addresses differ.
+
+## Server discovery and selection (JOOST-76)
+
+Each installed engine has its own server catalog and pin. `GET /api/nodes/{id}/servers?engine=ookla`
+reads the stored Ookla catalog; use `engine=librespeed` for LibreSpeed. `POST` to the same URL queues
+a `list_servers` command for that engine and returns `202` with a `Location` to poll. A successful
+agent acknowledgement replaces only that engine's catalog. A failed refresh leaves its prior catalog
+and pin intact. The catalog response ETag is the node configuration revision.
+
+Use `PUT /api/nodes/{id}/server-selection` with that ETag in `If-Match` and a CSRF token to set
+`{"engine":"ookla","serverId":54321}` or clear the pin with `"serverId":"auto"`. A numeric ID must
+be present in the selected engine's discovered catalog. The center stores pins independently for
+Ookla and LibreSpeed, advances the configuration revision, and queues an agent configuration refresh.
+Each agent schedule includes its own `serverId`, so one engine's pin cannot affect the other engine.
+
+The picker searches server name, city and ISP. Ookla distance is displayed when the server list
+provides it; LibreSpeed has no coordinates, so it is sorted by server name and shows no distance.
+When a pinned server cannot be reached, the agent retries with automatic selection and attaches a
+warning to the result. Result reads include the server actually used in `serverId` and the pin snapshot
+for that measurement in `pinnedServerId`; the UI identifies a mismatch and shows any fallback warning.
+LibreSpeed automatic results omit the numeric server ID. The center resolves it from the stored catalog
+only when the reported host matches exactly one catalog entry; missing or ambiguous matches remain
+unknown.
 
 Agent config advertises the latest release URL/version/sha256 and defaults
 autoUpdate to false. The owner enables it per node; verify checksums, replace
@@ -215,6 +243,9 @@ Poll commands oldest-first, up to 100 per call. Redeliver until terminal ack;
 agents remember command IDs to prevent duplicate execution. Running a manual
 test returns a Command to poll; progress acks carry phase/pct/resultId/error.
 Terminal acks replay idempotently; conflicting terminal changes return 409.
+Successful `list_servers` acks include the catalog payload; identical retries remain
+idempotent even after a later refresh, while a changed payload for the same command
+returns 409 and leaves the newer catalog intact.
 Each agent gets only its own configuration, effective offset and quiet hours.
 The center coordinates offsets; there is no WAN, load-balancer or peer-node model.
 
@@ -412,7 +443,7 @@ metric mean over `[now-7d,now)` with `[now-14d,now-7d)`. The percent change is
 the previous mean is zero.
 
 Settings defaults match the preview: dark, 7d, auto units, browser timezone,
-24-hour clock, one decimal, 365-day retention (0=forever), GeoLite2 + ip-api fallback,
+24-hour clock, one decimal, 365-day retention (0=forever), offline geolocation plus the configured quota-aware fallbacks,
 weekly updates, Ookla/auto server/4 threads, stagger on/maxConcurrent=1, empty
 quiet hours, email enabled to `ops@example.com`, other channels off/empty.
 Public center URL comes from deployment `.env`, not the demo URL. `POST /api/nodes`
@@ -531,6 +562,8 @@ const paths = [
   '/api/notifications/templates/{key}/{channel}', '/api/notifications/templates/{key}/{channel}/previews',
   '/api/notifications/templates/{key}/{channel}/resets', '/api/settings',
   '/api/ip/history', '/api/ip/addresses', '/api/ip/lookup', '/api/ip/map',
+  '/api/alerts/events', '/api/notifications/test/{channel}', '/api/settings',
+  '/api/ip/history', '/api/ip/addresses', '/api/ip/lookup', '/api/ip/map', '/api/ip/providers',
   '/api/auth/login', '/api/auth/logout', '/api/auth/me', '/api/auth/password',
   '/api/auth/2fa', '/api/auth/2fa/setup', '/api/auth/2fa/enable', '/api/auth/2fa/disable'
 ];
@@ -658,13 +691,15 @@ A daily job (03:15 UTC) deletes results older than the `retentionDays` setting (
 
 ## IP and location views
 
-All four routes need a session and only read. `GET /api/ip/history?node=` lists address changes newest first (the first address a node ever reports is not a change), with the location of the old and new address (`fromGeo`, `toGeo`, null when unknown). `GET /api/ip/addresses?node=` lists the distinct addresses each node has used, most recently seen first, with first/last seen, number of tests and the average download/upload of the non-failed tests (null when there were none). `GET /api/ip/map?node=` gives the most recently observed address of each node with its location, leaving out nodes that never reported one. Locations come from the cache of `ip_addresses`; an address whose lookup has not happened or found nothing has `geo: null`, never invented coordinates. Lists are paginated with `page` and `size`.
+The IP history, addresses, map and lookup routes require a session and only read. `GET /api/ip/history?node=` lists address changes newest first (the first address a node ever reports is not a change), with the location of the old and new address (`fromGeo`, `toGeo`, null when unknown). `GET /api/ip/addresses?node=` lists the distinct addresses each node has used, most recently seen first, with first/last seen, number of tests and the average download/upload of the non-failed tests (null when there were none). `GET /api/ip/map?node=` gives the most recently observed address of each node with its location, leaving out nodes that never reported one. Locations come from the cache of `ip_addresses`; an address whose lookup has not happened or found nothing has `geo: null`, never invented coordinates. Known API locations include `qualityScore` and per-field `fieldSources`. Lists are paginated with `page` and `size`.
 
-`GET /api/ip/lookup?ip=` accepts only an IPv4 or IPv6 literal (host names, ports, prefixes and zones answer 422 before anything is looked up) and runs the geolocation chain: cache, offline GeoLite2, then the configured fallback providers; a found location is cached. An address no source knows returns `data: null` with status 200.
+`GET /api/ip/lookup?ip=` accepts only an IPv4 or IPv6 literal (host names, ports, prefixes and zones answer 422 before anything is looked up) and runs the geolocation chain: cache, offline databases, then at most one configured fallback provider for this interactive request; a found location is cached and includes its quality score and field sources. An address no source knows returns `data: null` with status 200.
+
+`GET /api/ip/providers` returns the configured provider list and today's durable request counts. Each item reports `name`, `enabled`, `keyConfigured`, `requestsToday` and `dailyBudget`; it never returns credential values. The endpoint requires an owner session. A `dailyBudget` of zero means no configured local daily cap. Background lookups may use at most 80% of each configured daily quota, keeping the rest available for interactive lookups.
 
 ## Settings
 
-`GET /api/settings` (session) returns the owner's preferences with `ETag`; `PUT /api/settings` (session, CSRF, origin, `If-Match`) replaces them and answers 422 with field-level `errors` for invalid values, 428 without `If-Match` and 412 when the tag is stale. Before anything is saved the ETag is `"0"`, so the first save always moves it. Defaults match the UI preview (dark theme, 7d range, auto units, 1 decimal, 365 days retention, GeoLite2 with ip-api fallback, Ookla, 4 threads, concurrency 1, stagger on).
+`GET /api/settings` (session) returns the owner's preferences with `ETag`; `PUT /api/settings` (session, CSRF, origin, `If-Match`) replaces them and answers 422 with field-level `errors` for invalid values, 428 without `If-Match` and 412 when the tag is stale. Before anything is saved the ETag is `"0"`, so the first save always moves it. Defaults match the UI preview (dark theme, 7d range, auto units, 1 decimal, 365 days retention, offline geolocation plus configured quota-aware fallbacks, Ookla, 4 threads, concurrency 1, stagger on).
 
 Secrets (the location-service key, email/Telegram/Slack credentials and the webhook URL) are write-only: they are encrypted with AES-GCM using `APP_KEY` from `.env` before they are stored and are never returned; the read model only says which are configured. Omitting a secret on PUT keeps the stored one.
 

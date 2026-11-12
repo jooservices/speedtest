@@ -55,33 +55,36 @@ try {
     console.log(`PASS smoke run ${run}: all 10 routes, demo/API, dark/light, 390/768/1440px`);
   }
   await goto('/isps', true);
-  await page.locator('#view table').first().getByRole('row').nth(1).click();
+  await page.getByRole('button', { name: /^Show trend for .* \(AS\d+\)$/ }).first().click();
   await page.locator('#view .grid-2 svg[role="img"]').waitFor();
 
   await goto('/isps', false);
-  const ispRow = () => page.locator('#view table').first().getByRole('row').nth(1);
-  await ispRow().waitFor();
+  const ispSelect = () => page.getByRole('button', { name: 'Show trend for Fixture ISP (AS64500)' });
+  await ispSelect().waitFor();
   server.control.empty = true;
-  await ispRow().click();
+  await ispSelect().click();
   await page.getByText('No samples').waitFor();
   server.control.empty = false;
-  await ispRow().click();
+  await ispSelect().click();
   await page.locator('#view .grid-2 svg[aria-label="Fixture ISP download trend"]').waitFor();
   const trendPath = `/api/isps/${server.data.isp.id}/trend`;
   server.control.failPaths.add(trendPath);
-  await ispRow().click();
+  await ispSelect().click();
   await page.getByText('Could not load trend').waitFor();
   server.control.failPaths.delete(trendPath);
-  await ispRow().click();
+  await ispSelect().click();
   await page.locator('#view .grid-2 svg[aria-label="Fixture ISP download trend"]').waitFor();
 
   server.control.failPaths.add('/api/isps');
-  await page.goto(`${server.origin}/#/isps`);
+  await page.getByRole('link', { name: 'Nodes', exact: true }).click();
+  await page.waitForURL('**/#/nodes');
+  await page.getByRole('link', { name: 'ISPs', exact: true }).click();
+  await page.waitForURL('**/#/isps');
   await page.waitForFunction(() => ST.remote.status === 'ready');
   await page.getByText('Could not load ISPs').waitFor();
   server.control.failPaths.delete('/api/isps');
   await page.getByRole('button', { name: 'Retry', exact: true }).click();
-  await ispRow().waitFor();
+  await ispSelect().waitFor();
 
   for (const route of routes) {
     // Delay each bootstrap so loading is observable on every route.

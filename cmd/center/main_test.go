@@ -170,6 +170,14 @@ func TestDefaultSeedOnlyAllowsLocalAndTest(t *testing.T) {
 	}
 }
 
+func TestBuildPreferencesDisableSecretsWithoutAppKey(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	preferences, notifications, err := buildPreferences(nil, config.CenterConfig{}, logger)
+	if err != nil || preferences != nil || notifications != nil {
+		t.Fatalf("buildPreferences without APP_KEY = (%v,%v,%v)", preferences, notifications, err)
+	}
+}
+
 func TestDefaultSeedRequiresExplicitSafeEnvironment(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
