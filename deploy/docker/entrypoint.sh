@@ -4,10 +4,12 @@
 # exits so Docker's restart policy brings everything back (state lives in the volume).
 set -euo pipefail
 
-STATE=/var/lib/speedtest
+STATE="${STAGING_STATE_DIR:-/var/lib/speedtest}"
 PORT="${STAGING_PORT:-18090}"
-INTERVAL="${STAGING_INTERVAL_MINUTES:-30}"
-NODES="${STAGING_NODES:-VM1:0 VM2:10 VM3:20}"          # name:startMinuteOffset ...
+INTERVAL="${STAGING_INTERVAL_MINUTES:-60}"
+# name:startMinuteOffset ...; the default spreads the three nodes evenly inside the interval (valid down to 5 minutes).
+NODES="${STAGING_NODES:-VM1:0 VM2:$((INTERVAL / 3)) VM3:$((INTERVAL * 2 / 3))}"
+ENGINE="${STAGING_ENGINE:-ookla}"
 EXPECTED_DOWN="${STAGING_EXPECTED_DOWN_MBPS:-500}"
 EXPECTED_UP="${STAGING_EXPECTED_UP_MBPS:-500}"
 CENTER="http://127.0.0.1:${PORT}"
@@ -16,6 +18,9 @@ export APP_ENV="${APP_ENV:-local}" SPEEDTEST_HTTP_ADDR="${BIND}:${PORT}"
 
 log() { printf '%s entrypoint: %s\n' "$(date -u +%FT%TZ)" "$*"; }
 die() { log "ERROR: $*"; exit 1; }
+for spec in $NODES; do
+  [ "${spec##*:}" -lt "$INTERVAL" ] || die "node ${spec%%:*}: offset ${spec##*:} must be below the ${INTERVAL}-minute interval"
+done
 : "${SPEEDTEST_DB_HOST:?}" "${SPEEDTEST_DB_PORT:?}" "${SPEEDTEST_DB_NAME:?}" "${SPEEDTEST_DB_USER:?}" "${SPEEDTEST_DB_PASSWORD:?}"
 : "${STAGING_OWNER_EMAIL:?}" "${STAGING_OWNER_PASSWORD:?}" "${APP_KEY:?}"
 mkdir -p "$STATE/agents"
@@ -80,8 +85,9 @@ for spec in $NODES; do
     SPEEDTEST_AGENT_CONFIG="$dir/config.yaml" SPEEDTEST_AGENT_CREDENTIAL="$dir/credential" \
       speedtest-agent enroll --center "$CENTER" --token "$token" --name "$name" --host "docker-staging"
     psql_run -c "UPDATE schedules SET interval_minutes=${INTERVAL}, offset_minutes=${offset}, revision=revision+1 WHERE node_id='${node_id}'" \
+             -c "UPDATE engine_schedules SET interval_minutes=${INTERVAL}, offset_minutes=${offset}, revision=revision+1 WHERE node_id='${node_id}' AND engine='${ENGINE}'" \
              -c "UPDATE nodes SET config_revision=config_revision+1 WHERE id='${node_id}'"
-    printf 'name: %s\nengine: %s\ninterval: %sm\nexpected_download_mbps: %s\nexpected_upload_mbps: %s\n' "$name" "${STAGING_ENGINE:-ookla}" "$INTERVAL" "$EXPECTED_DOWN" "$EXPECTED_UP" > "$dir/config.yaml"
+    printf 'name: %s\nengine: %s\ninterval: %sm\nexpected_download_mbps: %s\nexpected_upload_mbps: %s\n' "$name" "$ENGINE" "$INTERVAL" "$EXPECTED_DOWN" "$EXPECTED_UP" > "$dir/config.yaml"
     touch "$dir/enrolled"
   fi
   log "starting agent ${name}"

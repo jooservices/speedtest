@@ -20,7 +20,8 @@ All notable changes to Speedtest are recorded here. The format follows
 - Fixed failure classes on test results; Ookla rate limits use capped exponential backoff, and rate-limited tests are counted separately from success rates and ignored by failure alerts.
 
 ### Changed
-- New nodes, missing agent intervals, and newly enabled engine schedules default to 60 minutes; existing schedules retain their configured values. Docker staging scripts keep their current default until JOOST-89.
+- New nodes, missing agent intervals, and newly enabled engine schedules default to 60 minutes; existing schedules retain their configured values.
+- JOOST-89: Docker staging nodes (entrypoint, node entrypoint and nodes.sh) default to a 60-minute interval, the staging default offsets spread across it, and the staging interval is written to both schedule tables.
 - Results and Alerts ISP filters stay page-scoped; rolling ISP trends use in-range hourly samples, and plan edits preserve explicitly chosen expected speeds.
 
 ### Fixed

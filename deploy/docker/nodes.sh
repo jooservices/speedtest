@@ -13,7 +13,7 @@
 #
 # Needs Docker access (sg docker -c "deploy/docker/nodes.sh ...") and deploy/docker/stg.env (0600) for the
 # owner credentials; they are read by parsing, never sourced or printed.
-# Environment: CENTER_URL (default http://<host LAN IP>:18090), NODE_INTERVAL (30), EXPECTED_DOWN/UP (500).
+# Environment: CENTER_URL (default http://<host LAN IP>:18090), NODE_INTERVAL (60), EXPECTED_DOWN/UP (500).
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 IMAGE="${STG_IMAGE:-speedtest-staging:latest}"
@@ -22,6 +22,7 @@ PORT="${STAGING_PORT:-18090}"
 NODE_NETWORK="${NODE_NETWORK:-host}"
 if [ "$NODE_NETWORK" = host ]; then CENTER_URL="${CENTER_URL:-http://127.0.0.1:${PORT}}"; else CENTER_URL="${CENTER_URL:-http://$(hostname -I | awk '{print $1}'):${PORT}}"; fi
 LOCAL="http://127.0.0.1:${PORT}"
+NODE_INTERVAL="${NODE_INTERVAL:-60}"
 cmd="${1:-list}"; shift || true
 
 envval() { grep -m1 "^$1=" "$ENV_FILE" | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//'; }
@@ -40,13 +41,18 @@ up)
   for name in "$@"; do
     if docker ps -a --format '{{.Names}}' | grep -qx "speedtest-node-$name"; then echo "node $name already has a container"; continue; fi
     created="$(api POST /api/nodes "$(jq -nc --arg n "$name" --arg l "Docker node $name" --argjson d "${EXPECTED_DOWN:-500}" --argjson u "${EXPECTED_UP:-500}" '{name:$n,label:$l,expectedDown:$d,expectedUp:$u}')")"
-    token="$(printf '%s' "$created" | jq -r '.data.token // empty')"
-    [ -n "$token" ] || { echo "node $name was not created: $(printf '%s' "$created" | head -c 300)"; exit 1; }
+    token="$(printf '%s' "$created" | jq -r '.data.token // empty')"; node_id="$(printf '%s' "$created" | jq -r '.data.node.id // empty')"
+    if [ -z "$token" ] || [ -z "$node_id" ]; then echo "node $name was not created: $(printf '%s' "$created" | head -c 300)"; exit 1; fi
+    # The center schedule must carry the same interval as the agent (the node is created with the center default).
+    sched_etag="$(curl -sS -D - -o /dev/null -b "$jar" "${LOCAL}/api/schedules/${node_id}" | tr -d '\r' | awk -F': ' 'tolower($1)=="etag"{print $2}')"
+    code="$(curl -sS -o /dev/null -w '%{http_code}' -b "$jar" -X PUT "${LOCAL}/api/schedules/${node_id}" -H "Origin: ${LOCAL}" -H "X-CSRF-Token: ${csrf}" \
+      -H "If-Match: ${sched_etag}" -H 'Content-Type: application/json' -d "$(jq -nc --argjson i "$NODE_INTERVAL" '{interval:$i,offset:0,enabled:true}')")"
+    case "$code" in 2??) ;; *) echo "node $name: interval ${NODE_INTERVAL} not saved on the center (HTTP $code)"; exit 1;; esac
     net=host
     if [ "$NODE_NETWORK" != host ]; then net="speedtest-net-$name"; docker network inspect "$net" >/dev/null 2>&1 || docker network create "$net" >/dev/null; fi
     docker volume create "speedtest-node-$name" >/dev/null
     docker run -d --name "speedtest-node-$name" --restart unless-stopped --network "$net" \
-      -e NODE_NAME="$name" -e CENTER_URL="$CENTER_URL" -e ENROLL_TOKEN="$token" -e NODE_INTERVAL="${NODE_INTERVAL:-30}" \
+      -e NODE_NAME="$name" -e CENTER_URL="$CENTER_URL" -e ENROLL_TOKEN="$token" -e NODE_INTERVAL="$NODE_INTERVAL" \
       -e EXPECTED_DOWN="${EXPECTED_DOWN:-500}" -e EXPECTED_UP="${EXPECTED_UP:-500}" -v "speedtest-node-$name":/var/lib/speedtest \
       --entrypoint /usr/bin/tini "$IMAGE" -- /usr/local/bin/node-entrypoint.sh >/dev/null
     echo "started node $name (network $net)"
@@ -61,7 +67,7 @@ list)
   ;;
 down|purge)
   for name in "$@"; do docker rm -f "speedtest-node-$name" >/dev/null 2>&1 || true; docker network rm "speedtest-net-$name" >/dev/null 2>&1 || true
-    [ "$cmd" = purge ] && docker volume rm "speedtest-node-$name" >/dev/null 2>&1 || true; echo "removed $name"; done
+    if [ "$cmd" = purge ]; then docker volume rm "speedtest-node-$name" >/dev/null 2>&1 || true; fi; echo "removed $name"; done
   ;;
 forget)
   login
