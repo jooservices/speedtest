@@ -1836,6 +1836,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1844,6 +1846,7 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
@@ -1876,6 +1879,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1884,6 +1889,7 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
@@ -1933,6 +1939,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1941,6 +1949,7 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
@@ -1973,6 +1982,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1981,6 +1992,7 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - name: node
           in: query
           required: true
@@ -2014,6 +2026,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -2022,6 +2036,7 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - $ref: "#/components/parameters/Nodes"
         - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
@@ -2281,6 +2296,48 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/ServerError"
+  /api/stats/events:
+    get:
+      operationId: getStatisticsEvents
+      x-access-token-scope: read
+      tags:
+        - Statistics
+      summary: Read bounded IP, ISP and alert marks for statistics
+      description: Returns the newest 500 marks in stable order (ts descending, then type and id ascending).
+        IP marks compare consecutive known result IPs per node and selected engine in timestamp/ID order,
+        skip null IPs and include the selected engine's predecessor before the requested range. ISP marks
+        compare consecutive known effective ISPs per node and engine, including the predecessor before the
+        requested range. An unlinked alert is included only
+        without an ISP filter and is labelled engine unknown. truncated is true when more marks match.
+        Event labels are plain text.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getEventsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
+        - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
   /api/dashboard:
     get:
       operationId: getDashboard
@@ -2910,7 +2967,7 @@ paths:
           schema:
             $ref: "#/components/schemas/Severity"
         - $ref: "#/components/parameters/Node"
-        - $ref: "#/components/parameters/ISP"
+        - $ref: "#/components/parameters/ISPId"
   /api/alerts/events/{id}:
     get:
       operationId: getEvent
@@ -3176,6 +3233,419 @@ paths:
           description: Resource identifier.
           schema:
             $ref: "#/components/schemas/ID"
+  /api/notifications/events:
+    get:
+      operationId: listNotificationEvents
+      x-access-token-scope: read
+      tags:
+        - Notifications
+      summary: List notification event catalog
+      description: Effective per-event on/off, severity, channels and catalog metadata.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listNotificationEventsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/notifications/events/{key}:
+    get:
+      operationId: getNotificationEvent
+      x-access-token-scope: read
+      tags:
+        - Notifications
+      summary: Read one notification event
+      description: Read one notification event.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationEventResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+    patch:
+      operationId: updateNotificationEvent
+      x-access-token-scope: read-write
+      tags:
+        - Notifications
+      summary: Update notification event settings
+      description: Owner overrides for event delivery and thresholds. `for_tests` on test.failed and quality events is an integer from 1 through 100. Requires CSRF.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationEventPatch"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationEventResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/events/{key}/tests/{channel}:
+    post:
+      operationId: testNotificationEventTemplate
+      x-access-token-scope: read-write
+      tags:
+        - Notifications
+      summary: Send a sample through an event template
+      description: Queues the selected event's saved template with sample placeholder values through the configured channel. Poll the returned delivery resource.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      responses:
+        "202":
+          description: Accepted; poll Location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/testNotificationResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/events/{key}/nodes/{id}:
+    get:
+      operationId: getNotificationNodeEventSetting
+      x-access-token-scope: read
+      tags:
+        - Notifications
+      summary: Read a node notification override
+      description: Read effective enablement for a node-scoped event.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      code:
+                        const: 200
+                      data:
+                        $ref: "#/components/schemas/NotificationNodeEventSetting"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+    put:
+      operationId: updateNotificationNodeEventSetting
+      x-access-token-scope: read-write
+      tags:
+        - Notifications
+      summary: Update a node notification override
+      description: Set node-scoped event enablement. Requires CSRF.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationNodeEventPatch"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      code:
+                        const: 200
+                      data:
+                        $ref: "#/components/schemas/NotificationNodeEventSetting"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/templates/{key}/{channel}:
+    get:
+      operationId: getNotificationTemplate
+      x-access-token-scope: read
+      tags:
+        - Notifications
+      summary: Read a notification template
+      description: Effective body for one event and channel.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationTemplateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+    put:
+      operationId: putNotificationTemplate
+      x-access-token-scope: read-write
+      tags:
+        - Notifications
+      summary: Replace a notification template
+      description: Unknown placeholders are rejected. Requires CSRF.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationTemplateInput"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationTemplateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/templates/{key}/{channel}/previews:
+    post:
+      operationId: previewNotificationTemplate
+      x-access-token-scope: read
+      tags:
+        - Notifications
+      summary: Preview a notification template
+      description: Renders the body (or stored/default) with sample placeholder data.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationTemplateInput"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/previewNotificationTemplateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/templates/{key}/{channel}/resets:
+    post:
+      operationId: resetNotificationTemplate
+      x-access-token-scope: read-write
+      tags:
+        - Notifications
+      summary: Reset a notification template
+      description: Deletes the owner override so the catalog default applies again.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationTemplateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - $ref: "#/components/parameters/CSRF"
   /api/settings:
     get:
       operationId: getSettings
@@ -3776,6 +4246,15 @@ components:
       description: Omission uses each node's primary engine; engines are never blended.
       schema:
         $ref: "#/components/schemas/Engine"
+    ISP:
+      name: isp
+      in: query
+      required: false
+      description: Optional trimmed, case-insensitive exact ISP match (1–200 characters). Effective ISP uses the result engine ISP, then cached IP organisation; records with unknown ISP are excluded when filtering.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
     Page:
       name: page
       in: query
@@ -3821,11 +4300,11 @@ components:
         uniqueItems: true
       style: form
       explode: false
-    ISP:
+    ISPId:
       name: isp
       in: query
       required: false
-      description: Optional single ISP filter for alert events.
+      description: Optional ISP entity ID filter for alert events.
       schema:
         $ref: "#/components/schemas/ID"
     Node:
@@ -5949,7 +6428,19 @@ components:
             - "null"
           description: Same unit as the selected metric; null for no samples.
           minimum: 0
+        p50:
+          type:
+            - number
+            - "null"
+          description: Median percentile, equal to median; null for no samples.
+          minimum: 0
         p95:
+          type:
+            - number
+            - "null"
+          description: Same unit as the selected metric; null for no samples.
+          minimum: 0
+        p99:
           type:
             - number
             - "null"
@@ -5968,7 +6459,9 @@ components:
         - min
         - max
         - p5
+        - p50
         - p95
+        - p99
         - std
       description: Population std deviation. Percentiles interpolate at (n-1)*p. A single sample has
         std=0; empty aggregates have n=0 and null values.
@@ -6220,6 +6713,46 @@ components:
         - count
       description: Empty data returns bins=[] and count=0; constant data uses a nonzero width centered on
         the constant.
+    StatisticsEvent:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        ts:
+          $ref: "#/components/schemas/Timestamp"
+        type:
+          type: string
+          enum:
+            - ip_change
+            - isp_change
+            - alert
+        label:
+          type: string
+          description: Plain text change or alert title/details.
+      required:
+        - id
+        - nodeId
+        - ts
+        - type
+        - label
+    StatisticsEvents:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatisticsEvent"
+          maxItems: 500
+        truncated:
+          type: boolean
+          description: True when more than 500 matching marks exist.
+      required:
+        - items
+        - truncated
     Fleet:
       type: object
       additionalProperties: false
@@ -6455,12 +6988,13 @@ components:
             - $ref: "#/components/schemas/ID"
             - type: "null"
         nodeId:
-          $ref: "#/components/schemas/ID"
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
         ispId:
           anyOf:
             - $ref: "#/components/schemas/ID"
             - type: "null"
-          description: ISP captured at event time and retained after result cleanup.
         severity:
           $ref: "#/components/schemas/Severity"
         ts:
@@ -6487,7 +7021,7 @@ components:
         - detail
         - acked
       description: Acknowledgement is independent of resolution. Setting acked=false reopens attention,
-        not the underlying streak. One event per streak; system offline events may have ruleId=null.
+        not the underlying streak. One event per streak; system events may have null ruleId or nodeId.
     Acknowledgement:
       type: object
       additionalProperties: false
@@ -6928,6 +7462,202 @@ components:
         - lastAttempt
         - error
       description: Safe delivery metadata only; no payload secrets or destination credentials.
+    NotificationEvent:
+      type: object
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+        category:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+        severity:
+          $ref: "#/components/schemas/Severity"
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Channel"
+          minItems: 1
+          maxItems: 4
+        nodeScoped:
+          type: boolean
+        engineScoped:
+          type: boolean
+        alertMetric:
+          type: string
+        thresholds:
+          type: object
+          properties:
+            for_tests:
+              type: integer
+              minimum: 1
+              maximum: 100
+            attempts:
+              type: integer
+              minimum: 1
+              maximum: 100
+          additionalProperties:
+            type: number
+        cooldownSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+        repeatSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+        maintenanceStart:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$|^$'
+        maintenanceEnd:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$|^$'
+        maintenanceTimezone:
+          type: string
+        ispScopes:
+          type: array
+          items:
+            type: string
+        placeholders:
+          type: array
+          items:
+            type: string
+        customized:
+          type: boolean
+      required:
+        - key
+        - category
+        - title
+        - description
+        - enabled
+        - severity
+        - channels
+        - nodeScoped
+        - engineScoped
+        - thresholds
+        - cooldownSeconds
+        - repeatSeconds
+        - maintenanceStart
+        - maintenanceEnd
+        - maintenanceTimezone
+        - ispScopes
+        - placeholders
+        - customized
+    NotificationEventPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+        severity:
+          $ref: "#/components/schemas/Severity"
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Channel"
+          minItems: 1
+          maxItems: 4
+        thresholds:
+          type: object
+          properties:
+            for_tests:
+              type: integer
+              minimum: 1
+              maximum: 100
+            attempts:
+              type: integer
+              minimum: 1
+              maximum: 100
+          additionalProperties:
+            type: number
+        cooldownSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+        repeatSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+        maintenanceStart:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$|^$'
+        maintenanceEnd:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$|^$'
+        maintenanceTimezone:
+          type: string
+        ispScopes:
+          type: array
+          items:
+            type: string
+    NotificationNodeEventPatch:
+      type: object
+      additionalProperties: false
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+    NotificationNodeEventSetting:
+      type: object
+      additionalProperties: false
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+    NotificationTemplate:
+      type: object
+      additionalProperties: false
+      properties:
+        eventKey:
+          type: string
+        channel:
+          $ref: "#/components/schemas/Channel"
+        body:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        isDefault:
+          type: boolean
+        updatedAt:
+          type: string
+      required:
+        - eventKey
+        - channel
+        - body
+        - isDefault
+    NotificationTemplateInput:
+      type: object
+      additionalProperties: false
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 4000
+      required:
+        - body
+    NotificationTemplatePreview:
+      type: object
+      additionalProperties: false
+      properties:
+        channel:
+          $ref: "#/components/schemas/Channel"
+        body:
+          type: string
+        sample:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+        - channel
+        - body
+        - sample
     IPChange:
       type: object
       additionalProperties: false
@@ -7801,6 +8531,7 @@ components:
               items:
                 $ref: "#/components/schemas/Distribution"
     getUsageResponse:
+    getEventsResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
         - type: object
@@ -7840,6 +8571,7 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/UsageBudget"
+              $ref: "#/components/schemas/StatisticsEvents"
     getDashboardResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
@@ -8093,6 +8825,44 @@ components:
               const: 200
             data:
               $ref: "#/components/schemas/Delivery"
+    listNotificationEventsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/NotificationEvent"
+    getNotificationEventResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/NotificationEvent"
+    getNotificationTemplateResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/NotificationTemplate"
+    previewNotificationTemplateResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/NotificationTemplatePreview"
     getSettingsResponse:
       allOf:
         - $ref: "#/components/schemas/Success"

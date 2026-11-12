@@ -251,6 +251,44 @@ func TestAuthHTTPBootstrapLoginLogoutAndRevocation(t *testing.T) {
 	}
 }
 
+func TestAuthLoginRecordsSecurityEventsWithoutCredentials(t *testing.T) {
+	events := &fakeNotificationEvents{}
+	identity := auth.Identity{ID: "user-123", Email: "owner@example.com"}
+	created := testSessionView()
+	created.Identity = &identity
+	validService := scriptedAuthService{
+		session: func(context.Context, string) (auth.SessionView, error) { return testSessionView(), nil },
+		login:   func(context.Context, string, string, string, string) (auth.SessionView, error) { return created, nil },
+	}
+	invalidService := validService
+	invalidService.login = func(context.Context, string, string, string, string) (auth.SessionView, error) {
+		return auth.SessionView{}, auth.ErrInvalidCredentials
+	}
+	request := func(service AuthService) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "http://speedtest.local/api/auth/login", strings.NewReader(`{"email":"owner@example.com","password":"private password"}`))
+		req.RemoteAddr = "203.0.113.90:4321"
+		req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "current-token"})
+		req.Header.Set("Origin", "http://speedtest.local")
+		req.Header.Set("X-CSRF-Token", "test-csrf")
+		(&serverAuth{service: service, events: events}).serve(response, req)
+		return response
+	}
+	if response := request(validService); response.Code != http.StatusOK {
+		t.Fatalf("successful login = %d %s", response.Code, response.Body.String())
+	}
+	if events.signIns != 1 || events.userKey != identity.ID || events.signInIP != "203.0.113.90" {
+		t.Fatalf("new sign-in event = %d/%q/%q", events.signIns, events.userKey, events.signInIP)
+	}
+	response := request(invalidService)
+	if response.Code != http.StatusUnauthorized || strings.Contains(response.Body.String(), "private password") {
+		t.Fatalf("failed login response = %d %s", response.Code, response.Body.String())
+	}
+	if events.failures != 1 || events.failureIP != "203.0.113.90" || events.signIns != 1 {
+		t.Fatalf("failed-login event = failures:%d ip:%q sign-ins:%d", events.failures, events.failureIP, events.signIns)
+	}
+}
+
 func TestAuthHTTPRequiresSameOriginAndCSRF(t *testing.T) {
 	handler := newAuthHandler(t, 5)
 	bootstrap := httptest.NewRecorder()

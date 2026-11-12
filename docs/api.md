@@ -227,7 +227,7 @@ The center coordinates offsets; there is no WAN, load-balancer or peer-node mode
 | Dashboard, JOOST-27/38 | `/api/dashboard`, `/api/series`; `Fleet` current/previous, `NodeCard` summary/sparkline/latestGood/current IP/city, latest results/open alerts/count, `Series.summary` for table mode |
 | Nodes and wizard, JOOST-25/41/43/44 | node CRUD/run/commands, installer probes/installations/uninstallations and SSE; `Node`, `Enrollment`, `Install`, `InstallEvent`, pinned fingerprint, `Command` progress |
 | Results, JOOST-24/32/38 | results list/detail/filtered CSV and full CSV/JSON exports; `Result` includes every measured field, `Server`, `Geo`, raw JSON and manual flag; search/sort/range/download/status filters |
-| Statistics, JOOST-26/39 | `/api/stats/{summary,trend,hour-of-day,heatmap,distribution}`; `SummaryComparison`, `MetricSummary`, `Series`, `HourSeries`, `Heatmap` counts, `Distribution` edges/count/percent; combined total is display-only; optional `isps` filter |
+| Statistics, JOOST-26/39/81 | `/api/stats/{summary,trend,hour-of-day,heatmap,distribution,events}`; `SummaryComparison`, percentiles, engine and ISP filters, bounded event marks; combined total is display-only |
 | ISPs, JOOST-74 | `/api/isps`, `/api/isps/compare`, `/api/isps/{id}`, `/api/isps/{id}/trend`, `/api/isps/{id}/plans`; entities from uint32 ASN/organisation; engine-isolated aggregates; optional plans; `isps`/`isp` filters on results, statistics and alert events |
 | Monthly report, JOOST-79 | `GET /api/reports/monthly?month=YYYY-MM&format=json|csv|pdf&isp=&engine=`; per ISP and node; UTC month; explicit unknown-ISP rows; current downtime bounded by `generatedAt`; CSV protects formula cells; PDF preserves Unicode and wraps long names |
 | Results, JOOST-24/32/38/80 | results list/detail/filtered CSV and full CSV/JSON exports; `Result` includes every measured field, bytes down/up/total, `Server`, `Geo`, raw JSON and manual flag; search/sort/range/download/status filters |
@@ -236,6 +236,7 @@ The center coordinates offsets; there is no WAN, load-balancer or peer-node mode
 | IP & location, JOOST-33/34/35/36/39/42 | `/api/ip/{history,addresses,lookup,map}` (location database updates run on the center's schedule; manual update/refresh/status endpoints are not part of v1); `IPChange`, `IPAddress`, `Geo` (all location/ASN/ISP/accuracy/source fields), `MapLocation`, database timestamp/cache count, maintenance `Job` |
 | Schedules, JOOST-28/39 | `/api/schedules`, per-node GET/PUT, rules PUT, stagger POST; `ScheduleInput`, `ScheduleRules`, `Schedules` clashes/upcoming/nextRun/bytesPerDay/bytesPerMonth |
 | Alerts, JOOST-29/40 | rules CRUD, events list/detail/ack, snapshot acknowledge-all job; `AlertRule`, `AlertEvent` title/detail/severity/ts/resolvedAt/acked; reopen means acked=false |
+| Settings/notifications, JOOST-30/31/40/78 | Settings GET/PUT/key rotation, test-channel POST, delivery logs/status, event catalog and node overrides, template get/update/preview/reset; `Settings`, `NotificationSettings`, `NotificationEvent`, `NotificationTemplate`, `Delivery`, issuance-only `IssuedKey` |
 | Settings/notifications, JOOST-30/31/40 | Settings GET/PUT/key rotation, test-channel POST, delivery logs/status; `Settings`, `NotificationSettings`, `Delivery`, issuance-only `IssuedKey` |
 | Bandwidth, JOOST-80 | `/api/usage`, `/api/usage/advice`, `/api/usage/budgets`; UTC totals and day/week/month buckets stay separated by node and engine; optional global/node budgets |
 | Installer distribution, JOOST-46 | public `GET /install.sh`; checksum-verifying shell script |
@@ -259,7 +260,9 @@ Reset demo data remains a local preview action, with no destructive API endpoint
 
 Statistics follow the UI formulas: summaries include nonfailed samples;
 trend/hour-of-day/heatmap/distribution include only `ok` samples as `stats.js`
-does. Percentiles interpolate at `(n-1)*p`, standard deviation is population,
+does. Every `MetricSummary` keeps its existing fields and adds nullable `p50`
+and `p99`; `p50` equals `median`. Percentiles interpolate at `(n-1)*p`,
+standard deviation is population,
 and stability is `clamp(100-220*std/mean,0,100)`, null for zero/no mean. Counts
 include failures; success rate includes degraded tests and excludes
 `failureClass=rate_limited` (shown separately as `rateLimited`). Fleet
@@ -275,7 +278,7 @@ persist topology.
 
 ### Statistics endpoints (JOOST-26)
 
-All five endpoints require an authenticated UI session and return the standard
+All statistics endpoints require an authenticated UI session and return the standard
 success envelope. Omit `nodes` to include every node; `nodes=` selects none.
 Explicit `from` and `to` are an inclusive/exclusive RFC 3339 interval, must be
 given together, and cannot be combined with `range`. Analytics intervals are
@@ -288,7 +291,17 @@ GET /api/stats/trend?from=<RFC3339>&to=<RFC3339>&metric=down&bucket=hour&timezon
 GET /api/stats/hour-of-day?range=7d&metric=ping&timezone=Asia/Ho_Chi_Minh
 GET /api/stats/heatmap?node=<node-id>&metric=down&timezone=Asia/Ho_Chi_Minh
 GET /api/stats/distribution?range=30d&metric=down&bins=12
+GET /api/stats/events?range=7d&nodes=<node-id>&engine=ookla&isp=Viettel
 ```
+
+All statistics endpoints accept optional `engine` and `isp` filters. An omitted
+engine selects each node's primary engine, so different engines are never mixed.
+`isp` is one trimmed 1–200 character, case-insensitive exact match; repeated or
+whitespace-only values return 422. Effective ISP uses the trimmed result
+`engine_isp`, then the cached organisation for that result's IP. A specific ISP
+filter excludes results with unknown ISP. Cached geolocation can be refreshed,
+so historical ISP attribution may change. `isp` is applied before every
+aggregate and comparison, including the heatmap and event marks.
 
 `summary` returns current and immediately previous intervals of equal length.
 Its counts include failed tests; `ok` includes both `ok` and `degraded` results.
@@ -376,6 +389,27 @@ current chart uses 12, so pass `bins=12` when comparing its histogram directly.
 Bin edges cover the sample minimum through maximum and the last upper edge is
 inclusive. Constant data uses a nonzero range centered on the value; no samples
 returns `bins: []` and `count: 0`.
+
+`GET /api/stats/events` accepts the same `range` or `from`+`to`, `nodes`,
+`engine` and `isp` filters. It returns `data.items` and `data.truncated`; items
+are newest-first with ties ordered by type and ID, capped at 500. A true
+`truncated` value means more matching events exist. IP changes compare
+consecutive known result IPs per node and selected engine, ordered by `(ts,id)`;
+null IPs are skipped and the selected engine's last known predecessor before
+the requested window is included. This avoids treating another engine's IP
+measurement as a transition for the selected engine. ISP changes compare
+consecutive known effective ISPs per node and engine, ordered by `(ts,id)`, and
+include the last known predecessor before the requested window. IP/ISP marks and
+alerts with a `trigger_result_id` use that result's engine and effective ISP.
+Unlinked alerts appear only without an ISP filter and are labelled `engine
+unknown`; event labels contain plain text. The endpoint reports alert openings,
+not inferred threshold anomalies.
+
+The Statistics page's week-over-week comparison requests `summary?range=7d`
+independently of the page range. It compares each selected node's selected
+metric mean over `[now-7d,now)` with `[now-14d,now-7d)`. The percent change is
+`(current-previous)/previous*100`; it is unavailable if either mean is null or
+the previous mean is zero.
 
 Settings defaults match the preview: dark, 7d, auto units, browser timezone,
 24-hour clock, one decimal, 365-day retention (0=forever), GeoLite2 + ip-api fallback,
@@ -492,7 +526,10 @@ const paths = [
   '/api/nodes', '/api/results', '/api/isps', '/api/isps/compare', '/api/stats/summary', '/api/stats/trend',
   '/api/stats/hour-of-day', '/api/stats/heatmap', '/api/stats/distribution',
   '/api/dashboard', '/api/series', '/api/schedules/{node}', '/api/alerts/rules',
-  '/api/alerts/events', '/api/notifications/test/{channel}', '/api/settings',
+  '/api/alerts/events', '/api/notifications/test/{channel}', '/api/notifications/events',
+  '/api/notifications/events/{key}', '/api/notifications/events/{key}/nodes/{id}',
+  '/api/notifications/templates/{key}/{channel}', '/api/notifications/templates/{key}/{channel}/previews',
+  '/api/notifications/templates/{key}/{channel}/resets', '/api/settings',
   '/api/ip/history', '/api/ip/addresses', '/api/ip/lookup', '/api/ip/map',
   '/api/auth/login', '/api/auth/logout', '/api/auth/me', '/api/auth/password',
   '/api/auth/2fa', '/api/auth/2fa/setup', '/api/auth/2fa/enable', '/api/auth/2fa/disable'
@@ -644,6 +681,16 @@ page/size and optional event UUID, newest first. No delivery response exposes a
 destination, payload, URL or credential. Notification pages are limited to
 1,000,000. See [notification delivery](notifications.md) for transport Settings,
 retry/expiry behavior, the exactly-once transaction boundary and verification.
+
+## Notification catalog (JOOST-78)
+
+`GET /api/notifications/events` lists code defaults merged with owner settings.
+`GET|PATCH /api/notifications/events/{key}` reads or updates an event, and
+`GET|PUT /api/notifications/events/{key}/nodes/{id}` reads or updates enablement
+for node-scoped events. Templates use `GET|PUT /api/notifications/templates/{key}/{channel}`;
+preview and reset use `POST /previews` and `POST /resets` on that template path.
+Writes require the owner session, CSRF token and same-origin request. See
+[the notification catalog](notifications.md) for placeholders, formatting and defaults.
 
 ### Published agent releases
 

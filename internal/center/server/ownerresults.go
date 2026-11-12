@@ -31,12 +31,13 @@ var csvHeader = []string{"time", "node", "status", "download_mbps", "upload_mbps
 
 type ownerResults struct {
 	store   OwnerResultsStore
+	events  NotificationEvents
 	limiter *nodeRateLimiter
 	now     func() time.Time
 }
 
-func newOwnerResultsHandler(store OwnerResultsStore, auth *serverAuth) http.Handler {
-	h := &ownerResults{store: store, limiter: newOwnerRateLimiter(), now: time.Now}
+func newOwnerResultsHandler(store OwnerResultsStore, auth *serverAuth, events NotificationEvents) http.Handler {
+	h := &ownerResults{store: store, events: events, limiter: newOwnerRateLimiter(), now: time.Now}
 	return ownerReader(auth, h.limiter, h.serve)
 }
 
@@ -131,10 +132,11 @@ func (h *ownerResults) exportCSV(w http.ResponseWriter, r *http.Request, filter 
 		return
 	}
 	out.Flush()
-	if err != nil {
+	if err != nil || out.Error() != nil {
 		// The status line is already sent; cut the connection so the client sees an incomplete download.
 		panic(http.ErrAbortHandler)
 	}
+	h.notifyExport(r.Context(), "csv", rows)
 }
 
 // exportJSON streams every stored result, oldest first, as one JSON array without the response envelope.
@@ -180,10 +182,25 @@ func (h *ownerResults) exportJSON(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="speedtest-results-`+h.now().UTC().Format("2006-01-02")+`.json"`)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("[]"))
+		if _, err := w.Write([]byte("[]")); err != nil {
+			return
+		}
+		h.notifyExport(r.Context(), "json", rows)
 		return
 	}
-	_, _ = w.Write([]byte("]"))
+	if _, err := w.Write([]byte("]")); err == nil {
+		h.notifyExport(r.Context(), "json", rows)
+	}
+}
+
+func (h *ownerResults) notifyExport(ctx context.Context, format string, rows int) {
+	if h.events != nil {
+		publishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		_ = h.events.PublishEvent(publishCtx, "platform.export_ready", "", map[string]string{
+			"format": format, "count": strconv.Itoa(rows),
+		})
+	}
 }
 
 // csvRecord renders one result. Text cells that a spreadsheet would read as a formula are neutralised.

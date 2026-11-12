@@ -46,13 +46,17 @@ func (s *Transport) Send(ctx context.Context, channel, to, secret, message strin
 			return ErrSend
 		}
 		endpoint = base + "/bot" + url.PathEscape(secret) + "/sendMessage"
-		payload = map[string]string{"chat_id": to, "text": message}
+		payload = map[string]string{"chat_id": to, "text": message, "parse_mode": "HTML"}
 	case "slack":
 		endpoint = secret
-		payload = map[string]string{"text": message}
+		payload = map[string]any{"blocks": []any{map[string]any{"type": "section", "text": map[string]string{"type": "mrkdwn", "text": message}}}}
 	case "webhook":
 		endpoint = secret
-		payload = map[string]string{"text": message}
+		if json.Valid([]byte(message)) {
+			payload = json.RawMessage(message)
+		} else {
+			payload = map[string]string{"text": message}
+		}
 	default:
 		return ErrSend
 	}
@@ -149,10 +153,15 @@ func (s *Transport) email(ctx context.Context, to, password, message string) err
 	return nil
 }
 
-// Message keeps the event, node, start time and dashboard together in plain text.
-func Message(what, node string, since time.Time, centerURL string) string {
+// Message keeps the event, node, start time and dashboard together in plain text. An optional detail (for example the old and the
+// new address of an IP change) goes on its own line under the title.
+func Message(what, node string, since time.Time, centerURL string, detail ...string) string {
 	clean := func(v string) string { return strings.Join(strings.Fields(v), " ") }
-	return fmt.Sprintf("%s — %s\nSince %s\n%s", clean(what), clean(node), since.UTC().Format(time.RFC3339), strings.TrimRight(centerURL, "/")+"/#/alerts")
+	extra := ""
+	if len(detail) > 0 && clean(detail[0]) != "" {
+		extra = clean(detail[0]) + "\n"
+	}
+	return fmt.Sprintf("%s — %s\n%sSince %s\n%s", clean(what), clean(node), extra, since.UTC().Format(time.RFC3339), strings.TrimRight(centerURL, "/")+"/#/alerts")
 }
 
 // Backoff doubles from one minute and caps at one hour.

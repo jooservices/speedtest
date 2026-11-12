@@ -165,7 +165,9 @@ func Defaults(centerURL string) Settings {
 		Stagger:             true,
 		QuietStart:          "",
 		QuietEnd:            "",
-		NotifyQuietZone:     "UTC",
+		NotifyQuietStart:    "23:00",
+		NotifyQuietEnd:      "07:00",
+		NotifyQuietZone:     "Asia/Bangkok",
 		NotifyQuietCritical: true,
 		CenterURL:           centerURL,
 		Notify: NotificationSettings{
