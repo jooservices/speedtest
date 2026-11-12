@@ -45,6 +45,8 @@ type Result struct {
 type Retention struct {
 	// ObserveRun reports pass success without changing worker behavior.
 	ObserveRun func(bool)
+	// OnComplete publishes a successful retention summary after the database work finishes.
+	OnComplete func(context.Context, Result) error
 	DB         DB
 	Logger     *slog.Logger
 	Now        func() time.Time
@@ -88,6 +90,9 @@ func (r *Retention) days(ctx context.Context) (int, error) {
 func (r *Retention) Run(ctx context.Context) (Result, error) {
 	start := time.Now()
 	res, err := r.run(ctx)
+	if err == nil && r.OnComplete != nil {
+		err = r.OnComplete(ctx, res)
+	}
 	if r.ObserveRun != nil {
 		r.ObserveRun(err == nil)
 	}

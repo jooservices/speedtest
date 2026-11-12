@@ -9,6 +9,7 @@ func TestRouteLabelNeverInventsGroups(t *testing.T) {
 		"/api/nodes/" + id + "/servers":          "/api/nodes/{id}/servers",
 		"/api/nodes/" + id + "/server-selection": "/api/nodes/{id}/server-selection",
 		"/api/alerts/events/" + id:               "/api/alerts/events/{id}",
+		"/api/access-tokens/" + id:               "/api/access-tokens/{id}",
 		"/api/schedules/rules":                   "/api/schedules/rules",
 		"/api/stats/summary":                     "/api/stats/summary",
 		"/api/export/results.csv":                "/api/export/results.csv",

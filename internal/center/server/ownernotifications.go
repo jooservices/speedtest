@@ -6,27 +6,46 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/jooservices/speedtest/internal/center/audit"
 	"github.com/jooservices/speedtest/internal/center/notify"
 	"github.com/jooservices/speedtest/internal/center/settings"
 )
 
-// OwnerNotificationsStore exposes only safe delivery metadata.
+// OwnerNotificationsStore exposes delivery metadata and the notification catalog.
 type OwnerNotificationsStore interface {
 	Test(context.Context, string) (notify.Delivery, error)
 	Delivery(context.Context, string) (notify.Delivery, error)
 	Deliveries(context.Context, string, int, int) ([]notify.Delivery, int, error)
+	ListNotificationEvents(context.Context) ([]notify.EventView, error)
+	GetNotificationEvent(context.Context, string) (notify.EventView, error)
+	UpdateNotificationEvent(context.Context, string, notify.EventPatch) (notify.EventView, error)
+	SetNotificationNodeEnabled(context.Context, string, string, bool) error
+	NotificationNodeEnabled(context.Context, string, string) (bool, error)
+	GetNotificationTemplate(context.Context, string, string) (notify.TemplateView, error)
+	PutNotificationTemplate(context.Context, string, string, string) (notify.TemplateView, error)
+	ResetNotificationTemplate(context.Context, string, string) (notify.TemplateView, error)
+	PreviewNotificationTemplate(context.Context, string, string, string) (notify.TemplatePreview, error)
+	TestNotificationEvent(context.Context, string, string) (notify.Delivery, error)
 }
 
 type ownerNotifications struct {
 	store   OwnerNotificationsStore
 	limiter *nodeRateLimiter
+	auth    *serverAuth
+}
+
+type notificationEventAuditStore interface {
+	UpdateNotificationEventAudited(context.Context, string, notify.EventPatch, audit.Entry) (notify.EventView, error)
+	SetNotificationNodeEnabledAudited(context.Context, string, string, bool, audit.Entry) error
+	PutNotificationTemplateAudited(context.Context, string, string, string, audit.Entry) (notify.TemplateView, error)
+	ResetNotificationTemplateAudited(context.Context, string, string, audit.Entry) (notify.TemplateView, error)
 }
 
 func newOwnerNotificationsHandler(store OwnerNotificationsStore, auth *serverAuth, perMinute int) http.Handler {
 	if perMinute <= 0 {
 		perMinute = defaultAgentRequestsPerMinute
 	}
-	h := &ownerNotifications{store, newNodeRateLimiter(perMinute, defaultAgentBurst*2)}
+	h := &ownerNotifications{store: store, limiter: newNodeRateLimiter(perMinute, defaultAgentBurst*2), auth: auth}
 	read := auth.requireSession(http.HandlerFunc(h.serve))
 	write := auth.requireOwner(http.HandlerFunc(h.serve))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -37,8 +56,62 @@ func newOwnerNotificationsHandler(store OwnerNotificationsStore, auth *serverAut
 		}
 	})
 }
+
+func (h *ownerNotifications) auditEntry(r *http.Request) audit.Entry {
+	entry, _ := audit.Classify(r.Method, r.URL.Path)
+	entry.Actor = h.auth.actor(r)
+	entry.Remote = remoteIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), h.auth.trustedProxyCIDRs)
+	return entry
+}
+
+func (h *ownerNotifications) updateEvent(r *http.Request, key string, patch notify.EventPatch) (notify.EventView, error) {
+	if store, ok := h.store.(notificationEventAuditStore); ok {
+		view, err := store.UpdateNotificationEventAudited(r.Context(), key, patch, h.auditEntry(r))
+		if err == nil {
+			markAuditRecorded(r.Context())
+		}
+		return view, err
+	}
+	return h.store.UpdateNotificationEvent(r.Context(), key, patch)
+}
+
+func (h *ownerNotifications) setNodeEvent(r *http.Request, key, node string, enabled bool) error {
+	if store, ok := h.store.(notificationEventAuditStore); ok {
+		err := store.SetNotificationNodeEnabledAudited(r.Context(), key, node, enabled, h.auditEntry(r))
+		if err == nil {
+			markAuditRecorded(r.Context())
+		}
+		return err
+	}
+	return h.store.SetNotificationNodeEnabled(r.Context(), key, node, enabled)
+}
+
+func (h *ownerNotifications) putTemplate(r *http.Request, key, channel, body string) (notify.TemplateView, error) {
+	if store, ok := h.store.(notificationEventAuditStore); ok {
+		view, err := store.PutNotificationTemplateAudited(r.Context(), key, channel, body, h.auditEntry(r))
+		if err == nil {
+			markAuditRecorded(r.Context())
+		}
+		return view, err
+	}
+	return h.store.PutNotificationTemplate(r.Context(), key, channel, body)
+}
+
+func (h *ownerNotifications) storeResetTemplate(r *http.Request, key, channel string) (notify.TemplateView, error) {
+	if store, ok := h.store.(notificationEventAuditStore); ok {
+		view, err := store.ResetNotificationTemplateAudited(r.Context(), key, channel, h.auditEntry(r))
+		if err == nil {
+			markAuditRecorded(r.Context())
+		}
+		return view, err
+	}
+	return h.store.ResetNotificationTemplate(r.Context(), key, channel)
+}
 func ownerNotificationsRoute(path string) bool { return strings.HasPrefix(path, "/api/notifications/") }
 func notificationError(w http.ResponseWriter, r *http.Request, err error) {
+	if notificationCatalogError(w, r, err) {
+		return
+	}
 	switch {
 	case errors.Is(err, notify.ErrUnconfigured):
 		invalid(w, r, "Enable and configure this notification channel in Settings.")
@@ -61,11 +134,19 @@ func (h *ownerNotifications) serve(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case strings.HasPrefix(rest, "test/"):
 		h.queueTest(w, r, strings.TrimPrefix(rest, "test/"))
-	case r.Method != http.MethodGet:
-		methodNotAllowed(w, r, http.MethodGet)
+	case rest == "events" || strings.HasPrefix(rest, "events/") || strings.HasPrefix(rest, "templates/"):
+		h.serveCatalog(w, r, rest)
 	case rest == "deliveries":
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, r, http.MethodGet)
+			return
+		}
 		h.listDeliveries(w, r)
 	case strings.HasPrefix(rest, "deliveries/"):
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, r, http.MethodGet)
+			return
+		}
 		h.getDelivery(w, r, strings.TrimPrefix(rest, "deliveries/"))
 	default:
 		writeNotFoundProblem(w, r)
