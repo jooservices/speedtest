@@ -4,22 +4,28 @@
 # exits so Docker's restart policy brings everything back (state lives in the volume).
 set -euo pipefail
 
+log() { printf '%s entrypoint: %s\n' "$(date -u +%FT%TZ)" "$*"; }
+die() { log "ERROR: $*"; exit 1; }
 STATE="${STAGING_STATE_DIR:-/var/lib/speedtest}"
 PORT="${STAGING_PORT:-18090}"
 INTERVAL="${STAGING_INTERVAL_MINUTES:-60}"
+# These values are spliced into SQL below, so they are checked before anything else uses them.
+case "$INTERVAL" in ''|0*|*[!0-9]*) die "STAGING_INTERVAL_MINUTES must be an integer" ;; esac
+if [ "$INTERVAL" -lt 5 ] || [ "$INTERVAL" -gt 1440 ]; then die "STAGING_INTERVAL_MINUTES must be 5..1440"; fi
+ENGINE="${STAGING_ENGINE:-ookla}"
+case "$ENGINE" in ookla|librespeed) ;; *) die "STAGING_ENGINE must be ookla or librespeed" ;; esac
 # name:startMinuteOffset ...; the default spreads the three nodes evenly inside the interval (valid down to 5 minutes).
 NODES="${STAGING_NODES:-VM1:0 VM2:$((INTERVAL / 3)) VM3:$((INTERVAL * 2 / 3))}"
-ENGINE="${STAGING_ENGINE:-ookla}"
 EXPECTED_DOWN="${STAGING_EXPECTED_DOWN_MBPS:-500}"
 EXPECTED_UP="${STAGING_EXPECTED_UP_MBPS:-500}"
 CENTER="http://127.0.0.1:${PORT}"
 BIND="${STAGING_BIND:-0.0.0.0}"
 export APP_ENV="${APP_ENV:-local}" SPEEDTEST_HTTP_ADDR="${BIND}:${PORT}"
 
-log() { printf '%s entrypoint: %s\n' "$(date -u +%FT%TZ)" "$*"; }
-die() { log "ERROR: $*"; exit 1; }
 for spec in $NODES; do
-  [ "${spec##*:}" -lt "$INTERVAL" ] || die "node ${spec%%:*}: offset ${spec##*:} must be below the ${INTERVAL}-minute interval"
+  off="${spec##*:}"
+  case "$off" in ''|*[!0-9]*) die "node ${spec%%:*}: offset must be a whole number of minutes" ;; esac
+  if [ "$off" -ge "$INTERVAL" ]; then die "node ${spec%%:*}: offset ${off} must be below the ${INTERVAL}-minute interval"; fi
 done
 : "${SPEEDTEST_DB_HOST:?}" "${SPEEDTEST_DB_PORT:?}" "${SPEEDTEST_DB_NAME:?}" "${SPEEDTEST_DB_USER:?}" "${SPEEDTEST_DB_PASSWORD:?}"
 : "${STAGING_OWNER_EMAIL:?}" "${STAGING_OWNER_PASSWORD:?}" "${APP_KEY:?}"

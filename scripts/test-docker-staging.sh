@@ -98,7 +98,7 @@ test_default_interval_is_60() {
 
 	nodes_up || fail "nodes.sh failed with defaults: $(cat "$case_dir/out.txt")"
 	has 'NODE_INTERVAL=60' "$FAKE_LOG_DIR/calls.log" "extra node container must get NODE_INTERVAL=60"
-	has '"interval":60' "$FAKE_LOG_DIR/calls.log" "center schedule of an extra node must be 60 minutes"
+	if grep -qF -- '-X PUT' "$FAKE_LOG_DIR/calls.log"; then fail "the default interval must not save a schedule on the center"; fi
 }
 
 # Criterion 1: explicit STAGING_INTERVAL_MINUTES and NODE_INTERVAL still win over the default.
@@ -155,8 +155,32 @@ test_offsets_valid_at_minimum_interval() {
 	if grep -q 'UPDATE' "$FAKE_LOG_DIR/calls.log"; then fail "no schedule may be written for a refused node set"; fi
 }
 
+# Review fix: values spliced into SQL or sent as JSON are validated before any write or request.
+test_rejects_unsafe_settings() {
+	for bad in "5' OR '1'='1" 3 2000; do
+		new_case "bad-interval-$bad"
+		if entrypoint STAGING_INTERVAL_MINUTES="$bad"; then fail "STAGING_INTERVAL_MINUTES=$bad must be refused"; fi
+		has 'STAGING_INTERVAL_MINUTES must be' "$case_dir/out.txt" "refusal of $bad must name the setting"
+		if grep -q 'UPDATE' "$FAKE_LOG_DIR/calls.log"; then fail "nothing may be written for STAGING_INTERVAL_MINUTES=$bad"; fi
+	done
+
+	new_case bad-engine
+	if entrypoint STAGING_ENGINE="ookla'; DROP"; then fail "an unknown STAGING_ENGINE must be refused"; fi
+	if grep -q 'UPDATE' "$FAKE_LOG_DIR/calls.log"; then fail "nothing may be written for an unknown engine"; fi
+
+	new_case bad-node-interval
+	if nodes_up NODE_INTERVAL="5; rm -rf /"; then fail "a non-numeric NODE_INTERVAL must be refused"; fi
+	has 'NODE_INTERVAL must be a whole number' "$case_dir/out.txt" "refusal must name NODE_INTERVAL"
+	if grep -qF -- 'docker run' "$FAKE_LOG_DIR/calls.log"; then fail "no container may start for a refused NODE_INTERVAL"; fi
+
+	new_case bad-expected
+	if nodes_up EXPECTED_DOWN=abc; then fail "a non-numeric EXPECTED_DOWN must abort before the node is created"; fi
+	if grep -qF -- '-X POST http://127.0.0.1:18090/api/nodes -H' "$FAKE_LOG_DIR/calls.log"; then fail "no node may be created from a bad request body"; fi
+}
+
 test_default_interval_is_60
 test_explicit_interval_wins
 test_interval_reaches_center_and_agent
 test_offsets_valid_at_minimum_interval
-printf 'docker staging interval tests: 4 passed\n'
+test_rejects_unsafe_settings
+printf 'docker staging interval tests: 5 passed\n'

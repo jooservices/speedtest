@@ -23,6 +23,8 @@ NODE_NETWORK="${NODE_NETWORK:-host}"
 if [ "$NODE_NETWORK" = host ]; then CENTER_URL="${CENTER_URL:-http://127.0.0.1:${PORT}}"; else CENTER_URL="${CENTER_URL:-http://$(hostname -I | awk '{print $1}'):${PORT}}"; fi
 LOCAL="http://127.0.0.1:${PORT}"
 NODE_INTERVAL="${NODE_INTERVAL:-60}"
+case "$NODE_INTERVAL" in ''|0*|*[!0-9]*) echo "NODE_INTERVAL must be a whole number of minutes"; exit 1 ;; esac
+if [ "$NODE_INTERVAL" -lt 5 ] || [ "$NODE_INTERVAL" -gt 1440 ]; then echo "NODE_INTERVAL must be 5..1440"; exit 1; fi
 cmd="${1:-list}"; shift || true
 
 envval() { grep -m1 "^$1=" "$ENV_FILE" | cut -d= -f2- | sed -e 's/^["'\'']//' -e 's/["'\'']$//'; }
@@ -40,14 +42,11 @@ up)
   login
   for name in "$@"; do
     if docker ps -a --format '{{.Names}}' | grep -qx "speedtest-node-$name"; then echo "node $name already has a container"; continue; fi
-    created="$(api POST /api/nodes "$(jq -nc --arg n "$name" --arg l "Docker node $name" --argjson d "${EXPECTED_DOWN:-500}" --argjson u "${EXPECTED_UP:-500}" '{name:$n,label:$l,expectedDown:$d,expectedUp:$u}')")"
+    body="$(jq -nc --arg n "$name" --arg l "Docker node $name" --argjson d "${EXPECTED_DOWN:-500}" --argjson u "${EXPECTED_UP:-500}" '{name:$n,label:$l,expectedDown:$d,expectedUp:$u}')" \
+      || { echo "cannot build the request for node $name (check EXPECTED_DOWN/UP)"; exit 1; }
+    created="$(api POST /api/nodes "$body")"
     token="$(printf '%s' "$created" | jq -r '.data.token // empty')"; node_id="$(printf '%s' "$created" | jq -r '.data.node.id // empty')"
     if [ -z "$token" ] || [ -z "$node_id" ]; then echo "node $name was not created: $(printf '%s' "$created" | head -c 300)"; exit 1; fi
-    # The center schedule must carry the same interval as the agent (the node is created with the center default).
-    sched_etag="$(curl -sS -D - -o /dev/null -b "$jar" "${LOCAL}/api/schedules/${node_id}" | tr -d '\r' | awk -F': ' 'tolower($1)=="etag"{print $2}')"
-    code="$(curl -sS -o /dev/null -w '%{http_code}' -b "$jar" -X PUT "${LOCAL}/api/schedules/${node_id}" -H "Origin: ${LOCAL}" -H "X-CSRF-Token: ${csrf}" \
-      -H "If-Match: ${sched_etag}" -H 'Content-Type: application/json' -d "$(jq -nc --argjson i "$NODE_INTERVAL" '{interval:$i,offset:0,enabled:true}')")"
-    case "$code" in 2??) ;; *) echo "node $name: interval ${NODE_INTERVAL} not saved on the center (HTTP $code)"; exit 1;; esac
     net=host
     if [ "$NODE_NETWORK" != host ]; then net="speedtest-net-$name"; docker network inspect "$net" >/dev/null 2>&1 || docker network create "$net" >/dev/null; fi
     docker volume create "speedtest-node-$name" >/dev/null
@@ -56,6 +55,14 @@ up)
       -e EXPECTED_DOWN="${EXPECTED_DOWN:-500}" -e EXPECTED_UP="${EXPECTED_UP:-500}" -v "speedtest-node-$name":/var/lib/speedtest \
       --entrypoint /usr/bin/tini "$IMAGE" -- /usr/local/bin/node-entrypoint.sh >/dev/null
     echo "started node $name (network $net)"
+    # New nodes get interval 60 on the center (column default), so only another interval needs a save.
+    if [ "$NODE_INTERVAL" != 60 ]; then
+      sched_body="$(jq -nc --argjson i "$NODE_INTERVAL" '{interval:$i,offset:0,enabled:true}')" || { echo "cannot build the schedule for node $name"; exit 1; }
+      sched_etag="$(curl -sS -D - -o /dev/null -b "$jar" "${LOCAL}/api/schedules/${node_id}" | tr -d '\r' | awk -F': ' 'tolower($1)=="etag"{print $2}')"
+      code="$(curl -sS -o /dev/null -w '%{http_code}' -b "$jar" -X PUT "${LOCAL}/api/schedules/${node_id}" -H "Origin: ${LOCAL}" -H "X-CSRF-Token: ${csrf}" \
+        -H "If-Match: ${sched_etag}" -H 'Content-Type: application/json' -d "$sched_body")"
+      case "$code" in 2??) ;; *) echo "node $name runs but its interval ${NODE_INTERVAL} was not saved on the center (HTTP $code); remove it with down and forget, then up again"; exit 1;; esac
+    fi
   done
   # Spread the start minutes so nodes never test at the same time.
   etag="$(curl -sS -D - -o /dev/null -b "$jar" "${LOCAL}/api/schedules" | tr -d '\r' | awk -F': ' 'tolower($1)=="etag"{print $2}')"
