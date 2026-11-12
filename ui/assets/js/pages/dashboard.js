@@ -1,7 +1,7 @@
 /* Dashboard: fleet summary, node cards, comparison chart, recent results and alerts. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
   var state = { metric: 'down', mode: 'abs', hidden: {} };
 
   ST.sevInfo = function (sev) {

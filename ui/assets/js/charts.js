@@ -1,8 +1,8 @@
 /* Small dependency-free SVG chart kit: line/area, bar, heatmap, sparkline and an illustrative map. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, svg = U.svg;
-  var C = (ST.charts = {});
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, svg = U.svg;
+  var C = /** @type {any} */ (ST.charts = {});
 
   function niceStep(span, count) {
     var raw = span / Math.max(1, count), mag = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / mag;
@@ -257,16 +257,16 @@
     var el = h('div', { class: 'map-canvas', role: 'region', 'aria-label': 'Map of connection locations' });
     host.appendChild(el);
     var pins = (o.pins || []).filter(function (p) { return Number.isFinite(+p.lat) && Number.isFinite(+p.lon); });
-    var map = L.map(el, { zoomControl: true, attributionControl: true, worldCopyJump: false, minZoom: 2 });
+    var map = (/** @type {any} */ (window)).L.map(el, { zoomControl: true, attributionControl: true, worldCopyJump: false, minZoom: 2 });
     var meta = document.querySelector('meta[name="map-tiles"]'), url = meta ? meta.getAttribute('content') : '';
-    if (url) L.tileLayer(url, { maxZoom: 18, attribution: '© <a href="https://www.openstreetmap.org/copyright" rel="noopener noreferrer" target="_blank">OpenStreetMap</a> contributors' }).addTo(map);
+    if (url) (/** @type {any} */ (window)).L.tileLayer(url, { maxZoom: 18, attribution: '© <a href="https://www.openstreetmap.org/copyright" rel="noopener noreferrer" target="_blank">OpenStreetMap</a> contributors' }).addTo(map);
     map.attributionControl.setPrefix(false); // the OpenStreetMap credit stays; the Leaflet prefix only crowds the corner
     var bounds = [];
     pins.forEach(function (pin) {
       var colors = pin.colors && pin.colors.length ? pin.colors : ['var(--accent)'];
       var dot = h('span', { class: 'map-pin' }, colors.map(function (c) { return h('i', { style: { background: c } }); }));
-      var icon = L.divIcon({ html: dot.outerHTML, className: 'map-pin-wrap', iconSize: [14 + colors.length * 6, 20], iconAnchor: [(14 + colors.length * 6) / 2, 10] });
-      var marker = L.marker([pin.lat, pin.lon], { icon: icon, keyboard: true, title: pin.label + ': ' + pin.names, alt: pin.label }).addTo(map);
+      var icon = (/** @type {any} */ (window)).L.divIcon({ html: dot.outerHTML, className: 'map-pin-wrap', iconSize: [14 + colors.length * 6, 20], iconAnchor: [(14 + colors.length * 6) / 2, 10] });
+      var marker = (/** @type {any} */ (window)).L.marker([pin.lat, pin.lon], { icon: icon, keyboard: true, title: pin.label + ': ' + pin.names, alt: pin.label }).addTo(map);
       var body = h('div', { class: 'map-tip' }, h('b', null, pin.label), (pin.tip || []).map(function (t) { return h('div', null, h('span', { class: 'dot', style: { background: t.color } }), ' ' + t.label + ' ', h('span', { class: 'mono' }, t.value)); }));
       marker.bindTooltip(body, { direction: 'top', offset: [0, -8] });
       marker.on('keypress', function () { marker.openTooltip(); });
@@ -280,7 +280,7 @@
     return map;
   }
   C.map = function (host, o) {
-    if (!ST.demo && window.L) return leafletMap(host, o);
+    if (!ST.demo && (/** @type {any} */ (window)).L) return leafletMap(host, o);
     U.clear(host); host.classList.add('map');
     var W = 360, H = 620, lon0 = 101.5, lon1 = 110.2, lat0 = 8, lat1 = 23.8;
     var P = function (lat, lon) { return [(lon - lon0) / (lon1 - lon0) * W, (lat1 - lat) / (lat1 - lat0) * H]; };

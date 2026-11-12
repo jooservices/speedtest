@@ -1,7 +1,7 @@
 /* ISP list, comparison and trend. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt;
   var state = { selected: null, compare: [], remote: null, trendRevision: 0, trendController: null };
 
   function mean(a) { return a.length ? a.reduce(function (s, v) { return s + v; }, 0) / a.length : null; }
