@@ -287,7 +287,7 @@
         if (rule.nodes !== 'all' && rule.nodes.indexOf(node.id) < 0) return;
         var streak = 0, open = null, prevIp = null;
         (byNode[node.id] || []).forEach(function (r) {
-          if (r.status === 'failed' && r.failureClass === 'rate_limited') return;
+          if (r.status === 'failed' && (r.failureClass === 'rate_limited' || rule.metric !== 'failed')) return;
           var before = prevIp, hit = ruleMatch(rule, r, node, prevIp);
           prevIp = r.ip;
           if (hit) {
@@ -634,6 +634,46 @@
           })();
         });
       });
+    };
+    ST.notificationEvents = function () { return API.request('/api/notifications/events').then(function (r) { return r.data; }); };
+    ST.sendEventTemplateTest = function (key, channel) {
+      var path = '/api/notifications/events/' + encodeURIComponent(key) + '/tests/' + encodeURIComponent(channel);
+      return API.request(path, { method: 'POST', idempotencyKey: API.key() }).then(function (queued) {
+        var started = Date.now(), deliveryPath = '/api/notifications/deliveries/' + encodeURIComponent(queued.data.id);
+        return new Promise(function (resolve, reject) {
+          (function poll() {
+            API.request(deliveryPath).then(function (reply) {
+              var delivery = reply.data;
+              if (delivery.status === 'sent' || delivery.status === 'failed') { resolve(delivery); return; }
+              if (Date.now() - started > 30000) { resolve({ status: 'failed', error: 'no answer from the center in time' }); return; }
+              setTimeout(poll, 1000);
+            }, reject);
+          })();
+        });
+      });
+    };
+    ST.updateNotificationEvent = function (key, patch) {
+      return API.request('/api/notifications/events/' + encodeURIComponent(key), { method: 'PATCH', body: patch }).then(function (r) { return r.data; });
+    };
+    ST.notificationNodeEnabled = function (key, node) {
+      var path = '/api/notifications/events/' + encodeURIComponent(key) + '/nodes/' + encodeURIComponent(node);
+      return API.request(path).then(function (r) { return r.data.enabled; });
+    };
+    ST.setNotificationNodeEnabled = function (key, node, enabled) {
+      var path = '/api/notifications/events/' + encodeURIComponent(key) + '/nodes/' + encodeURIComponent(node);
+      return API.request(path, { method: 'PUT', body: { enabled: !!enabled } }).then(function (r) { return r.data; });
+    };
+    ST.notificationTemplate = function (key, channel) {
+      return API.request('/api/notifications/templates/' + encodeURIComponent(key) + '/' + encodeURIComponent(channel)).then(function (r) { return r.data; });
+    };
+    ST.saveNotificationTemplate = function (key, channel, body) {
+      return API.request('/api/notifications/templates/' + encodeURIComponent(key) + '/' + encodeURIComponent(channel), { method: 'PUT', body: { body: body } }).then(function (r) { return r.data; });
+    };
+    ST.previewNotificationTemplate = function (key, channel, body) {
+      return API.request('/api/notifications/templates/' + encodeURIComponent(key) + '/' + encodeURIComponent(channel) + '/previews', { method: 'POST', body: { body: body } }).then(function (r) { return r.data; });
+    };
+    ST.resetNotificationTemplate = function (key, channel) {
+      return API.request('/api/notifications/templates/' + encodeURIComponent(key) + '/' + encodeURIComponent(channel) + '/resets', { method: 'POST' }).then(function (r) { return r.data; });
     };
     // Follows an installation or removal job. Progress arrives as server-sent events; if the stream drops after the job has
     // ended, its final state is read instead. onEvent receives {id, message, pct, status}; the last call has a terminal status.

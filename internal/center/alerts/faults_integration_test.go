@@ -180,6 +180,12 @@ func TestAlertDatabaseFailuresArePropagatedIntegration(t *testing.T) {
 	}
 	for name, op := range ops {
 		t.Run(name, func(t *testing.T) {
+			// Subtests share fixtures; restore the IP signal so drain/result paths stay stable regardless of map order.
+			if name == "drain" || name == "result" || name == "result-timestamp-fallback" {
+				if _, err := p.Exec(ctx, `UPDATE ip_change_signals SET consumed_at=NULL WHERE result_id=$1`, resultID); err != nil {
+					t.Fatal(err)
+				}
+			}
 			for at := 1; at < 100; at++ {
 				tx, err := p.Begin(ctx)
 				if err != nil {
