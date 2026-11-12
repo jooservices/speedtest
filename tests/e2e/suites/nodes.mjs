@@ -349,7 +349,7 @@ export function nodesSuite(T, ctx) {
       seedSparseTrendFixture(T);
       try {
         await T.open('#/', 'Dashboard');
-        await T.choose(page.getByLabel('Engine'), 'librespeed');
+        await T.choose(page.getByLabel('Engine', { exact: true }), 'librespeed');
         await T.settled();
         const dashboard = page.locator('.card').filter({ hasText: 'Compare connections' }).first();
         const dashboardNote = dashboard.locator('.callout').filter({ hasText: 'Not enough data yet' });
@@ -358,12 +358,12 @@ export function nodesSuite(T, ctx) {
         assert.ok(!noteText.includes('VM4 · VNPT Home 2'), 'three valid measurements do not show a sparse warning');
         for (const name of ['VM1', 'VM2', 'VM3']) await dashboard.locator('.legend button').filter({ hasText: name }).click();
         assert.equal(await dashboard.locator('.callout').filter({ hasText: 'Not enough data yet' }).count(), 0, 'hidden sparse dashboard series do not keep the warning visible');
-        await T.choose(page.getByLabel('Engine'), '');
+        await T.choose(page.getByLabel('Engine', { exact: true }), '');
         await T.settled();
         assert.equal(await dashboard.locator('.callout').filter({ hasText: 'Not enough data yet' }).count(), 0, 'the primary-engine filter excludes sparse LibreSpeed measurements');
 
         await T.open('#/stats', 'Statistics');
-        await T.choose(page.getByLabel('Engine'), 'librespeed');
+        await T.choose(page.getByLabel('Engine', { exact: true }), 'librespeed');
         await T.settled();
         const trend = page.locator('.card').filter({ hasText: 'Trend' }).first();
         const statsNote = trend.locator('.callout').filter({ hasText: 'Not enough data yet' });
@@ -400,7 +400,7 @@ export function nodesSuite(T, ctx) {
         const apiText = await apiNote.innerText();
         assert.ok(apiText.includes('One bucket fixture: 3 samples in 1 plotted daily bucket'), `API mode reports raw samples and plotted buckets: ${apiText}`);
         assert.ok(apiText.includes('Two bucket fixture: 5 samples in 2 plotted daily buckets'), `API mode handles two occupied buckets: ${apiText}`);
-        await page.getByRole('row').filter({ hasText: 'One bucket fixture' }).locator('td').nth(1).click();
+        await T.summaryRow('One bucket fixture').locator('td').nth(1).click();
         await page.getByRole('heading', { name: /One bucket fixture/ }).waitFor();
         await T.open('#/stats', 'Statistics');
 

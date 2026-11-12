@@ -116,11 +116,11 @@ export function dashboardSuite(T, ctx) {
         await T.open('#/', 'Dashboard');
         await T.choose(page.locator('#topbar select').first(), '24h');
         await T.settled();
-        await T.choose(page.getByLabel('Engine'), 'librespeed');
+        await T.choose(page.getByLabel('Engine', { exact: true }), 'librespeed');
         await T.settled();
         await T.see('Download vs. expected', page.locator('#view'));
         await T.eventually(async () => {
-          const cards = page.locator('.stat'), values = await cards.locator('.delta').allInnerTexts();
+          const cards = page.locator('.grid.cols-5 .stat'), values = await cards.locator('.delta').allInnerTexts();
           return await cards.count() === 5 && values.length === 5 && values.every(value => value !== 'Loading comparison…');
         }, 'the dashboard comparison has loaded');
         await assertKpi(T, 'Download vs. expected', '80%', '▲ 33.3%');
@@ -145,7 +145,7 @@ export function dashboardSuite(T, ctx) {
         cleanupKpiFixture(T);
         await page.goto(T.url('#/'));
         await T.heading('Dashboard').waitFor();
-        await T.choose(page.getByLabel('Engine'), '');
+        await T.choose(page.getByLabel('Engine', { exact: true }), '');
         await T.settled();
         await T.choose(page.locator('#topbar select').first(), '7d');
       }
@@ -334,13 +334,16 @@ export function dashboardSuite(T, ctx) {
         T.db(`UPDATE results SET status='ok',down_mbps=100,up_mbps=50,ping_ms=10,error=NULL,failure_class='other',
           server_id=1,server='{"name":"Fixture"}'::jsonb,ip=(SELECT ip FROM ip_addresses LIMIT 1)
           WHERE id='${ids[0]}'; DELETE FROM results WHERE id='${ids[2]}'`);
-        await page.reload();
-        await page.waitForFunction(() => ST.remote.status === 'ready');
-        await T.open('#/', 'Dashboard');
-        await T.choose(page.locator('#topbar select').first(), '6h');
-        await T.settled();
+        // The center shares one dashboard snapshot for 5 seconds, so reload until the KPI reflects the edit.
         const mixedKPI = page.locator('.stat').filter({ hasText: 'Tests succeeded' });
-        assert.match(await mixedKPI.innerText(), /100\.0%[\s\S]*1 rate-limited test excluded from success rate/);
+        await T.eventually(async () => {
+          await page.reload();
+          await page.waitForFunction(() => ST.remote.status === 'ready');
+          await T.open('#/', 'Dashboard');
+          await T.choose(page.locator('#topbar select').first(), '6h');
+          await T.settled();
+          return /100\.0%[\s\S]*1 rate-limited test excluded from success rate/.test(await mixedKPI.innerText());
+        }, 'the mixed dashboard KPI shows one eligible success and the excluded rate limit', 20000);
         await T.open('#/stats', 'Statistics');
         await T.choose(page.locator('#topbar select').first(), '6h');
         await T.settled();

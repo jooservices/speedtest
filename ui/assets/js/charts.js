@@ -215,6 +215,8 @@
       root.appendChild(ax);
       var tip;
       rows.forEach(function (r, ri) {
+        var rowEl = svg('g', { role: 'row', 'aria-label': r });
+        root.appendChild(rowEl);
         cols.forEach(function (c, ci) {
           var v = o.values[ri][ci], idx = v == null ? -1 : Math.min(6, Math.floor((v - min) / (max - min || 1) * 6.999));
           if (o.invert && idx >= 0) idx = 6 - idx;
@@ -226,7 +228,7 @@
           rect.addEventListener('focus', show);
           rect.addEventListener('mouseleave', function () { tip.hide(); });
           rect.addEventListener('blur', function () { tip.hide(); });
-          root.appendChild(rect);
+          rowEl.appendChild(rect);
         });
       });
       host.appendChild(root); tip = makeTooltip(host);

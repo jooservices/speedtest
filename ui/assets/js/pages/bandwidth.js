@@ -186,9 +186,11 @@
         { key: 'up', label: 'Up', num: true, render: function (r) { return F.bytes(r.bytesUp); } },
         { key: 'total', label: 'Total', num: true, render: function (r) { return F.bytes(r.totalBytes); } }], rows: series }));
     }
-    root.appendChild(U.card('Bandwidth', 'Measured download and upload bytes remain separate by node, engine and recorded ISP. Calendar buckets use UTC.', host,
-      [U.select([{ value: 'day', label: 'By day' }, { value: 'week', label: 'By week' }, { value: 'month', label: 'By month' }], group, function (v) { usageGroup = v; ST.refresh(); }),
-        U.select([{ value: '', label: 'Any ISP' }].concat(ST.ispOptions()), usageISP, function (value) { usageISP = value; usageCache = {}; ST.refresh(); })]));
+    var groupSelect = U.select([{ value: 'day', label: 'By day' }, { value: 'week', label: 'By week' }, { value: 'month', label: 'By month' }], group, function (v) { usageGroup = v; ST.refresh(); });
+    var ispSelect = U.select([{ value: '', label: 'Any ISP' }].concat(ST.ispOptions()), usageISP, function (value) { usageISP = value; usageCache = {}; ST.refresh(); });
+    groupSelect.setAttribute('aria-label', 'Bandwidth period');
+    ispSelect.setAttribute('aria-label', 'Bandwidth ISP');
+    root.appendChild(U.card('Bandwidth', 'Measured download and upload bytes remain separate by node, engine and recorded ISP. Calendar buckets use UTC.', host, [groupSelect, ispSelect]));
   };
 
   function readBudgets(done) {
