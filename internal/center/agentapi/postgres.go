@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -88,39 +89,101 @@ func jsonValue(value any) any {
 	}
 	return string(data)
 }
+
+var resultColumns = [...]string{
+	"id", "node_id", "ts", "status", "down_mbps", "up_mbps", "ping_ms", "jitter_ms", "down_latency_ms", "up_latency_ms",
+	"loss_percent", "server_id", "ip", "threads", "bytes_down", "bytes_up", "duration_seconds", "error", "manual", "raw",
+	"loaded_down", "loaded_up", "server", "engine_isp", "engine_result_id", "engine_result_url", "engine_ip", "warnings", "engine",
+	"pinned_server_id_at_test", "server_selection_known", "failure_class",
+}
+
+const resultInsertQuery = `INSERT INTO results (
+	id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,down_latency_ms,up_latency_ms,
+	loss_percent,server_id,ip,threads,bytes_down,bytes_up,duration_seconds,error,manual,raw,
+	loaded_down,loaded_up,server,engine_isp,engine_result_id,engine_result_url,engine_ip,warnings,engine,
+	pinned_server_id_at_test,server_selection_known,failure_class
+) VALUES (
+	$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,
+	$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32
+) ON CONFLICT(id) DO NOTHING`
+
 func (r Result) values(node string) []any {
 	ts, _ := time.Parse(time.RFC3339Nano, r.TS)
 	class := r.FailureClass
 	if class == "" {
 		class = "other"
 	}
-	return []any{r.ID, node, ts, r.Status, r.Down, r.Up, r.Ping, r.Jitter, r.DLat, r.ULat, r.Loss, r.ServerID, r.IP, r.Threads, r.BytesDown, r.BytesUp, r.Duration, r.Error, r.Manual, jsonValue(r.Raw), jsonValue(r.LoadedDown), jsonValue(r.LoadedUp), jsonValue(r.Server), r.EngineISP, r.EngineResultID, r.EngineResultURL, r.EngineIP, jsonValue(r.Warnings), resultEngine(r.Engine), class}
+	return []any{r.ID, node, ts, r.Status, r.Down, r.Up, r.Ping, r.Jitter, r.DLat, r.ULat, r.Loss, r.ServerID, r.IP, r.Threads, r.BytesDown, r.BytesUp, r.Duration, r.Error, r.Manual, jsonValue(r.Raw), jsonValue(r.LoadedDown), jsonValue(r.LoadedUp), jsonValue(r.Server), r.EngineISP, r.EngineResultID, r.EngineResultURL, r.EngineIP, jsonValue(r.Warnings), resultEngine(r.Engine), r.PinnedServerID, r.ServerSelectionKnown, class}
 }
 
-const resultInsertQuery = `INSERT INTO results (
-	id, node_id, ts, status, down_mbps, up_mbps, ping_ms, jitter_ms, down_latency_ms, up_latency_ms,
-	loss_percent, server_id, ip, threads, bytes_down, bytes_up, duration_seconds, error, manual, raw,
-	loaded_down, loaded_up, server, engine_isp, engine_result_id, engine_result_url, engine_ip, warnings, engine, failure_class
-) VALUES (
-	$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15,
-	$16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30
-) ON CONFLICT(id) DO NOTHING`
+func resolveMissingServerID(ctx context.Context, tx pgx.Tx, node string, result *Result) error {
+	if result.ServerID != nil || result.Server == nil || result.Server.Host == "" {
+		return nil
+	}
+	var id *int64
+	err := tx.QueryRow(ctx, `SELECT CASE WHEN count(*)=1 THEN min(server_id) END FROM (
+		SELECT (entry->>'id')::bigint AS server_id FROM node_engine_servers
+		CROSS JOIN LATERAL jsonb_array_elements(servers) AS entry
+		WHERE node_id=$1 AND engine=$2 AND (
+			($3<>'' AND entry->>'endpoint'=$3) OR
+			($3='' AND lower(entry->>'host')=lower($4))
+		)
+	) matches`, node, resultEngine(result.Engine), result.Server.Endpoint, result.Server.Host).Scan(&id)
+	if err != nil || id == nil {
+		return err
+	}
+	serverID := int(*id)
+	result.ServerID = &serverID
+	result.Server.ID = &serverID
+	return nil
+}
 
-const resultReplayQuery = `SELECT
-	id IS NOT DISTINCT FROM $1 AND node_id IS NOT DISTINCT FROM $2 AND ts IS NOT DISTINCT FROM $3 AND
-	status IS NOT DISTINCT FROM $4 AND down_mbps IS NOT DISTINCT FROM $5 AND up_mbps IS NOT DISTINCT FROM $6 AND
-	ping_ms IS NOT DISTINCT FROM $7 AND jitter_ms IS NOT DISTINCT FROM $8 AND down_latency_ms IS NOT DISTINCT FROM $9 AND
-	up_latency_ms IS NOT DISTINCT FROM $10 AND loss_percent IS NOT DISTINCT FROM $11 AND server_id IS NOT DISTINCT FROM $12 AND
-	ip IS NOT DISTINCT FROM $13 AND threads IS NOT DISTINCT FROM $14 AND bytes_down IS NOT DISTINCT FROM $15 AND
-	bytes_up IS NOT DISTINCT FROM $16 AND duration_seconds IS NOT DISTINCT FROM $17 AND error IS NOT DISTINCT FROM $18 AND
-	manual IS NOT DISTINCT FROM $19 AND raw IS NOT DISTINCT FROM $20 AND loaded_down IS NOT DISTINCT FROM $21 AND
-	loaded_up IS NOT DISTINCT FROM $22 AND server IS NOT DISTINCT FROM $23 AND engine_isp IS NOT DISTINCT FROM $24 AND
-	engine_result_id IS NOT DISTINCT FROM $25 AND engine_result_url IS NOT DISTINCT FROM $26 AND engine_ip IS NOT DISTINCT FROM $27 AND
-	warnings IS NOT DISTINCT FROM $28 AND engine IS NOT DISTINCT FROM $29 AND
-	(failure_class IS NOT DISTINCT FROM $30 OR (failure_class = 'other' AND $31::boolean))
-FROM results WHERE id=$1`
+func alignServerIdentityWithStoredResult(ctx context.Context, tx pgx.Tx, node string, result *Result) error {
+	if result.Server == nil || result.Server.Host == "" {
+		return nil
+	}
+	var owner string
+	var serverID *int
+	var endpoint, host *string
+	err := tx.QueryRow(ctx, `SELECT node_id::text,server_id,server->>'endpoint',server->>'host' FROM results WHERE id=$1`, result.ID).Scan(&owner, &serverID, &endpoint, &host)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && owner != node {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if result.Server.Endpoint != "" && endpoint != nil && *endpoint == result.Server.Endpoint ||
+		result.Server.Endpoint == "" && host != nil && strings.EqualFold(*host, result.Server.Host) {
+		result.ServerID, result.Server.ID = serverID, serverID
+	}
+	return nil
+}
+
+func resultReplayMatches(ctx context.Context, tx pgx.Tx, node string, result *Result, alignServer bool) (bool, error) {
+	if alignServer {
+		if err := alignServerIdentityWithStoredResult(ctx, tx, node, result); err != nil {
+			return false, err
+		}
+	}
+	args := result.values(node)
+	comparisons := make([]string, len(resultColumns))
+	for i, column := range resultColumns {
+		parameter := fmt.Sprintf("$%d", i+1)
+		comparisons[i] = column + " IS NOT DISTINCT FROM " + parameter
+		if column == "failure_class" && result.classOmitted {
+			comparisons[i] = "(" + comparisons[i] + " OR (failure_class = 'other' AND $33::boolean))"
+		}
+	}
+	var identical bool
+	if result.classOmitted {
+		args = append(args, true)
+	}
+	err := tx.QueryRow(ctx, "SELECT "+strings.Join(comparisons, " AND ")+" FROM results WHERE id=$1", args...).Scan(&identical)
+	return identical, err
+}
 
 func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool, error) {
+	serverIdentityMissing := r.ServerID == nil && r.Server != nil && r.Server.Host != ""
 	tx, err := s.Pool.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -136,19 +199,20 @@ func (s *Postgres) SaveResult(ctx context.Context, node string, r Result) (bool,
 			return false, err
 		}
 	}
+	if err = resolveMissingServerID(ctx, tx, node, &r); err != nil {
+		return false, err
+	}
 	args := r.values(node)
 	tag, err := tx.Exec(ctx, resultInsertQuery, args...)
 	if err != nil {
 		return false, err
 	}
 	if tag.RowsAffected() == 0 {
-		var identical bool
 		// A new READ COMMITTED statement sees a concurrent insert after ON CONFLICT
 		// waits for it. Compare every stored field, never return foreign row data.
-		args = append(args, r.classOmitted)
-		err = tx.QueryRow(ctx, resultReplayQuery, args...).Scan(&identical)
-		if err != nil {
-			return false, err
+		identical, compareErr := resultReplayMatches(ctx, tx, node, &r, serverIdentityMissing)
+		if compareErr != nil {
+			return false, compareErr
 		}
 		if !identical {
 			return false, ErrConflict
@@ -175,7 +239,9 @@ func (s *Postgres) Config(ctx context.Context, node string) (map[string]any, err
 	var primary string
 	err := s.Pool.QueryRow(ctx, `SELECT n.id::text,n.name,n.expected_down_mbps,n.expected_up_mbps,n.threads,n.server_id,n.binding_interface,host(n.binding_source_ip),n.auto_update,n.config_revision,s.interval_minutes,s.offset_minutes,(s.enabled AND n.enabled),(SELECT sum(e.revision) FROM engine_schedules e WHERE e.node_id=n.id),
  COALESCE((SELECT jsonb_object_agg(key,value) FROM settings WHERE key IN ('engine','quietStart','quietEnd','timezone','agentRelease') AND value IS NOT NULL), '{}'::jsonb),n.primary_engine,
- (SELECT jsonb_agg(jsonb_build_object('engine',e.engine,'interval',e.interval_minutes,'offset',e.offset_minutes,'enabled',e.enabled AND n.enabled) ORDER BY e.engine) FROM engine_schedules e WHERE e.node_id=n.id)
+ (SELECT jsonb_agg(jsonb_build_object('engine',e.engine,'interval',e.interval_minutes,'offset',e.offset_minutes,'enabled',e.enabled AND n.enabled,
+   'serverId',COALESCE(to_jsonb(ns.pinned_server_id),'"auto"'::jsonb)) ORDER BY e.engine)
+   FROM engine_schedules e LEFT JOIN node_engine_servers ns ON ns.node_id=e.node_id AND ns.engine=e.engine WHERE e.node_id=n.id)
  FROM nodes n JOIN engine_schedules s ON s.node_id=n.id AND s.engine=n.primary_engine WHERE n.id=$1`, node).Scan(&id, &name, &down, &up, &threads, &server, &iface, &source, &autoUpdate, &revision, &interval, &offset, &enabled, &scheduleRevision, &settings, &primary, &engineSchedules)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
@@ -200,7 +266,7 @@ func (s *Postgres) Config(ctx context.Context, node string) (map[string]any, err
 	if server != nil {
 		serverValue = *server
 	}
-	return map[string]any{"revision": fmt.Sprintf("%d.%d", revision, scheduleRevision), "schedules": json.RawMessage(engineSchedules), "name": name, "expectedDown": down, "expectedUp": up,
+	return map[string]any{"revision": fmt.Sprintf("%d.%d", revision, scheduleRevision), "schedules": json.RawMessage(engineSchedules), "serverSelectionSnapshots": true, "name": name, "expectedDown": down, "expectedUp": up,
 		"schedule": map[string]any{"interval": interval, "offset": offset, "enabled": enabled},
 		"quiet":    map[string]any{"quietStart": defaults["quietStart"], "quietEnd": defaults["quietEnd"], "timezone": defaults["timezone"]},
 		"engine":   primary, "threads": threads, "server": serverValue, "binding": map[string]any{"iface": iface, "sourceIp": source}, "autoUpdate": autoUpdate, "release": defaults["agentRelease"]}, nil
@@ -245,13 +311,17 @@ func (s *Postgres) publishReleaseEvents(ctx context.Context, tx pgx.Tx, node, ag
 	return nil
 }
 
-const commandColumns = `id::text,node_id::text,type,version,status,created_at,acked_at,phase,pct,result_id::text,error`
+const commandColumns = `id::text,node_id::text,type,engine,version,status,created_at,acked_at,phase,pct,result_id::text,error,ack_payload_sha256`
 
 type scanner interface{ Scan(...any) error }
 
 func scanCommand(row scanner) (Command, error) {
 	var c Command
-	err := row.Scan(&c.ID, &c.NodeID, &c.Type, &c.Version, &c.Status, &c.CreatedAt, &c.AckedAt, &c.Phase, &c.Pct, &c.ResultID, &c.Error)
+	var engine *string
+	err := row.Scan(&c.ID, &c.NodeID, &c.Type, &engine, &c.Version, &c.Status, &c.CreatedAt, &c.AckedAt, &c.Phase, &c.Pct, &c.ResultID, &c.Error, &c.AckDigest)
+	if engine != nil {
+		c.Engine = *engine
+	}
 	c.CreatedAt = c.CreatedAt.UTC()
 	if c.AckedAt != nil {
 		utc := c.AckedAt.UTC()
@@ -288,6 +358,13 @@ func (s *Postgres) Ack(ctx context.Context, node, id string, a Ack) (Command, er
 	if err != nil {
 		return Command{}, err
 	}
+	if current.Type == "list_servers" {
+		if a.Status == "succeeded" && a.Servers == nil || a.Status != "succeeded" && a.Servers != nil {
+			return Command{}, ErrInvalid
+		}
+	} else if a.Servers != nil {
+		return Command{}, ErrInvalid
+	}
 	next, err := ApplyAck(current, a)
 	if err != nil {
 		return Command{}, err
@@ -295,13 +372,20 @@ func (s *Postgres) Ack(ctx context.Context, node, id string, a Ack) (Command, er
 	if sameAck(current, next) {
 		return current, nil
 	}
-	next, err = scanCommand(tx.QueryRow(ctx, `UPDATE agent_commands SET status=$3,phase=$4,pct=$5,result_id=$6,error=$7,acked_at=CASE WHEN $3 IN ('succeeded','failed') THEN clock_timestamp() ELSE NULL END WHERE id=$1 AND node_id=$2 RETURNING `+commandColumns, id, node, next.Status, next.Phase, next.Pct, next.ResultID, next.Error))
+	next, err = scanCommand(tx.QueryRow(ctx, `UPDATE agent_commands SET status=$3,phase=$4,pct=$5,result_id=$6,error=$7,ack_payload_sha256=$8,acked_at=CASE WHEN $3 IN ('succeeded','failed') THEN clock_timestamp() ELSE NULL END WHERE id=$1 AND node_id=$2 RETURNING `+commandColumns, id, node, next.Status, next.Phase, next.Pct, next.ResultID, next.Error, next.AckDigest))
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "23503" {
 			return Command{}, ErrInvalid
 		}
 		return Command{}, err
+	}
+	if current.Type == "list_servers" && next.Status == "succeeded" {
+		if _, err = tx.Exec(ctx, `INSERT INTO node_engine_servers(node_id,engine,servers,refreshed_at)
+VALUES($1,$2,$3::jsonb,clock_timestamp()) ON CONFLICT(node_id,engine) DO UPDATE
+SET servers=EXCLUDED.servers,refreshed_at=EXCLUDED.refreshed_at`, node, current.Engine, jsonValue(*a.Servers)); err != nil {
+			return Command{}, err
+		}
 	}
 	if s.Events != nil && next.Type == "update_agent" && (next.Status == "succeeded" || next.Status == "failed") {
 		key, reason := "agent.update_applied", ""

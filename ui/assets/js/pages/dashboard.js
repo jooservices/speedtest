@@ -152,11 +152,15 @@
 
   /* Result detail drawer, shared with the Results page. */
   ST.openResult = function (r) {
-    var n = ST.node(r.nodeId), srv = ST.server(r.serverId), geo = ST.geo(r.ip);
+    var n = ST.node(r.nodeId), srv = r.server || ST.server(r.serverId), geo = ST.geo(r.ip);
+    var usedServerID = r.serverId == null && r.server ? r.server.id : r.serverId;
+    var differsFromPin = r.pinnedServerId != null && usedServerID != null && Number(r.pinnedServerId) !== Number(usedServerID);
     var json = JSON.stringify({ id: r.id, time: new Date(r.ts).toISOString(), node: n && n.name, status: r.status, download_mbps: r.down, upload_mbps: r.up, ping_ms: r.ping, jitter_ms: r.jitter, packet_loss_pct: r.loss, loaded_latency_download_ms: r.dLat, loaded_latency_upload_ms: r.uLat, server: srv.name + ' - ' + srv.city, public_ip: r.ip, threads: r.threads }, null, 2);
     var body = h('div', { class: 'stack' },
       h('div', { class: 'row between' }, h('span', { class: 'row' }, U.dot(ST.nodeColor(n)), h('b', null, ST.nodeTitle(n))), U.statusChip(r.status)),
       r.status === 'failed' ? U.callout(r.error || 'The test could not finish.', 'crit', 'alert') : null,
+      r.warnings && r.warnings.length ? U.callout(r.warnings.join(' '), 'warn', 'alert') : null,
+      differsFromPin ? U.callout('This result used server #' + usedServerID + ' instead of pinned server #' + r.pinnedServerId + '.', 'warn', 'alert') : null,
       r.status !== 'failed' ? h('div', { class: 'grid cols-3' },
         h('div', { class: 'card card-pad' }, h('div', { class: 'muted' }, 'Download'), h('div', { class: 'speed-big tabnum' }, F.speedParts(r.down).v, h('small', null, F.speedParts(r.down).u)), h('div', { class: 'hint' }, F.num(r.down / n.expectedDown * 100, 0) + '% of expected')),
         h('div', { class: 'card card-pad' }, h('div', { class: 'muted' }, 'Upload'), h('div', { class: 'speed-big tabnum' }, F.speedParts(r.up).v, h('small', null, F.speedParts(r.up).u)), h('div', { class: 'hint' }, F.num(r.up / n.expectedUp * 100, 0) + '% of expected')),

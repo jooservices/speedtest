@@ -6,11 +6,11 @@ import { resolve, extname } from 'node:path';
 export function fixture() {
   const ts = new Date().toISOString();
   const node = { id: 'node-contract', name: 'Contract node', label: 'Test connection', provider: 'Fixture', plan: '',
-    expectedDown: 100, expectedUp: 50, threads: 4, server: 'auto', note: '', enabled: true, binding: { iface: '', sourceIp: null }, autoUpdate: false,
+    expectedDown: 100, expectedUp: 50, threads: 4, server: 'auto', ispPlanId: null, note: '', enabled: true, binding: { iface: '', sourceIp: null }, autoUpdate: false,
     colorSlot: 1, interval: 30, offset: 0, host: '', agent: 'test', createdAt: ts, lastSeen: ts, status: 'online',
     latest: null, latestGood: null, currentIp: '203.0.113.9', geo: null, isp: null, updateVersion: null };
   const result = { id: 'a4bbcf7b-8938-4e90-8128-59047d35b087', nodeId: node.id, ts,
-    serverId: 1, threads: 4, ip: '203.0.113.9', status: 'ok', error: null, down: 90, up: 40, ping: 0,
+    serverId: 1, pinnedServerId: null, serverSelectionKnown: false, threads: 4, ip: '203.0.113.9', status: 'ok', error: null, failureClass: 'other', ispId: null, down: 90, up: 40, ping: 0,
     jitter: null, loss: null, dLat: null, uLat: null, bytesDown: 1000, bytesUp: 500, duration: 1,
     manual: false, raw: {}, server: { id: 1, name: 'Fixture server', city: '', sponsor: '' }, geo: null };
   node.latest = result; node.latestGood = result;
@@ -23,7 +23,7 @@ export function fixture() {
     centerUrl: 'http://localhost', geoKeyConfigured: false, enrollKeyConfigured: false, notify };
   const rule = { id: 'rule-fixture', name: 'Slow connection', metric: 'down_pct', op: '<', value: 60, forTests: 3,
     nodes: 'all', severity: 'warn', channels: ['email'], enabled: true };
-  const event = { id: 'event-fixture', ruleId: rule.id, nodeId: node.id, severity: 'warn', ts, resolvedAt: null,
+  const event = { id: 'event-fixture', ruleId: rule.id, nodeId: node.id, ispId: null, severity: 'warn', ts, resolvedAt: null,
     title: rule.name, detail: 'Fixture alert', acked: false };
   const schedules = { rules: { stagger: true, maxConcurrent: 1, quiet: { quietStart: '', quietEnd: '', timezone: 'UTC' } },
     nodes: [{ nodeId: node.id, config: { interval: 30, offset: 0, enabled: true }, nextRun: ts, upcoming: [ts], bytesPerDay: 72000, bytesPerMonth: 2160000 }],
@@ -143,7 +143,7 @@ export async function startServer() {
       }
       if (url.pathname.startsWith('/api/stats/')) {
         const id = data.node.id, summary = { n: 1, mean: 90, median: 90, min: 90, max: 90, p5: 90, p50: 90, p95: 90, p99: 90, std: 0 };
-        const node = { count: 1, ok: 1, failed: 0, successRate: 100, down: summary, up: summary, ping: summary, jitter: summary, loss: summary, ipCount: 1, downPct: 90, upPct: 80, stability: 100 };
+        const node = { count: 1, ok: 1, failed: 0, rateLimited: 0, successRate: 100, down: summary, up: summary, ping: summary, jitter: summary, loss: summary, ipCount: 1, downPct: 90, upPct: 80, stability: 100 };
         const day = new Date().toISOString().slice(0, 10) + 'T00:00:00Z', kind = url.pathname.split('/').pop();
         const body = kind === 'events' ? { items: [], truncated: false }
           : kind === 'summary' ? [{ nodeId: id, current: node, previous: node }]
@@ -191,7 +191,7 @@ export async function startServer() {
       if (url.pathname.startsWith('/api/alerts/events/')) { send(200, envelope(data.event)); return; }
       const lists = {
         '/api/nodes': [data.node], '/api/results': [data.result], '/api/isps': [data.isp], '/api/alerts/rules': [], '/api/alerts/events': [],
-        '/api/audit': [{ id: '7d1c0000-0000-4000-8000-000000000001', ts: '2026-11-05T05:00:00Z', actor: 'owner@example.com', action: 'settings.update', targetType: 'settings', targetId: '', summary: 'Changed settings', remote: '127.0.0.1' }],
+        '/api/audit': [{ id: '7d1c0000-0000-4000-8000-000000000001', ts: '2026-11-05T05:00:00Z', actor: 'owner@example.com', action: 'settings.update', authMethod: 'session', targetType: 'settings', targetId: '', summary: 'Changed settings', remote: '127.0.0.1' }],
         '/api/ip/addresses': [{ nodeId: data.node.id, ip: data.result.ip, first: data.result.ts, last: data.result.ts,
           tests: 1, avgDown: 90, avgUp: 40, geo: null }], '/api/ip/history': []
       };
