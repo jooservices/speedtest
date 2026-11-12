@@ -6,7 +6,7 @@ The project enables `funlen` and `gocyclo` in `.golangci.yml`. The baseline was 
 
 | Check | `go test` build | Integration build | Configured limit |
 | --- | ---: | ---: | ---: |
-| `funlen` lines | 177 | 270 | 271 lines |
+| `funlen` lines | 177 | 281 | 286 lines |
 | `funlen` statements | 79 | 192 | 193 statements |
 | `gocyclo` complexity | 42 | 119 | 120 |
 
