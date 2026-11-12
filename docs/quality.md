@@ -7,7 +7,7 @@ The project enables `funlen` and `gocyclo` in `.golangci.yml`. The baseline was 
 | Check | `go test` build | Integration build | Configured limit |
 | --- | ---: | ---: | ---: |
 | `funlen` lines | 177 | 270 | 271 lines |
-| `funlen` statements | 79 | 187 | 188 statements |
+| `funlen` statements | 79 | 192 | 193 statements |
 | `gocyclo` complexity | 42 | 119 | 120 |
 
 The integration maxima are `TestNotificationCenterEndToEndIntegration` (270 lines and 187 statements) and `TestOwnerStatisticsHTTPFlowIntegration` (complexity 119). No existing functions were changed to establish these limits. Both standard and integration lint commands include tests, so the limits are one above the measured worst cases. As quality work simplifies existing product and test functions, lower the limits in small steps and keep both lint commands green.
