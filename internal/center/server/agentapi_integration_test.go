@@ -538,7 +538,13 @@ func TestAgentIngestionLoad1000PerMinuteIntegration(t *testing.T) {
 	_, token := enrollIngestionNode(t, ctx, service, "load-edge")
 	// The executable now wires IP watching. Use a deterministic warm geo cache
 	// and disable public fallbacks so the load test never contacts real providers.
-	if _, err := pool.Exec(ctx, `INSERT INTO ip_addresses(ip,geo,source,looked_up_at) VALUES ('203.0.113.1','{"city":"fixture"}','fixture',clock_timestamp())`); err != nil {
+	if _, err := pool.Exec(ctx, `WITH fixture_isp AS (
+		INSERT INTO isps(id,asn,organisation,name) VALUES ('30000000-0000-4000-8000-000000000001',64512,'Fixture Network','Fixture Network')
+		RETURNING id
+	)
+	INSERT INTO ip_addresses(ip,geo,source,looked_up_at,isp_id)
+	SELECT '203.0.113.1','{"city":"fixture","country":"ZZ","latitude":1,"longitude":1,"accuracy_radius":25,"asn":64512,"organisation":"Fixture Network"}'::jsonb,
+		'fixture',clock_timestamp(),id FROM fixture_isp`); err != nil {
 		t.Fatal(err)
 	}
 	// Isolate ingestion throughput from optional per-result success notifications.

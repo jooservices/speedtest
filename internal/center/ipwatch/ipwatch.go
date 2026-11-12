@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/geo"
+	"github.com/jooservices/speedtest/internal/center/geo/budget"
 	"github.com/jooservices/speedtest/internal/center/isp"
 )
 
@@ -22,26 +23,53 @@ type Watcher struct {
 	// Reader is the offline reader behind Offline; the center runs its database updaters on it.
 	Reader    *geo.Reader
 	Fallbacks []geo.Fallback
+	Budget    *budget.Broker
+	Providers geo.ProviderConfig
 	// Consensus asks every fallback provider and keeps the majority answer (SPEEDTEST_GEO_CONSENSUS).
 	Consensus bool
 	Logger    *slog.Logger
 }
 
 // Open configures offline and fallback geolocation from the documented env keys.
-func Open(logger *slog.Logger) (*Watcher, func() error, error) {
+func Open(logger *slog.Logger, databases ...budget.DB) (*Watcher, func() error, error) {
+	return open(logger, nil, databases...)
+}
+
+// OpenObserved configures providers with a bounded metrics observer before constructing them.
+func OpenObserved(logger *slog.Logger, database budget.DB, observe func(string, string)) (*Watcher, func() error, error) {
+	return open(logger, observe, database)
+}
+
+func open(logger *slog.Logger, observe func(string, string), databases ...budget.DB) (*Watcher, func() error, error) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	cfg, err := geo.ProviderConfigFromEnv()
 	if err != nil {
 		return nil, nil, err
+	}
+	cfg.Observe = observe
+	var broker *budget.Broker
+	if len(databases) > 0 {
+		broker, err = geo.NewBudgetBroker(cfg, budget.NewPostgresStore(databases[0]))
+		if err != nil {
+			return nil, nil, err
+		}
+		cfg.Budget = broker
 	}
 	providers, err := geo.NewFallbackProviders(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
+	if cfg.IPAPIEnabled {
+		logger.Warn("ip-api free endpoint sends IP addresses over plaintext HTTP and is for non-commercial use only")
+	}
 	reader, err := geo.Open(geo.ConfigFromEnv(), logger)
 	if err != nil {
 		return nil, nil, err
 	}
-	return &Watcher{Offline: reader, Reader: reader, Fallbacks: providers, Consensus: cfg.Consensus, Logger: logger}, reader.Close, nil
+	return &Watcher{Offline: reader, Reader: reader, Fallbacks: providers, Budget: broker, Providers: cfg,
+		Consensus: cfg.Consensus, Logger: logger}, reader.Close, nil
 }
 
 // boundCache retains the inet key already locked by ingestion. Resolver may
@@ -57,6 +85,18 @@ func (c boundCache) Get(ctx context.Context, _ string) (geo.Location, string, bo
 }
 func (c boundCache) Put(ctx context.Context, _ string, l geo.Location, source string) error {
 	return c.Cache.Put(ctx, c.ip, l, source)
+}
+
+func (c boundCache) Merge(ctx context.Context, _ string, location geo.Location, source string) (geo.Location, string, error) {
+	if merger, ok := c.Cache.(interface {
+		Merge(context.Context, string, geo.Location, string) (geo.Location, string, error)
+	}); ok {
+		return merger.Merge(ctx, c.ip, location, source)
+	}
+	if err := c.Cache.Put(ctx, c.ip, location, source); err != nil {
+		return geo.Location{}, "", err
+	}
+	return location, source, nil
 }
 
 type position struct{ id, ip string }
@@ -87,70 +127,9 @@ func setBoundary(ctx context.Context, tx pgx.Tx, node, id, ip string, previous *
 	_, err := tx.Exec(ctx, `INSERT INTO node_ip_history(id,node_id,ts,from_ip,to_ip,from_isp_id,to_isp_id)
  SELECT r.id,r.node_id,r.ts,$2::inet,r.ip,
 	(SELECT isp_id FROM ip_addresses WHERE ip IS NOT DISTINCT FROM $2::inet),
-	(SELECT isp_id FROM ip_addresses WHERE ip = r.ip)
+	(SELECT isp_id FROM ip_addresses WHERE ip=r.ip)
  FROM results r WHERE r.id=$1 AND r.node_id=$3
- ON CONFLICT(id) DO UPDATE SET from_ip=EXCLUDED.from_ip, from_isp_id=EXCLUDED.from_isp_id, to_isp_id=EXCLUDED.to_isp_id`, id, from, node)
-	return err
-}
-
-func cachedLocation(ctx context.Context, tx pgx.Tx, ip string) (geo.Location, bool, bool, error) {
-	var raw []byte
-	var lookedUp, linked bool
-	err := tx.QueryRow(ctx, `SELECT geo, looked_up_at IS NOT NULL, isp_id IS NOT NULL FROM ip_addresses WHERE ip=$1::inet`, ip).Scan(&raw, &lookedUp, &linked)
-	if errors.Is(err, pgx.ErrNoRows) || err == nil && !lookedUp {
-		return geo.Location{}, false, linked, nil
-	}
-	if err != nil {
-		return geo.Location{}, false, false, err
-	}
-	var location geo.Location
-	if err = json.Unmarshal(raw, &location); err != nil {
-		return geo.Location{}, false, false, errors.New("invalid cached geolocation")
-	}
-	return location, true, linked, nil
-}
-
-func (w *Watcher) resolveAndLink(ctx context.Context, tx pgx.Tx, node string, r agentapi.Result, ip string) error {
-	cached, found, linked, err := cachedLocation(ctx, tx, ip)
-	if err != nil {
-		return err
-	}
-	if found && cached.ASN == 0 {
-		if linked {
-			return isp.LinkResult(ctx, tx, r.ID, node, ip)
-		}
-		return nil
-	}
-	if err := isp.LockAddress(ctx, tx, ip); err != nil {
-		return err
-	}
-	resolver := geo.NewResolver(boundCache{Cache: geo.NewPostgresCache(tx), ip: ip}, w.Offline, w.Fallbacks...).WithConsensus(w.Consensus, w.Logger)
-	loc, err := resolver.Lookup(ctx, ip)
-	if err != nil {
-		if !errors.Is(err, geo.ErrNotFound) {
-			return err
-		}
-		w.logger().InfoContext(ctx, "public IP location unavailable", "node_id", node, "result_id", r.ID)
-		return isp.LinkResult(ctx, tx, r.ID, node, ip)
-	}
-	entity, err := isp.LinkAddress(ctx, tx, ip, loc.ASN, loc.Organisation)
-	if err != nil {
-		return err
-	}
-	if entity == nil {
-		// Without an ASN identity there is nothing to link on either row.
-		return nil
-	}
-	return isp.LinkResult(ctx, tx, r.ID, node, ip)
-}
-
-func bumpAddressStats(ctx context.Context, tx pgx.Tx, node, ip string, ts time.Time, r agentapi.Result) error {
-	_, err := tx.Exec(ctx, `INSERT INTO node_ip_addresses(node_id,ip,tests,first_seen,last_seen,speed_tests,down_sum,up_sum)
- VALUES ($1,$2,1,$3,$3,CASE WHEN $4 THEN 1 ELSE 0 END,CASE WHEN $4 THEN $5::numeric ELSE 0 END,CASE WHEN $4 THEN $6::numeric ELSE 0 END)
- ON CONFLICT(node_id,ip) DO UPDATE SET tests=node_ip_addresses.tests+1,
-	first_seen=least(node_ip_addresses.first_seen,EXCLUDED.first_seen), last_seen=greatest(node_ip_addresses.last_seen,EXCLUDED.last_seen),
-	speed_tests=node_ip_addresses.speed_tests+EXCLUDED.speed_tests, down_sum=node_ip_addresses.down_sum+EXCLUDED.down_sum, up_sum=node_ip_addresses.up_sum+EXCLUDED.up_sum`,
-		node, ip, ts, r.Status != "failed", r.Down, r.Up)
+	 ON CONFLICT(id) DO UPDATE SET from_ip=EXCLUDED.from_ip,from_isp_id=EXCLUDED.from_isp_id,to_isp_id=EXCLUDED.to_isp_id`, id, from, node)
 	return err
 }
 
@@ -160,6 +139,7 @@ func (w *Watcher) AfterResultStored(ctx context.Context, tx pgx.Tx, node string,
 	if r.IP == nil {
 		return nil
 	}
+	// Read the stored timestamp, which has PostgreSQL microsecond precision.
 	var ts time.Time
 	var ip string
 	if err := tx.QueryRow(ctx, `SELECT ts,host(ip) FROM results WHERE id=$1 AND node_id=$2 AND ip IS NOT NULL`, r.ID, node).Scan(&ts, &ip); err != nil {
@@ -176,7 +156,7 @@ func (w *Watcher) AfterResultStored(ctx context.Context, tx pgx.Tx, node string,
 	if err = bumpAddressStats(ctx, tx, node, ip, ts, r); err != nil {
 		return err
 	}
-	if err = w.resolveAndLink(ctx, tx, node, r, ip); err != nil {
+	if err = w.resolveAndLink(ctx, tx, node, r.ID, ip); err != nil {
 		return err
 	}
 	if err = setBoundary(ctx, tx, node, r.ID, ip, before); err != nil {
@@ -186,17 +166,84 @@ func (w *Watcher) AfterResultStored(ctx context.Context, tx pgx.Tx, node string,
 		if err = setBoundary(ctx, tx, node, after.id, after.ip, &position{id: r.ID, ip: ip}); err != nil {
 			return err
 		}
+	}
+	if after != nil {
 		w.logger().InfoContext(ctx, "late IP observation reconciled without change signal", "node_id", node, "result_id", r.ID)
 		return nil
 	}
 	if before == nil || before.ip == ip {
 		return nil
 	}
+	// The outbox survives restarts; a notification only wakes the consumer. Both
+	// become visible at commit, and neither survives a rolled-back result.
 	if _, err = tx.Exec(ctx, `INSERT INTO ip_change_signals(result_id,node_id,ts,from_ip,to_ip) VALUES ($1,$2,$3,$4,$5)`, r.ID, node, ts, before.ip, ip); err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `SELECT pg_notify('ip_changed',$1)`, r.ID)
 	return err
+}
+
+func bumpAddressStats(ctx context.Context, tx pgx.Tx, node, ip string, ts time.Time, r agentapi.Result) error {
+	_, err := tx.Exec(ctx, `INSERT INTO node_ip_addresses(node_id,ip,tests,first_seen,last_seen,speed_tests,down_sum,up_sum)
+ VALUES ($1,$2,1,$3,$3,CASE WHEN $4 THEN 1 ELSE 0 END,CASE WHEN $4 THEN $5::numeric ELSE 0 END,CASE WHEN $4 THEN $6::numeric ELSE 0 END)
+ ON CONFLICT(node_id,ip) DO UPDATE SET tests=node_ip_addresses.tests+1,
+	first_seen=least(node_ip_addresses.first_seen,EXCLUDED.first_seen), last_seen=greatest(node_ip_addresses.last_seen,EXCLUDED.last_seen),
+	speed_tests=node_ip_addresses.speed_tests+EXCLUDED.speed_tests, down_sum=node_ip_addresses.down_sum+EXCLUDED.down_sum, up_sum=node_ip_addresses.up_sum+EXCLUDED.up_sum`,
+		node, ip, ts, r.Status != "failed", r.Down, r.Up)
+	return err
+}
+
+func cachedLocation(ctx context.Context, tx pgx.Tx, ip string) (geo.Location, bool, bool, error) {
+	var raw []byte
+	var lookedUp, linked bool
+	var source string
+	var lookedUpAt time.Time
+	err := tx.QueryRow(ctx, `SELECT geo,looked_up_at IS NOT NULL,isp_id IS NOT NULL,source,COALESCE(looked_up_at,now()) FROM ip_addresses WHERE ip=$1::inet`, ip).
+		Scan(&raw, &lookedUp, &linked, &source, &lookedUpAt)
+	if errors.Is(err, pgx.ErrNoRows) || err == nil && !lookedUp {
+		return geo.Location{}, false, linked, nil
+	}
+	if err != nil {
+		return geo.Location{}, false, false, err
+	}
+	var location geo.Location
+	if err := json.Unmarshal(raw, &location); err != nil {
+		return geo.Location{}, false, false, errors.New("invalid cached geolocation")
+	}
+	location.AgeDays = max(0, int(time.Since(lookedUpAt).Hours()/24))
+	location.QualityScore = geo.QualityScore(location, source, location.AgeDays)
+	return location, true, linked, nil
+}
+
+func (w *Watcher) resolveAndLink(ctx context.Context, tx pgx.Tx, node, resultID, ip string) error {
+	cached, found, linked, err := cachedLocation(ctx, tx, ip)
+	if err != nil {
+		return err
+	}
+	if found && linked && cached.QualityScore >= geo.QualityThreshold {
+		return isp.LinkResult(ctx, tx, resultID, node, ip)
+	}
+	if err := isp.LockAddress(ctx, tx, ip); err != nil {
+		return err
+	}
+	resolver := geo.NewResolver(boundCache{Cache: geo.NewPostgresCache(tx), ip: ip}, w.Offline, w.Fallbacks...).
+		WithPurpose(budget.Background).WithHighValue(true).WithConsensus(w.Consensus, w.Logger)
+	location, err := resolver.Lookup(ctx, ip)
+	if err != nil {
+		switch {
+		case errors.Is(err, geo.ErrBudgetExhausted):
+			w.logger().InfoContext(ctx, "public IP location lookup deferred until provider quota is available", "node_id", node, "result_id", resultID)
+		case !errors.Is(err, geo.ErrNotFound):
+			return err
+		default:
+			w.logger().InfoContext(ctx, "public IP location unavailable", "node_id", node, "result_id", resultID)
+		}
+		return isp.LinkResult(ctx, tx, resultID, node, ip)
+	}
+	if _, err = isp.LinkAddress(ctx, tx, ip, location.ASN, location.Organisation); err != nil {
+		return err
+	}
+	return isp.LinkResult(ctx, tx, resultID, node, ip)
 }
 
 func (w *Watcher) logger() *slog.Logger {

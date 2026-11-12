@@ -26,6 +26,7 @@ type Telemetry struct {
 	ingestion *prometheus.CounterVec
 	runs      *prometheus.CounterVec
 	success   *prometheus.GaugeVec
+	geo       *prometheus.CounterVec
 }
 
 // New creates an independent registry, including runtime, process and build collectors.
@@ -37,20 +38,41 @@ func New(version string) *Telemetry {
 		ingestion: prometheus.NewCounterVec(prometheus.CounterOpts{Name: "speedtest_results_ingested_total", Help: "Result items by ingestion outcome."}, []string{"status"}),
 		runs:      prometheus.NewCounterVec(prometheus.CounterOpts{Name: "speedtest_job_runs_total", Help: "Completed worker passes by outcome."}, []string{"job", "status"}),
 		success:   prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "speedtest_job_last_success_timestamp_seconds", Help: "Unix time of the last successful worker pass; zero until success."}, []string{"job"}),
+		geo:       prometheus.NewCounterVec(prometheus.CounterOpts{Name: "speedtest_geo_lookups_total", Help: "Online geolocation attempts by provider and bounded outcome."}, []string{"provider", "outcome"}),
 	}
 	build := prometheus.NewGaugeVec(prometheus.GaugeOpts{Name: "speedtest_build_info", Help: "Build and Go version."}, []string{"version", "go_version"})
 	build.WithLabelValues(version, runtime.Version()).Set(1)
-	t.Registry.MustRegister(t.requests, t.duration, t.flight, t.ingestion, t.runs, t.success, build, collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
+	t.Registry.MustRegister(t.requests, t.duration, t.flight, t.ingestion, t.runs, t.success, t.geo, build, collectors.NewGoCollector(), collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}))
 	for _, status := range []string{"accepted", "duplicate", "rejected"} {
 		t.ingestion.WithLabelValues(status)
 	}
-	for _, job := range []string{"retention", "alerts", "notification"} {
+	for _, job := range []string{"retention", "alerts", "notification", "geo_backfill"} {
 		t.success.WithLabelValues(job).Set(0)
 		for _, status := range []string{"success", "error"} {
 			t.runs.WithLabelValues(job, status)
 		}
 	}
+	for _, provider := range []string{"ip-api", "ipinfo-lite", "ipwho", "ipapi-co", "ipgeolocation", "freeipapi", "geojs", "ripestat"} {
+		for _, outcome := range []string{"success", "not_found", "error", "budget_exhausted"} {
+			t.geo.WithLabelValues(provider, outcome)
+		}
+	}
 	return t
+}
+
+// GeoProvider records only known provider and outcome labels to keep cardinality bounded.
+func (t *Telemetry) GeoProvider(provider, outcome string) {
+	switch provider {
+	case "ip-api", "ipinfo-lite", "ipwho", "ipapi-co", "ipgeolocation", "freeipapi", "geojs", "ripestat":
+	default:
+		return
+	}
+	switch outcome {
+	case "success", "not_found", "error", "budget_exhausted":
+	default:
+		outcome = "error"
+	}
+	t.geo.WithLabelValues(provider, outcome).Inc()
 }
 
 // Ingest records one validated batch item outcome, ignoring unsupported labels.
@@ -64,7 +86,7 @@ func (t *Telemetry) Ingest(status string) {
 // Job records a completed worker pass without affecting scheduling or retries.
 func (t *Telemetry) Job(job string, ok bool) {
 	switch job {
-	case "retention", "alerts", "notification":
+	case "retention", "alerts", "notification", "geo_backfill":
 	default:
 		return
 	}

@@ -54,6 +54,78 @@ func TestExtraProvidersMapResponses(t *testing.T) {
 	}
 }
 
+func TestFreeIPAPIGeoJSAndRIPEStat(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/v1/json/8.8.8.8":
+			_, _ = fmt.Fprint(w, `{"ipAddress":"8.8.8.8","countryCode":"US","regionName":"California","cityName":"Mountain View","latitude":37.4,"longitude":-122,"timeZones":["America/Los_Angeles"],"asn":"AS15169","asnOrganization":"Google LLC"}`)
+		case r.URL.Path == "/geo.json" && r.URL.Query().Get("ip") == "8.8.8.8":
+			_, _ = fmt.Fprint(w, `{"ip":"8.8.8.8","country_code":"US","city":"Mountain View","latitude":"37.4","longitude":"-122","accuracy":5,"organization_name":"Google LLC","asn":15169}`)
+		case r.URL.Path == "/ripe" && r.URL.Query().Get("resource") == "8.8.8.8":
+			_, _ = fmt.Fprint(w, `{"data":{"asns":[15169]}}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	cfg := ProviderConfig{Timeout: time.Second, FailureThreshold: 2, BreakerReset: time.Second,
+		FreeIPAPIEnabled: true, FreeIPAPIURL: server.URL + "/api/v1/json", FreeIPAPIRequestsPerMinute: 60,
+		GeoJSEnabled: true, GeoJSURL: server.URL + "/geo.json", GeoJSRequestsPerMinute: 30,
+		RIPEStatEnabled: true, RIPEStatURL: server.URL + "/ripe", RIPEStatRequestsPerMinute: 30}
+	providers, err := NewFallbackProviders(cfg)
+	if err != nil || len(providers) != 3 {
+		t.Fatalf("providers = %d, %v", len(providers), err)
+	}
+	for index, want := range []Location{
+		{City: "Mountain View", Region: "California", Country: "US", Latitude: 37.4, Longitude: -122, TimeZone: "America/Los_Angeles", ASN: 15169, Organisation: "Google LLC"},
+		{City: "Mountain View", Country: "US", Latitude: 37.4, Longitude: -122, AccuracyRadius: 5, Organisation: "Google LLC", ASN: 15169},
+		{ASN: 15169},
+	} {
+		got, err := providers[index].Lookup(context.Background(), "8.8.8.8")
+		if err != nil || got != want {
+			t.Fatalf("%s = %+v, %v; want %+v", providers[index].Source(), got, err, want)
+		}
+	}
+}
+
+func TestParseRIPEStatASNFormsAndFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		wantASN    uint
+		wantErr    bool
+	}{
+		{name: "numeric ASN", body: `{"data":{"asns":[15169]}}`, wantASN: 15169},
+		{name: "text ASN", body: `{"data":{"asns":["AS174"]}}`, wantASN: 174},
+		{name: "invalid ASN before valid ASN", body: `{"data":{"asns":[0,"ASbad","AS64500"]}}`, wantASN: 64500},
+		{name: "no ASN", body: `{"data":{"asns":[]}}`, wantErr: true},
+		{name: "malformed ASN values", body: `{"data":{"asns":[[],"ASbad"]}}`, wantErr: true},
+		{name: "invalid JSON", body: `{`, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseRIPEStat([]byte(tc.body), "")
+			if (err != nil) != tc.wantErr || got.ASN != tc.wantASN {
+				t.Fatalf("parseRIPEStat = (%+v,%v), want ASN %d and error=%v", got, err, tc.wantASN, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestProviderDefaultsMatchQuotaPolicy(t *testing.T) {
+	for _, key := range []string{"IPAPI", "IPINFO", "IPWHO", "FREEIPAPI", "GEOJS", "IPAPICO", "IPGEOLOCATION", "RIPESTAT"} {
+		t.Setenv("SPEEDTEST_GEO_"+key+"_ENABLED", "")
+	}
+	t.Setenv("SPEEDTEST_GEO_IPINFO_TOKEN", "")
+	t.Setenv("SPEEDTEST_GEO_IPGEOLOCATION_KEY", "")
+	cfg, err := ProviderConfigFromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.IPAPIEnabled || cfg.IPInfoEnabled || !cfg.IPWhoEnabled || !cfg.FreeIPAPIEnabled || cfg.GeoJSEnabled ||
+		cfg.IPAPICoEnabled || cfg.IPGeoEnabled || !cfg.RIPEStatEnabled {
+		t.Fatalf("provider defaults do not match the policy: %+v", cfg)
+	}
+}
+
 func TestExtraProviderErrors(t *testing.T) {
 	var body string
 	status := http.StatusOK
@@ -210,6 +282,19 @@ type memoryCache struct {
 	loc    Location
 }
 
+type countedProvider struct {
+	name     string
+	location Location
+	err      error
+	calls    int
+}
+
+func (p *countedProvider) Source() string { return p.name }
+func (p *countedProvider) Lookup(context.Context, string) (Location, error) {
+	p.calls++
+	return p.location, p.err
+}
+
 func (m *memoryCache) Get(context.Context, string) (Location, string, bool, error) {
 	return Location{}, "", false, nil
 }
@@ -224,16 +309,17 @@ func TestConsensusPicksTheMajorityAndFillsGaps(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(&logged, nil))
 	r := NewResolver(cache, nil,
 		fakeProvider{"a", Location{Country: "DE", City: "Berlin"}, nil},
-		fakeProvider{"b", Location{Country: "vn", City: "Hanoi", ASN: 7552}, nil},
+		fakeProvider{"b", Location{Country: "vn", City: "Hanoi"}, nil},
 		fakeProvider{"c", Location{Country: "VN", Organisation: "Viettel", TimeZone: "Asia/Ho_Chi_Minh"}, nil},
 		fakeProvider{"d", Location{}, ErrNotFound},
 		fakeProvider{"e", Location{}, errors.New("boom")},
+		fakeProvider{"ripestat", Location{ASN: 7552}, nil},
 	).WithConsensus(true, logger)
 	got, err := r.Lookup(context.Background(), "1.2.3.4")
 	if err != nil || got.Country != "vn" || got.City != "Hanoi" || got.ASN != 7552 || got.Organisation != "Viettel" || got.TimeZone != "Asia/Ho_Chi_Minh" {
 		t.Fatalf("Lookup() = %+v, %v", got, err)
 	}
-	if cache.source != "consensus:b+c" {
+	if cache.source != "consensus:b+c+ripestat" || got.FieldSources.Country != "b" || got.FieldSources.ASN != "ripestat" {
 		t.Fatalf("source = %q", cache.source)
 	}
 	if !strings.Contains(logged.String(), "disagree") || strings.Contains(logged.String(), "1.2.3.4") {
@@ -249,6 +335,11 @@ func TestConsensusSingleAnswerFailuresAndCancel(t *testing.T) {
 	).WithConsensus(true, nil)
 	if _, err := r.Lookup(context.Background(), "1.2.3.4"); err != nil || cache.source != "b" {
 		t.Fatalf("single answer: %v source=%q", err, cache.source)
+	}
+	asnOnlyCache := &memoryCache{}
+	asnOnly := NewResolver(asnOnlyCache, nil, fakeProvider{"ripestat", Location{ASN: 174}, nil}).WithConsensus(true, nil)
+	if got, err := asnOnly.Lookup(context.Background(), "1.2.3.4"); err != nil || got.ASN != 174 || got.Country != "" || got.FieldSources.ASN != "ripestat" {
+		t.Fatalf("countryless-only ASN consensus = %+v, %v", got, err)
 	}
 	none := NewResolver(nil, nil, fakeProvider{"a", Location{}, ErrNotFound}, fakeProvider{"b", Location{}, ErrNotFound}).WithConsensus(true, nil)
 	if _, err := none.Lookup(context.Background(), "1.2.3.4"); !errors.Is(err, ErrNotFound) {
@@ -270,6 +361,58 @@ func TestConsensusSingleAnswerFailuresAndCancel(t *testing.T) {
 	}
 }
 
+func TestConsensusDefersAllExhaustedProvidersButKeepsAvailableAnswers(t *testing.T) {
+	exhausted := NewResolver(nil, nil,
+		fakeProvider{"a", Location{}, ErrBudgetExhausted},
+		fakeProvider{"b", Location{}, ErrBudgetExhausted},
+	).WithConsensus(true, nil)
+	if _, err := exhausted.Lookup(context.Background(), "1.2.3.4"); !errors.Is(err, ErrBudgetExhausted) {
+		t.Fatalf("all exhausted providers = %v", err)
+	}
+	available := NewResolver(nil, nil,
+		fakeProvider{"a", Location{}, ErrBudgetExhausted},
+		fakeProvider{"b", Location{Country: "US"}, nil},
+	).WithConsensus(true, nil)
+	if got, err := available.Lookup(context.Background(), "1.2.3.4"); err != nil || got.Country != "US" {
+		t.Fatalf("available provider after exhaustion = (%+v,%v)", got, err)
+	}
+}
+
+func TestConsensusUsesIPGeoOnlyForUnresolvedAgreementOrTie(t *testing.T) {
+	cheapA := &countedProvider{name: "ipwho", location: Location{Country: "US", ASN: 64500}}
+	cheapB := &countedProvider{name: "freeipapi", location: Location{Country: "us", City: "Seattle"}}
+	ipgeo := &countedProvider{name: "ipgeolocation", location: Location{Country: "US", AccuracyRadius: 5}}
+	resolver := NewResolver(nil, nil, cheapA, cheapB, ipgeo).WithHighValue(true).WithConsensus(true, nil)
+	if _, err := resolver.Lookup(context.Background(), "8.8.8.8"); err != nil || ipgeo.calls != 0 {
+		t.Fatalf("agreeing cheap providers used ipgeolocation: calls=%d err=%v", ipgeo.calls, err)
+	}
+
+	first := &countedProvider{name: "ipwho", location: Location{Country: "US"}}
+	second := &countedProvider{name: "freeipapi", location: Location{Country: "GB"}}
+	tieResolver := NewResolver(nil, nil, first, second, ipgeo).WithHighValue(true).WithConsensus(true, nil)
+	if _, err := tieResolver.Lookup(context.Background(), "8.8.4.4"); err != nil || ipgeo.calls != 1 {
+		t.Fatalf("unresolved tie did not use ipgeolocation: calls=%d err=%v", ipgeo.calls, err)
+	}
+
+	cheapMiss := &countedProvider{name: "ipwho", err: ErrNotFound}
+	reservedIPGeo := &countedProvider{name: "ipgeolocation", location: Location{Country: "US"}}
+	lowValue := NewResolver(nil, nil, cheapMiss, reservedIPGeo)
+	if _, err := lowValue.Lookup(context.Background(), "8.8.8.8"); !errors.Is(err, ErrNotFound) || reservedIPGeo.calls != 0 {
+		t.Fatalf("lookup-only address spent the ipgeolocation allocation: calls=%d err=%v", reservedIPGeo.calls, err)
+	}
+	highValue := NewResolver(nil, nil, cheapMiss, reservedIPGeo).WithHighValue(true)
+	if _, err := highValue.Lookup(context.Background(), "8.8.8.8"); err != nil || reservedIPGeo.calls != 1 {
+		t.Fatalf("high-value address did not use ipgeolocation after cheap misses: calls=%d err=%v", reservedIPGeo.calls, err)
+	}
+}
+
+func TestPickConsensusKeepsSourceForEmptyProviderAnswer(t *testing.T) {
+	got, source, disagreement := pickConsensus([]sourced{{source: "provider", location: Location{}}})
+	if got != (Location{}) || source != "provider" || disagreement != "" {
+		t.Fatalf("empty answer merge = (%+v,%q,%q)", got, source, disagreement)
+	}
+}
+
 type cancelAfter struct{ cancel context.CancelFunc }
 
 func (c cancelAfter) Source() string { return "cancel" }
@@ -283,9 +426,9 @@ func TestPickConsensusTiesAndFill(t *testing.T) {
 	if loc.Country != "DE" || source != "a" || dis != "DE,FR" {
 		t.Fatalf("tie = %+v %q %q", loc, source, dis)
 	}
-	_, _, dis = pickConsensus([]sourced{{"a", Location{Country: ""}}, {"b", Location{Country: "FR"}}, {"c", Location{Country: "FR"}}})
-	if dis != "none,FR" {
-		t.Fatalf("empty country label = %q", dis)
+	loc, source, dis = pickConsensus([]sourced{{"a", Location{ASN: 174}}, {"b", Location{Country: "FR"}}, {"c", Location{Country: "FR"}}})
+	if dis != "" || loc.Country != "FR" || loc.ASN != 174 || source != "consensus:a+b" {
+		t.Fatalf("countryless ASN affected country vote or was dropped: %+v %q %q", loc, source, dis)
 	}
 	got := fill(Location{}, Location{City: "c", Region: "r", Country: "x", Latitude: 1, Longitude: 2, TimeZone: "z", AccuracyRadius: 5, ASN: 9, Organisation: "o"})
 	if got.City != "c" || got.Region != "r" || got.Country != "x" || got.Latitude != 1 || got.TimeZone != "z" || got.AccuracyRadius != 5 || got.ASN != 9 || got.Organisation != "o" {

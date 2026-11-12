@@ -52,7 +52,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-ALR-03', area: 'alerts', title: 'alerts can be acknowledged, reopened and filtered', covers: 'ack, reopen, ack all, filters', run: S.alerts.activityAcknowledge },
 
     { id: 'SC-SET-01', area: 'settings', title: 'preferences are saved and survive a reload', covers: 'decimals, units, time zone, 12-hour, range, theme', run: S.settings.preferences },
-    { id: 'SC-SET-02', area: 'settings', title: 'speed test and location settings are kept; the licence key is write-only', covers: 'engine, location', run: S.settings.engineAndLocation },
+    { id: 'SC-SET-02', area: 'settings', title: 'speed test and location settings are kept; provider budgets are visible and keys stay write-only', covers: 'engine, location, provider enabled state and daily usage', run: S.settings.engineAndLocation },
     { id: 'SC-SET-03', area: 'settings', title: 'notification secrets are write-only and encrypted', covers: 'secrets', run: S.settings.notificationSecrets },
     { id: 'SC-SET-04', area: 'settings', title: 'a test notification reaches the configured channel', covers: 'webhook test, unset channel refused', run: S.settings.notificationTest },
     { id: 'SC-SET-09', area: 'settings', title: 'notification events and templates can be configured globally and per node', covers: 'event catalog toggles, quality consecutive-test threshold, per-node override, template editor, live preview and reset', run: S.settings.notificationEventCatalog },
