@@ -195,6 +195,21 @@ func TestOwnerResultsExportEmptyAndFailures(t *testing.T) {
 	t.Fatal("handler returned normally")
 }
 
+func TestCompletedExportsPublishReadyEvents(t *testing.T) {
+	store := &fakeOwnerResults{rows: []ownerapi.ResultRow{{Result: map[string]any{"status": "ok"}}, {Result: map[string]any{"status": "failed"}}}}
+	events := &fakeNotificationEvents{}
+	h := newNodeHandler(Options{OwnerResults: store, NotificationEvents: events, NodeCredentials: &fakeNodeCredentialService{}})
+	for _, path := range []string{"/api/export/results.csv", "/api/export/results.json"} {
+		if rec := do(h, http.MethodGet, path, "", ownerRead); rec.Code != http.StatusOK {
+			t.Fatalf("%s export = %d", path, rec.Code)
+		}
+	}
+	if len(events.published) != 2 || events.published[0].key != "platform.export_ready" || events.published[0].payload["format"] != "csv" ||
+		events.published[1].payload["format"] != "json" || events.published[0].payload["count"] != "2" {
+		t.Fatalf("export completion events = %+v", events.published)
+	}
+}
+
 func TestOwnerResultsRouteMatching(t *testing.T) {
 	for path, want := range map[string]bool{"/api/results": true, "/api/results/export.csv": true, "/api/results/" + resultID: true,
 		"/api/results/" + resultID + "/x": false, "/api/resultsx": false, "/api/nodes": false} {

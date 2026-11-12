@@ -1,5 +1,5 @@
 // End-to-end harness: a real command center on a throw-away worktree database, real agents driven by a fake speed test.
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { createServer } from 'node:net';
@@ -110,15 +110,19 @@ export async function startAgent(stack, { name, token, scenario = 'success', bac
     return child;
   };
   let childProcess = spawnAgent(env);
+  const stopProcess = async () => {
+    if (childProcess.exitCode == null && childProcess.signalCode == null) {
+      await new Promise(resolveExit => { childProcess.once('exit', resolveExit); childProcess.kill('SIGTERM'); });
+    }
+  };
   return {
     async restart(options = {}) {
-      if (childProcess.exitCode == null && childProcess.signalCode == null) {
-        await new Promise(resolveExit => { childProcess.once('exit', resolveExit); childProcess.kill('SIGTERM'); });
-      }
+      await stopProcess();
       const nextEnv = { ...env };
       if (options.scenario) nextEnv.SPEEDTEST_OOKLA_ARGS = JSON.stringify(['--scenario', options.scenario]);
       childProcess = spawnAgent(nextEnv);
-    }
+    },
+    stop: stopProcess,
   };
 }
 
@@ -129,6 +133,52 @@ export async function fetchAgentConfig(stack, name) {
   if (!response.ok) throw new Error(`agent config returned HTTP ${response.status}`);
   const body = await response.json();
   return body.data || body;
+}
+
+function agentCredential(name) {
+  const dir = join(out, 'agents', name.replaceAll(/[^A-Za-z0-9]/g, '_'));
+  return readFileSync(join(dir, 'credential'), 'utf8').trim();
+}
+
+async function submitAgentResult(stack, name, result) {
+  const response = await fetch(stack.origin + '/api/agent/results', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${agentCredential(name)}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ results: [result] }),
+  });
+  const body = await response.json();
+  if (!response.ok || body.data?.[0]?.outcome !== 'accepted') {
+    throw new Error(`scheduled test result was rejected (${response.status})`);
+  }
+}
+
+// The first run after enrolment may be a manual run requested by the wizard.
+export async function submitScheduledResult(stack, { name }) {
+  await submitAgentResult(stack, name, {
+      id: randomUUID(), ts: new Date().toISOString(), status: 'ok',
+      down: 123.4, up: 56.7, ping: 3, jitter: 4.2, dLat: null, uLat: null, loss: 0.3,
+      serverId: 1, ip: '203.0.113.10', threads: 4, bytesDown: 1024, bytesUp: 512,
+      duration: 2.3, error: null, manual: false, raw: {}, warnings: [],
+      server: { id: 1, name: 'E2E server', city: 'Hanoi', sponsor: 'E2E ISP', host: 'e2e.example' },
+  });
+}
+
+export async function submitFailedResult(stack, { name }) {
+  await submitAgentResult(stack, name, {
+    id: randomUUID(), ts: new Date().toISOString(), status: 'failed',
+    down: null, up: null, ping: null, jitter: null, dLat: null, uLat: null, loss: null,
+    serverId: null, ip: null, threads: 1, bytesDown: 0, bytesUp: 0,
+    duration: 2.3, error: 'E2E simulated failure', manual: false, raw: {}, warnings: [],
+  });
+}
+
+export async function sendAgentHeartbeat(stack, { name }) {
+  const response = await fetch(stack.origin + '/api/agent/heartbeat', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${agentCredential(name)}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ agent: 'speedtest-agent/2.0.0 (linux/amd64)', uptime: 60, lastTest: null, engines: ['ookla'] }),
+  });
+  if (!response.ok) throw new Error(`agent heartbeat was rejected (${response.status})`);
 }
 
 export function stopAll() {

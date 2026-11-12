@@ -102,7 +102,14 @@ func (s *Store) newUUID() (string, error) {
 	}
 	value[6] = (value[6] & 0x0f) | 0x40
 	value[8] = (value[8] & 0x3f) | 0x80
-	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x", value[0:4], value[4:6], value[6:8], value[8:10], value[10:16]), nil
+	var encoded [36]byte
+	hex.Encode(encoded[0:8], value[0:4])
+	hex.Encode(encoded[9:13], value[4:6])
+	hex.Encode(encoded[14:18], value[6:8])
+	hex.Encode(encoded[19:23], value[8:10])
+	hex.Encode(encoded[24:36], value[10:16])
+	encoded[8], encoded[13], encoded[18], encoded[23] = '-', '-', '-', '-'
+	return string(encoded[:]), nil
 }
 
 func (s *Store) encryptReplay(plain []byte, principal, keyHash string) ([]byte, error) {
