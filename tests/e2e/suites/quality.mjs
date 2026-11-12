@@ -97,8 +97,9 @@ export function qualitySuite(T) {
 
     // Keyboard and screen-reader basics: controls have names, the keyboard reaches them, exactly one h1.
     async accessibility() {
-      for (const [hash, title] of ROUTES) {
+      for (const [hash, title, tab] of ROUTES.concat([['#/settings', 'Settings', 'Bandwidth']])) {
         await T.open(hash, title);
+        if (tab) await T.tab(tab);
         await page.waitForLoadState('networkidle');
         await page.addScriptTag({ url: new URL('/__e2e_axe.js', T.url(hash)).href });
         const violations = await page.evaluate(async () => {

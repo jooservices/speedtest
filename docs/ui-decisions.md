@@ -16,7 +16,7 @@
 
 - The Nodes table shows download and upload averages as a percentage of each node's expected speed. These are calculated independently for that node.
 - Dashboard KPI deltas compare the selected period with the equally long period immediately before it. Live mode reads both periods from the center's dashboard snapshot because the results list contains only the selected period. IP changes use lower-is-better direction, with the history link kept beside the comparison. While the comparison loads the cards say so; an unavailable comparison can be retried by refreshing. When the earlier period has no results, the card says so instead of showing an unexplained dash; a zero baseline is labelled as new activity.
-- Failed result rows keep the existing full error in the result details and show a short, whitespace-normalized reason chip in result tables. The chip is capped at 32 characters.
+- Failed result rows keep the full error in the result details and show a short failure-class chip (for example Timeout or Rate limited) next to Failed in every result table.
 - Trend charts with fewer than three valid measurements explain that more data is needed for the selected metric. Dashboard notices count only visible series; Statistics notices count only selected nodes, using the selected engine's measurements. Node charts mark expected download and upload speeds separately, including when there are no valid points; the dashboard's normalized chart marks 100% as expected.
 - The JOOST-71 engine selector filters dashboard, results and statistics views; different engines remain separate series and are never combined into one average.
 - On phones the top bar keeps the menu, time range and Run action on one row. Active-node status, theme and sign-out actions live in the menu.
@@ -25,7 +25,7 @@
 - Dashboard comparison responses update only the five KPI values and deltas in place. Navigation invalidates pending comparisons, so a delayed response cannot rebuild a different page or move dashboard focus.
 - Statistics sparse warnings count valid plotted hourly or daily buckets in each displayed trend series. Each warning also reports its raw sample count, in demo and API modes.
 - The UI coverage report publishes function counts alongside line coverage and requires every function in the reviewed dashboard, Statistics and shared UI files to run.
-- The E2E accessibility scenario runs axe against the WCAG 2.0, 2.1 and 2.2 A/AA tags on every page and verifies visible keyboard focus, row/card activation and nested Run behavior.
+- The E2E accessibility scenario runs axe against the WCAG 2.0, 2.1 and 2.2 A/AA tags on every page and also covers the Settings Bandwidth tab, and verifies visible keyboard focus, row/card activation and nested Run behavior.
 
 ## API foundation (JOOST-37)
 
