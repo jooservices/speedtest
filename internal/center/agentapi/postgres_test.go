@@ -84,6 +84,20 @@ type testHook struct {
 	err    error
 }
 
+type batchTestHook struct {
+	testHook
+	prepared int
+	err      error
+}
+
+func (h *batchTestHook) PrepareResultBatch(ctx context.Context, _ string, _ []Result) (context.Context, error) {
+	h.prepared++
+	if h.err != nil {
+		return ctx, h.err
+	}
+	return context.WithValue(ctx, batchMarkerKey{}, true), nil
+}
+
 func (h *testHook) AfterResultStored(context.Context, pgx.Tx, string, Result) error {
 	h.called++
 	return h.err
@@ -185,6 +199,23 @@ func TestResultHookChainOrderAndFailure(t *testing.T) {
 		t.Fatalf("failed chain = %v, calls %d/%d", err, first.called, second.called)
 	}
 }
+
+func TestResultHookBatchPreparation(t *testing.T) {
+	hook := &batchTestHook{}
+	ctx, err := (ResultHookChain{hook}).PrepareResultBatch(context.Background(), "node", []Result{{Status: "ok"}})
+	if err != nil || hook.prepared != 1 || ctx.Value(batchMarkerKey{}) != true {
+		t.Fatalf("chain prepare: calls=%d err=%v", hook.prepared, err)
+	}
+	store := &Postgres{Hook: hook}
+	ctx, err = store.PrepareResultBatch(context.Background(), "node", nil)
+	if err != nil || hook.prepared != 2 || ctx.Value(batchMarkerKey{}) != true {
+		t.Fatalf("store prepare: calls=%d err=%v", hook.prepared, err)
+	}
+	failed := &batchTestHook{err: errors.New("prepare failed")}
+	if _, err := (ResultHookChain{failed}).PrepareResultBatch(context.Background(), "node", nil); err == nil {
+		t.Fatal("batch preparation failure ignored")
+	}
+}
 func TestPostgresConfigAndHeartbeat(t *testing.T) {
 	base := []any{"node", "edge", float64(300), float64(100), 4, (*int)(nil), "", (*string)(nil), false, int64(1), 30, 0, true, int64(1), []byte(`{}`), "ookla", []byte(`[{"engine":"ookla","interval":30,"offset":0,"enabled":true}]`)}
 	s := &Postgres{Pool: testDB{row: testRow{values: base}}}
@@ -205,7 +236,7 @@ func TestPostgresConfigAndHeartbeat(t *testing.T) {
 		t.Fatal("bad settings accepted")
 	}
 	for _, failure := range []error{pgx.ErrNoRows, errors.New("database unavailable")} {
-		s.Pool = testDB{row: testRow{err: failure}}
+		s.Pool = testDB{row: testRow{err: failure}, tx: &testTx{row: testRow{err: failure}}}
 		want := failure
 		if errors.Is(failure, pgx.ErrNoRows) {
 			want = ErrNotFound
@@ -217,8 +248,12 @@ func TestPostgresConfigAndHeartbeat(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	s.Pool = testDB{beginErr: errors.New("begin failed")}
+	if _, err = s.Heartbeat(t.Context(), "node", Heartbeat{}); err == nil {
+		t.Fatal("heartbeat begin failure ignored")
+	}
 	now := time.Now()
-	s.Pool = testDB{row: testRow{values: []any{now}}}
+	s.Pool = testDB{tx: &testTx{row: testRow{values: []any{now}}}}
 	if received, err := s.Heartbeat(t.Context(), "node", Heartbeat{Agent: "v1"}); err != nil || !received.Equal(now) {
 		t.Fatal(received, err)
 	}

@@ -50,17 +50,19 @@ func (f *fakeOwnerAlerts) DeleteRule(_ context.Context, _ string, etag string) e
 func (f *fakeOwnerAlerts) ListEvents(_ context.Context, filter alerts.EventFilter, page, size int) ([]alerts.Event, int, error) {
 	f.calls = append(f.calls, "events")
 	f.filter, f.page, f.size = filter, page, size
-	return []alerts.Event{{ID: nodeID, NodeID: nodeID, Title: "slow"}}, 1, f.err
+	return []alerts.Event{{ID: nodeID, NodeID: stringAddress(nodeID), Title: "slow"}}, 1, f.err
 }
 func (f *fakeOwnerAlerts) GetEvent(context.Context, string) (alerts.Event, string, error) {
 	f.calls = append(f.calls, "get-event")
-	return alerts.Event{ID: nodeID, NodeID: nodeID, Title: "slow"}, `"event-1"`, f.err
+	return alerts.Event{ID: nodeID, NodeID: stringAddress(nodeID), Title: "slow"}, `"event-1"`, f.err
 }
 func (f *fakeOwnerAlerts) Acknowledge(_ context.Context, _ string, acked bool, etag string) (alerts.Event, string, error) {
 	f.calls = append(f.calls, "ack")
 	f.acked, f.ifMatch = acked, etag
-	return alerts.Event{ID: nodeID, NodeID: nodeID, Acked: acked}, `"event-2"`, f.err
+	return alerts.Event{ID: nodeID, NodeID: stringAddress(nodeID), Acked: acked}, `"event-2"`, f.err
 }
+
+func stringAddress(value string) *string { return &value }
 
 func (f *fakeOwnerAlerts) AcknowledgeAll(context.Context) (string, error) {
 	f.calls = append(f.calls, "ack-all")

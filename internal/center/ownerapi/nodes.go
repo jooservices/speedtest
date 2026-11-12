@@ -43,7 +43,13 @@ type DB interface {
 type Store struct {
 	Releases *release.Catalog
 	DB       DB
+	Events   EventPublisher
 	Now      func() time.Time
+}
+
+// EventPublisher lets schedule writes record their notification in the same transaction.
+type EventPublisher interface {
+	PublishEventTx(context.Context, pgx.Tx, string, string, map[string]string) error
 }
 
 func (s *Store) now() time.Time {

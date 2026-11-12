@@ -257,7 +257,7 @@ func TestMigrationBackfillAndRollbackIntegration(t *testing.T) {
 	for i := range 8 {
 		save(t, s, nodeA, result(i+1, i, fmt.Sprintf("203.0.113.%d", i%2+1)))
 	}
-	if err := db.MigrateDownTo(t.Context(), p, 3); err != nil { // the version-3 schema
+	if err := db.MigrateDownTo(t.Context(), p, 3); err != nil {
 		t.Fatal(err)
 	}
 	// Populate version-3 data, including an obsolete history row, as a pre-upgrade fixture.

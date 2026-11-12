@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/center/notify"
 	"github.com/jooservices/speedtest/internal/center/schedules"
 )
 
@@ -121,6 +122,27 @@ func TestReplaceScheduleClampsAndChecksPreconditions(t *testing.T) {
 	}
 	if _, after, _ := s.Schedules(ctx); after == before {
 		t.Fatal("the collection ETag must change with a schedule")
+	}
+}
+
+func TestWidenedOrPausedSchedulePublishesBandwidthEventIntegration(t *testing.T) {
+	pool, ctx := openPool(t)
+	now := time.Now().UTC()
+	store := &Store{DB: pool, Now: func() time.Time { return now }, Events: &notify.Store{DB: pool}}
+	seedNode(t, ctx, pool, 21, "schedule-budget", &now)
+	if _, _, err := store.ReplaceSchedule(ctx, uid(21), ScheduleInput{Interval: 60, Offset: 0, Enabled: true}, `"schedule-1"`); err != nil {
+		t.Fatal("widen schedule:", err)
+	}
+	if _, _, err := store.ReplaceSchedule(ctx, uid(21), ScheduleInput{Interval: 60, Offset: 0, Enabled: false}, `"schedule-2"`); err != nil {
+		t.Fatal("pause schedule:", err)
+	}
+	var rows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM alert_events WHERE event_key='bandwidth.interval_widened' AND node_id=$1`, uid(21)).Scan(&rows); err != nil || rows != 2 {
+		t.Fatalf("interval event rows = %d %v, want widening and pause", rows, err)
+	}
+	var deliveries int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM alert_notification_outbox o JOIN alert_events e ON e.id=o.event_id WHERE e.event_key='bandwidth.interval_widened' AND e.node_id=$1`, uid(21)).Scan(&deliveries); err != nil || deliveries != 2 {
+		t.Fatalf("interval event deliveries = %d %v, want 2", deliveries, err)
 	}
 }
 
