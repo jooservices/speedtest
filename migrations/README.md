@@ -62,6 +62,19 @@ from `nodes.server_id`; the legacy column remains synchronized for older agents.
 Results store whether the measurement-time selection and pin are known; old rows
 remain unknown. Terminal catalog acknowledgements store a payload digest to reject
 conflicting retries without replacing a newer catalog refresh.
+`00021_isp_entities.sql` adds ASN-derived ISP entities, plan records and links
+from results, addresses, IP history and alert events. `00022_isp_plan_default_provenance.sql`
+adds separate per-speed flags so plan updates change only expected speeds that
+still follow the advertised defaults. Existing rows start with both flags false;
+the migration does not infer default provenance from numeric equality. Owners can
+clear and reassign a plan to opt an existing node into advertised defaults. Its
+down migration removes those flags and leaves node speeds and plan assignments
+otherwise intact.
+`00034_geo_provider_usage.sql` adds durable online-provider usage, cooldowns
+and a resumable node-first geolocation refresh cursor. Its down migration
+preserves cached locations and address history. `00035_geo_provider_rolling_window.sql`
+adds the persisted next-request time used to enforce ip-api's 15-per-minute batch
+limit across minute boundaries; its down migration drops only that column.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file

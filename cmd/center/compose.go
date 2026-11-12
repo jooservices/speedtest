@@ -15,6 +15,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/auth"
 	"github.com/jooservices/speedtest/internal/center/dashboard"
 	"github.com/jooservices/speedtest/internal/center/geo"
+	"github.com/jooservices/speedtest/internal/center/geo/budget"
 	"github.com/jooservices/speedtest/internal/center/installer"
 	"github.com/jooservices/speedtest/internal/center/ipapi"
 	"github.com/jooservices/speedtest/internal/center/ipwatch"
@@ -75,8 +76,7 @@ func newAuthService(store auth.Store, cfg config.CenterConfig) (*auth.Service, e
 	})
 }
 
-func newOperationalStores(pool *pgxpool.Pool, cfg config.CenterConfig, logger *slog.Logger, notifications *notify.Store) (*telemetry.Telemetry, *alerts.Store, *jobs.Retention) {
-	operational := telemetry.New(version)
+func newOperationalStores(pool *pgxpool.Pool, cfg config.CenterConfig, logger *slog.Logger, notifications *notify.Store, operational *telemetry.Telemetry) (*telemetry.Telemetry, *alerts.Store, *jobs.Retention) {
 	operational.RegisterDatabase(pool)
 	if notifications != nil {
 		notifications.ObserveRun = func(ok bool) { operational.Job("notification", ok) }
@@ -86,12 +86,13 @@ func newOperationalStores(pool *pgxpool.Pool, cfg config.CenterConfig, logger *s
 	return operational, alertStore, retention
 }
 
-func backgroundServices(notifications *notify.Store, retention *jobs.Retention, mailer *report.Mailer, watcher *ipwatch.Watcher, dbip geo.DBIPConfig, alertStore *alerts.Store) func(context.Context) {
+func backgroundServices(notifications *notify.Store, retention *jobs.Retention, mailer *report.Mailer, backfill *geo.Backfill, watcher *ipwatch.Watcher, dbip geo.DBIPConfig, alertStore *alerts.Store) func(context.Context) {
 	return func(ctx context.Context) {
 		if notifications != nil {
 			go notifications.Loop(ctx)
 		}
 		go retention.Loop(ctx)
+		go backfill.Loop(ctx)
 		if mailer != nil {
 			go mailer.Loop(ctx)
 		}
@@ -101,6 +102,9 @@ func backgroundServices(notifications *notify.Store, retention *jobs.Retention, 
 				go watcher.Reader.Run(ctx, geo.EnvironmentSettings{})
 			}
 			go watcher.Reader.RunDBIP(ctx, dbip)
+			if os.Getenv("SPEEDTEST_GEO_IPINFO_TOKEN") != "" {
+				go watcher.Reader.RunIPInfo(ctx)
+			}
 		}
 		alertStore.Loop(ctx)
 	}
@@ -116,6 +120,7 @@ func ownerNotifications(notifications *notify.Store) server.OwnerNotificationsSt
 // buildServices wires every store and background job of the center. The returned function releases what was
 // opened here (the offline location database).
 func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterConfig, logger *slog.Logger) (services, func(), error) {
+	operational := telemetry.New(version)
 	store, err := auth.NewPostgresStore(pool)
 	if err != nil {
 		return services{}, nil, err
@@ -124,7 +129,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 	if err != nil {
 		return services{}, nil, err
 	}
-	watcher, closeGeo, err := ipwatch.Open(logger)
+	watcher, closeGeo, err := ipwatch.OpenObserved(logger, pool, operational.GeoProvider)
 	if err != nil {
 		return services{}, nil, err
 	}
@@ -139,9 +144,14 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		return services{}, nil, err
 	}
 	owner.Events = notifications
-	operational, alertStore, retention := newOperationalStores(pool, cfg, logger, notifications)
+	_, alertStore, retention := newOperationalStores(pool, cfg, logger, notifications, operational)
 	mailer := buildReportMailer(pool, notifications, logger)
 	dbip, err := geo.DBIPConfigFromEnv()
+	if err != nil {
+		cleanup()
+		return services{}, nil, err
+	}
+	backfill, err := buildGeoBackfill(pool, watcher, operational, logger)
 	if err != nil {
 		cleanup()
 		return services{}, nil, err
@@ -175,14 +185,14 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		OwnerISP:           &isp.Store{DB: pool},
 		OwnerReport:        &report.Store{DB: pool},
 		Settings:           preferences,
-		OwnerIP:            &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...).WithConsensus(watcher.Consensus, logger)},
+		OwnerIP:            &ipapi.Store{DB: pool, Resolver: geo.NewResolver(geo.NewPostgresCache(pool), watcher.Offline, watcher.Fallbacks...), ProviderSettings: &watcher.Providers},
 		OwnerDashboard:     &dashboard.Cached{Source: &dashboard.Store{DB: pool, Nodes: owner, Stats: statsStore, Results: owner, Alerts: alertStore}, TTL: 5 * time.Second},
 		OwnerAlerts:        alertStore,
 		OwnerJobs:          &jobs.Registry{DB: pool},
 		Audit:              &audit.Store{DB: pool},
 		AccessTokens:       &apitoken.Store{DB: pool},
 		Installer:          installerService,
-		Background:         backgroundServices(notifications, retention, mailer, watcher, dbip, alertStore),
+		Background:         backgroundServices(notifications, retention, mailer, backfill, watcher, dbip, alertStore),
 	}, cleanup, nil
 }
 
@@ -208,6 +218,44 @@ func buildInstaller(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCo
 		return nil, nil
 	}
 	return installer.NewService(ctx, installer.ServiceOptions{Database: pool, Enrollment: enrollment, CenterURL: cfg.PublicURL, AppKey: cfg.AppKey, Logger: logger})
+}
+
+// buildGeoBackfill wires the slow nightly location refresh. ip-api is used only through its batch endpoint, so it is left out of
+// the one-by-one fallbacks of the background resolver.
+func buildGeoBackfill(pool *pgxpool.Pool, watcher *ipwatch.Watcher, operational *telemetry.Telemetry, logger *slog.Logger) (*geo.Backfill, error) {
+	return buildGeoBackfillWithCache(pool, geo.NewPostgresCache(pool), watcher, operational, logger)
+}
+
+type geoBackfillCache interface {
+	geo.Cache
+	Merge(context.Context, string, geo.Location, string) (geo.Location, string, error)
+}
+
+func buildGeoBackfillWithCache(pool *pgxpool.Pool, cache geoBackfillCache, watcher *ipwatch.Watcher, operational *telemetry.Telemetry, logger *slog.Logger) (*geo.Backfill, error) {
+	backfillConfig, err := geo.BackfillConfigFromEnv()
+	if err != nil {
+		return nil, err
+	}
+	var batch geo.BatchLookup
+	if watcher.Providers.IPAPIEnabled {
+		batch, err = geo.NewIPAPIProvider(watcher.Providers)
+		if err != nil {
+			return nil, err
+		}
+	}
+	fallbacks := make([]geo.Fallback, 0, len(watcher.Fallbacks))
+	for _, provider := range watcher.Fallbacks {
+		if provider.Source() != "ip-api" {
+			fallbacks = append(fallbacks, provider)
+		}
+	}
+	resolver := geo.NewResolver(cache, watcher.Offline, fallbacks...).WithPurpose(budget.Background)
+	nodeResolver := geo.NewResolver(cache, watcher.Offline, fallbacks...).WithPurpose(budget.Background).
+		WithHighValue(true).WithConsensus(watcher.Consensus, logger)
+	return &geo.Backfill{DB: pool, Cache: cache,
+		Resolver: resolver, NodeResolver: nodeResolver,
+		Batch: batch, MaxPerRun: backfillConfig.MaxPerRun, BatchSize: backfillConfig.BatchSize, Pause: backfillConfig.Pause,
+		HourUTC: backfillConfig.HourUTC, Logger: logger, ObserveRun: func(ok bool) { operational.Job("geo_backfill", ok) }}, nil
 }
 
 // buildReportMailer returns the scheduled monthly report e-mail, or nil unless the owner turned it on with

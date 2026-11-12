@@ -1,0 +1,564 @@
+package geo
+
+import (
+	"context"
+	"errors"
+	"io"
+	"log/slog"
+	"sort"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jooservices/speedtest/internal/center/geo/budget"
+)
+
+type backfillMemoryDB struct {
+	day                time.Time
+	cursor             string
+	cursorNodePriority bool
+	addresses          []string
+	nodeAddresses      map[string]bool
+	queryErr           error
+	rowErr             error
+	execErr            error
+	saveErr            error
+	dayUpdateErr       error
+	scanErr            error
+	rowsErr            error
+}
+
+func (d *backfillMemoryDB) Query(_ context.Context, _ string, args ...any) (pgx.Rows, error) {
+	if d.queryErr != nil {
+		return nil, d.queryErr
+	}
+	cursorPriority, hasCursor := args[0].(bool)
+	cursor, _ := args[1].(string)
+	limit := args[2].(int)
+	rows := &backfillMemoryRows{scanErr: d.scanErr, rowsErr: d.rowsErr}
+	for _, address := range d.addresses {
+		nodePriority := d.nodeAddresses[address]
+		afterCursor := !hasCursor || (!nodePriority && cursorPriority) || (nodePriority == cursorPriority && address > cursor)
+		if afterCursor {
+			rows.values = append(rows.values, backfillCandidate{address: address, nodePriority: nodePriority})
+		}
+	}
+	sort.Slice(rows.values, func(i, j int) bool {
+		if rows.values[i].nodePriority != rows.values[j].nodePriority {
+			return rows.values[i].nodePriority
+		}
+		return rows.values[i].address < rows.values[j].address
+	})
+	if len(rows.values) > limit {
+		rows.values = rows.values[:limit]
+	}
+	return rows, nil
+}
+
+func (d *backfillMemoryDB) QueryRow(context.Context, string, ...any) pgx.Row {
+	if d.rowErr != nil {
+		return backfillMemoryRow{err: d.rowErr}
+	}
+	if d.day.IsZero() {
+		return backfillMemoryRow{err: pgx.ErrNoRows}
+	}
+	return backfillMemoryRow{day: d.day, cursor: d.cursor, cursorNodePriority: d.cursorNodePriority}
+}
+
+func (d *backfillMemoryDB) Exec(_ context.Context, query string, args ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(query, "SET run_day") && d.dayUpdateErr != nil {
+		return pgconn.CommandTag{}, d.dayUpdateErr
+	}
+	if d.execErr != nil {
+		return pgconn.CommandTag{}, d.execErr
+	}
+	if strings.Contains(query, "cursor_node_priority=EXCLUDED") && d.saveErr != nil {
+		return pgconn.CommandTag{}, d.saveErr
+	}
+	switch {
+	case strings.Contains(query, "cursor=NULL"):
+		d.day = args[0].(time.Time)
+		d.cursor = ""
+		d.cursorNodePriority = true
+	case strings.Contains(query, "cursor_node_priority=EXCLUDED"):
+		d.day = args[0].(time.Time)
+		d.cursorNodePriority = args[1].(bool)
+		if args[2] == nil {
+			d.cursor = ""
+		} else {
+			d.cursor = args[2].(string)
+		}
+	case strings.Contains(query, "SET run_day"):
+		d.day = args[0].(time.Time)
+	default:
+		d.day = args[0].(time.Time)
+		d.cursorNodePriority = true
+	}
+	return pgconn.NewCommandTag("INSERT 0 1"), nil
+}
+
+type backfillMemoryRow struct {
+	day                time.Time
+	cursor             string
+	cursorNodePriority bool
+	err                error
+}
+
+func (r backfillMemoryRow) Scan(dest ...any) error {
+	if r.err != nil {
+		return r.err
+	}
+	*dest[0].(*time.Time) = r.day
+	*dest[1].(*bool) = r.cursorNodePriority
+	if r.cursor != "" {
+		value := r.cursor
+		*dest[2].(**string) = &value
+	}
+	return nil
+}
+
+type backfillMemoryRows struct {
+	pgx.Rows
+	values  []backfillCandidate
+	index   int
+	scanErr error
+	rowsErr error
+}
+
+func (r *backfillMemoryRows) Next() bool {
+	return r.index < len(r.values)
+}
+
+func (r *backfillMemoryRows) Scan(dest ...any) error {
+	if r.scanErr != nil {
+		return r.scanErr
+	}
+	*dest[0].(*string) = r.values[r.index].address
+	*dest[1].(*bool) = r.values[r.index].nodePriority
+	r.index++
+	return nil
+}
+
+func (*backfillMemoryRows) Close()                                       {}
+func (r *backfillMemoryRows) Err() error                                 { return r.rowsErr }
+func (*backfillMemoryRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (*backfillMemoryRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (*backfillMemoryRows) Values() ([]any, error)                       { return nil, nil }
+func (*backfillMemoryRows) RawValues() [][]byte                          { return nil }
+func (*backfillMemoryRows) Conn() *pgx.Conn                              { return nil }
+
+type backfillMemoryCache struct {
+	merged []string
+	values map[string]Location
+	getErr error
+	err    error
+}
+
+func (c *backfillMemoryCache) Get(_ context.Context, ip string) (Location, string, bool, error) {
+	if c.getErr != nil {
+		return Location{}, "", false, c.getErr
+	}
+	location, ok := c.values[ip]
+	return location, "fixture", ok, nil
+}
+
+func (c *backfillMemoryCache) Put(_ context.Context, ip string, location Location, _ string) error {
+	if c.values == nil {
+		c.values = make(map[string]Location)
+	}
+	c.values[ip] = location
+	return nil
+}
+
+func (c *backfillMemoryCache) Merge(_ context.Context, ip string, location Location, source string) (Location, string, error) {
+	if c.err != nil {
+		return Location{}, "", c.err
+	}
+	c.merged = append(c.merged, ip)
+	if c.values == nil {
+		c.values = make(map[string]Location)
+	}
+	c.values[ip] = location
+	return location, source, nil
+}
+
+type backfillMemoryBatch struct {
+	calls  int
+	err    error
+	empty  bool
+	cancel context.CancelFunc
+}
+
+func (b *backfillMemoryBatch) LookupBatch(_ context.Context, ips []string, _ budget.Purpose) (map[string]Location, error) {
+	b.calls++
+	if b.cancel != nil {
+		b.cancel()
+	}
+	if b.err != nil {
+		return nil, b.err
+	}
+	locations := make(map[string]Location, len(ips))
+	if b.empty {
+		return locations, nil
+	}
+	for _, ip := range ips {
+		locations[ip] = Location{City: "London", Country: "GB"}
+	}
+	return locations, nil
+}
+
+type backfillMemoryFallback struct{ err error }
+
+func (backfillMemoryFallback) Source() string { return "ipwho" }
+func (f backfillMemoryFallback) Lookup(context.Context, string) (Location, error) {
+	return Location{Country: "GB"}, f.err
+}
+
+type backfillSequenceFallback struct {
+	calls  int
+	failAt int
+}
+
+func (*backfillSequenceFallback) Source() string { return "ipwho" }
+func (f *backfillSequenceFallback) Lookup(context.Context, string) (Location, error) {
+	f.calls++
+	if f.calls == f.failAt {
+		return Location{}, ErrBudgetExhausted
+	}
+	return Location{Country: "GB"}, nil
+}
+
+func TestBackfillRunOncePersistsCursorAndStopsAtLimit(t *testing.T) {
+	db := &backfillMemoryDB{addresses: []string{"1.1.1.1", "8.8.8.8"}}
+	cache, batch := &backfillMemoryCache{}, &backfillMemoryBatch{}
+	now := time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC)
+	job := &Backfill{DB: db, Cache: cache, Batch: batch, MaxPerRun: 1, BatchSize: 1, Now: func() time.Time { return now }}
+	for _, want := range []int{1, 1, 0} {
+		processed, err := job.RunOnce(context.Background())
+		if err != nil || processed != want {
+			t.Fatalf("RunOnce = (%d,%v), want (%d,nil)", processed, err, want)
+		}
+	}
+	if db.cursor != "" || batch.calls != 2 || len(cache.merged) != 2 {
+		t.Fatalf("cursor=%q batches=%d merged=%v", db.cursor, batch.calls, cache.merged)
+	}
+}
+
+func TestBackfillRunOnceRetainsCursorOnErrorsAndExhaustion(t *testing.T) {
+	ctx := context.Background()
+	address := []string{"1.1.1.1"}
+	for _, tc := range []struct {
+		name       string
+		batchErr   error
+		cacheErr   error
+		queryErr   error
+		wantErr    error
+		wantCount  int
+		wantCursor string
+	}{
+		{name: "provider error is skipped", batchErr: errors.New("provider"), wantCount: 1, wantCursor: address[0]},
+		{name: "cache error", cacheErr: errors.New("cache"), wantErr: errors.New("cache")},
+		{name: "query error", queryErr: errors.New("query"), wantErr: errors.New("query")},
+		{name: "budget exhausted is skipped", batchErr: ErrBudgetExhausted, wantCount: 1, wantCursor: address[0]},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &backfillMemoryDB{addresses: address, queryErr: tc.queryErr}
+			batch, cache := &backfillMemoryBatch{err: tc.batchErr}, &backfillMemoryCache{err: tc.cacheErr}
+			job := &Backfill{DB: db, Cache: cache, Batch: batch, MaxPerRun: 1, Now: func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) }}
+			count, err := job.RunOnce(ctx)
+			if (err == nil) != (tc.wantErr == nil) || (err != nil && !strings.Contains(err.Error(), tc.wantErr.Error())) || count != tc.wantCount || db.cursor != tc.wantCursor {
+				t.Fatalf("RunOnce = (%d,%v), cursor=%q", count, err, db.cursor)
+			}
+		})
+	}
+}
+
+func TestBackfillRunOnceUsesResolverWithoutBatch(t *testing.T) {
+	db := &backfillMemoryDB{addresses: []string{"1.1.1.1"}}
+	cache := &backfillMemoryCache{}
+	resolver := NewResolver(nil, nil, backfillMemoryFallback{}).WithPurpose(budget.Background)
+	job := &Backfill{DB: db, Cache: cache, Resolver: resolver, MaxPerRun: 1, Now: func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) }}
+	if count, err := job.RunOnce(context.Background()); err != nil || count != 1 || db.cursor != "1.1.1.1" {
+		t.Fatalf("RunOnce = (%d,%v), cursor=%q", count, err, db.cursor)
+	}
+}
+
+func TestBackfillEvaluatesOfflineBeforeBatchAndSkipsBatchFailures(t *testing.T) {
+	address := "203.0.113.77"
+	complete := Location{City: "London", Region: "England", Country: "GB", Latitude: 51.5, Longitude: -0.1,
+		TimeZone: "Europe/London", AccuracyRadius: 5, ASN: 64500, Organisation: "Example Network"}
+	t.Run("offline completion avoids ip-api", func(t *testing.T) {
+		cache, batch := &backfillMemoryCache{}, &backfillMemoryBatch{}
+		resolver := NewResolver(cache, &testGeo{location: complete})
+		job := &Backfill{Cache: cache, Resolver: resolver, Batch: batch}
+		count, err := job.refresh(context.Background(), []backfillCandidate{{address: address}})
+		if err != nil || count != 1 || batch.calls != 0 || cache.values[address].City != "London" {
+			t.Fatalf("offline refresh = (%d,%v), batch=%d cache=%+v", count, err, batch.calls, cache.values)
+		}
+	})
+	t.Run("quota refusal does not stop other sources", func(t *testing.T) {
+		cache, batch := &backfillMemoryCache{}, &backfillMemoryBatch{err: ErrBudgetExhausted}
+		fallback := &backfillSequenceFallback{}
+		resolver := NewResolver(cache, &testGeo{err: ErrNotFound}, fallback)
+		job := &Backfill{Cache: cache, Resolver: resolver, Batch: batch}
+		count, err := job.refresh(context.Background(), []backfillCandidate{{address: address}})
+		if err != nil || count != 1 || batch.calls != 1 || fallback.calls != 1 || cache.values[address].Country != "GB" {
+			t.Fatalf("quota-refused batch refresh = (%d,%v), batch=%d fallback=%d cache=%+v", count, err, batch.calls, fallback.calls, cache.values)
+		}
+	})
+}
+
+func TestBackfillKeepsNodePriorityThroughResolverSelection(t *testing.T) {
+	location := Location{City: "London", Country: "GB", Latitude: 51.5, Longitude: -0.1, ASN: 64500, Organisation: "Example"}
+	firstGeo, secondGeo := &testGeo{location: location}, &testGeo{location: location}
+	low := NewResolver(&backfillMemoryCache{}, nil, testFallback{name: "ipwho", geo: firstGeo}, testFallback{name: "freeipapi", geo: secondGeo})
+	node := NewResolver(&backfillMemoryCache{}, nil, testFallback{name: "ipwho", geo: firstGeo}, testFallback{name: "freeipapi", geo: secondGeo}).
+		WithHighValue(true).WithConsensus(true, nil)
+	job := &Backfill{Resolver: low, NodeResolver: node, Cache: &backfillMemoryCache{}, Batch: &backfillMemoryBatch{empty: true}}
+	candidates := []backfillCandidate{{address: "203.0.113.1"}, {address: "203.0.113.2", nodePriority: true}}
+	if count, err := job.refresh(context.Background(), candidates); err != nil || count != 2 {
+		t.Fatalf("priority refresh = (%d,%v)", count, err)
+	}
+	if firstGeo.calls.Load() != 2 || secondGeo.calls.Load() != 1 {
+		t.Fatalf("lookup-only/node provider calls = (%d,%d), want (2,1)", firstGeo.calls.Load(), secondGeo.calls.Load())
+	}
+}
+
+func TestBackfillLoopCancellationAndObservedPass(t *testing.T) {
+	now := time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC)
+	db := &backfillMemoryDB{}
+	ctx, cancel := context.WithCancel(context.Background())
+	var observed bool
+	clockCalls := 0
+	job := &Backfill{DB: db, Cache: &backfillMemoryCache{}, Batch: &backfillMemoryBatch{}, HourUTC: 2,
+		Now: func() time.Time {
+			clockCalls++
+			if clockCalls == 1 {
+				return now
+			}
+			return now.Add(time.Second)
+		},
+		ObserveRun: func(ok bool) { observed = ok; cancel() }, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	job.Loop(ctx)
+	if !observed {
+		t.Fatal("backfill pass result was not observed")
+	}
+	ctx, cancel = context.WithCancel(context.Background())
+	cancel()
+	job.Loop(ctx)
+}
+
+func TestBackfillRunOnceValidatesDependenciesAndDatabaseFailures(t *testing.T) {
+	if count, err := (&Backfill{}).RunOnce(context.Background()); count != 0 || err == nil {
+		t.Fatalf("missing dependencies = (%d,%v)", count, err)
+	}
+	now := time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC)
+	for _, tc := range []struct {
+		name string
+		db   *backfillMemoryDB
+	}{
+		{name: "cursor read", db: &backfillMemoryDB{day: now, rowErr: errors.New("read cursor")}},
+		{name: "cursor create", db: &backfillMemoryDB{execErr: errors.New("create cursor")}},
+		{name: "candidate scan", db: &backfillMemoryDB{day: now, addresses: []string{"1.1.1.1"}, scanErr: errors.New("scan candidate")}},
+		{name: "candidate iteration", db: &backfillMemoryDB{day: now, addresses: []string{"1.1.1.1"}, rowsErr: errors.New("iterate candidates")}},
+		{name: "cursor save", db: &backfillMemoryDB{day: now, addresses: []string{"1.1.1.1"}, execErr: errors.New("save cursor")}},
+		{name: "cursor reset", db: &backfillMemoryDB{day: now, cursor: "1.1.1.1", execErr: errors.New("reset cursor")}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			job := &Backfill{DB: tc.db, Cache: &backfillMemoryCache{}, Batch: &backfillMemoryBatch{}, Now: func() time.Time { return now }}
+			if count, err := job.RunOnce(context.Background()); count != 0 || err == nil {
+				t.Fatalf("RunOnce = (%d,%v), want an error before cursor progress", count, err)
+			}
+		})
+	}
+}
+
+func TestBackfillContinuesOtherSourcesAfterMidBatchBudgetExhaustion(t *testing.T) {
+	addresses := []string{"1.1.1.1", "8.8.8.8", "9.9.9.9"}
+	for _, saveErr := range []error{nil, errors.New("save partial cursor")} {
+		db := &backfillMemoryDB{addresses: addresses, saveErr: saveErr,
+			nodeAddresses: map[string]bool{"1.1.1.1": true, "8.8.8.8": true, "9.9.9.9": true}}
+		fallback := &backfillSequenceFallback{failAt: 2}
+		job := &Backfill{DB: db, Cache: &backfillMemoryCache{},
+			Resolver: NewResolver(nil, nil, fallback).WithPurpose(budget.Background), BatchSize: len(addresses), MaxPerRun: len(addresses),
+			Now: func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) }}
+		count, err := job.RunOnce(context.Background())
+		if saveErr == nil && (err != nil || count != 1 || db.cursor != addresses[0] || !db.cursorNodePriority || fallback.calls != 2) {
+			t.Fatalf("batch refresh after provider exhaustion = (%d,%v), cursor=%q priority=%v calls=%d", count, err, db.cursor, db.cursorNodePriority, fallback.calls)
+		}
+		if saveErr != nil && (count != 0 || !errors.Is(err, saveErr)) {
+			t.Fatalf("partial cursor save failure = (%d,%v)", count, err)
+		}
+	}
+}
+
+func TestBackfillCandidateCacheAndCursorDateErrors(t *testing.T) {
+	cacheErr := errors.New("cache read failed")
+	job := &Backfill{Cache: &backfillMemoryCache{getErr: cacheErr}}
+	if _, err := job.resolveCandidate(context.Background(), backfillCandidate{address: "8.8.8.8"}); !errors.Is(err, cacheErr) {
+		t.Fatalf("candidate cache read error = %v", err)
+	}
+
+	now := time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC)
+	dateErr := errors.New("cannot advance run day")
+	db := &backfillMemoryDB{day: now.Add(-24 * time.Hour), dayUpdateErr: dateErr}
+	job = &Backfill{DB: db}
+	if _, _, err := job.loadCursor(context.Background(), now); !errors.Is(err, dateErr) {
+		t.Fatalf("cursor date update error = %v", err)
+	}
+}
+
+func TestBackfillBatchCancellationRetainsPriorProgress(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cache := &backfillMemoryCache{values: map[string]Location{
+		"203.0.113.1": {City: "London", Latitude: 51.5, Longitude: -0.1},
+	}}
+	batch := &backfillMemoryBatch{cancel: cancel, err: context.Canceled}
+	job := &Backfill{Cache: cache, Batch: batch}
+	candidates := []backfillCandidate{{address: "203.0.113.1"}, {address: "203.0.113.2"}}
+	completed, err := job.refresh(ctx, candidates)
+	if completed != 1 || !errors.Is(err, context.Canceled) || batch.calls != 1 {
+		t.Fatalf("canceled batch = (%d,%v), calls=%d", completed, err, batch.calls)
+	}
+}
+
+func TestBackfillRetainsPriorityCursorAcrossUTCDate(t *testing.T) {
+	now := time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC)
+	db := &backfillMemoryDB{day: now.Add(-24 * time.Hour), cursor: "1.1.1.1", cursorNodePriority: true,
+		addresses: []string{"1.1.1.1", "8.8.8.8"}, nodeAddresses: map[string]bool{"1.1.1.1": true}}
+	job := &Backfill{DB: db, Cache: &backfillMemoryCache{}, Batch: &backfillMemoryBatch{}, BatchSize: 1, MaxPerRun: 1, Now: func() time.Time { return now }}
+	if count, err := job.RunOnce(context.Background()); err != nil || count != 1 || db.cursor != "8.8.8.8" || db.cursorNodePriority {
+		t.Fatalf("cross-day cursor was not retained: (%d,%v), cursor=%q node=%v", count, err, db.cursor, db.cursorNodePriority)
+	}
+	if count, err := job.RunOnce(context.Background()); err != nil || count != 0 || db.cursor != "" {
+		t.Fatalf("completed keyspace did not start a fresh pass: (%d,%v), cursor=%q", count, err, db.cursor)
+	}
+}
+
+func TestBackfillUsesDefaultsAfterCompletedPass(t *testing.T) {
+	if (&Backfill{}).now().IsZero() {
+		t.Fatal("default backfill clock returned zero time")
+	}
+	db := &backfillMemoryDB{addresses: []string{"8.8.8.8"}}
+	job := &Backfill{DB: db, Cache: &backfillMemoryCache{}, Batch: &backfillMemoryBatch{}}
+	job.MaxPerRun, job.BatchSize = 0, 0
+	job.Now = func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) }
+	if count, err := job.RunOnce(context.Background()); err != nil || count != 1 {
+		t.Fatalf("default limits and clock = (%d,%v)", count, err)
+	}
+}
+
+func TestBackfillLoopUsesDefaultLoggerForFailure(t *testing.T) {
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(io.Discard, nil)))
+	defer slog.SetDefault(previous)
+
+	now := time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC)
+	db := &backfillMemoryDB{rowErr: errors.New("cursor read failed")}
+	ctx, cancel := context.WithCancel(context.Background())
+	observations := 0
+	job := &Backfill{DB: db, HourUTC: 2, Now: func() time.Time { return now }}
+	job.ObserveRun = func(bool) {
+		observations++
+		if observations == 2 {
+			cancel()
+		}
+	}
+	job.Loop(ctx)
+	if observations != 2 {
+		t.Fatalf("failure loop observations = %d, want 2", observations)
+	}
+}
+
+func TestBackfillRefreshBranchesAndPauseCancellation(t *testing.T) {
+	ctx := context.Background()
+	addresses := []string{"1.1.1.1"}
+	db := &backfillMemoryDB{addresses: addresses}
+	cache := &backfillMemoryCache{}
+	batch := &backfillMemoryBatch{empty: true}
+	job := &Backfill{DB: db, Cache: cache, Batch: batch, MaxPerRun: 1, Now: func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) }}
+	if count, err := job.RunOnce(ctx); err != nil || count != 1 || len(cache.merged) != 0 {
+		t.Fatalf("empty batch results = (%d,%v), merged=%v", count, err, cache.merged)
+	}
+	for _, lookupErr := range []error{ErrNotFound, ErrBudgetExhausted, context.DeadlineExceeded} {
+		db = &backfillMemoryDB{addresses: addresses}
+		resolver := NewResolver(nil, nil, backfillMemoryFallback{err: lookupErr}).WithPurpose(budget.Background)
+		job = &Backfill{DB: db, Cache: &backfillMemoryCache{}, Batch: &backfillMemoryBatch{empty: true}, Resolver: resolver, MaxPerRun: 1,
+			Now: func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) }}
+		count, err := job.RunOnce(ctx)
+		if errors.Is(lookupErr, ErrNotFound) && (err != nil || count != 1) {
+			t.Fatalf("not found should advance: (%d,%v)", count, err)
+		}
+		if errors.Is(lookupErr, ErrBudgetExhausted) && (err != nil || count != 1) {
+			t.Fatalf("batch mode should advance after exhausted fallback: (%d,%v)", count, err)
+		}
+		if errors.Is(lookupErr, context.DeadlineExceeded) && (err == nil || count != 0) {
+			t.Fatalf("resolver failure should retain cursor: (%d,%v)", count, err)
+		}
+	}
+	for _, lookupErr := range []error{ErrNotFound, ErrBudgetExhausted, context.DeadlineExceeded} {
+		db = &backfillMemoryDB{addresses: addresses}
+		job = &Backfill{DB: db, Cache: &backfillMemoryCache{}, Resolver: NewResolver(nil, nil, backfillMemoryFallback{err: lookupErr}), MaxPerRun: 1,
+			Now: func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) }}
+		count, err := job.RunOnce(ctx)
+		if errors.Is(lookupErr, ErrNotFound) && (err != nil || count != 1) {
+			t.Fatalf("individual not found = (%d,%v)", count, err)
+		}
+		if errors.Is(lookupErr, ErrBudgetExhausted) && (err != nil || count != 0) {
+			t.Fatalf("individual budget exhaustion = (%d,%v)", count, err)
+		}
+		if errors.Is(lookupErr, context.DeadlineExceeded) && (err == nil || count != 0) {
+			t.Fatalf("individual resolver failure = (%d,%v)", count, err)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	db = &backfillMemoryDB{addresses: []string{"1.1.1.1", "8.8.8.8"}}
+	job = &Backfill{DB: db, Cache: &backfillMemoryCache{}, Batch: &backfillMemoryBatch{}, MaxPerRun: 2, BatchSize: 1, Pause: time.Second,
+		Now: func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) }}
+	if count, err := job.RunOnce(ctx); count != 1 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled pause = (%d,%v)", count, err)
+	}
+	db = &backfillMemoryDB{addresses: []string{"1.1.1.1", "8.8.8.8"}}
+	job = &Backfill{DB: db, Cache: &backfillMemoryCache{}, Batch: &backfillMemoryBatch{empty: true}, MaxPerRun: 2, BatchSize: 1, Pause: time.Nanosecond,
+		Now: func() time.Time { return time.Date(2026, 11, 10, 2, 0, 0, 0, time.UTC) }}
+	if count, err := job.RunOnce(context.Background()); err != nil || count != 2 {
+		t.Fatalf("completed pause = (%d,%v)", count, err)
+	}
+}
+
+// A cache or storage failure is not a provider miss: the batch stops at that address, keeps the progress made before it and never
+// sends the address (or the ones after it) to the batch endpoint on the strength of an unchecked cache.
+func TestBackfillBatchStopsOnCacheFailureWithoutDispatch(t *testing.T) {
+	cache := &backfillMemoryCache{values: map[string]Location{"203.0.113.1": {City: "London", Latitude: 51.5, Longitude: -0.1}}}
+	batch := &backfillMemoryBatch{}
+	job := &Backfill{Cache: cache, Batch: batch}
+	failing := &backfillMemoryCache{getErr: errors.New("storage down")}
+	job.Cache = failing
+	completed, err := job.refresh(context.Background(), []backfillCandidate{{address: "203.0.113.2"}, {address: "203.0.113.3"}})
+	if completed != 0 || err == nil || batch.calls != 0 {
+		t.Fatalf("a failing cache must stop the batch before any dispatch: completed=%d err=%v calls=%d", completed, err, batch.calls)
+	}
+	// With a healthy cache holding the first address, the failure at the second keeps the first one's progress.
+	partial := &backfillMemoryCache{values: map[string]Location{"203.0.113.1": {City: "London", Latitude: 51.5, Longitude: -0.1}}}
+	job = &Backfill{Cache: &cacheFailingFor{backfillMemoryCache: partial, failIP: "203.0.113.2"}, Batch: batch}
+	completed, err = job.refresh(context.Background(), []backfillCandidate{{address: "203.0.113.1"}, {address: "203.0.113.2"}})
+	if completed != 1 || err == nil || batch.calls != 0 {
+		t.Fatalf("progress before the failing address is kept: completed=%d err=%v calls=%d", completed, err, batch.calls)
+	}
+}
+
+type cacheFailingFor struct {
+	*backfillMemoryCache
+	failIP string
+}
+
+func (c *cacheFailingFor) Get(ctx context.Context, ip string) (Location, string, bool, error) {
+	if ip == c.failIP {
+		return Location{}, "", false, errors.New("storage down")
+	}
+	return c.backfillMemoryCache.Get(ctx, ip)
+}

@@ -1,11 +1,9 @@
 # Geolocation lookup, fallback and database updates
 
-`internal/center/geo` implements `Geo.Lookup(ctx, ip)` with MaxMind City and ASN
-MMDBs using `oschwald/geoip2-golang` v1.13.0, as required by JOOST-33. `Resolver`
-adds the ordered `ip_addresses` cache, offline reader, and online fallback chain
-behind the same `Geo` interface. The package is a library; the center scaffold
-has no server lifecycle yet. Its lifecycle owner supplies the shared PostgreSQL
-pool and closes the reader after cancelling and joining its updater.
+`internal/center/geo` combines local City and ASN MMDB readers, an optional
+IPinfo Lite MMDB, the `ip_addresses` PostgreSQL cache, and configured online
+providers. The center owns the reader, durable quota store and background
+workers; it cancels and joins their goroutines before closing the readers.
 
 ```go
 reader, err := geo.Open(geo.ConfigFromEnv(), slog.Default())
@@ -21,9 +19,11 @@ if err != nil {
     return err
 }
 resolver := geo.NewResolver(geo.NewPostgresCache(pool), reader, providers...)
-// Call resolver.Lookup(ctx, ip) from the center's geolocation consumer.
-// Run blocks until cancellation; start it in the owner's lifecycle goroutine:
+// The center also composes the PostgreSQL quota store and resumable backfill.
+// Run blocks until cancellation; the center starts and joins these loops:
 // reader.Run(ctx, geo.EnvironmentSettings{})
+// reader.RunIPInfo(ctx)
+// backfill.Loop(ctx)
 // Cancel and join that goroutine before reader.Close().
 ```
 
@@ -38,14 +38,15 @@ Concurrent lookups, replacements and repeated closes are safe.
 
 ## Fallback providers and cache
 
-The resolver checks `ip_addresses` first, then GeoLite2, then enabled providers
-in this order: ip-api.com and IPinfo Lite. Successful results are stored in the
-existing `ip_addresses.geo` JSONB, `source`, and `looked_up_at` columns. Cache
-entries are write-once: later provider responses cannot replace a completed
-lookup. Concurrent requests for the same IP in one center process share one
-lookup. Invalid addresses never reach PostgreSQL or an online provider. A cache
-read/write failure is returned to the caller so a successful upstream result is
-not reported complete without its durable cache entry. Provider failures do not
+The resolver checks `ip_addresses` first, then offline MMDB data, then enabled
+providers in this order: ip-api, IPinfo Lite, ipwho.is, freeipapi, GeoJS,
+ipapi.co, ipgeolocation.io and RIPEstat. A cached entry below quality score 85
+can be enriched. Existing fields are replaced only by a higher-ranked source;
+missing fields are filled and field-level provenance is retained. Concurrent
+requests for the same IP in one center process share one lookup. Invalid
+addresses never reach PostgreSQL or an online provider. A cache read/write
+failure is returned to the caller so a successful upstream result is not
+reported complete without its durable cache entry. Provider failures do not
 stop later providers in the chain; caller cancellation does.
 
 The providers use a timeout that bounds both rate-limit waiting and HTTP I/O,
@@ -63,11 +64,17 @@ honours both headers. Its free endpoint is not licensed for commercial use;
 operators must use it only where its terms permit. [ip-api JSON API and limits](https://ip-api.com/docs/api%3Ajson)
 and its [free-use terms](https://ip-api.com/docs/legal) are authoritative.
 
-IPinfo Lite is optional and requires `SPEEDTEST_GEO_IPINFO_TOKEN`. The free Lite
-API is authenticated and currently has no request cap, but returns country and
-basic ASN only (no city or coordinates). IPinfo requires attribution when Lite
-data is shown publicly. See [IPinfo Lite API](https://ipinfo.io/developers/lite-api)
-and its [free-plan details](https://support.ipinfo.io/hc/en-us/articles/30792535492626-What-Is-the-Usage-Limit-for-the-Free-Plan).
+IPinfo Lite is opt-in for online lookups and requires both
+`SPEEDTEST_GEO_IPINFO_ENABLED=true` and `SPEEDTEST_GEO_IPINFO_TOKEN`. Its
+authenticated Lite API has no published request cap and returns country and
+basic ASN only (no city or coordinates). With a token, the center also refreshes
+the offline IPinfo Lite MMDB daily; this can fill country/ASN gaps without
+sending individual IP lookups over the network. Database downloads are
+HTTPS-only outside loopback, validated as IPinfo Lite MMDBs and atomically
+installed; a bad download retains the previous file and reader. IPinfo requires
+attribution when its data is shown publicly. See [IPinfo Lite API](https://ipinfo.io/developers/lite-api),
+[database downloads](https://ipinfo.io/developers/data-download), and its
+[free-plan details](https://support.ipinfo.io/hc/en-us/articles/30792535492626-What-Is-the-Usage-Limit-for-the-Free-Plan).
 Set `SPEEDTEST_GEO_IPINFO_REQUESTS_PER_MINUTE` to add local pacing if needed;
 zero follows the provider's published unlimited request policy.
 
@@ -117,8 +124,11 @@ from `Run`; no IP or key is logged. On failure, check connectivity, credentials,
 path permissions and capacity, then call `Update` to retry. Archive and checksum
 can refer to different releases during a vendor release: the checksum mismatch
 safely retains that edition's old file; retry later. For rollback, stop/join the
-updater, restore previously backed-up City/ASN MMDBs to configured paths, then
-reopen the reader. This ticket has no SQL migration.
+updater, restore previously backed-up MMDBs to configured paths, then reopen the
+reader. Migration `00034_geo_provider_usage.sql` adds durable provider budget
+and resumable backfill state; `00035_geo_provider_rolling_window.sql` adds the
+persistent next-request timestamp used to pace ip-api batch requests across
+minute boundaries. Their Down sections remove only these additions and tables.
 
 ## Verification
 
@@ -130,28 +140,23 @@ idempotent and works offline after the verified files are cached.
 
 ```sh
 python3 scripts/geo-test-fixtures.py
-# Unit coverage uses local MMDB fixtures and loopback HTTP test servers.
-go test -race -coverprofile=.tmp/geo.cover ./internal/center/geo
-go tool cover -func=.tmp/geo.cover
-go test ./...
-go vet ./...
-go build ./...
+# Unit and race tests use local MMDB fixtures and loopback HTTP test servers.
+go test -race ./internal/center/geo/... ./internal/center/ipwatch ./internal/center/ipapi
+# Database tests use only this worktree's configured speedtest_wt<ID> database.
+go test -p 1 -tags integration ./internal/center/geo/... -run 'Integration$' -count=1
+E2E_ONLY=SC-SET-02 node tests/e2e/main.mjs
+E2E_ONLY=SC-IP-01 node tests/e2e/main.mjs
 ```
 
-`make test` and CI prepare the fixtures before testing. Unit tests use local
-files and loopback `httptest` servers, with fake credentials. They make no
-licensed MaxMind download, database connection, or browser request. The
-database integration test is separate (`go test -p 1 -tags integration
-./internal/center/geo -count=1`) and requires a disposable database named
-`speedtest_test` or matching `^speedtest_wt[a-z0-9]{1,12}$`; it verifies the
-project ownership marker, resets project tables and the goose
-journal, applies its own schema, rolls back fixture transactions and leaves the
-schema empty on cleanup. Run all suites with
-`go test -race -p 1 -tags integration ./... -count=1`. Never run integration
-suites concurrently against the same database. The change touches no UI flow,
-so browser, layout, and theme checks are not applicable. Real provider calls
-and staging lifecycle integration require owner-authorized staging deployment; this library
-does not deploy itself.
+Unit tests use local files and loopback `httptest` servers with fake credentials;
+they make no licensed database download or real provider call. Integration
+tests verify the project ownership marker, reset the worktree schema, apply the
+current migrations and clean their fixture rows. Do not run database suites
+concurrently against the same worktree database. The two focused E2E scenarios
+cover provider budget visibility and quality/source details in IP views. The
+full repository CI gate remains responsible for the complete browser and
+integration suites. Live provider calls require deployment-specific credentials
+and network access.
 
 References: [MaxMind updates](https://dev.maxmind.com/geoip/updating-databases/),
 [download API](https://github.com/maxmind/openapi/blob/main/bundled/downloads.yaml),
@@ -160,18 +165,20 @@ References: [MaxMind updates](https://dev.maxmind.com/geoip/updating-databases/)
 
 ## More providers, consensus and DB-IP Lite (JOOST-75)
 
-Resolver order stays: durable cache, offline MMDB, then the enabled online providers. Enabled providers are tried in
-this order: ip-api, IPinfo Lite, **ipwho.is**, **ipapi.co**, **ipgeolocation.io**. The three new ones are off by default
-(`SPEEDTEST_GEO_IPWHO_ENABLED`, `SPEEDTEST_GEO_IPAPICO_ENABLED`, `SPEEDTEST_GEO_IPGEOLOCATION_ENABLED`) and share the
-existing timeout, rate limiter and circuit breaker. ipgeolocation.io needs `SPEEDTEST_GEO_IPGEOLOCATION_KEY` and HTTPS;
-the key travels only in the request to that service and appears in no error or log line. Every provider also checks that
-the answer is for the requested IP.
+Resolver order stays: durable cache, offline MMDB, then enabled online providers.
+The default provider switches are documented in `.env.example`: ip-api and
+online IPinfo Lite are off; ipwho.is, freeipapi and RIPEstat are on; GeoJS,
+ipapi.co and ipgeolocation.io are off. ipgeolocation.io needs
+`SPEEDTEST_GEO_IPGEOLOCATION_KEY` and HTTPS; the key travels only in the request
+to that service and appears in no error or log line. Every provider checks that
+the answer is for the requested IP. Low-value owner lookups use at most the
+first configured fallback. Node public-IP lookups use all enabled providers
+when consensus is enabled.
 
 **Consensus** (`SPEEDTEST_GEO_CONSENSUS=true`, needs at least two providers): all enabled providers are asked, the country
-most of them report wins (a tie goes to the earlier provider), empty fields of the winning answer are filled from the
-providers that agree, and the stored source is `consensus:ipwho+ipapi-co` (a single answer keeps its provider name). When
-providers disagree, a warning lists the competing countries (never the IP). The source of every location is shown in
-IP and location as "Looked up with".
+most of them report wins (a tie goes to the earlier provider), and empty fields in that answer are filled from providers
+that agree. The stored source records the contributing providers, for example `consensus:ipwho+freeipapi`. When providers
+disagree, a warning lists the competing countries (never the IP). Location source and quality are shown in IP views.
 
 **DB-IP Lite**: when no MaxMind licence key is set the center keeps `GeoLite2-City.mmdb` and `GeoLite2-ASN.mmdb` current
 from the free DB-IP Lite files (same format, CC BY 4.0). It checks every 24 hours and replaces a file only when it is
@@ -179,9 +186,51 @@ missing or older than 25 days, tries the previous month when the current month i
 database before the atomic swap, and keeps the old file and reader when anything fails.
 It is on by default in production (`APP_ENV=production`) and off elsewhere; `SPEEDTEST_GEO_DBIP_AUTO_UPDATE=true|false` overrides; with a MaxMind key the GeoLite2 updater runs instead. Wherever the
 data is shown, the attribution **IP Geolocation by DB-IP** (https://db-ip.com) applies; this page and the application
-documentation carry it. Providers are configured through the environment; moving their keys into Settings is a follow-up.
+documentation carry it. Provider settings remain environment-controlled; the owner Settings page reports each provider's
+on/off state, whether a key is configured, and today's usage without returning key values.
 
-## Free provider facts (read from the providers' own pages on 2026-11-06)
+## Quota-aware quality and backfill (JOOST-88)
+
+The stored quality score is 0–100, combines location completeness, source and age, and uses 85 as the enrichment
+threshold. It is recomputed from stored fields and lookup age on reads. Merge fills missing fields; it replaces a populated
+field only when the incoming source ranks higher, and stores provenance for each field. Offline data is checked before
+online requests. Node-address lookups may use consensus; interactive owner lookups are limited to one configured
+provider to conserve free quotas. A lookup that adds no field value or better provenance does not renew the cached
+observation time. Consensus votes only on known countries; a countryless RIPEstat ASN can fill an ASN gap while each
+field keeps its actual contributing provider.
+
+`geo_provider_usage` stores per-provider UTC-day request totals, current-minute counts and provider cooldowns in
+PostgreSQL. Reservations are atomic across center processes and survive restarts. A daily limit of zero means no local
+daily cap. Background work can use at most 80% of a configured daily quota, leaving the rest for interactive lookups.
+The broker observes ip-api `X-Rl`, `X-Ttl` and HTTP 429 responses and blocks calls until the provider window expires.
+The ip-api free endpoint defaults off; enabling it logs a warning that request IPs travel over plaintext HTTP and that
+the free service is for non-commercial use. Single lookups are paced to 45/minute; batch requests are paced to 15/minute
+and contain at most 100 IPs per request. The batch window has its own durable reservation key; an atomic rolling
+reservation spaces requests across minute boundaries and reserves the shared ip-api request budget in the same
+transaction. Batch `X-Rl`/`X-Ttl` or 429 responses persist the cooldown across restarts and center replicas.
+
+At the configured UTC hour (02:00 by default), the resumable backfill selects at most 100 weak or aged addresses per
+night, in bounded batches of up to 100. It includes unlooked placeholders, visits node addresses before lookup-only
+addresses, and uses ip-api batching when enabled and otherwise the budgeted fallback chain. If ingestion finds every
+provider out of budget, it commits the measurement and leaves an unlooked address for this scheduled retry path.
+`geo_backfill_state` stores the node-priority/IP cursor across UTC days and budget stops; after the keyspace is fully
+visited, the next pass starts from the highest-priority address again. Daily limits and batch size/pause are configurable
+in `.env.example`.
+
+`python3 scripts/geo-test-fixtures.py` verifies pinned public MMDB fixtures, including IPinfo's vendor sample database.
+IPinfo Lite stores ASN values as strings such as `AS174`; the reader validates and converts that value while keeping
+GeoLite fields available if the supplemental IPinfo record cannot be decoded.
+
+`GET /api/ip/providers` is session-protected and reports provider state, key-configured state, daily limit and today's
+request count. The Settings location panel never exposes a credential. Stored `ip_addresses.geo` uses `quality_score`
+and `field_sources`; API responses use `qualityScore` and `fieldSources` so operators can see aggregate quality and
+per-field sources.
+
+The center exports bounded-label `speedtest_geo_lookups_total{provider,outcome}` counters and includes
+`geo_backfill` in worker run/success metrics. Provider names and outcomes come from fixed allowlists; IP addresses and
+keys are never metric labels.
+
+## Free provider facts (read from the providers' own pages on 2026-11-10)
 
 Limits change; check the page before relying on a number.
 

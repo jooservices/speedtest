@@ -10,6 +10,32 @@
   function fail(error) {
     U.toast(error.status === 412 ? 'Settings were changed elsewhere. Reload the page and try again.' : error.status === 422 ? invalidMessage(error) : error.message, 'error');
   }
+  function geoProvidersView() {
+    var panel = h('div', { class: 'stack', 'aria-live': 'polite' }, h('p', { role: 'status' }, 'Loading provider status…'));
+    if (!real) {
+      U.clear(panel);
+      panel.appendChild(U.kv([['Providers', 'Demo data'], ['Daily usage', 'Available on a connected command center'] ]));
+      return panel;
+    }
+    ST.api.request('/api/ip/providers').then(function (result) {
+      U.clear(panel);
+      (result.data || []).forEach(function (provider) {
+        var labels = { 'ip-api': 'ip-api.com', 'ipinfo-lite': 'IPinfo Lite', ipwho: 'ipwho.is', freeipapi: 'freeipapi.com', geojs: 'GeoJS', 'ipapi-co': 'ipapi.co', ipgeolocation: 'ipgeolocation.io', ripestat: 'RIPEstat' };
+        var needsKey = provider.name === 'ipinfo-lite' || provider.name === 'ipgeolocation';
+        var keyText = needsKey ? (provider.keyConfigured ? 'Key configured' : 'Key not set') : 'No key required';
+        var budgetText = provider.dailyBudget === 0
+          ? F.num(provider.requestsToday) + ' requests today · no local daily cap'
+          : F.num(provider.requestsToday) + ' / ' + F.num(provider.dailyBudget) + ' requests today';
+        panel.appendChild(h('div', { class: 'row between wrap' },
+          h('div', { class: 'stack' }, h('b', null, labels[provider.name] || provider.name), h('span', { class: 'hint' }, keyText + ' · ' + budgetText)),
+          U.chip(provider.enabled ? 'On' : 'Off', provider.enabled ? 'good' : 'warn')));
+      });
+      if (!(result.data || []).length) panel.appendChild(U.empty('No providers configured', 'Check the command center environment configuration.'));
+    }, function () {
+      U.clear(panel); panel.appendChild(U.callout('Provider status is unavailable. Retry after the command center database is reachable.', 'warn', 'info'));
+    });
+    return panel;
+  }
   function invalidMessage(error) {
     var fields = error.errors && typeof error.errors === 'object' ? Object.keys(error.errors) : [];
     return fields.length ? 'Check these fields: ' + fields.join(', ') + '.' : 'Some values are not valid. Check them and try again.';
@@ -499,6 +525,7 @@
       body.appendChild(row('Backup service', 'Used when the database has no answer.', U.select([{ value: 'none', label: 'None' }, { value: 'ip-api', label: 'ip-api.com (free)' }, { value: 'ipinfo', label: 'IPinfo (free tier)' }], s.geoFallback, function (v) { set({ geoFallback: v }, true); saved(); })));
       body.appendChild(row('MaxMind license key', 'Free to get from maxmind.com. Needed to download database updates.', U.input(s.geoKey, function (v) { set({ geoKey: v }, true); }, { type: 'password', placeholder: 'Paste key', autocomplete: 'off', 'aria-label': 'MaxMind license key' })));
       body.appendChild(row('Update the database weekly', null, U.toggle(s.geoAutoUpdate, function (v) { set({ geoAutoUpdate: v }, true); saved(); }, 'Weekly update')));
+      body.appendChild(row('Provider budgets', 'Shows which online sources are enabled and their persisted UTC-day usage. Keys are never returned.', geoProvidersView()));
     }
 
     if (tab === 'notify' && real) realNotify();

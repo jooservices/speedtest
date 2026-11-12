@@ -1,0 +1,135 @@
+package budget
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sort"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+)
+
+// DB is the subset of the pgx pool or transaction the store needs, so tests can substitute a fake.
+type DB interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+	QueryRow(context.Context, string, ...any) pgx.Row
+}
+
+// PostgresStore keeps the daily counts in geo_provider_usage, so a restart does not reset a quota.
+type PostgresStore struct {
+	db DB
+}
+
+// NewPostgresStore wraps db; the caller owns the pool and its lifetime.
+func NewPostgresStore(db DB) *PostgresStore {
+	return &PostgresStore{db: db}
+}
+
+// Add increments the day's count atomically with an upsert and returns the new total.
+func (s *PostgresStore) Add(ctx context.Context, provider string, day time.Time, n int) (int, error) {
+	var total int
+	err := s.db.QueryRow(ctx, `INSERT INTO geo_provider_usage(provider, day, requests) VALUES ($1, $2::date, $3)
+		ON CONFLICT (provider, day) DO UPDATE SET requests = geo_provider_usage.requests + EXCLUDED.requests
+		RETURNING requests`, provider, day.UTC(), n).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("add geolocation usage: %w", err)
+	}
+	return total, nil
+}
+
+// Reserve atomically counts a request only when daily, minute, and provider cooldown limits allow it.
+func (s *PostgresStore) Reserve(ctx context.Context, provider string, day, minute, now time.Time, dailyLimit, minuteLimit int) (bool, error) {
+	return reserve(ctx, s.db, Reservation{Provider: provider, Day: day, Minute: minute, Now: now,
+		DailyLimit: dailyLimit, MinuteLimit: minuteLimit})
+}
+
+func reserve(ctx context.Context, db DB, reservation Reservation) (bool, error) {
+	var counted int
+	err := db.QueryRow(ctx, `INSERT INTO geo_provider_usage(provider,day,requests,minute_start,minute_requests,next_request_at)
+SELECT $1,$2::date,1,$3,1,CASE WHEN $7::boolean THEN $4::timestamptz + make_interval(secs => $8::double precision / 1000000.0) ELSE NULL::timestamptz END
+WHERE $5>=0 AND ($5=0 OR $5>=1)
+	AND $6>=0 AND ($6=0 OR $6>=1)
+	AND (NOT $7::boolean OR (SELECT coalesce(max(next_request_at),'-infinity'::timestamptz) FROM geo_provider_usage WHERE provider=$1)<=$4::timestamptz)
+	AND (SELECT coalesce(max(blocked_until),'-infinity'::timestamptz) FROM geo_provider_usage WHERE provider=$1)<=$4::timestamptz
+ON CONFLICT(provider,day) DO UPDATE SET
+	requests=geo_provider_usage.requests+1,
+	minute_requests=CASE WHEN geo_provider_usage.minute_start=$3 THEN geo_provider_usage.minute_requests+1 ELSE 1 END,
+	minute_start=$3,
+	next_request_at=CASE WHEN $7::boolean THEN $4::timestamptz + make_interval(secs => $8::double precision / 1000000.0) ELSE geo_provider_usage.next_request_at END
+WHERE $5>=0 AND ( $5=0 OR geo_provider_usage.requests < $5 )
+	AND $6>=0 AND ( $6=0 OR geo_provider_usage.minute_start<>$3 OR geo_provider_usage.minute_requests<$6 )
+	AND (NOT $7::boolean OR coalesce(geo_provider_usage.next_request_at,'-infinity'::timestamptz)<=$4::timestamptz)
+	AND (SELECT coalesce(max(blocked_until),'-infinity'::timestamptz) FROM geo_provider_usage WHERE provider=$1)<=$4::timestamptz
+	RETURNING requests`, reservation.Provider, reservation.Day.UTC(), reservation.Minute.UTC(), reservation.Now.UTC(),
+		reservation.DailyLimit, reservation.MinuteLimit, reservation.MinuteWindow, reservation.MinimumInterval.Microseconds()).Scan(&counted)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("reserve geolocation usage: %w", err)
+	}
+	return true, nil
+}
+
+// ReserveMany counts related quotas in one PostgreSQL transaction, rolling back all dimensions on any refusal.
+func (s *PostgresStore) ReserveMany(ctx context.Context, reservations []Reservation) (bool, error) {
+	if len(reservations) == 0 {
+		return true, nil
+	}
+	starter, ok := s.db.(interface {
+		Begin(context.Context) (pgx.Tx, error)
+	})
+	if !ok {
+		return false, errors.New("geolocation budget database does not support transactions")
+	}
+	ordered := append([]Reservation(nil), reservations...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if ordered[i].Provider == ordered[j].Provider {
+			return ordered[i].Day.Before(ordered[j].Day)
+		}
+		return ordered[i].Provider < ordered[j].Provider
+	})
+	tx, err := starter.Begin(ctx)
+	if err != nil {
+		return false, fmt.Errorf("begin geolocation budget reservation: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	for _, reservation := range ordered {
+		allowed, reserveErr := reserve(ctx, tx, reservation)
+		if reserveErr != nil {
+			return false, reserveErr
+		}
+		if !allowed {
+			return false, nil
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, fmt.Errorf("commit geolocation budget reservation: %w", err)
+	}
+	return true, nil
+}
+
+// BlockUntil persists provider supplied cooldown windows across restarts and UTC day changes.
+func (s *PostgresStore) BlockUntil(ctx context.Context, provider string, now, until time.Time) error {
+	_, err := s.db.Exec(ctx, `INSERT INTO geo_provider_usage(provider,day,blocked_until)
+VALUES($1,$2::date,$3)
+ON CONFLICT(provider,day) DO UPDATE SET blocked_until=GREATEST(COALESCE(geo_provider_usage.blocked_until,EXCLUDED.blocked_until),EXCLUDED.blocked_until)`,
+		provider, utcDay(now), until.UTC())
+	if err != nil {
+		return fmt.Errorf("persist geolocation provider cooldown: %w", err)
+	}
+	return nil
+}
+
+// Used returns the day's count, or zero when no request was counted that day.
+func (s *PostgresStore) Used(ctx context.Context, provider string, day time.Time) (int, error) {
+	var total int
+	err := s.db.QueryRow(ctx, `SELECT coalesce((SELECT requests FROM geo_provider_usage WHERE provider=$1 AND day=$2::date), 0)`,
+		provider, day.UTC()).Scan(&total)
+	if err != nil {
+		return 0, fmt.Errorf("read geolocation usage: %w", err)
+	}
+	return total, nil
+}
