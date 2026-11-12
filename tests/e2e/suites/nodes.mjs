@@ -26,10 +26,13 @@ function cleanupUploadFixture(T) {
   T.db(`DELETE FROM nodes WHERE id='${UPLOAD_NODE_ID}'; DELETE FROM ip_addresses WHERE ip='${UPLOAD_IP}' AND NOT EXISTS (SELECT 1 FROM results WHERE ip='${UPLOAD_IP}');`);
 }
 
+// VM3's two samples must land in ONE daily bucket whatever the time of day: they are pinned to 12:00 and 11:00 of the previous
+// day in the display zone (a fixed 'now minus 3 and 4 hours' straddles midnight between 00:00 and 04:00 and failed SC-QA-06).
 function seedSparseTrendFixture(T) {
   T.db(`INSERT INTO ip_addresses(ip) VALUES ('${SPARSE_IP}') ON CONFLICT DO NOTHING;
     INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,bytes_down,bytes_up,duration_seconds,error,engine)
-    SELECT gen_random_uuid(), n.id, now()-make_interval(hours=>v.hours), v.status,
+    SELECT gen_random_uuid(), n.id,
+      CASE WHEN n.name='VM3' THEN (date_trunc('day', now() AT TIME ZONE 'Asia/Bangkok') AT TIME ZONE 'Asia/Bangkok') - interval '12 hours' - make_interval(hours=>v.hours-3) ELSE now()-make_interval(hours=>v.hours) END, v.status,
       CASE WHEN v.status='failed' THEN NULL ELSE n.expected_down_mbps*(0.4+v.seq/100.0) END,
       CASE WHEN v.status='failed' THEN NULL ELSE n.expected_up_mbps*(0.4+v.seq/100.0) END,
       CASE WHEN v.status='failed' THEN NULL ELSE 8+v.seq END,
