@@ -1,6 +1,6 @@
 -- +goose Up
 -- ISP entities derived from ASN/organisation already stored in ip_addresses.geo (JOOST-74).
--- Numbered 00016 after merging develop's 00015 schedule-default migration.
+-- Numbered 00021 after the merged schedule, token and audit migrations.
 CREATE TABLE isps (
     id uuid PRIMARY KEY,
     asn bigint NOT NULL UNIQUE CHECK (asn > 0 AND asn <= 4294967295),

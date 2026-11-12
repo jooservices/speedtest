@@ -55,6 +55,10 @@ The SSH install wizard (host-key confirmation, live progress, failure) is covere
 Set `E2E_ONLY=SC-NODE-03,stats` (scenario IDs, areas or words of a title, comma separated) to run some scenarios (sign-in always runs first) and `E2E_TRACE=1` to print every write the browser makes.
 Failure screenshots land in `.tmp/e2e/shots`.
 
+The test process, center and agents run natively in this worktree. When using the Workspaces remote browser, tunnel the fixed
+local port to vm-tools and provide the remote Playwright server through `PW_TEST_CONNECT_WS_ENDPOINT`; the vm-tools browser
+reaches the center through the reverse tunnel at `E2E_BROWSER_ORIGIN`.
+
 ## Coverage of the UI code
 
 `make ui-coverage` runs the E2E suite, the demo/API smoke run, the wizard test and the Node unit tests, each recording V8 line coverage of

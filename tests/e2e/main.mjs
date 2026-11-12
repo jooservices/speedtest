@@ -34,7 +34,7 @@ const problems = [];
 // Map tiles come from the internet in production; the suite answers them locally with a blank tile.
 const BLANK_TILE = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 await context.route('https://tile.openstreetmap.org/**', route => route.fulfill({ status: 200, contentType: 'image/png', body: BLANK_TILE }));
-const contractRecorder = recordContract(page, stack.origin);
+const contractRecorder = recordContract(page, stack.browserOrigin);
 page.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') problems.push(`${m.type()}: ${m.text()}`); });
 page.on('pageerror', e => problems.push(`pageerror: ${e.message}`));
 
@@ -48,7 +48,7 @@ const T = coreSteps(ctx);
 const S = { engines: enginesSuite(T, ctx), auth: authSuite(T, ctx), dashboard: dashboardSuite(T, ctx), nodes: nodesSuite(T, ctx), results: resultsSuite(T, ctx), statistics: statisticsSuite(T, ctx),
   network: networkSuite(T, ctx), isps: ispsSuite(T), schedules: schedulesSuite(T, ctx), alerts: alertsSuite(T, ctx), settings: settingsSuite(T, ctx), quality: qualitySuite(T, ctx) };
 const scenarios = buildScenarios({ T, S });
-if (process.env.E2E_TRACE) page.on('response', r => {  if (r.url().includes('/api/') && r.request().method() !== 'GET') console.log('  ', r.request().method(), r.url().replace(stack.origin, ''), r.status(), process.env.E2E_BODY ? (r.request().postData() || '') : ''); });
+if (process.env.E2E_TRACE) page.on('response', r => {  if (r.url().includes('/api/') && r.request().method() !== 'GET') console.log('  ', r.request().method(), r.url().replace(stack.browserOrigin, ''), r.status(), process.env.E2E_BODY ? (r.request().postData() || '') : ''); });
 let failed = 0;
 const only = process.env.E2E_ONLY;
 // E2E_ONLY filters by scenario id, area or words of the title (comma separated); sign-in always runs first.
