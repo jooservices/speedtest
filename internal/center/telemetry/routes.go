@@ -86,6 +86,7 @@ var apiRoutes = map[string]bool{
 	"/api/stats/hour-of-day":                          true,
 	"/api/stats/heatmap":                              true,
 	"/api/stats/distribution":                         true,
+	"/api/stats/events":                               true,
 	"/api/dashboard":                                  true,
 	"/api/series":                                     true,
 	"/api/schedules":                                  true,

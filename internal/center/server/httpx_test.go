@@ -12,6 +12,7 @@ func TestRouteLabelNeverInventsGroups(t *testing.T) {
 		"/api/access-tokens/" + id:               "/api/access-tokens/{id}",
 		"/api/schedules/rules":                   "/api/schedules/rules",
 		"/api/stats/summary":                     "/api/stats/summary",
+		"/api/stats/events":                      "/api/stats/events",
 		"/api/export/results.csv":                "/api/export/results.csv",
 		"/api/wp-admin/setup.php":                "/api/*/*",
 		"/api/nodes/abc/def/ghi/jkl/mno":         "/api/nodes/*/*/*",

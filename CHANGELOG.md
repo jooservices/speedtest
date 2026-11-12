@@ -9,6 +9,7 @@ All notable changes to Speedtest are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Statistics analytics now include p50/p95/p99, an ISP filter, a fixed-window heatmap, week-over-week means and bounded IP/ISP/alert events.
 - Monthly ISP and plan report (JOOST-79): per-ISP/per-node metrics, destination-attributed IP changes, an explicit unknown-attribution row, a Unicode PDF and CSV export, a populated UI preview, and optional previous-month e-mail with a renewable lease and stale-claim recovery.
 - IP change notifications and alert events now say which address changed to which ("Changed from 203.0.113.1 to 203.0.113.2 (city)"), and every delivered notification carries the event detail line (JOOST-91).
 - Configurable application notification events, per-channel templates, preview and reset controls, test-success and recovery deliveries, and security, bandwidth-budget and export event producers.
@@ -23,6 +24,7 @@ All notable changes to Speedtest are recorded here. The format follows
 
 ### Fixed
 - Installation event streams revalidate the bearer token that opened them, so expiry and revocation stop the stream at its next 10-second check.
+- Statistics trend markers render numeric demo timestamps; IP transitions are scoped to known results for the selected engine.
 
 ## [1.0.0] - 2026-11-06
 
