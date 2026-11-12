@@ -125,6 +125,7 @@ func buildHandler(cfg config.CenterConfig, svc services, logger *slog.Logger, ui
 		Settings:             svc.Settings,
 		OwnerIP:              svc.OwnerIP,
 		OwnerNotifications:   svc.OwnerNotifications,
+		NotificationEvents:   svc.NotificationEvents,
 		OwnerDashboard:       svc.OwnerDashboard,
 		OwnerAlerts:          svc.OwnerAlerts,
 		OwnerJobs:            svc.OwnerJobs,

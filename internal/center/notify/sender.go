@@ -46,13 +46,17 @@ func (s *Transport) Send(ctx context.Context, channel, to, secret, message strin
 			return ErrSend
 		}
 		endpoint = base + "/bot" + url.PathEscape(secret) + "/sendMessage"
-		payload = map[string]string{"chat_id": to, "text": message}
+		payload = map[string]string{"chat_id": to, "text": message, "parse_mode": "HTML"}
 	case "slack":
 		endpoint = secret
-		payload = map[string]string{"text": message}
+		payload = map[string]any{"blocks": []any{map[string]any{"type": "section", "text": map[string]string{"type": "mrkdwn", "text": message}}}}
 	case "webhook":
 		endpoint = secret
-		payload = map[string]string{"text": message}
+		if json.Valid([]byte(message)) {
+			payload = json.RawMessage(message)
+		} else {
+			payload = map[string]string{"text": message}
+		}
 	default:
 		return ErrSend
 	}
