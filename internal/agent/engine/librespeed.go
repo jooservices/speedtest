@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -115,8 +116,7 @@ func NewConfigured(name string, parallelConnections int) (Engine, error) {
 }
 
 func (e *LibreSpeed) Run(ctx context.Context, opts Options) (Result, error) {
-	// librespeed-cli can bind a source address (--source) but not an interface; refuse
-	// an interface binding instead of silently measuring the default route.
+	// Refuse interface binding; librespeed-cli supports only a source address.
 	if opts.ServerID < 0 || opts.Timeout < 0 || opts.InterfaceName != "" || !validNetworkOptions(opts) {
 		return failed(Result{}, InvalidOptions, nil)
 	}
@@ -163,6 +163,9 @@ func (e *LibreSpeed) Run(ctx context.Context, opts Options) (Result, error) {
 	if stdout.overflow {
 		return failed(Result{}, InvalidResult, nil)
 	}
+	if opts.ServerID > 0 && bytes.Equal(bytes.TrimSpace(stdout.data), []byte("null")) {
+		return failed(Result{}, ServerUnavailable, nil)
+	}
 	r, err := ParseLibreSpeed(stdout.data)
 	if err != nil {
 		return r, err
@@ -171,4 +174,24 @@ func (e *LibreSpeed) Run(ctx context.Context, opts Options) (Result, error) {
 		r.Server.ID = opts.ServerID
 	}
 	return r, nil
+}
+
+// ListServers asks the configured LibreSpeed CLI to enumerate its configured
+// server list on the node's network path.
+func (e *LibreSpeed) ListServers(ctx context.Context, opts Options) ([]ServerOption, error) {
+	if !validServerListOptions(opts) || opts.InterfaceName != "" {
+		return nil, &RunError{Class: InvalidOptions}
+	}
+	args := []string{"--list"}
+	if e.config.ServerJSON != "" {
+		args = append(args, "--server-json", e.config.ServerJSON)
+	}
+	if opts.SourceIP != "" {
+		args = append(args, "--source", opts.SourceIP)
+	}
+	data, err := runServerListCommand(ctx, e.config.Binary, args, e.config.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	return ParseLibreSpeedList(data)
 }

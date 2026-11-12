@@ -4,14 +4,18 @@ package ownerapi
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/shared/testenv"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+	"github.com/jooservices/speedtest/internal/center/agentapi"
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/shared/config"
@@ -23,9 +27,7 @@ func openPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	if err != nil {
 		t.Fatal("a configured worktree .env is required")
 	}
-	for k, v := range values {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid test configuration")
@@ -54,7 +56,7 @@ func seedNode(t *testing.T, ctx context.Context, pool *pgxpool.Pool, n int, name
 	if _, err := pool.Exec(ctx, `INSERT INTO nodes (id,name,label,expected_down_mbps,expected_up_mbps,color_slot,last_seen_at,host,agent) VALUES ($1,$2,'lbl',300,100,$3,$4,'host','agent/1')`, id, name, n, lastSeen); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `WITH legacy AS (INSERT INTO schedules (node_id,interval_minutes,offset_minutes) VALUES ($1,30,$2) RETURNING *) INSERT INTO engine_schedules SELECT node_id,'ookla',interval_minutes,offset_minutes,enabled,revision FROM legacy`, id, n*3); err != nil {
+	if _, err := pool.Exec(ctx, `WITH legacy AS (INSERT INTO schedules (node_id,interval_minutes,offset_minutes) VALUES ($1,30,$2) RETURNING *) INSERT INTO engine_schedules SELECT node_id,'ookla',interval_minutes,offset_minutes,enabled,revision FROM legacy`, id, n*3%30); err != nil {
 		t.Fatal(err)
 	}
 	return id
@@ -177,6 +179,186 @@ func TestStoreUpdate(t *testing.T) {
 	var rev int64
 	if err := pool.QueryRow(ctx, `SELECT config_revision FROM nodes WHERE id=$1`, id).Scan(&rev); err != nil || rev != 3 {
 		t.Fatalf("revision = %d (a rejected update must not bump it) err %v", rev, err)
+	}
+}
+
+func TestLegacyAndPerEnginePinsStayCompatibleIntegration(t *testing.T) {
+	pool, ctx := openPool(t)
+	nodeID := seedNode(t, ctx, pool, 1, "pin-compat", nil)
+	if _, err := pool.Exec(ctx, `UPDATE nodes SET installed_engines=ARRAY['ookla']::text[] WHERE id=$1`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO node_engine_servers(node_id,engine,servers) VALUES($1,'ookla',
+		'[{"id":41,"name":"First","city":"Hanoi","isp":"ISP","host":"one.example"},{"id":42,"name":"Second","city":"Hue","isp":"ISP","host":"two.example"}]')`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	owner := &Store{DB: pool}
+	_, tag, err := owner.Update(ctx, nodeID, raw(map[string]string{"server": `41`}), ETag(1))
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAgentPinCompatible(t, ctx, pool, nodeID, "41")
+	second := int64(42)
+	_, tag, err = owner.SelectServer(ctx, nodeID, "ookla", &second, tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAgentPinCompatible(t, ctx, pool, nodeID, "42")
+	_, tag, err = owner.Update(ctx, nodeID, raw(map[string]string{"server": `"auto"`}), tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAgentPinCompatible(t, ctx, pool, nodeID, "auto")
+	_, _, err = owner.SelectServer(ctx, nodeID, "ookla", nil, tag)
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertAgentPinCompatible(t, ctx, pool, nodeID, "auto")
+}
+
+func TestResultSelectionSnapshotsStayHistoricalAfterPinChangesIntegration(t *testing.T) {
+	pool, ctx := openPool(t)
+	nodeID := seedNode(t, ctx, pool, 1, "pin-history", nil)
+	if _, err := pool.Exec(ctx, `INSERT INTO node_engine_servers(node_id,engine,pinned_server_id) VALUES($1,'ookla',10)`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE node_engine_servers SET pinned_server_id=20 WHERE node_id=$1 AND engine='ookla'`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE node_engine_servers SET pinned_server_id=NULL WHERE node_id=$1 AND engine='ookla'`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	seedResult(t, ctx, pool, 90, nodeID, now.Add(-3*time.Minute), "failed", "")
+	seedResult(t, ctx, pool, 91, nodeID, now.Add(-2*time.Minute), "failed", "")
+	seedResult(t, ctx, pool, 92, nodeID, now.Add(-time.Minute), "failed", "")
+	for _, snapshot := range []struct {
+		id    string
+		pin   int
+		known bool
+	}{{uid(1091), 10, true}, {uid(1092), 20, true}} {
+		if _, err := pool.Exec(ctx, `UPDATE results SET pinned_server_id_at_test=$2,server_selection_known=$3 WHERE id=$1`, snapshot.id, snapshot.pin, snapshot.known); err != nil {
+			t.Fatal(err)
+		}
+	}
+	items, _, err := (&Store{DB: pool}).ListResults(ctx, ResultFilter{Nodes: []string{nodeID}, NodesSet: true, AllEngines: true}, 1, 10)
+	if err != nil || len(items) != 3 {
+		t.Fatalf("historical results=%v err=%v", items, err)
+	}
+	byID := make(map[string]map[string]any, len(items))
+	for _, item := range items {
+		byID[item["id"].(string)] = item
+	}
+	if byID[uid(1090)]["serverSelectionKnown"] != false || byID[uid(1090)]["pinnedServerId"] != nil ||
+		byID[uid(1091)]["serverSelectionKnown"] != true || byID[uid(1091)]["pinnedServerId"] != int64(10) ||
+		byID[uid(1092)]["serverSelectionKnown"] != true || byID[uid(1092)]["pinnedServerId"] != int64(20) {
+		t.Fatalf("current cleared pin rewrote historical selections: %v", byID)
+	}
+}
+
+func TestLegacyPatchRollsBackWhenPerEnginePinSyncFailsIntegration(t *testing.T) {
+	pool, ctx := openPool(t)
+	nodeID := seedNode(t, ctx, pool, 1, "pin-sync-rollback", nil)
+	if _, err := pool.Exec(ctx, `INSERT INTO node_engine_servers(node_id,engine,servers) VALUES($1,'ookla','[{"id":41,"name":"First"}]')`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	createServerWriteFailureFunction(t, ctx, pool)
+	deferServerWriteFailureCleanup(t, pool)
+	createServerFailureTrigger(t, ctx, pool, `CREATE TRIGGER fail_pin BEFORE UPDATE ON node_engine_servers
+		FOR EACH ROW WHEN (NEW.node_id='`+nodeID+`'::uuid) EXECUTE FUNCTION fail_server_write()`)
+	if _, _, err := (&Store{DB: pool}).Update(ctx, nodeID, raw(map[string]string{"server": `41`}), ETag(1)); err == nil {
+		t.Fatal("legacy patch succeeded despite per-engine pin storage failure")
+	}
+	var legacy *int64
+	var pin *int64
+	var revision int64
+	if err := pool.QueryRow(ctx, `SELECT n.server_id,c.pinned_server_id,n.config_revision FROM nodes n JOIN node_engine_servers c ON c.node_id=n.id WHERE n.id=$1`, nodeID).
+		Scan(&legacy, &pin, &revision); err != nil || legacy != nil || pin != nil || revision != 1 {
+		t.Fatalf("failed legacy patch left split pins: legacy=%v per-engine=%v revision=%d err=%v", legacy, pin, revision, err)
+	}
+}
+
+func assertAgentPinCompatible(t *testing.T, ctx context.Context, pool *pgxpool.Pool, nodeID, want string) {
+	t.Helper()
+	config, err := (&agentapi.Postgres{Pool: pool}).Config(ctx, nodeID)
+	if err != nil || fmt.Sprint(config["server"]) != want {
+		t.Fatalf("legacy agent pin=%v err=%v, want %s", config["server"], err, want)
+	}
+	var schedules []map[string]any
+	if err := json.Unmarshal(config["schedules"].(json.RawMessage), &schedules); err != nil || len(schedules) != 1 || fmt.Sprint(schedules[0]["serverId"]) != want {
+		t.Fatalf("current agent schedules=%v err=%v, want pin %s", schedules, err, want)
+	}
+}
+
+func TestNodeISPPlanDefaultsAndOverridesIntegration(t *testing.T) {
+	pool, ctx := openPool(t)
+	s := &Store{DB: pool}
+	first := seedNode(t, ctx, pool, 1, "plan-defaults", nil)
+	second := seedNode(t, ctx, pool, 2, "plan-isp-mismatch", nil)
+	ispA, ispB := uid(5101), uid(5102)
+	planA, planB := uid(5201), uid(5202)
+	seedNodePlans(t, ctx, pool, ispA, ispB, planA, planB)
+
+	view, etag, err := s.Update(ctx, first, raw(map[string]string{"ispPlanId": `"` + planA + `"`}), ETag(1))
+	if err != nil || view["expectedDown"] != float64(500) || view["expectedUp"] != float64(100) {
+		t.Fatalf("assign plan defaults: view=%v err=%v", view, err)
+	}
+	assertNodePlanState(t, ctx, pool, first, 500, 100, true, true)
+	_, etag, err = s.Update(ctx, first, raw(map[string]string{"expectedDown": `500`}), etag)
+	if err != nil {
+		t.Fatal("set explicit speed equal to old plan:", err)
+	}
+	assertNodePlanState(t, ctx, pool, first, 500, 100, false, true)
+	_, etag, err = s.Update(ctx, first, raw(map[string]string{"label": `"same plan"`}), etag)
+	if err != nil {
+		t.Fatal("save an unrelated edit on the same plan:", err)
+	}
+	assertNodePlanState(t, ctx, pool, first, 500, 100, false, true)
+	_, etag, err = s.Update(ctx, first, raw(map[string]string{"ispPlanId": `"` + planB + `"`}), etag)
+	if err != nil {
+		t.Fatal("switch plans:", err)
+	}
+	assertNodePlanState(t, ctx, pool, first, 500, 120, false, true)
+	_, _, err = s.Update(ctx, first, raw(map[string]string{"ispPlanId": `null`}), etag)
+	if err != nil {
+		t.Fatal("clear plan:", err)
+	}
+	assertNodePlanState(t, ctx, pool, first, 500, 120, false, false)
+	assertNodePlanISPMatch(t, ctx, pool, s, second, ispA, planB)
+}
+
+func seedNodePlans(t *testing.T, ctx context.Context, pool *pgxpool.Pool, ispA, ispB, planA, planB string) {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `INSERT INTO isps(id,asn,organisation,name) VALUES ($1,64501,'Plan A','Plan A'),($2,64502,'Plan B','Plan B')`, ispA, ispB); err != nil {
+		t.Fatal("seed ISPs:", err)
+	}
+	_, err := pool.Exec(ctx, `INSERT INTO isp_plans(id,isp_id,name,advertised_down_mbps,advertised_up_mbps) VALUES ($1,$2,'Fiber A',500,100),($3,$4,'Fiber B',600,120)`, planA, ispA, planB, ispB)
+	if err != nil {
+		t.Fatal("seed ISP plans:", err)
+	}
+}
+
+func assertNodePlanState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, node string, down, up float64, downDefault, upDefault bool) {
+	t.Helper()
+	var gotDown, gotUp float64
+	var gotDownDefault, gotUpDefault bool
+	err := pool.QueryRow(ctx, `SELECT expected_down_mbps,expected_up_mbps,expected_down_isp_default,expected_up_isp_default FROM nodes WHERE id=$1`, node).Scan(&gotDown, &gotUp, &gotDownDefault, &gotUpDefault)
+	if err != nil || gotDown != down || gotUp != up || gotDownDefault != downDefault || gotUpDefault != upDefault {
+		t.Fatalf("plan state=%v/%v:%v/%v want %v/%v:%v/%v err=%v", gotDown, gotUp, gotDownDefault, gotUpDefault, down, up, downDefault, upDefault, err)
+	}
+}
+
+func assertNodePlanISPMatch(t *testing.T, ctx context.Context, pool *pgxpool.Pool, s *Store, node, ispID, planID string) {
+	seedResult(t, ctx, pool, 2, node, time.Now().UTC(), "ok", "203.0.113.22")
+	if _, err := pool.Exec(ctx, `UPDATE ip_addresses SET isp_id=$1 WHERE ip='203.0.113.22'`, ispID); err != nil {
+		t.Fatal("assign current ISP to address:", err)
+	}
+	_, etag, err := s.Get(ctx, node)
+	if err != nil {
+		t.Fatal("read node before ISP mismatch:", err)
+	}
+	if _, _, err := s.Update(ctx, node, raw(map[string]string{"ispPlanId": `"` + planID + `"`}), etag); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("different ISP plan error=%v, want ErrInvalid", err)
 	}
 }
 

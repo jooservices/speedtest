@@ -20,12 +20,15 @@ export function networkSuite(T) {
       await T.press('Look up');
       const found = await (await lookup).json();
       assert.equal(found.data.city, 'Hanoi', 'the center answered the lookup');
+      assert.ok(found.data.qualityScore >= 85 && found.data.fieldSources.city, 'the location includes quality and per-field source data');
       await page.locator('.card').filter({ hasText: 'Look up an address' }).getByText('Hanoi').first().waitFor();
+      await T.see('Quality score');
       await T.fill('IP address to look up', '2001:db8::1');
       await T.press('Look up');
       await T.see('No location is known for this address.');
       await page.getByRole('cell', { name: '203.0.113.11' }).first().click();
       await page.getByRole('heading', { name: 'IP address details' }).waitFor();
+      await T.see('Quality score', page.locator('.drawer'));
       await T.press('Copy', page.locator('.drawer'));
       await T.dismiss();
     },

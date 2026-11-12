@@ -16,15 +16,22 @@ import (
 
 // Entry is one recorded change.
 type Entry struct {
-	ID         string    `json:"id"`
-	TS         time.Time `json:"ts"`
-	Actor      string    `json:"actor"`
-	Action     string    `json:"action"`
-	TargetType string    `json:"targetType"`
-	TargetID   string    `json:"targetId"`
-	Summary    string    `json:"summary"`
-	Remote     string    `json:"remote"`
+	ID           string    `json:"id"`
+	TS           time.Time `json:"ts"`
+	Actor        string    `json:"actor"`
+	AuthMethod   string    `json:"authMethod"`
+	CredentialID string    `json:"credentialId,omitempty"`
+	Action       string    `json:"action"`
+	TargetType   string    `json:"targetType"`
+	TargetID     string    `json:"targetId"`
+	Summary      string    `json:"summary"`
+	Remote       string    `json:"remote"`
 }
+
+const (
+	AuthMethodSession = "session"
+	AuthMethodBearer  = "bearer"
+)
 
 // Store keeps the audit log in PostgreSQL.
 type Store struct {
@@ -49,18 +56,38 @@ func newID() string {
 
 // Record stores one entry. The summary is cut to 300 characters.
 func (s *Store) Record(ctx context.Context, e Entry) error {
+	return record(ctx, s.DB, e, s.Now)
+}
+
+// RecordTx writes an audit entry inside the caller's transaction.
+func RecordTx(ctx context.Context, tx pgx.Tx, e Entry) error {
+	return record(ctx, tx, e, nil)
+}
+
+type entryWriter interface {
+	Exec(context.Context, string, ...any) (pgconn.CommandTag, error)
+}
+
+func record(ctx context.Context, writer entryWriter, e Entry, nowFn func() time.Time) error {
 	if e.Actor == "" || e.Action == "" {
 		return fmt.Errorf("audit entry needs an actor and an action")
+	}
+	if e.AuthMethod == "" {
+		e.AuthMethod = AuthMethodSession
+	}
+	if e.AuthMethod != AuthMethodSession && e.AuthMethod != AuthMethodBearer {
+		return fmt.Errorf("audit entry has an unsupported authentication method")
 	}
 	if len(e.Summary) > 300 {
 		e.Summary = e.Summary[:300]
 	}
 	now := time.Now()
-	if s.Now != nil {
-		now = s.Now()
+	if nowFn != nil {
+		now = nowFn()
 	}
-	_, err := s.DB.Exec(ctx, `INSERT INTO audit_log(id,ts,actor,action,target_type,target_id,summary,remote) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-		newID(), now.UTC(), e.Actor, e.Action, e.TargetType, e.TargetID, e.Summary, e.Remote)
+	_, err := writer.Exec(ctx, `INSERT INTO audit_log(id,ts,actor,action,target_type,target_id,summary,remote,auth_method,credential_id)
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,NULLIF($10,'')::uuid)`,
+		newID(), now.UTC(), e.Actor, e.Action, e.TargetType, e.TargetID, e.Summary, e.Remote, e.AuthMethod, e.CredentialID)
 	return err
 }
 
@@ -78,13 +105,13 @@ func (s *Store) List(ctx context.Context, f Filter, page, size int) ([]Entry, in
 		return nil, 0, err
 	}
 	args = append(args, size, (page-1)*size)
-	rows, err := s.DB.Query(ctx, fmt.Sprintf(`SELECT id::text,ts,actor,action,target_type,target_id,summary,remote FROM audit_log%s ORDER BY ts DESC, id LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
+	rows, err := s.DB.Query(ctx, fmt.Sprintf(`SELECT id::text,ts,actor,auth_method,coalesce(credential_id::text,''),action,target_type,target_id,summary,remote FROM audit_log%s ORDER BY ts DESC, id LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args)), args...)
 	if err != nil {
 		return nil, 0, err
 	}
 	items, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (Entry, error) {
 		var e Entry
-		err := row.Scan(&e.ID, &e.TS, &e.Actor, &e.Action, &e.TargetType, &e.TargetID, &e.Summary, &e.Remote)
+		err := row.Scan(&e.ID, &e.TS, &e.Actor, &e.AuthMethod, &e.CredentialID, &e.Action, &e.TargetType, &e.TargetID, &e.Summary, &e.Remote)
 		e.TS = e.TS.UTC()
 		return e, err
 	})
@@ -109,6 +136,8 @@ type rule struct {
 // rules map an owner write to a readable action. Patterns use {id} for one path segment.
 var rules = []rule{
 	{"POST", "/api/nodes", "node.create", "node", "Added a node"},
+	{"POST", "/api/access-tokens", "access_token.create", "access_token", "Created an API access token"},
+	{"DELETE", "/api/access-tokens/{id}", "access_token.revoke", "access_token", "Revoked an API access token"},
 	{"PATCH", "/api/nodes/{id}", "node.update", "node", "Changed node settings"},
 	{"DELETE", "/api/nodes/{id}", "node.delete", "node", "Removed a node"},
 	{"POST", "/api/nodes/{id}/run", "node.run", "node", "Started a speed test"},
@@ -118,6 +147,8 @@ var rules = []rule{
 	{"POST", "/api/nodes/{id}/installations", "node.install", "node", "Installed the agent over SSH"},
 	{"POST", "/api/nodes/{id}/uninstallations", "node.uninstall", "node", "Removed the agent over SSH"},
 	{"PUT", "/api/schedules/{id}", "schedule.update", "schedule", "Changed a node schedule"},
+	{"PUT", "/api/usage/budgets/{id}", "usage_budget.update", "usage_budget", "Changed a bandwidth budget"},
+	{"DELETE", "/api/usage/budgets/{id}", "usage_budget.delete", "usage_budget", "Removed a bandwidth budget"},
 	{"PUT", "/api/schedules/rules", "schedule.rules", "schedule", "Changed the schedule rules"},
 	{"POST", "/api/schedules/stagger", "schedule.stagger", "schedule", "Spread out start times"},
 	{"POST", "/api/alerts/rules", "alert.rule.create", "alert_rule", "Created an alert rule"},
@@ -128,6 +159,11 @@ var rules = []rule{
 	{"PUT", "/api/settings", "settings.update", "settings", "Changed settings"},
 	{"POST", "/api/settings/enrolment-key", "settings.enrolment_key", "settings", "Generated a new enrolment key"},
 	{"POST", "/api/notifications/test/{id}", "notification.test", "notification", "Sent a test notification"},
+	{"PATCH", "/api/notifications/events/{id}", "notification.event.update", "notification_event", "Changed a notification event"},
+	{"POST", "/api/notifications/events/{id}/tests/{id}", "notification.event.test", "notification_event", "Sent a sample notification event"},
+	{"PUT", "/api/notifications/events/{id}/nodes/{id}", "notification.event.node.update", "notification_event", "Changed a node notification event"},
+	{"PUT", "/api/notifications/templates/{id}/{id}", "notification.template.update", "notification_template", "Changed a notification template"},
+	{"POST", "/api/notifications/templates/{id}/{id}/resets", "notification.template.reset", "notification_template", "Reset a notification template"},
 	{"POST", "/api/auth/password", "auth.password", "user", "Changed the password"},
 	{"POST", "/api/auth/2fa/enable", "auth.two_factor_enable", "user", "Turned two-factor sign-in on"},
 	{"POST", "/api/auth/2fa/disable", "auth.two_factor_disable", "user", "Turned two-factor sign-in off"},
@@ -139,16 +175,17 @@ func match(pattern, path string) (id string, ok bool) {
 	if len(a) != len(b) {
 		return "", false
 	}
+	var ids []string
 	for i := range a {
 		if a[i] == "{id}" {
-			id = b[i]
+			ids = append(ids, b[i])
 			continue
 		}
 		if a[i] != b[i] {
 			return "", false
 		}
 	}
-	return id, true
+	return strings.Join(ids, "/"), true
 }
 
 // Classify turns an owner write into an entry (without actor, time or origin). ok is false for requests that are

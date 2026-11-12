@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/jooservices/speedtest/internal/center/agentapi"
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 	"github.com/jooservices/speedtest/internal/center/settings"
 	"github.com/jooservices/speedtest/internal/center/telemetry"
 	"github.com/jooservices/speedtest/internal/shared/errtrack"
@@ -31,6 +32,13 @@ const (
 // Pinger reports whether the configured database is reachable.
 type Pinger interface {
 	PingContext(context.Context) error
+}
+
+// NotificationEvents publishes owner security events without affecting request outcomes.
+type NotificationEvents interface {
+	PublishEvent(context.Context, string, string, map[string]string) error
+	RecordSignIn(context.Context, string, string) error
+	RecordLoginFailure(context.Context, string) error
 }
 
 // Options configures the HTTP handlers.
@@ -51,6 +59,8 @@ type Options struct {
 	AgentRateLimit    int
 	// OwnerNodes optionally serves the dashboard node API (list, detail, update, delete, commands).
 	OwnerNodes OwnerNodesStore
+	// OwnerServers optionally serves per-engine server catalogs and pin selection.
+	OwnerServers OwnerServersStore
 	// OwnerSchedules optionally serves the dashboard schedule API.
 	OwnerSchedules OwnerSchedulesStore
 	// Audit optionally records owner changes and serves GET /api/audit.
@@ -62,12 +72,19 @@ type Options struct {
 	// OwnerIP optionally serves the IP history, address, lookup and map views.
 	OwnerIP            OwnerIPStore
 	OwnerNotifications OwnerNotificationsStore
+	NotificationEvents NotificationEvents
 	// Settings optionally serves the settings API and enrolment-key rotation.
 	Settings settings.Store
 	// OwnerResults optionally serves the dashboard result API (list, detail, CSV export).
 	OwnerResults OwnerResultsStore
 	// OwnerStats optionally serves the owner statistics API.
 	OwnerStats OwnerStatsStore
+	// OwnerUsage optionally serves measured traffic and monthly budget resources.
+	OwnerUsage OwnerUsageStore
+	// OwnerISP optionally serves ISP list, comparison, trend and plan APIs.
+	OwnerISP OwnerISPStore
+	// OwnerReport optionally serves the monthly ISP and plan report (JSON, CSV, PDF).
+	OwnerReport OwnerReportStore
 	// OwnerAlerts optionally serves alert-rule and event APIs.
 	OwnerAlerts OwnerAlertsStore
 	// Installer serves SSH fingerprint probes, install jobs, and replayable progress.
@@ -75,6 +92,11 @@ type Options struct {
 	// Install optionally serves /install.sh and /download/<artifact>.
 	Install  http.Handler
 	AgentAPI agentapi.Store
+	// AccessTokens enables named owner bearer tokens and the authenticated /mcp endpoint.
+	AccessTokens AccessTokenStore
+	// AccessTokenRateLimit and AccessTokenBurst set each token's independent API rate bucket.
+	AccessTokenRateLimit int
+	AccessTokenBurst     int
 }
 
 // NewHandler builds the whole HTTP handler: owner APIs, agent API, health endpoints and the static UI, wrapped in
@@ -88,10 +110,20 @@ func NewHandler(options Options) http.Handler {
 	if readinessTimeout <= 0 {
 		readinessTimeout = defaultReadinessTimeout
 	}
-	auth := &serverAuth{service: options.Auth, requireHTTPS: options.RequireHTTPS, trustedProxyCIDRs: options.TrustedProxyCIDRs}
-	areas := append(ownerAreas(options, auth), platformAreas(options, auth, readyz(options.Pinger, readinessTimeout))...)
+	auth := &serverAuth{service: options.Auth, requireHTTPS: options.RequireHTTPS, trustedProxyCIDRs: options.TrustedProxyCIDRs,
+		tokens: options.AccessTokens, tokenLimiter: newNodeRateLimiter(options.AccessTokenRateLimit, options.AccessTokenBurst), events: options.NotificationEvents}
+	owners := ownerAreas(options, auth)
+	internalOwner := withAudit(dispatcher(owners, http.NotFoundHandler()), options.Audit, auth, options.NotificationEvents, logger)
+	if options.AccessTokens != nil {
+		owners.addToken(newMCPHandler(internalOwner), onPath(func(path string) bool { return path == "/mcp" }), func(*http.Request) (apitoken.Scope, bool) { return "", true })
+	}
+	platform := platformAreas(options, auth, readyz(options.Pinger, readinessTimeout))
+	areas := make(routeTable, 0, len(owners)+len(platform))
+	areas = append(areas, owners...)
+	areas = append(areas, platform...)
 
-	handler := withAudit(dispatcher(areas, uiHandler(options.UI)), options.Audit, auth, logger)
+	handler := withAudit(dispatcher(areas, uiHandler(options.UI)), options.Audit, auth, options.NotificationEvents, logger)
+	handler = withAPITokenAuth(handler, owners, auth)
 	handler = withSecurityHeaders(handler)
 	handler = recoverPanics(handler, logger)
 	handler = logRequests(handler, logger)

@@ -39,7 +39,10 @@ func (EnvironmentSettings) AutoUpdate(context.Context) (bool, error) {
 type Config struct {
 	CityPath    string
 	ASNPath     string
+	IPInfoPath  string
 	DownloadURL string
+	IPInfoURL   string
+	IPInfoToken string
 	// AccountID selects the current Basic Auth download API. If absent, the
 	// backwards-compatible licence-key download API is used.
 	AccountID string
@@ -50,7 +53,10 @@ func ConfigFromEnv() Config {
 	return Config{
 		CityPath:    envDefault("SPEEDTEST_GEOIP_CITY_DB", "data/geoip/GeoLite2-City.mmdb"),
 		ASNPath:     envDefault("SPEEDTEST_GEOIP_ASN_DB", "data/geoip/GeoLite2-ASN.mmdb"),
+		IPInfoPath:  envDefault("SPEEDTEST_GEOIP_IPINFO_DB", "data/geoip/ipinfo_lite.mmdb"),
 		DownloadURL: envDefault("SPEEDTEST_GEOLITE2_DOWNLOAD_URL", "https://download.maxmind.com"),
+		IPInfoURL:   envDefault("SPEEDTEST_GEO_IPINFO_MMDB_URL", "https://ipinfo.io/data/ipinfo_lite.mmdb"),
+		IPInfoToken: os.Getenv("SPEEDTEST_GEO_IPINFO_TOKEN"),
 		AccountID:   os.Getenv("SPEEDTEST_GEOLITE2_ACCOUNT_ID"),
 	}
 }

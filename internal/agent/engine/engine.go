@@ -36,6 +36,24 @@ type Server struct {
 	Name     string `json:"name"`
 	Location string `json:"location"`
 	Host     string `json:"host"`
+	Endpoint string `json:"endpoint,omitempty"`
+}
+
+// ServerOption is one engine server offered for selection. Distance is only
+// populated by engines that report it; the agent never estimates coordinates.
+type ServerOption struct {
+	ID         int64    `json:"id"`
+	Name       string   `json:"name"`
+	City       string   `json:"city"`
+	ISP        string   `json:"isp"`
+	Host       string   `json:"host"`
+	Endpoint   string   `json:"endpoint,omitempty"`
+	DistanceKM *float64 `json:"distanceKm,omitempty"`
+}
+
+// ServerLister is implemented by engines that can discover their server list.
+type ServerLister interface {
+	ListServers(context.Context, Options) ([]ServerOption, error)
 }
 
 // Result contains measurements only, not the reporting UUID or node identity.
@@ -61,6 +79,7 @@ const (
 	Timeout           ErrorClass = "timeout"
 	NoRoute           ErrorClass = "no_route"
 	ServerUnavailable ErrorClass = "server_unavailable"
+	RateLimited       ErrorClass = "rate_limited"
 	License           ErrorClass = "license"
 	BinaryMissing     ErrorClass = "binary_missing"
 	Canceled          ErrorClass = "canceled"

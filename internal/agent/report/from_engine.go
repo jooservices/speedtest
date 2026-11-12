@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jooservices/speedtest/internal/agent/engine"
+	"github.com/jooservices/speedtest/internal/shared/failureclass"
 )
 
 // Options controls how an engine result becomes a reportable Result.
@@ -40,8 +41,10 @@ func FromEngine(e engine.Result, o Options) (Result, error) {
 		r.Status = StatusFailed
 		err := e.Error
 		r.Error = &err
+		r.FailureClass = failureclass.FromText(e.Error)
 	} else {
 		r.Status = StatusOK
+		r.FailureClass = failureclass.Other
 	}
 
 	ts := e.Timestamp
@@ -103,11 +106,12 @@ func (r *Result) copyMeasurement(e engine.Result, o Options) {
 			r.ServerID = &id
 		}
 		r.Server = &Server{
-			ID:      e.Server.ID,
-			Name:    e.Server.Name,
-			City:    e.Server.Location,
-			Sponsor: "",
-			Host:    e.Server.Host,
+			ID:       e.Server.ID,
+			Name:     e.Server.Name,
+			City:     e.Server.Location,
+			Sponsor:  "",
+			Host:     e.Server.Host,
+			Endpoint: e.Server.Endpoint,
 		}
 	}
 

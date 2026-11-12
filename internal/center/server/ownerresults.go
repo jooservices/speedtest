@@ -27,16 +27,17 @@ var resultRanges = map[string]time.Duration{"6h": 6 * time.Hour, "24h": 24 * tim
 
 // csvHeader lists the export columns; they match the dashboard's own export.
 var csvHeader = []string{"time", "node", "status", "download_mbps", "upload_mbps", "ping_ms", "jitter_ms", "packet_loss_pct",
-	"loaded_latency_down_ms", "loaded_latency_up_ms", "server", "public_ip", "error", "engine"}
+	"bytes_down", "bytes_up", "bytes_total", "loaded_latency_down_ms", "loaded_latency_up_ms", "server", "public_ip", "error", "failure_class", "engine"}
 
 type ownerResults struct {
 	store   OwnerResultsStore
+	events  NotificationEvents
 	limiter *nodeRateLimiter
 	now     func() time.Time
 }
 
-func newOwnerResultsHandler(store OwnerResultsStore, auth *serverAuth) http.Handler {
-	h := &ownerResults{store: store, limiter: newOwnerRateLimiter(), now: time.Now}
+func newOwnerResultsHandler(store OwnerResultsStore, auth *serverAuth, events NotificationEvents) http.Handler {
+	h := &ownerResults{store: store, events: events, limiter: newOwnerRateLimiter(), now: time.Now}
 	return ownerReader(auth, h.limiter, h.serve)
 }
 
@@ -131,10 +132,11 @@ func (h *ownerResults) exportCSV(w http.ResponseWriter, r *http.Request, filter 
 		return
 	}
 	out.Flush()
-	if err != nil {
+	if err != nil || out.Error() != nil {
 		// The status line is already sent; cut the connection so the client sees an incomplete download.
 		panic(http.ErrAbortHandler)
 	}
+	h.notifyExport(r.Context(), "csv", rows)
 }
 
 // exportJSON streams every stored result, oldest first, as one JSON array without the response envelope.
@@ -180,10 +182,25 @@ func (h *ownerResults) exportJSON(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Content-Disposition", `attachment; filename="speedtest-results-`+h.now().UTC().Format("2006-01-02")+`.json"`)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("[]"))
+		if _, err := w.Write([]byte("[]")); err != nil {
+			return
+		}
+		h.notifyExport(r.Context(), "json", rows)
 		return
 	}
-	_, _ = w.Write([]byte("]"))
+	if _, err := w.Write([]byte("]")); err == nil {
+		h.notifyExport(r.Context(), "json", rows)
+	}
+}
+
+func (h *ownerResults) notifyExport(ctx context.Context, format string, rows int) {
+	if h.events != nil {
+		publishCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+		defer cancel()
+		_ = h.events.PublishEvent(publishCtx, "platform.export_ready", "", map[string]string{
+			"format": format, "count": strconv.Itoa(rows),
+		})
+	}
 }
 
 // csvRecord renders one result. Text cells that a spreadsheet would read as a formula are neutralised.
@@ -209,8 +226,25 @@ func csvRecord(row ownerapi.ResultRow) []string {
 		city, _ := s["city"].(string)
 		server = strings.Trim(strings.TrimSpace(name)+" - "+strings.TrimSpace(city), " -")
 	}
+	class := text(res["failureClass"])
+	if class == "" {
+		class = "other"
+	}
 	return []string{text(res["ts"]), neutralise(node), text(res["status"]), num(res["down"]), num(res["up"]), num(res["ping"]),
-		num(res["jitter"]), num(res["loss"]), num(res["dLat"]), num(res["uLat"]), neutralise(server), text(res["ip"]), text(res["error"]), text(res["engine"])}
+		num(res["jitter"]), num(res["loss"]), num(res["bytesDown"]), num(res["bytesUp"]), num(totalResultBytes(res)),
+		num(res["dLat"]), num(res["uLat"]), neutralise(server), text(res["ip"]), text(res["error"]), class, text(res["engine"])}
+}
+
+func totalResultBytes(result map[string]any) any {
+	down, downOK := result["bytesDown"].(int64)
+	up, upOK := result["bytesUp"].(int64)
+	if !downOK || !upOK {
+		return nil
+	}
+	if up > 0 && down > int64(^uint64(0)>>1)-up {
+		return int64(^uint64(0) >> 1)
+	}
+	return down + up
 }
 
 func neutralise(s string) string {
@@ -249,6 +283,24 @@ func (h *ownerResults) filter(w http.ResponseWriter, r *http.Request) (ownerapi.
 		}
 		if len(f.Nodes) > 100 {
 			return f, invalid(w, r, "nodes accepts at most 100 IDs.")
+		}
+	}
+	if _, present := q["isps"]; present {
+		f.ISPsSet = true
+		seen := map[string]bool{}
+		for _, id := range strings.Split(q.Get("isps"), ",") {
+			id = strings.ToLower(strings.TrimSpace(id))
+			if id == "" || seen[id] {
+				continue
+			}
+			if !uuidPattern.MatchString(id) {
+				return f, invalid(w, r, "isps must be comma-separated ISP IDs.")
+			}
+			seen[id] = true
+			f.ISPs = append(f.ISPs, id)
+		}
+		if len(f.ISPs) > 100 {
+			return f, invalid(w, r, "isps accepts at most 100 IDs.")
 		}
 	}
 	if !h.timeRange(w, r, q, &f) {

@@ -86,7 +86,7 @@ func TestAdvanceStreak(t *testing.T) {
 		{name: "opens at threshold", count: 1, hit: true, threshold: 2, want: streakTransition{count: 2, active: true, opened: true}},
 		{name: "stays open", count: 2, active: true, hit: true, threshold: 2, want: streakTransition{count: 2, active: true}},
 		{name: "miss clears and resolves", count: 2, active: true, threshold: 2, want: streakTransition{resolved: true}},
-		{name: "miss before opening", count: 1, threshold: 3, want: streakTransition{}},
+		{name: "miss before opening", count: 1, threshold: 3, want: streakTransition{recovered: true}},
 		{name: "offline one test", hit: true, threshold: 1, want: streakTransition{count: 1, active: true, opened: true}},
 	}
 	for _, tc := range tests {
@@ -115,6 +115,7 @@ func TestMetricMatches(t *testing.T) {
 		{name: "jitter", rule: Rule{Metric: "jitter", Op: "<", Value: 6}, result: result, want: true},
 		{name: "packet loss", rule: Rule{Metric: "loss", Op: "<=", Value: 10}, result: result, want: true},
 		{name: "failed", rule: Rule{Metric: "failed"}, result: agentapi.Result{Status: "failed"}, want: true},
+		{name: "rate limited ignored", rule: Rule{Metric: "failed"}, result: agentapi.Result{Status: "failed", FailureClass: "rate_limited"}},
 		{name: "failed resets numeric", rule: Rule{Metric: "ping", Op: ">", Value: 1}, result: agentapi.Result{Status: "failed", Ping: &ping}},
 		{name: "missing metric", rule: Rule{Metric: "jitter", Op: ">", Value: 1}, result: agentapi.Result{Status: "ok"}},
 		{name: "zero expected speed", rule: Rule{Metric: "down_pct", Op: "<", Value: 1}, result: result},
@@ -127,6 +128,17 @@ func TestMetricMatches(t *testing.T) {
 				t.Fatalf("metricMatches() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestMetricObservationFailedResultLeavesQualityStreakUnobserved(t *testing.T) {
+	_, observed := metricObservation(Rule{Metric: "ping", Op: ">", Value: 30}, agentapi.Result{Status: "failed"}, 0, 0)
+	if observed {
+		t.Fatal("a failed test without a quality measurement must not resolve the alert")
+	}
+	_, observed = metricObservation(Rule{Metric: "ping", Op: ">", Value: 30}, agentapi.Result{Status: "ok"}, 0, 0)
+	if observed {
+		t.Fatal("a successful test without the metric must leave the streak unchanged")
 	}
 }
 

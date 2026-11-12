@@ -1,9 +1,9 @@
 /* DOM helpers and shared components. Text is always inserted with textContent (no innerHTML) so data cannot inject markup. */
 (function () {
   'use strict';
-  var ST = window.ST;
+  var ST = (/** @type {any} */ (window)).ST;
   ST.pages = ST.pages || {};
-  var U = (ST.ui = {});
+  var U = /** @type {any} */ (ST.ui = {});
 
   U.h = function (tag, props) {
     var el = document.createElement(tag);
@@ -151,10 +151,21 @@
     if (s === 'failed') return U.chip('Failed', 'crit', 'x');
     return U.chip(s);
   };
-  U.resultStatus = function (result) {
-    if (result.status !== 'failed') return U.statusChip(result.status);
-    return h('span', { class: 'row wrap' }, U.statusChip(result.status),
-      h('span', { class: 'chip crit result-reason' }, U.icon('alert', 12), ST.fmt.failureReason(result.error)));
+  U.failureClassLabel = function (c) {
+    return ({ rate_limited: 'Rate limited', no_network: 'No network', server_unreachable: 'Server unreachable', engine_missing: 'Engine missing', timeout: 'Timeout', other: 'Other' })[c] || 'Other';
+  };
+  U.failureChip = function (r) {
+    if (!r || r.status !== 'failed') return null;
+    var cls = r.failureClass || 'other';
+    var chip = U.chip(U.failureClassLabel(cls), cls === 'rate_limited' ? 'warn' : 'crit');
+    chip.classList.add('result-reason');
+    return chip;
+  };
+  U.resultStatus = function (r) {
+    var chips = h('span', { class: 'row', style: 'gap:6px' }, U.statusChip(r.status));
+    var reason = U.failureChip(r);
+    if (reason) chips.appendChild(reason);
+    return chips;
   };
   U.dot = function (color) { return h('span', { class: 'dot', style: { background: color } }); };
   U.nodeTag = function (n) { return h('span', { class: 'row', style: 'gap:7px' }, U.dot(ST.nodeColor(n)), h('span', null, n.name), h('span', { class: 'muted' }, n.label)); };

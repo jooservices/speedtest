@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/agent/engine"
 	"github.com/jooservices/speedtest/internal/agent/sched"
 	"github.com/jooservices/speedtest/internal/agent/testutil"
 )
@@ -332,6 +333,25 @@ func TestControllerETagSecondSyncNotModified(t *testing.T) {
 	}
 	if fake.scheduleCount() != 1 {
 		t.Fatalf("schedule applied %d times, want 1", fake.scheduleCount())
+	}
+}
+
+func TestListServersCommandUsesRequestedEngine(t *testing.T) {
+	center := testutil.NewCenter(testutil.WithCommands(testutil.Command{ID: "servers", Type: "list_servers", Engine: "librespeed"}))
+	t.Cleanup(center.Close)
+	ctl := newController(t, center, &fakeScheduler{})
+	called := ""
+	ctl.ListServers = func(_ context.Context, name string) ([]engine.ServerOption, error) {
+		called = name
+		return []engine.ServerOption{{ID: 7, Name: "Singapore"}}, nil
+	}
+	ctl.Once(context.Background())
+	if called != "librespeed" {
+		t.Fatalf("ListServers engine = %q", called)
+	}
+	acks := center.Acks()
+	if len(acks) != 1 || acks[0].CommandID != "servers" || acks[0].Ack.Status != "succeeded" {
+		t.Fatalf("server list acknowledgement = %+v", acks)
 	}
 }
 

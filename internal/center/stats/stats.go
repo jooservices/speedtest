@@ -54,8 +54,11 @@ func (m Metric) unit() string {
 
 type Query struct {
 	Engine       string
+	ISP          string
 	NodeIDs      []string
 	NodesSet     bool
+	ISPIDs       []string
+	ISPsSet      bool
 	From         time.Time
 	To           time.Time
 	PreviousFrom time.Time
@@ -74,7 +77,9 @@ type MetricSummary struct {
 	Min         *float64 `json:"min"`
 	Max         *float64 `json:"max"`
 	P5          *float64 `json:"p5"`
+	P50         *float64 `json:"p50"`
 	P95         *float64 `json:"p95"`
+	P99         *float64 `json:"p99"`
 	Std         *float64 `json:"std"`
 	percentiles []float64
 }
@@ -83,6 +88,7 @@ type NodeSummary struct {
 	Count       int           `json:"count"`
 	OK          int           `json:"ok"`
 	Failed      int           `json:"failed"`
+	RateLimited int           `json:"rateLimited"`
 	SuccessRate *float64      `json:"successRate"`
 	Down        MetricSummary `json:"down"`
 	Up          MetricSummary `json:"up"`
@@ -190,7 +196,7 @@ func (s *Store) Summary(ctx context.Context, q Query) ([]SummaryComparison, erro
 	for rows.Next() {
 		var id, name, period string
 		var summary NodeSummary
-		dest := []any{&id, &name, &period, &summary.Count, &summary.OK, &summary.Failed, &summary.IPCount}
+		dest := []any{&id, &name, &period, &summary.Count, &summary.OK, &summary.Failed, &summary.RateLimited, &summary.IPCount}
 		for _, metric := range []*MetricSummary{&summary.Down, &summary.Up, &summary.Ping, &summary.Jitter, &summary.Loss} {
 			dest = append(dest, metricDest(metric)...)
 		}
@@ -199,22 +205,7 @@ func (s *Store) Summary(ctx context.Context, q Query) ([]SummaryComparison, erro
 		if err := rows.Scan(dest...); err != nil {
 			return nil, fmt.Errorf("scan statistics summary: %w", err)
 		}
-		for _, metric := range []*MetricSummary{&summary.Down, &summary.Up, &summary.Ping, &summary.Jitter, &summary.Loss} {
-			metric.setPercentiles()
-		}
-		if summary.Count > 0 {
-			summary.SuccessRate = number(float64(summary.OK) / float64(summary.Count) * 100)
-		}
-		if summary.Down.Mean != nil {
-			summary.DownPct = number(*summary.Down.Mean / expectedDown * 100)
-		}
-		if summary.Up.Mean != nil {
-			summary.UpPct = number(*summary.Up.Mean / expectedUp * 100)
-		}
-		if summary.Down.Mean != nil && *summary.Down.Mean != 0 && summary.Down.Std != nil {
-			stability := math.Max(0, math.Min(100, 100-(*summary.Down.Std / *summary.Down.Mean)*220))
-			summary.Stability = number(stability)
-		}
+		summary.derive(expectedDown, expectedUp)
 
 		idx, found := byID[id]
 		if !found {
@@ -234,9 +225,37 @@ func (s *Store) Summary(ctx context.Context, q Query) ([]SummaryComparison, erro
 	return items, nil
 }
 
+// derive fills the percentiles, success rate, percentages of the expected speed and the stability from the raw aggregates.
+func (summary *NodeSummary) derive(expectedDown, expectedUp float64) {
+	for _, metric := range []*MetricSummary{&summary.Down, &summary.Up, &summary.Ping, &summary.Jitter, &summary.Loss} {
+		metric.setPercentiles()
+	}
+	// Success rate excludes provider rate limits; those are shown separately as rateLimited.
+	summary.setSuccessRate()
+	if summary.Down.Mean != nil {
+		summary.DownPct = number(*summary.Down.Mean / expectedDown * 100)
+	}
+	if summary.Up.Mean != nil {
+		summary.UpPct = number(*summary.Up.Mean / expectedUp * 100)
+	}
+	if summary.Down.Mean != nil && *summary.Down.Mean != 0 && summary.Down.Std != nil {
+		stability := math.Max(0, math.Min(100, 100-(*summary.Down.Std / *summary.Down.Mean)*220))
+		summary.Stability = number(stability)
+	}
+}
+
+func (summary *NodeSummary) setSuccessRate() {
+	summary.SuccessRate = nil
+	eligible := summary.Count - summary.RateLimited
+	if eligible > 0 {
+		summary.SuccessRate = number(float64(summary.OK) / float64(eligible) * 100)
+	}
+}
+
 func summarySQL() string {
 	selects := []string{"n.id::text", "n.name", "p.period", "count(r.id)::int", "count(r.id) FILTER (WHERE r.status <> 'failed')::int",
-		"count(r.id) FILTER (WHERE r.status = 'failed')::int", "count(DISTINCT r.ip)::int"}
+		"count(r.id) FILTER (WHERE r.status = 'failed')::int", "count(r.id) FILTER (WHERE r.status = 'failed' AND r.failure_class = 'rate_limited')::int",
+		"count(DISTINCT r.ip)::int"}
 	for _, col := range []string{"down_mbps", "up_mbps", "ping_ms", "jitter_ms", "loss_percent"} {
 		selects = append(selects, metricAggregate("r."+col)...)
 	}
@@ -260,7 +279,7 @@ func metricAggregate(column string) []string {
 		"min(" + column + ") FILTER (WHERE r.status <> 'failed')",
 		"max(" + column + ") FILTER (WHERE r.status <> 'failed')",
 		"stddev_pop(" + column + ") FILTER (WHERE r.status <> 'failed')",
-		"percentile_cont(ARRAY[0.05, 0.5, 0.95]) WITHIN GROUP (ORDER BY " + column + ") FILTER (WHERE " + valid + ")",
+		"percentile_cont(ARRAY[0.05, 0.5, 0.95, 0.99]) WITHIN GROUP (ORDER BY " + column + ") FILTER (WHERE " + valid + ")",
 	}
 }
 
@@ -269,10 +288,12 @@ func metricDest(m *MetricSummary) []any {
 }
 
 func (m *MetricSummary) setPercentiles() {
-	if len(m.percentiles) == 3 {
+	if len(m.percentiles) == 4 {
 		m.P5 = number(m.percentiles[0])
-		m.Median = number(m.percentiles[1])
+		m.P50 = number(m.percentiles[1])
+		m.Median = m.P50
 		m.P95 = number(m.percentiles[2])
+		m.P99 = number(m.percentiles[3])
 	}
 }
 
@@ -591,8 +612,10 @@ func summarizeValues(values []float64) MetricSummary {
 		variance += delta * delta
 	}
 	std := math.Sqrt(variance / float64(len(sorted)))
-	return MetricSummary{N: len(sorted), Mean: number(mean), Median: number(percentile(sorted, .5)), Min: number(sorted[0]),
-		Max: number(sorted[len(sorted)-1]), P5: number(percentile(sorted, .05)), P95: number(percentile(sorted, .95)), Std: number(std)}
+	p50 := number(percentile(sorted, .5))
+	return MetricSummary{N: len(sorted), Mean: number(mean), Median: p50, Min: number(sorted[0]), P50: p50,
+		Max: number(sorted[len(sorted)-1]), P5: number(percentile(sorted, .05)), P95: number(percentile(sorted, .95)),
+		P99: number(percentile(sorted, .99)), Std: number(std)}
 }
 
 func percentile(sorted []float64, p float64) float64 {

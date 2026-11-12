@@ -48,6 +48,7 @@ absent if the center has no database.
 | `speedtest_notification_oldest_pending_age_seconds` | > 600 (notifier stuck) |
 | `speedtest_notification_outbox_pending` | > 0 for 10 min |
 | `speedtest_alerts_open` | informational |
+| `speedtest_bandwidth_budget_ratio` | >= 0.8: application emits one budget warning per scope/month; at 1.0 it applies the configured schedule policy |
 
 `/healthz` is process liveness; `/readyz` also pings PostgreSQL.
 
@@ -73,6 +74,26 @@ restore 3 s, row counts equal before and after. Run a restore into a scratch
 database after any schema migration. Secrets are stored encrypted with `APP_KEY`:
 back up `APP_KEY` separately (never in the same place as the dumps), or restored
 integration secrets cannot be decrypted.
+
+## Statistics analytics
+
+Statistics use the existing results, cached geolocation and alert
+tables; this feature adds no schema objects. The events endpoint returns at most
+500 newest matching marks and sets `truncated` when more exist. ISP attribution
+uses the current cached IP organisation when the test engine did not report an
+ISP, so refreshing cached geolocation can change historical attribution. The UI
+labels this source and explains that unknown ISP rows are excluded by a filter.
+
+The guarded `TestStatisticsQueriesMeetLatencyTargetOnOneYearDataset` integration
+test measures all five analytics queries and event marks against 87,600 synthetic
+results, two engines, two ISPs and 600 linked alerts, for both the default
+primary-engine/all-ISP query and a selective Ookla/Carrier A query. Five samples
+are logged per operation; the empirical p50 and p95 (the maximum of five
+samples for p95) must both stay below 300 ms. The test logs
+`EXPLAIN (ANALYZE, BUFFERS)` plans for summary and events in both filter cases.
+The timing test skips when Go coverage instrumentation is enabled because that
+changes query latency; run it without coverage on the disposable worktree/test
+database. A rollback is a code rollback; no database migration is involved.
 
 ## Capacity
 
@@ -293,12 +314,19 @@ and check `curl -vI https://<host>/readyz`. The probe's `cert_days` confirms the
 
 In Node → Settings → Test engines, set each installed engine's interval and enabled
 switch, then save. An uninstalled engine explains how to repair installation.
-Ookla remains the new-node default at 30 minutes. LibreSpeed starts disabled until
+Ookla remains the new-node default at 60 minutes. LibreSpeed starts disabled until
 selected, with a 60 minute default. When several nodes share a public IP, increase
 their Ookla intervals: the Ookla CLI can rate limit by public IP. Choose one engine
 in dashboard, results or statistics before interpreting trends; different engines
 are never averaged together. Alert rules without an engine evaluate the primary
 engine only.
+
+For a center binary rollback, stop all center writers before rolling back
+migration 00015 and restoring the previous binary. Start the previous binary
+only after the database default is back to 30 minutes; its node-create response
+assumes that former default. The current binary reports the value actually
+inserted, so node creation remains consistent if 00015 is rolled back while the
+current binary is running.
 
 Migration 00010 keeps the single-row legacy `schedules` table, backfills
 `engine_schedules`, and adds `results.engine NOT NULL DEFAULT 'ookla'`. New code

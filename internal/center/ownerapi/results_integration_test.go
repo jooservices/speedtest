@@ -55,9 +55,10 @@ func ids(items []map[string]any) []string {
 }
 
 func TestListResultsFiltersSortsAndPaginates(t *testing.T) {
-	ctx, _, fx := seedFixture(t)
+	ctx, pool, fx := seedFixture(t)
 	s := fx.store
 	all := ResultFilter{From: fx.now.Add(-24 * time.Hour), To: fx.now.Add(time.Second)}
+	seedResultISPs(t, ctx, pool)
 
 	items, total, err := s.ListResults(ctx, all, 1, 2)
 	if err != nil || total != 4 || len(items) != 2 || items[0]["id"] != uid(1003) || items[1]["id"] != uid(1002) {
@@ -77,6 +78,8 @@ func TestListResultsFiltersSortsAndPaginates(t *testing.T) {
 	}{
 		{"one node", func(f ResultFilter) ResultFilter { f.NodesSet, f.Nodes = true, []string{fx.alpha}; return f }, []string{uid(1002), uid(1001)}},
 		{"no node selected", func(f ResultFilter) ResultFilter { f.NodesSet = true; return f }, nil},
+		{"one ISP", func(f ResultFilter) ResultFilter { f.ISPsSet, f.ISPs = true, []string{uid(5001)}; return f }, []string{uid(1002), uid(1001), uid(1004)}},
+		{"another ISP", func(f ResultFilter) ResultFilter { f.ISPsSet, f.ISPs = true, []string{uid(5002)}; return f }, []string{uid(1003)}},
 		{"status failed", func(f ResultFilter) ResultFilter { f.Status = "failed"; return f }, []string{uid(1002)}},
 		{"status all", func(f ResultFilter) ResultFilter { f.Status = "all"; return f }, []string{uid(1003), uid(1002), uid(1001), uid(1004)}},
 		{"time range excludes older", func(f ResultFilter) ResultFilter { f.From = fx.now.Add(-30 * time.Minute); return f }, []string{uid(1003), uid(1002), uid(1001)}},
@@ -115,6 +118,19 @@ func TestListResultsFiltersSortsAndPaginates(t *testing.T) {
 	}
 }
 
+func seedResultISPs(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
+	t.Helper()
+	for _, query := range []string{
+		`INSERT INTO isps(id,asn,organisation,name) VALUES ('` + uid(5001) + `',64501,'Results ISP A','Results ISP A'),('` + uid(5002) + `',64502,'Results ISP B','Results ISP B')`,
+		`UPDATE results SET isp_id='` + uid(5001) + `' WHERE id IN ('` + uid(1001) + `','` + uid(1002) + `','` + uid(1004) + `')`,
+		`UPDATE results SET isp_id='` + uid(5002) + `' WHERE id='` + uid(1003) + `'`,
+	} {
+		if _, err := pool.Exec(ctx, query); err != nil {
+			t.Fatal("seed result ISP filter:", err)
+		}
+	}
+}
+
 func TestGetResultReturnsEveryFieldAndLocation(t *testing.T) {
 	ctx, _, fx := seedFixture(t)
 	r, err := fx.store.GetResult(ctx, uid(1001))
@@ -122,7 +138,7 @@ func TestGetResultReturnsEveryFieldAndLocation(t *testing.T) {
 		t.Fatal(err)
 	}
 	geo, _ := r["geo"].(map[string]any)
-	if r["status"] != "ok" || r["down"] != 250.5 || r["up"] != 90.25 || r["serverId"] != int64(9) || r["bytesDown"] != int64(1000) ||
+	if r["status"] != "ok" || r["down"] != 250.5 || r["up"] != 90.25 || r["serverId"] != int64(9) || r["bytesDown"] != int64(1000) || r["bytesUp"] != int64(500) || r["bytesTotal"] != int64(1500) ||
 		r["manual"] != false || r["raw"].(map[string]any)["k"] != "v" || r["ip"] != "203.0.113.5" {
 		t.Fatalf("result = %v", r)
 	}
@@ -131,6 +147,9 @@ func TestGetResultReturnsEveryFieldAndLocation(t *testing.T) {
 	}
 	if noGeo, err := fx.store.GetResult(ctx, uid(1003)); err != nil || noGeo["geo"] != nil || noGeo["ip"] != "198.51.100.9" {
 		t.Fatalf("address without a stored location: %v %v", noGeo, err)
+	}
+	if failed, err := fx.store.GetResult(ctx, uid(1002)); err != nil || failed["bytesDown"] != nil || failed["bytesUp"] != nil || failed["bytesTotal"] != nil {
+		t.Fatalf("missing byte counters should remain unavailable: %v %v", failed, err)
 	}
 	if _, err := fx.store.GetResult(ctx, uid(9999)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("unknown id = %v", err)
@@ -156,7 +175,9 @@ func TestExportResultsFollowsTheSameFilterAndStopsOnError(t *testing.T) {
 }
 
 func TestExportOfOneHundredThousandRowsStreams(t *testing.T) {
-	ctx, pool, fx := seedFixture(t)
+	_, pool, fx := seedFixture(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Minute)
+	defer cancel()
 	if _, err := pool.Exec(ctx, `INSERT INTO results (id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,raw)
 		SELECT gen_random_uuid(), $1, $2::timestamptz - (g || ' seconds')::interval, 'ok', 100 + g % 50, 50, 10, 9,
 		'{"id":9,"name":"S","city":"C","sponsor":"P","padding":"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}', '203.0.113.5', 4, '{"k":"v"}'

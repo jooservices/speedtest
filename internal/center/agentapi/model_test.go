@@ -8,7 +8,7 @@ import (
 	"testing"
 )
 
-const validResult = `{"id":"00000000-0000-4000-8000-000000000001","ts":"2026-11-03T00:00:00Z","status":"ok","down":123.4,"up":56.7,"ping":3,"jitter":null,"dLat":null,"uLat":null,"loss":null,"serverId":1,"ip":"203.0.113.1","threads":4,"bytesDown":1024,"bytesUp":512,"duration":2.3,"error":null,"manual":false,"server":{"id":1,"name":"test","city":"","sponsor":""}}`
+const validResult = `{"id":"00000000-0000-4000-8000-000000000001","ts":"2026-11-03T00:00:00Z","status":"ok","down":123.4,"up":56.7,"ping":3,"jitter":null,"dLat":null,"uLat":null,"loss":null,"serverId":1,"ip":"203.0.113.1","threads":4,"bytesDown":1024,"bytesUp":512,"duration":2.3,"error":null,"manual":false,"server":{"id":1,"name":"test","city":"","sponsor":"","endpoint":"https://speed.example.test/backend"}}`
 
 func change(data, key string, value any) []byte {
 	var object map[string]any
@@ -29,6 +29,30 @@ func TestResultValidation(t *testing.T) {
 		result, err := ParseResult(data)
 		if err != nil || result.Jitter != nil || string(result.Raw) != "{}" || result.Warnings == nil {
 			t.Fatalf("%s: %+v %v", status, result, err)
+		}
+	}
+	for _, item := range []struct {
+		status string
+		class  string
+		valid  bool
+	}{
+		{status: "ok", class: "other", valid: true},
+		{status: "degraded", class: "other", valid: true},
+		{status: "failed", class: "rate_limited", valid: true},
+		{status: "ok", class: "rate_limited"},
+		{status: "degraded", class: "timeout"},
+	} {
+		data := change(validResult, "status", item.status)
+		data = change(string(data), "failureClass", item.class)
+		if item.status == "failed" {
+			data = change(string(data), "error", "Too many requests")
+			for _, key := range []string{"down", "up", "ping", "serverId"} {
+				data = change(string(data), key, nil)
+			}
+		}
+		_, err := ParseResult(data)
+		if (err == nil) != item.valid {
+			t.Fatalf("status=%s class=%s: valid=%t err=%v", item.status, item.class, item.valid, err)
 		}
 	}
 	full := validResult[:len(validResult)-1] + `,"raw":{"nested":[1,true]},"loadedDown":{"low":null,"iqm":4,"high":10},"loadedUp":{"low":1,"iqm":2,"high":3},"server":{"id":1,"name":"a","city":"b","sponsor":"c","host":"test.example"},"engineISP":"isp","engineResultId":"engine-1","engineResultUrl":"https://example.test/result/1","engineIp":"2001:db8::1","warnings":["IP mismatch"]}`
@@ -78,6 +102,45 @@ func TestResultValidation(t *testing.T) {
 		t.Fatal("trailing JSON")
 	}
 }
+
+func TestResultSelectionSnapshotDecode(t *testing.T) {
+	legacy, err := ParseResult([]byte(validResult))
+	if err != nil || legacy.ServerSelectionKnown || legacy.PinnedServerID != nil {
+		t.Fatalf("legacy result snapshot=%+v err=%v", legacy, err)
+	}
+	known := change(validResult, "serverSelectionKnown", true)
+	known = change(string(known), "pinnedServerId", 54321)
+	result, err := ParseResult(known)
+	if err != nil || !result.ServerSelectionKnown || result.PinnedServerID == nil || *result.PinnedServerID != 54321 {
+		t.Fatalf("known result snapshot=%+v err=%v", result, err)
+	}
+	unknown := change(validResult, "pinnedServerId", 54321)
+	if _, err := ParseResult(unknown); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("accepted pin without a known measurement selection: %v", err)
+	}
+}
+
+func TestParseResultPreservesFailureClassPresence(t *testing.T) {
+	data := change(validResult, "status", "failed")
+	data = change(string(data), "error", "speedtest: timeout")
+	for _, key := range []string{"down", "up", "ping", "jitter", "dLat", "uLat", "loss", "serverId", "ip", "server"} {
+		data = change(string(data), key, nil)
+	}
+	legacy, err := ParseResult(data)
+	if err != nil || !legacy.classOmitted || legacy.FailureClass != "timeout" {
+		t.Fatalf("omitted class = %+v, %v", legacy, err)
+	}
+	explicit, err := ParseResult(change(string(data), "failureClass", "timeout"))
+	if err != nil || explicit.classOmitted || explicit.FailureClass != "timeout" {
+		t.Fatalf("explicit class = %+v, %v", explicit, err)
+	}
+	for _, value := range []any{"", nil} {
+		if _, err := ParseResult(change(string(data), "failureClass", value)); !errors.Is(err, ErrInvalid) {
+			t.Errorf("accepted explicit empty class %v: %v", value, err)
+		}
+	}
+}
+
 func TestHeartbeatValidation(t *testing.T) {
 	valid := `{"agent":"1.0","uptime":0,"lastTest":null}`
 	for _, data := range []string{valid, `{"agent":"","uptime":12,"lastTest":"2026-11-03T00:00:00Z","updateResult":{"version":"v1","status":"succeeded","ts":"2026-11-03T00:00:00Z","error":null}}`} {
@@ -138,6 +201,46 @@ func TestAckValidationAndTransitions(t *testing.T) {
 	x, y := "a", "b"
 	if equalString(&x, &y) || equalString(nil, &x) || !equalString(&x, &x) {
 		t.Fatal("pointer equality")
+	}
+}
+
+func TestServerListAcknowledgementValidation(t *testing.T) {
+	valid := `{"status":"succeeded","pct":100,"servers":[{"id":12,"name":"Singapore","city":"Singapore","isp":"Fiber","host":"sg.example","endpoint":"https://sg.example/backend","distanceKm":4.5}]}`
+	ack, err := ParseAck([]byte(valid))
+	if err != nil || ack.Servers == nil || len(*ack.Servers) != 1 || (*ack.Servers)[0].ID != 12 {
+		t.Fatalf("server list ack=%+v err=%v", ack, err)
+	}
+	for _, data := range []string{
+		`{"status":"succeeded","servers":null}`,
+		`{"status":"succeeded","servers":[{"id":0,"name":"Bad"}]}`,
+		`{"status":"succeeded","servers":[{"id":12,"name":""}]}`,
+		`{"status":"succeeded","servers":[{"id":12,"name":"A"},{"id":12,"name":"B"}]}`,
+		`{"status":"succeeded","servers":[{"id":12,"name":"A","distanceKm":-1}]}`,
+		`{"status":"succeeded","servers":[{"id":2147483648,"name":"A"}]}`,
+		`{"status":"succeeded","servers":[{"id":13,"name":"A","endpoint":"https://user:secret@sg.example/backend"}]}`,
+		`{"status":"running","servers":[]}`,
+	} {
+		if _, err := ParseAck([]byte(data)); err == nil {
+			t.Errorf("accepted %s", data)
+		}
+	}
+}
+
+func TestTerminalCatalogAckDigestAllowsIdenticalRetryAndRejectsChanges(t *testing.T) {
+	pct := float64(100)
+	first := []ServerOption{{ID: 12, Name: "Hanoi"}, {ID: 13, Name: "Hue"}}
+	terminal, err := ApplyAck(Command{Status: "pending"}, Ack{Status: "succeeded", Pct: &pct, Servers: &first})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reordered := []ServerOption{first[1], first[0]}
+	replay, err := ApplyAck(terminal, Ack{Status: "succeeded", Pct: &pct, Servers: &reordered})
+	if err != nil || !sameAck(terminal, replay) {
+		t.Fatalf("identical catalog retry=%+v err=%v", replay, err)
+	}
+	changed := []ServerOption{{ID: 12, Name: "Different Hanoi"}, {ID: 13, Name: "Hue"}}
+	if _, err := ApplyAck(terminal, Ack{Status: "succeeded", Pct: &pct, Servers: &changed}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("changed terminal catalog error=%v, want conflict", err)
 	}
 }
 

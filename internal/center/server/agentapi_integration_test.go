@@ -22,8 +22,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
+	"github.com/jooservices/speedtest/internal/center/alerts"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/center/nodes"
+	"github.com/jooservices/speedtest/internal/center/notify"
 )
 
 const ingestionResult = `{"id":"00000000-0000-4000-8000-000000000001","ts":"2026-11-03T00:00:00Z","status":"ok","down":123.4,"up":56.7,"ping":3,"jitter":null,"dLat":null,"uLat":null,"loss":null,"serverId":1,"ip":"203.0.113.1","threads":4,"bytesDown":1024,"bytesUp":512,"duration":2.3,"error":null,"manual":false,"raw":{"nested":[1,true]},"loadedDown":{"low":null,"iqm":4,"high":10},"loadedUp":{"low":1,"iqm":2,"high":3},"server":{"id":1,"name":"edge","city":"city","sponsor":"isp","host":"test.example"},"engineISP":"isp","engineResultId":"engine-1","engineResultUrl":"https://example.test/result/1","engineIp":"2001:db8::1","warnings":["IP mismatch"]}`
@@ -177,7 +179,7 @@ func TestAgentIngestionProtocolIntegration(t *testing.T) {
 		t.Fatal("concurrent inserts", count)
 	}
 	first := ingestRequest(t, handler, token, "GET", "/api/agent/config", "")
-	if first.Code != 200 {
+	if first.Code != 200 || !strings.Contains(first.Body.String(), `"schedule":{"enabled":true,"interval":60,"offset":0}`) {
 		t.Fatal(first.Code, first.Body.String())
 	}
 	etag := first.Header().Get("ETag")
@@ -315,9 +317,218 @@ func TestAgentIngestionProtocolIntegration(t *testing.T) {
 	t.Log("PASS: batch partial failure; all fields/raw persisted; identical, changed and cross-node replays; concurrent UUID; transactional hook rollback; config ETag; heartbeat; command ack ownership/progress/idempotency; IP proxy trust; immediate revocation on all six operations")
 }
 
+func TestServerDiscoveryCommandStoresCatalogWithoutDroppingPinIntegration(t *testing.T) {
+	pool, ctx, appKey := openServerIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	service := nodes.NewService(pool, appKey)
+	node, token := enrollIngestionNode(t, ctx, service, "server-discovery")
+	if _, err := pool.Exec(ctx, `UPDATE nodes SET installed_engines=ARRAY['ookla','librespeed']::text[] WHERE id=$1`, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO engine_schedules(node_id,engine,interval_minutes,enabled) VALUES($1,'librespeed',60,true)`, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO node_engine_servers(node_id,engine,servers,pinned_server_id) VALUES($1,'ookla','[]',54321)`, node); err != nil {
+		t.Fatal(err)
+	}
+	store := &agentapi.Postgres{Pool: pool}
+	handler := NewHandler(Options{NodeCredentials: service, AgentAPI: store, Logger: slog.New(slog.NewJSONHandler(io.Discard, nil))})
+	commandID := "00000000-0000-4000-8000-000000000176"
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_commands(id,node_id,type,engine) VALUES($1,$2,'list_servers','ookla')`, commandID, node); err != nil {
+		t.Fatal(err)
+	}
+	polled := ingestRequest(t, handler, token, http.MethodGet, "/api/agent/commands", "")
+	if polled.Code != http.StatusOK || !strings.Contains(polled.Body.String(), `"engine":"ookla"`) {
+		t.Fatalf("agent command poll=%d %s", polled.Code, polled.Body.String())
+	}
+	ack := `{"status":"succeeded","phase":"done","pct":100,"servers":[{"id":54321,"name":"Hanoi","city":"Hanoi","isp":"Fiber","host":"hn.example","distanceKm":22.8}]}`
+	acknowledged := ingestRequest(t, handler, token, http.MethodPost, "/api/agent/commands/"+commandID+"/ack", ack)
+	if acknowledged.Code != http.StatusOK {
+		t.Fatalf("server discovery acknowledgement=%d %s", acknowledged.Code, acknowledged.Body.String())
+	}
+	var servers []byte
+	var pin int64
+	var refreshed time.Time
+	if err := pool.QueryRow(ctx, `SELECT servers,pinned_server_id,refreshed_at FROM node_engine_servers WHERE node_id=$1 AND engine='ookla'`, node).Scan(&servers, &pin, &refreshed); err != nil {
+		t.Fatalf("stored catalog=%s pin=%d refreshed=%s err=%v", servers, pin, refreshed, err)
+	}
+	var listed []agentapi.ServerOption
+	if err := json.Unmarshal(servers, &listed); err != nil || len(listed) != 1 || listed[0].City != "Hanoi" || pin != 54321 || refreshed.IsZero() {
+		t.Fatalf("stored catalog=%s pin=%d refreshed=%s err=%v", servers, pin, refreshed, err)
+	}
+	refreshID := "00000000-0000-4000-8000-000000000178"
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_commands(id,node_id,type,engine) VALUES($1,$2,'list_servers','ookla')`, refreshID, node); err != nil {
+		t.Fatal(err)
+	}
+	refreshAck := `{"status":"succeeded","phase":"done","pct":100,"servers":[{"id":54322,"name":"Hue","city":"Hue","isp":"Fiber","host":"hue.example"}]}`
+	if refreshed := ingestRequest(t, handler, token, http.MethodPost, "/api/agent/commands/"+refreshID+"/ack", refreshAck); refreshed.Code != http.StatusOK {
+		t.Fatalf("second discovery acknowledgement=%d %s", refreshed.Code, refreshed.Body.String())
+	}
+	replay := ingestRequest(t, handler, token, http.MethodPost, "/api/agent/commands/"+commandID+"/ack", ack)
+	if replay.Code != http.StatusOK {
+		t.Fatalf("identical terminal catalog replay=%d %s", replay.Code, replay.Body.String())
+	}
+	changedReplay := strings.Replace(ack, `"name":"Hanoi"`, `"name":"Changed Hanoi"`, 1)
+	if conflict := ingestRequest(t, handler, token, http.MethodPost, "/api/agent/commands/"+commandID+"/ack", changedReplay); conflict.Code != http.StatusConflict {
+		t.Fatalf("different terminal catalog replay=%d %s, want 409", conflict.Code, conflict.Body.String())
+	}
+	if err := pool.QueryRow(ctx, `SELECT servers,pinned_server_id,refreshed_at FROM node_engine_servers WHERE node_id=$1 AND engine='ookla'`, node).Scan(&servers, &pin, &refreshed); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(servers, &listed); err != nil || len(listed) != 1 || listed[0].ID != 54322 || pin != 54321 {
+		t.Fatalf("catalog replay replaced later refresh: servers=%s pin=%d err=%v", servers, pin, err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO agent_commands(id,node_id,type,engine) VALUES('00000000-0000-4000-8000-000000000177',$1,'list_servers','librespeed')`, node); err != nil {
+		t.Fatal(err)
+	}
+	missingList := ingestRequest(t, handler, token, http.MethodPost, "/api/agent/commands/00000000-0000-4000-8000-000000000177/ack", `{"status":"succeeded","pct":100}`)
+	if missingList.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("success without list=%d %s", missingList.Code, missingList.Body.String())
+	}
+	t.Log("PASS: discovery command carries engine; success ACK validates and transactionally replaces that engine catalog; existing pin survives; missing catalog payload refused")
+}
+
+func TestLibreSpeedFallbackResultResolvesCatalogServerAndKeepsMeasurementPinIntegration(t *testing.T) {
+	pool, ctx, key := openServerIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	service := nodes.NewService(pool, key)
+	node, _ := enrollIngestionNode(t, ctx, service, "libre-fallback")
+	if _, err := pool.Exec(ctx, `UPDATE nodes SET installed_engines=ARRAY['ookla','librespeed']::text[] WHERE id=$1`, node); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO node_engine_servers(node_id,engine,servers,pinned_server_id) VALUES($1,'librespeed',
+		'[{"id":51,"name":"Hanoi","host":"hn.example.test"},{"id":52,"name":"Singapore","host":"sg.example.test"}]',52)`, node); err != nil {
+		t.Fatal(err)
+	}
+	// The agent may deliver a spooled measurement after the owner clears the live pin.
+	if _, err := pool.Exec(ctx, `UPDATE node_engine_servers SET pinned_server_id=NULL WHERE node_id=$1 AND engine='librespeed'`, node); err != nil {
+		t.Fatal(err)
+	}
+	body := strings.ReplaceAll(ingestionResult, "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000003")
+	body = strings.ReplaceAll(body, `"serverId":1`, `"serverId":null`)
+	body = strings.ReplaceAll(body, `"server":{"id":1,"name":"edge","city":"city","sponsor":"isp","host":"test.example"}`, `"engine":"librespeed","server":{"name":"Hanoi","city":"Hanoi","sponsor":"Hanoi ISP","host":"hn.example.test"},"serverSelectionKnown":true,"pinnedServerId":52`)
+	result, err := agentapi.ParseResult([]byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate, err := (&agentapi.Postgres{Pool: pool}).SaveResult(ctx, node, result); err != nil || duplicate {
+		t.Fatalf("late LibreSpeed result duplicate=%v err=%v", duplicate, err)
+	}
+	var serverID, pinnedID *int64
+	var known bool
+	var server []byte
+	if err := pool.QueryRow(ctx, `SELECT server_id,pinned_server_id_at_test,server_selection_known,server FROM results WHERE id=$1`, result.ID).
+		Scan(&serverID, &pinnedID, &known, &server); err != nil {
+		t.Fatal(err)
+	}
+	var actual map[string]any
+	if err := json.Unmarshal(server, &actual); err != nil || serverID == nil || *serverID != 51 || actual["id"] != float64(51) || pinnedID == nil || *pinnedID != 52 || !known {
+		t.Fatalf("stored fallback identity=%v server=%v pin=%v known=%v err=%v", serverID, actual, pinnedID, known, err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE node_engine_servers SET servers=servers || '[{"id":53,"name":"Hanoi duplicate","host":"hn.example.test"}]'::jsonb WHERE node_id=$1 AND engine='librespeed'`, node); err != nil {
+		t.Fatal(err)
+	}
+	ambiguous := result
+	ambiguous.ID = "00000000-0000-4000-8000-000000000004"
+	if duplicate, err := (&agentapi.Postgres{Pool: pool}).SaveResult(ctx, node, ambiguous); err != nil || duplicate {
+		t.Fatalf("ambiguous LibreSpeed result duplicate=%v err=%v", duplicate, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT server_id FROM results WHERE id=$1`, ambiguous.ID).Scan(&serverID); err != nil || serverID != nil {
+		t.Fatalf("ambiguous host match=%v err=%v, want unknown ID", serverID, err)
+	}
+	if duplicate, err := (&agentapi.Postgres{Pool: pool}).SaveResult(ctx, node, result); err != nil || !duplicate {
+		t.Fatalf("replay after catalog changed duplicate=%v err=%v", duplicate, err)
+	}
+}
+
 // The paced test measures the production executable, not the race/coverage
 // instrumented test harness or the load generator. The service shares this
 // suite's verified worktree database and is stopped before fixture cleanup.
+func TestSuccessfulResultCreatesCatalogNotificationIntegration(t *testing.T) {
+	pool, ctx, key := openServerIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	service := nodes.NewService(pool, key)
+	nodeID, token := enrollIngestionNode(t, ctx, service, "success-event-edge")
+	alertStore := &alerts.Store{DB: pool, AppKey: key}
+	store := &agentapi.Postgres{Pool: pool, Hook: alertStore}
+	handler := NewHandler(Options{NodeCredentials: service, AgentAPI: store, AgentRateLimit: 10000})
+	result := strings.Replace(ingestionResult, `"jitter":null`, `"jitter":7.5`, 1)
+	result = strings.Replace(result, `"loss":null`, `"loss":0.5`, 1)
+	if response := ingestRequest(t, handler, token, http.MethodPost, "/api/agent/results", `{"results":[`+result+`]}`); response.Code != 207 {
+		t.Fatalf("success ingestion = %d %s", response.Code, response.Body.String())
+	}
+	var eventID, eventKey, resultID string
+	var raw []byte
+	if err := pool.QueryRow(ctx, `SELECT id::text,event_key,trigger_result_id::text,payload FROM alert_events WHERE node_id=$1 AND event_key='test.success'`, nodeID).
+		Scan(&eventID, &eventKey, &resultID, &raw); err != nil {
+		t.Fatal("successful result notification missing:", err)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal("notification payload:", err)
+	}
+	if eventKey != "test.success" || resultID != "00000000-0000-4000-8000-000000000001" ||
+		payload["download"] != "123.4 Mbps" || payload["upload"] != "56.7 Mbps" || payload["ping"] != "3" ||
+		payload["jitter"] != "7.5" || payload["loss"] != "0.5" || payload["download_limit"] != "65% of expected" ||
+		payload["upload_limit"] != "40% of expected" || payload["ping_limit"] != "30" || payload["jitter_limit"] != "10" ||
+		payload["loss_limit"] != "2" || payload["download_ok"] != "no" || payload["upload_ok"] != "yes" ||
+		payload["ping_ok"] != "yes" || payload["jitter_ok"] != "yes" || payload["loss_ok"] != "yes" {
+		t.Fatalf("notification payload = %#v", payload)
+	}
+	var channels []string
+	if err := pool.QueryRow(ctx, `SELECT channels FROM alert_notification_outbox WHERE event_id=$1`, eventID).Scan(&channels); err != nil || len(channels) != 1 || channels[0] != "telegram" {
+		t.Fatalf("notification channels = %v: %v", channels, err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO notification_event_node_settings(event_key,node_id,enabled) VALUES('test.success',$1,false)`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	second := strings.Replace(result, "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", 1)
+	if response := ingestRequest(t, handler, token, http.MethodPost, "/api/agent/results", `{"results":[`+second+`]}`); response.Code != 207 {
+		t.Fatalf("node-disabled success ingestion = %d %s", response.Code, response.Body.String())
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM alert_events WHERE node_id=$1 AND event_key='test.success'`, nodeID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("node-disabled event count = %d: %v", count, err)
+	}
+	t.Log("PASS: successful test creates a catalog event with measurements, configured limits, status flags and Telegram outbox; per-node disable suppresses the next event")
+}
+
+func TestAgentUpdateAcknowledgementsCreateCatalogEventsIntegration(t *testing.T) {
+	pool, ctx, _ := openServerIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	const nodeID = "10000000-0000-4000-8000-000000000091"
+	const successID = "10000000-0000-4000-8000-000000000092"
+	const failedID = "10000000-0000-4000-8000-000000000093"
+	if _, err := pool.Exec(ctx, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES($1,'update-node',100,50)`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{successID, failedID} {
+		if _, err := pool.Exec(ctx, `INSERT INTO agent_commands(id,node_id,type,version) VALUES($1,$2,'update_agent','1.2.3')`, id, nodeID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &agentapi.Postgres{Pool: pool, Events: &notify.Store{DB: pool}}
+	if command, err := store.Ack(ctx, nodeID, successID, agentapi.Ack{Status: "succeeded"}); err != nil || command.Status != "succeeded" {
+		t.Fatalf("successful update ack: %+v %v", command, err)
+	}
+	reason := "updater returned an error"
+	if command, err := store.Ack(ctx, nodeID, failedID, agentapi.Ack{Status: "failed", Error: &reason}); err != nil || command.Status != "failed" {
+		t.Fatalf("failed update ack: %+v %v", command, err)
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM alert_events WHERE node_id=$1 AND event_key IN ('agent.update_applied','agent.update_failed')`, nodeID).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("agent update events = %d %v", count, err)
+	}
+}
+
 func TestAgentIngestionLoad1000PerMinuteIntegration(t *testing.T) {
 	pool, ctx, key := openServerIntegrationPool(t)
 	dbtest.Reset(t, pool)
@@ -327,7 +538,18 @@ func TestAgentIngestionLoad1000PerMinuteIntegration(t *testing.T) {
 	_, token := enrollIngestionNode(t, ctx, service, "load-edge")
 	// The executable now wires IP watching. Use a deterministic warm geo cache
 	// and disable public fallbacks so the load test never contacts real providers.
-	if _, err := pool.Exec(ctx, `INSERT INTO ip_addresses(ip,geo,source,looked_up_at) VALUES ('203.0.113.1','{"city":"fixture"}','fixture',clock_timestamp())`); err != nil {
+	if _, err := pool.Exec(ctx, `WITH fixture_isp AS (
+		INSERT INTO isps(id,asn,organisation,name) VALUES ('30000000-0000-4000-8000-000000000001',64512,'Fixture Network','Fixture Network')
+		RETURNING id
+	)
+	INSERT INTO ip_addresses(ip,geo,source,looked_up_at,isp_id)
+	SELECT '203.0.113.1','{"city":"fixture","country":"ZZ","latitude":1,"longitude":1,"accuracy_radius":25,"asn":64512,"organisation":"Fixture Network"}'::jsonb,
+		'fixture',clock_timestamp(),id FROM fixture_isp`); err != nil {
+		t.Fatal(err)
+	}
+	// Isolate ingestion throughput from optional per-result success notifications.
+	// Their transactional path and delivery are covered by the catalog integration and SC-NODE-05 E2E tests.
+	if _, err := pool.Exec(ctx, `INSERT INTO notification_event_settings(event_key,enabled,severity,channels) VALUES ('test.success',false,'info',ARRAY['telegram'])`); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "false")
@@ -362,8 +584,8 @@ func TestAgentIngestionLoad1000PerMinuteIntegration(t *testing.T) {
 	t.Setenv("SPEEDTEST_GEO_DBIP_AUTO_UPDATE", "false")
 	process := exec.CommandContext(ctx, binary)
 	process.Dir = root
-	process.Stdout = io.Discard
-	process.Stderr = io.Discard
+	process.Stdout = os.Stdout
+	process.Stderr = os.Stderr
 	if err = process.Start(); err != nil {
 		t.Fatal(err)
 	}

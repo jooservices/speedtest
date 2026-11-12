@@ -15,6 +15,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/shared/testenv"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
@@ -32,17 +34,30 @@ type locator struct{ calls atomic.Int64 }
 
 func (l *locator) Lookup(context.Context, string) (geo.Location, error) {
 	l.calls.Add(1)
-	return geo.Location{City: "Fixture city", Country: "ZZ"}, nil
+	return geo.Location{City: "Fixture city", Country: "ZZ", Latitude: 1, Longitude: 1, AccuracyRadius: 25,
+		ASN: 64512, Organisation: "Fixture Network"}, nil
 }
+
+type unavailableGeo struct{}
+
+func (unavailableGeo) Lookup(context.Context, string) (geo.Location, error) {
+	return geo.Location{}, geo.ErrNotFound
+}
+
+type exhaustedProvider struct{}
+
+func (exhaustedProvider) Source() string { return "quota-provider" }
+func (exhaustedProvider) Lookup(context.Context, string) (geo.Location, error) {
+	return geo.Location{}, geo.ErrBudgetExhausted
+}
+
 func setup(t *testing.T) (*pgxpool.Pool, *agentapi.Postgres, *locator) {
 	t.Helper()
 	values, err := godotenv.Read("../../../.env")
 	if err != nil {
 		t.Fatal("worktree .env required")
 	}
-	for k, v := range values {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
 		t.Fatal("configured Speedtest worktree/test database required")
@@ -207,6 +222,24 @@ func TestMeasurementTimelineIntegration(t *testing.T) {
 	}
 	t.Log("PASS: first/repeated/alternating IPs; late insert/split/merge; equal timestamps; known-IP and NULL-IP failures; replay/conflict; cached IPv4/IPv6; only newest changes signal")
 }
+
+func TestBudgetExhaustionDoesNotRollbackIngestionIntegration(t *testing.T) {
+	p, s, _ := setup(t)
+	s.Hook = &ipwatch.Watcher{Offline: unavailableGeo{}, Fallbacks: []geo.Fallback{exhaustedProvider{}}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	address := "203.0.113.88"
+	save(t, s, nodeA, result(880, 1, address))
+	if n := scalar(t, p, `SELECT count(*) FROM results WHERE id=$1 AND ip=$2::inet`, result(880, 1, address).ID, address); n != 1 {
+		t.Fatalf("measurement was rolled back after geolocation quota exhaustion: count=%d", n)
+	}
+	if n := scalar(t, p, `SELECT count(*) FROM node_ip_history WHERE to_ip=$1::inet`, address); n != 1 {
+		t.Fatalf("IP history was not committed after quota exhaustion: count=%d", n)
+	}
+	if n := scalar(t, p, `SELECT count(*) FROM ip_addresses WHERE ip=$1::inet AND looked_up_at IS NULL`, address); n != 1 {
+		t.Fatalf("deferred address placeholder missing: count=%d", n)
+	}
+	t.Log("PASS: all exhausted providers defer geolocation; measurement, IP history and unlooked cache row commit for scheduled backfill")
+}
+
 func TestConcurrentIngestionIntegration(t *testing.T) {
 	p, s, l := setup(t)
 	var wg sync.WaitGroup
@@ -257,12 +290,7 @@ func TestMigrationBackfillAndRollbackIntegration(t *testing.T) {
 	for i := range 8 {
 		save(t, s, nodeA, result(i+1, i, fmt.Sprintf("203.0.113.%d", i%2+1)))
 	}
-	for range 6 {
-		if err := db.Migrate(t.Context(), p, "down"); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := db.Migrate(t.Context(), p, "down"); err != nil {
+	if err := db.MigrateDownTo(t.Context(), p, 3); err != nil {
 		t.Fatal(err)
 	}
 	// Populate version-3 data, including an obsolete history row, as a pre-upgrade fixture.

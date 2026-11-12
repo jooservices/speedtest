@@ -50,6 +50,99 @@ test('demo mode seeds and persists locally without making API calls', () => {
   ST.updateNode('n1', { name: 'Local demo' });
   assert.equal(ST.node('n1').name, 'Local demo'); assert.ok(storage.has('st.demo.v1'));
 });
+test('demo bandwidth budgets survive reload and reset with the rest of demo state', () => {
+  const first = runtime('http://localhost', { demo: true });
+  const budget = { scopeKey: 'global', monthlyBytes: 4096, action: 'pause', widenMultiplier: 2 };
+  first.ST.setDemoBandwidthBudgets([budget]);
+  assert.equal(JSON.stringify(first.ST.demoBandwidthBudgets()), JSON.stringify([budget]));
+  const reloaded = runtime('http://localhost', { demo: true, storage: first.storage });
+  assert.equal(JSON.stringify(reloaded.ST.demoBandwidthBudgets()), JSON.stringify([budget]));
+  reloaded.ST.resetDemo();
+  const reset = runtime('http://localhost', { demo: true, storage: first.storage });
+  assert.equal(JSON.stringify(reset.ST.demoBandwidthBudgets()), '[]');
+});
+test('percentiles and week changes use interpolated values and preserve undefined cases', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  const summary = ST.stats.summary([10, 20, 30, 40, 50]);
+  assert.equal(summary.p50, 30); assert.equal(summary.median, summary.p50);
+  assert.equal(summary.p95, 48); assert.equal(summary.p99, 49.6);
+  assert.equal(ST.stats.summary([]).p50, null); assert.equal(ST.stats.summary([]).p99, null);
+  assert.equal(ST.stats.summary([7]).p50, 7); assert.equal(ST.stats.summary([7]).p99, 7);
+  assert.equal(ST.stats.weekChange(120, 100), 20);
+  assert.equal(ST.stats.weekChange(100, 0), null); assert.equal(ST.stats.weekChange(null, 100), null);
+});
+test('effective ISP prefers the trimmed engine value and falls back to cached IP organisation', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  assert.equal(ST.stats.effectiveISP({ engineISP: '  Engine ISP  ', ip: '203.0.113.9' }), 'Engine ISP');
+  assert.equal(ST.stats.effectiveISP({ engineISP: ' ', ip: '203.0.113.9' }), 'Viettel Group');
+  assert.equal(ST.stats.effectiveISP({ ip: '192.0.2.99' }), 'VNPT Corp');
+  assert.equal(ST.stats.effectiveISP({ status: 'failed', failureClass: 'rate_limited', ip: null }), null);
+  assert.equal(ST.stats.effectiveISP({ ip: '203.0.114.9' }), null);
+  const filtered = ST.results({ nodeIds: ['n1'], isp: 'viettel group' });
+  assert.ok(filtered.length > 0);
+  assert.ok(filtered.every(result => ST.stats.effectiveISP(result).toLowerCase() === 'viettel group'));
+  assert.equal(ST.results({ nodeIds: ['n1'], isp: 'unknown isp' }).length, 0);
+});
+test('demo IP marks compare known results within one engine across nulls and range edges', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  const interleaved = [
+    { id: 'a', ts: 1, engine: 'ookla', ip: '203.0.113.1' },
+    { id: 'b', ts: 2, engine: 'librespeed', ip: '203.0.113.2' },
+    { id: 'c', ts: 3, engine: 'ookla', ip: '203.0.113.1' },
+    { id: 'd', ts: 4, engine: 'ookla', ip: '203.0.113.1' },
+    { id: 'e', ts: 5, engine: 'librespeed', ip: '203.0.113.2' },
+    { id: 'f', ts: 6, engine: 'ookla', ip: '203.0.113.2' },
+  ];
+  const interleavedChanges = Array.from(ST.stats.ipChanges(interleaved, 'ookla', 0, 7), change => [change.from, change.result.ip]);
+  assert.equal(JSON.stringify(interleavedChanges), JSON.stringify([['203.0.113.1', '203.0.113.2']]));
+  const boundaryAndNull = [
+    { id: 'before', ts: 0, engine: 'ookla', ip: '203.0.113.3' },
+    { id: 'start', ts: 1, engine: 'ookla', ip: '203.0.113.4' },
+    { id: 'null', ts: 2, engine: 'ookla', ip: null },
+    { id: 'after-null', ts: 3, engine: 'ookla', ip: '203.0.113.5' },
+    { id: 'end', ts: 5, engine: 'ookla', ip: '203.0.113.6' },
+  ];
+  const boundaryChanges = Array.from(ST.stats.ipChanges(boundaryAndNull, 'ookla', 1, 5), change => [change.result.id, change.from, change.result.ip]);
+  assert.equal(JSON.stringify(boundaryChanges), JSON.stringify([
+    ['start', '203.0.113.3', '203.0.113.4'],
+    ['after-null', '203.0.113.4', '203.0.113.5'],
+  ]));
+});
+test('engine selector updates the selected engine and refreshes demo data', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  let refreshes = 0;
+  ST.ui = { field: (label, control) => ({ label, control }), select: (options, value, onChange) => ({ options, value, onChange }) };
+  ST.refresh = () => { refreshes++; };
+  const field = ST.engineSelector();
+  field.control.onChange('librespeed');
+  assert.equal(field.label, 'Engine');
+  assert.equal(ST.selectedEngine, 'librespeed');
+  assert.equal(ST.engineQuery(), '&engine=librespeed');
+  assert.equal(refreshes, 1);
+});
+test('engine schedules use the primary engine for legacy nodes', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  const [schedule] = ST.engineSchedules({ interval: 60, enabled: true });
+  assert.equal(schedule.engine, 'ookla'); assert.equal(schedule.interval, 60);
+  assert.equal(schedule.offset, 0); assert.equal(schedule.enabled, true);
+});
+test('remote engine schedules are filtered by node and include the default engine', async t => {
+  const { ST, data } = await setup(t);
+  await ST.load();
+  const [schedule] = ST.engineSchedules({ id: data.node.id });
+  assert.equal(schedule.engine, 'ookla'); assert.equal(schedule.interval, 30);
+  assert.equal(ST.engineSchedules({ id: 'missing' }).length, 0);
+});
+test('duration formatting includes days', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  assert.equal(ST.fmt.dur(90_000_000), '1d 1h');
+});
+test('new demo nodes use a 60-minute interval and zero offset', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  const node = ST.addNode({ name: 'New demo node', expectedDown: 100, expectedUp: 50 });
+  assert.equal(node.interval, 60);
+  assert.equal(node.offset, 0);
+});
 test('settings writes use CSRF and ETag and never echo configured flags or blank secrets', async t => {
   const { ST, control } = await setup(t);
   await ST.load();
@@ -147,15 +240,11 @@ test('demo public queries, statistics, formatting and mutations retain their beh
   assert.equal(ST.node(node.id).name, 'Extra'); assert.ok(ST.nodeColor(node).startsWith('var('));
   assert.ok(ST.nodeTitle(node).startsWith('Extra')); ST.removeNode(node.id); assert.equal(ST.node(node.id), undefined);
   const F = ST.fmt;
-  assert.equal(F.failureReason('  Network   timeout  '), 'Network timeout');
-  assert.equal(F.failureReason('The test server did not answer in time'), 'The test server did not answer…');
-  assert.equal(F.failureReason(''), 'Reason unavailable');
-  assert.equal(F.failureReason(null), 'Reason unavailable');
   for (const kind of ['day', 'time', 'full', 'dayfull', undefined]) assert.equal(typeof F.date(Date.now(), kind), 'string');
   assert.equal(F.date(null), '—'); assert.equal(F.parts(Date.parse('2026-11-02T00:00:00Z')).wd, 0);
   assert.equal(F.rel(null), '—');
   for (const delta of [-100000, 0, 100000, 4000000, 100000000]) assert.equal(typeof F.rel(Date.now() - delta), 'string');
-  for (const duration of [1000, 100000, 10000000]) assert.equal(typeof F.dur(duration), 'string');
+  for (const duration of [1000, 100000, 10000000, 100000000]) assert.equal(typeof F.dur(duration), 'string');
   assert.equal(F.num(null), '—'); assert.equal(F.num(1.5, 1), '1.5');
   for (const units of ['auto', 'Mbps', 'MBps', 'Gbps']) {
     ST.setSettings({ units }, true);
@@ -163,9 +252,15 @@ test('demo public queries, statistics, formatting and mutations retain their beh
     assert.ok(F.axisUnit());
   }
   assert.equal(F.ms(null), '—'); assert.equal(F.ms(0), '0.0 ms'); assert.equal(F.pct(null), '—'); F.pct(1, 2);
-  assert.equal(F.bytes(0), '—'); F.bytes(1); F.bytes(4096);
+  assert.equal(F.bytes(null), '—'); assert.equal(F.bytes(0), '0 B'); F.bytes(1); F.bytes(4096);
+  assert.equal(F.bytesTotal(null, 10), null); assert.equal(F.bytesTotal(20, 10), 30);
   for (const metric of ['down', 'ping', 'loss', 'unknown']) { F.metric(metric, 1); F.metric(metric, null); }
-  assert.ok(ST.csv([{ ...ST.results()[0], error: 'quoted,"value"\nnext' }]).includes('"quoted,""value""\nnext"'));
+  const csv = ST.csv([{ ...ST.results()[0], bytesDown: 100, bytesUp: 50, error: 'quoted,"value"\nnext' }]);
+  assert.ok(csv.startsWith('time,node,status,download_mbps,upload_mbps,ping_ms,jitter_ms,packet_loss_pct,bytes_down,bytes_up,bytes_total'));
+  assert.ok(csv.includes(',100,50,150,'));
+  const missingBytes = ST.csv([{ ...ST.results()[0], bytesDown: null, bytesUp: null }]).split('\n')[1].split(',');
+  assert.deepEqual(missingBytes.slice(8, 11), ['', '', ''], 'missing counters keep the total empty');
+  assert.ok(csv.includes('"quoted,""value""\nnext"'));
   assert.ok(ST.csv([{ ...ST.results()[0], nodeId: 'missing', serverId: -1 }]).includes('missing'));
 });
 test('demo manual test reports progress and inserts a result without network access', async () => {
@@ -181,15 +276,43 @@ test('demo manual test reports progress and inserts a result without network acc
   assert.equal(ST.latest('n1').id, result.id);
 });
 
+test('demo rate-limited results preserve failed and numeric alert streaks', async () => {
+  const { ST, context } = runtime('http://localhost', { demo: true });
+  const { default: vm } = await import('node:vm');
+  vm.runInContext('var testClock = Date.now(); Date.now = function () { return testClock; };', context);
+  context.setTimeout = fn => { context.testClock += 1000; fn(); };
+  ST.util.rng = () => () => 0.99;
+  const node = ST.addNode({ name: 'Rate-limit fixture', expectedDown: 100, expectedUp: 50 });
+  const failedRule = { id: 'demo-rate-failed', name: 'Failed streak', metric: 'failed', op: '>=', value: 1, forTests: 2, nodes: [node.id], severity: 'warn', enabled: true };
+  const pingRule = { id: 'demo-rate-ping', name: 'Ping streak', metric: 'ping', op: '>', value: 50, forTests: 2, nodes: [node.id], severity: 'warn', enabled: true };
+  ST.saveRule(failedRule); ST.saveRule(pingRule);
+  let nextSample;
+  ST.genSample = (selected, ts) => ({ ...nextSample, nodeId: selected.id, ts });
+  const run = async sample => { nextSample = sample; return ST.runTest(node.id); };
+  const ping = { status: 'ok', failureClass: 'other', serverId: ST.servers[0].id, ip: '203.0.113.73', down: 100, up: 50, ping: 100, jitter: 1, dLat: 5, uLat: 5, loss: 0, bytesDown: 100, bytesUp: 50, duration: 1 };
+  const limited = { status: 'failed', failureClass: 'rate_limited', error: 'Too many requests', serverId: ST.servers[0].id, ip: '', down: null, up: null, ping: null, jitter: null, dLat: null, uLat: null, loss: null, bytesDown: 0, bytesUp: 0, duration: 1 };
+  const failure = { ...limited, failureClass: 'other', error: 'fixture failure' };
+  await run(ping); await run(limited); await run(ping); await run(limited);
+  assert.ok(ST.events().some(event => event.ruleId === pingRule.id && !event.resolvedAt), 'rate limit between and after high ping results preserves the numeric alert');
+  await run(failure); await run(ping);
+  assert.ok(ST.events().some(event => event.ruleId === pingRule.id && !event.resolvedAt), 'a failed measurement does not recover a numeric alert');
+  await run(failure); await run(limited); await run(failure); await run(limited);
+  assert.ok(ST.events().some(event => event.ruleId === failedRule.id && !event.resolvedAt), 'rate limit between and after failures preserves the failed-test alert');
+});
+
 test('remote schedules, rules, stagger, key rotation, agent update, manual tests and notification tests use the API', async t => {
   const { ST, control, data } = await setup(t);
   await ST.load();
   assert.equal(ST.scheduleInfo().rules.maxConcurrent, 1);
   assert.equal(ST.scheduleInfo().nodes[0].nodeId, data.node.id);
-  assert.deepEqual(JSON.parse(JSON.stringify(ST.engineSchedules(data.node))), [{ engine: 'ookla', interval: 30, offset: 0, enabled: true }]);
+  control.requests.length = 0;
+  assert.equal(JSON.stringify(ST.engineSchedules(data.node)), JSON.stringify([{ engine: 'ookla', interval: 30, offset: 0, enabled: true }]));
+  assert.equal(ST.engineSchedules({ id: 'unconfigured' }).length, 0);
   await ST.saveSchedule(data.node.id, { interval: 60, offset: 5, enabled: true });
   const put = control.requests.find(r => r.method === 'PUT' && r.path === '/api/schedules/' + data.node.id);
   assert.deepEqual(put.body, { interval: 60, offset: 5, enabled: true }); assert.equal(put.headers['if-match'], '"fixture-v1"');
+  assert.equal(control.requests.filter(r => r.path === '/api/schedules').length, 1, 'refreshes schedule data after save');
+  assert.equal(control.requests.some(r => r.path.startsWith('/api/results')), false, 'does not reload result history for a schedule edit');
   await ST.saveScheduleRules({ maxConcurrent: 3, quietStart: '23:00', quietEnd: '05:00' });
   const rules = control.requests.find(r => r.path === '/api/schedules/rules' && r.method === 'PUT').body;
   assert.equal(rules.maxConcurrent, 3); assert.equal(rules.stagger, true); assert.equal(rules.quiet.quietStart, '23:00');
@@ -205,6 +328,93 @@ test('remote schedules, rules, stagger, key rotation, agent update, manual tests
   assert.equal((await ST.testNotification('webhook')).status, 'sent');
   control.deliveryFails = true;
   assert.equal((await ST.testNotification('webhook')).status, 'failed');
+});
+
+test('remote server catalogs poll discovery, preserve errors, and pin with the catalog ETag', async t => {
+  const { ST, context, data, control } = await setup(t);
+  await ST.load();
+  assert.deepEqual(JSON.parse(JSON.stringify(ST.engineSchedules(data.node))),
+    [{ engine: 'ookla', interval: 30, offset: 0, enabled: true }]);
+  await ST.saveEngineSchedules(data.node.id, [{ engine: 'librespeed', interval: 60, offset: 2, enabled: true }]);
+  let commandStatus = 'running';
+  let commandError = '';
+  let holdCommand = false;
+  let commandPolls = 0;
+  const request = ST.api.request;
+  const calls = [];
+  ST.api.request = async (path, options = {}) => {
+    calls.push({ path, options });
+    if (path.includes('/servers?engine=') && options.method === 'POST') return { data: { id: 'command/id' } };
+    if (path.includes('/servers?engine=')) return { data: { servers: [], pinnedServerId: 'auto' }, etag: '"catalog-v1"' };
+    if (path.endsWith('/commands/command%2Fid')) {
+      if (commandStatus === 'running' && !holdCommand && ++commandPolls > 1) commandStatus = 'succeeded';
+      return { data: { status: commandStatus, error: commandError } };
+    }
+    if (path.endsWith('/server-selection')) return { data: { engine: 'librespeed', serverId: calls.filter(call => call.path.endsWith('/server-selection')).length === 1 ? 17 : 'auto' }, etag: calls.filter(call => call.path.endsWith('/server-selection')).length === 1 ? '"catalog-v2"' : '"catalog-v3"' };
+    return request(path, options);
+  };
+  context.setTimeout = fn => { fn(); return 0; };
+  const catalog = await ST.serverCatalog('node/contract', 'libre speed');
+  assert.equal(catalog.etag, '"catalog-v1"');
+  await ST.refreshServerCatalog('node/contract', 'libre speed');
+  assert.ok(calls.some(call => call.path === '/api/nodes/node%2Fcontract/commands/command%2Fid'));
+  const selected = await ST.selectServer(data.node.id, 'librespeed', 17, '"catalog-v1"');
+  assert.equal(selected.serverId, 17);
+  assert.equal(selected.etag, '"catalog-v2"');
+  const automatic = await ST.selectServer(data.node.id, 'librespeed', 'auto', selected.etag);
+  assert.equal(automatic.serverId, 'auto');
+  assert.equal(automatic.etag, '"catalog-v3"');
+  assert.deepEqual(JSON.parse(JSON.stringify(calls.find(call => call.path.endsWith('/server-selection')).options.body)),
+    { engine: 'librespeed', serverId: 17 });
+  commandStatus = 'failed';
+  await assert.rejects(ST.refreshServerCatalog(data.node.id, 'librespeed'), /could not retrieve its server list/);
+  commandError = 'server list unavailable';
+  await assert.rejects(ST.refreshServerCatalog(data.node.id, 'librespeed'), /server list unavailable/);
+  commandStatus = 'running'; commandError = ''; holdCommand = true; commandPolls = 0;
+  const vm = await import('node:vm');
+  vm.runInContext('var serverClock = 0; Date.now = function () { serverClock += 200000; return serverClock; };', context);
+  await assert.rejects(ST.refreshServerCatalog(data.node.id, 'librespeed'), /discovery is still running/);
+});
+
+test('remote engine schedule queries select the node and default legacy entries to Ookla', async t => {
+  const { ST, data } = await setup(t);
+  await ST.load();
+  const rows = ST.engineSchedules(ST.node(data.node.id));
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].engine, 'ookla'); assert.equal(rows[0].interval, 30);
+  assert.equal(rows[0].offset, 0); assert.equal(rows[0].enabled, true);
+  assert.equal(ST.engineSchedules({ id: 'missing' }).length, 0);
+});
+
+test('notification catalog and template methods use their REST endpoints', async t => {
+  const { ST, control } = await setup(t);
+  await ST.load();
+  const events = await ST.notificationEvents();
+  assert.equal(events[0].key, 'test.success');
+  await ST.updateNotificationEvent('test.success', { enabled: false, severity: 'warn', channels: ['webhook'] });
+  assert.equal(await ST.notificationNodeEnabled('test.success', 'node/contract'), true);
+  assert.equal((await ST.setNotificationNodeEnabled('test.success', 'node/contract', false)).enabled, false);
+  await ST.notificationTemplate('test.success', 'telegram');
+  await ST.saveNotificationTemplate('test.success', 'telegram', 'Hello {node}');
+  const preview = await ST.previewNotificationTemplate('test.success', 'telegram', 'Hello {node}');
+  assert.equal(preview.body, 'Hello Viettel Fast 50');
+  const reset = await ST.resetNotificationTemplate('test.success', 'telegram');
+  assert.equal(reset.body, 'Hello {node}');
+  const calls = control.requests.filter(r => r.path.startsWith('/api/notifications/'));
+  assert.deepEqual(calls.map(r => `${r.method} ${r.path}`), [
+    'GET /api/notifications/events',
+    'PATCH /api/notifications/events/test.success',
+    'GET /api/notifications/events/test.success/nodes/node%2Fcontract',
+    'PUT /api/notifications/events/test.success/nodes/node%2Fcontract',
+    'GET /api/notifications/templates/test.success/telegram',
+    'PUT /api/notifications/templates/test.success/telegram',
+    'POST /api/notifications/templates/test.success/telegram/previews',
+    'POST /api/notifications/templates/test.success/telegram/resets',
+  ]);
+  assert.deepEqual(calls[3].body, { enabled: false });
+  assert.deepEqual(calls[5].body, { body: 'Hello {node}' });
+  assert.deepEqual(calls[6].body, { body: 'Hello {node}' });
+  assert.equal(calls[1].headers['x-csrf-token'], 'fixture-csrf');
 });
 
 test('a manual test follows the command to its result and reports a failed command plainly', async t => {

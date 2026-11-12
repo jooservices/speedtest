@@ -1,7 +1,7 @@
 /* Dashboard: fleet summary, node cards, comparison chart, recent results and alerts. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt, S = ST.stats;
   var state = { metric: 'down', mode: 'abs', hidden: {} };
   var dashboardComparisons = {}, dashboardRequests = {}, dashboardRevision = 0, activeComparisonDisplay = null;
 
@@ -72,9 +72,11 @@
       var pcts = sums.map(function (x) { return x.downPct; }).filter(function (v) { return v != null; });
       var upc = sums.map(function (x) { return x.upPct; }).filter(function (v) { return v != null; });
       var allOk = S.sum(sums.map(function (x) { return x.ok; })), allN = S.sum(sums.map(function (x) { return x.count; }));
+      var rateLimited = S.sum(sums.map(function (x) { return x.rateLimited || 0; }));
+      var eligible = allN - rateLimited;
       var pings = ST.results({ from: a, to: b, status: 'ok' }).map(function (r) { return r.ping; });
       var ips = S.sum(nodes.map(function (n) { return ST.ipHistory(n.id).changes.filter(function (c) { return c.ts >= a && c.ts <= b && !(n.ipModel && n.ipModel.kind === 'mix'); }).length; }));
-      return { down: S.mean(pcts), up: S.mean(upc), ping: S.summary(pings).median, success: allN ? allOk / allN * 100 : null, ips: ips, count: allN };
+      return { down: S.mean(pcts), up: S.mean(upc), ping: S.summary(pings).median, success: eligible ? allOk / eligible * 100 : null, rateLimited: rateLimited, ips: ips, count: allN };
     }
     var cur = fleet(from, now), prev = fleet(prevFrom, from), comparisonState = comparison(s.range);
     if (comparisonState && comparisonState.data) {
@@ -89,17 +91,20 @@
     var tiles = h('div', { class: 'grid cols-5 mb' });
     var comparisonDisplay = { key: comparisonState && comparisonState.key, fields: {} };
     activeComparisonDisplay = comparisonDisplay;
-    function tile(label, icon, value, unit, delta, hint, field, format, goodHigh) {
+    function tile(label, icon, value, unit, delta, hint, field, format, goodHigh, detail) {
       var valueText = h('span', null, value), deltaContent = delta || h('span', { class: 'delta flat' }, ' ');
       var deltaValue = deltaContent.classList && deltaContent.classList.contains('delta') ? deltaContent : deltaContent.querySelector('.delta');
       if (field && comparisonDisplay.key) comparisonDisplay.fields[field] = { value: valueText, delta: deltaValue, format: format, goodHigh: goodHigh };
       return h('div', { class: 'card stat', title: hint }, h('div', { class: 'stat-label' }, U.icon(icon, 15), label),
-        h('div', { class: 'stat-value tabnum' }, valueText, unit ? h('small', null, unit) : null), h('div', { style: 'margin-top:2px' }, deltaContent));
+        h('div', { class: 'stat-value tabnum' }, valueText, unit ? h('small', null, unit) : null), h('div', { style: 'margin-top:2px' }, deltaContent),
+        detail ? h('div', { class: 'stat-hint' }, detail) : null);
     }
     tiles.appendChild(tile('Download vs. expected', 'down', cur.down == null ? '—' : F.num(cur.down, 0), '%', delta(cur.down, prev.down, true), 'Average of each node’s download compared with the speed you expect from it', 'down', function (v) { return v == null ? '—' : F.num(v, 0); }, true));
     tiles.appendChild(tile('Upload vs. expected', 'up', cur.up == null ? '—' : F.num(cur.up, 0), '%', delta(cur.up, prev.up, true), 'Average of each node’s upload compared with the speed you expect from it', 'up', function (v) { return v == null ? '—' : F.num(v, 0); }, true));
     tiles.appendChild(tile('Median latency', 'activity', cur.ping == null ? '—' : F.num(cur.ping, 1), 'ms', delta(cur.ping, prev.ping, false), null, 'ping', function (v) { return v == null ? '—' : F.num(v, 1); }, false));
-    tiles.appendChild(tile('Tests succeeded', 'check', cur.success == null ? '—' : F.num(cur.success, 1), '%', delta(cur.success, prev.success, true), F.num(cur.count) + ' tests in this range', 'success', function (v) { return v == null ? '—' : F.num(v, 1); }, true));
+    var limitedText = F.num(cur.rateLimited || 0) + ' rate-limited ' + (cur.rateLimited === 1 ? 'test' : 'tests') + ' excluded from success rate';
+    if (cur.rateLimited > 0 && cur.count - cur.rateLimited === 0) limitedText += ' · no eligible tests';
+    tiles.appendChild(tile('Tests succeeded', 'check', cur.success == null ? '—' : F.num(cur.success, 1), '%', delta(cur.success, prev.success, true), F.num(cur.count) + ' tests in this range', 'success', function (v) { return v == null ? '—' : F.num(v, 1); }, true, limitedText));
     tiles.appendChild(tile('IP changes', 'swap', String(cur.ips), cur.ips === 1 ? 'change' : 'changes',
       h('span', { class: 'row wrap', style: 'gap:8px' }, delta(cur.ips, prev.ips, false), h('a', { href: '#/network', class: 'hint' }, 'See history')), null, 'ips', String, false));
     root.appendChild(tiles);
@@ -135,6 +140,8 @@
       h('div', { class: 'ev-ico info', style: 'width:38px;height:38px;margin:0 auto 8px' }, U.icon('plus', 20)), h('b', null, 'Add a node'), h('span', { class: 'muted' }, 'Measure another connection'));
     cards.appendChild(addCard);
     root.appendChild(cards);
+
+    ST.bandwidth.panel(root);
 
     /* ---- comparison chart ---- */
     var chartHost = h('div'), sparseHost = h('div'), legendHost = h('div'), tableMode = false;
@@ -218,11 +225,15 @@
 
   /* Result detail drawer, shared with the Results page. */
   ST.openResult = function (r) {
-    var n = ST.node(r.nodeId), srv = ST.server(r.serverId), geo = ST.geo(r.ip);
-    var json = JSON.stringify({ id: r.id, time: new Date(r.ts).toISOString(), node: n && n.name, status: r.status, download_mbps: r.down, upload_mbps: r.up, ping_ms: r.ping, jitter_ms: r.jitter, packet_loss_pct: r.loss, loaded_latency_download_ms: r.dLat, loaded_latency_upload_ms: r.uLat, server: srv.name + ' - ' + srv.city, public_ip: r.ip, threads: r.threads }, null, 2);
+    var n = ST.node(r.nodeId), srv = r.server || ST.server(r.serverId), geo = ST.geo(r.ip);
+    var usedServerID = r.serverId == null && r.server ? r.server.id : r.serverId;
+    var differsFromPin = r.pinnedServerId != null && usedServerID != null && Number(r.pinnedServerId) !== Number(usedServerID);
+    var json = JSON.stringify({ id: r.id, time: new Date(r.ts).toISOString(), node: n && n.name, status: r.status, download_mbps: r.down, upload_mbps: r.up, ping_ms: r.ping, jitter_ms: r.jitter, packet_loss_pct: r.loss, bytes_down: r.bytesDown, bytes_up: r.bytesUp, bytes_total: F.bytesTotal(r.bytesDown, r.bytesUp), loaded_latency_download_ms: r.dLat, loaded_latency_upload_ms: r.uLat, server: srv.name + ' - ' + srv.city, public_ip: r.ip, threads: r.threads }, null, 2);
     var body = h('div', { class: 'stack' },
       h('div', { class: 'row between' }, h('span', { class: 'row' }, U.dot(ST.nodeColor(n)), h('b', null, ST.nodeTitle(n))), U.statusChip(r.status)),
       r.status === 'failed' ? U.callout(r.error || 'The test could not finish.', 'crit', 'alert') : null,
+      r.warnings && r.warnings.length ? U.callout(r.warnings.join(' '), 'warn', 'alert') : null,
+      differsFromPin ? U.callout('This result used server #' + usedServerID + ' instead of pinned server #' + r.pinnedServerId + '.', 'warn', 'alert') : null,
       r.status !== 'failed' ? h('div', { class: 'grid cols-3' },
         h('div', { class: 'card card-pad' }, h('div', { class: 'muted' }, 'Download'), h('div', { class: 'speed-big tabnum' }, F.speedParts(r.down).v, h('small', null, F.speedParts(r.down).u)), h('div', { class: 'hint' }, F.num(r.down / n.expectedDown * 100, 0) + '% of expected')),
         h('div', { class: 'card card-pad' }, h('div', { class: 'muted' }, 'Upload'), h('div', { class: 'speed-big tabnum' }, F.speedParts(r.up).v, h('small', null, F.speedParts(r.up).u)), h('div', { class: 'hint' }, F.num(r.up / n.expectedUp * 100, 0) + '% of expected')),
@@ -230,7 +241,7 @@
       U.kv([
         ['Time', F.date(r.ts, 'full')], ['Packet loss', r.status === 'failed' ? '—' : F.num(r.loss, 1) + '%'],
         ['Latency under load', r.status === 'failed' ? '—' : 'Down ' + F.ms(r.dLat) + ' · Up ' + F.ms(r.uLat)],
-        ['Data used', r.status === 'failed' ? '—' : F.bytes(r.bytesDown) + ' down · ' + F.bytes(r.bytesUp) + ' up'], ['Duration', F.num(r.duration, 0) + ' s'], ['Connections', r.threads],
+        ['Data used', F.bytes(r.bytesDown) + ' down · ' + F.bytes(r.bytesUp) + ' up · ' + F.bytes(F.bytesTotal(r.bytesDown, r.bytesUp)) + ' total'], ['Duration', F.num(r.duration, 0) + ' s'], ['Connections', r.threads],
         ['Test server', srv.name + ', ' + srv.city + ' (#' + srv.id + ')'], ['Public IP', h('span', { class: 'mono' }, r.ip)],
         ['Location', geo ? geo.city + ', ' + geo.country + ' · ' + geo.isp + ' (AS' + geo.asn + ')' : 'Unknown'], ['Started by', r.manual ? 'You (manual test)' : 'Schedule']]),
       h('div', null, h('div', { class: 'label', style: 'margin-bottom:6px' }, 'Raw result'), U.code(json)));

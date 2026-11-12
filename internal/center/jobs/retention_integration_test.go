@@ -13,6 +13,7 @@ import (
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/shared/config"
+	"github.com/jooservices/speedtest/internal/shared/testenv"
 )
 
 func openPool(t *testing.T) (*pgxpool.Pool, context.Context) {
@@ -21,9 +22,7 @@ func openPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	if err != nil {
 		t.Fatal("a configured worktree .env is required")
 	}
-	for k, v := range values {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("invalid test configuration")
@@ -222,9 +221,16 @@ func TestRetentionAlsoPrunesTheAuditLog(t *testing.T) {
 func TestRetentionObserverIntegration(t *testing.T) {
 	pool, ctx := openPool(t)
 	var outcomes []bool
-	r := &Retention{DB: pool, ObserveRun: func(ok bool) { outcomes = append(outcomes, ok) }}
+	var completed []Result
+	r := &Retention{DB: pool, ObserveRun: func(ok bool) { outcomes = append(outcomes, ok) }, OnComplete: func(_ context.Context, result Result) error {
+		completed = append(completed, result)
+		return nil
+	}}
 	if _, err := r.Run(ctx); err != nil {
 		t.Fatal(err)
+	}
+	if len(completed) != 1 || completed[0].RetentionDays != DefaultRetentionDays {
+		t.Fatalf("retention completion events = %+v", completed)
 	}
 	cancelled, cancel := context.WithCancel(ctx)
 	cancel()

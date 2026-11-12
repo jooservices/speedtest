@@ -3,10 +3,11 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/ui/*.test.mjs",
+    "test": "node --test tests/ui/*.test.mjs tests/e2e/*.test.mjs",
     "test:ui": "node tests/ui/smoke.mjs",
     "test:coverage": "node tests/ui/coverage.mjs",
     "lint": "node --check ui/assets/js/api.js && node --check ui/assets/js/store.js && node --check ui/assets/js/app.js && node --check ui/assets/js/charts.js",
+    "typecheck": "tsc -p jsconfig.json",
     "test:wizard": "node tests/ui/wizard.mjs"
   },
   "devDependencies": {
@@ -15,6 +16,7 @@
     "axe-core": "^4.14.0",
     "istanbul-lib-coverage": "^3.2.2",
     "playwright": "1.63.0",
+    "typescript": "^7.0.2",
     "v8-to-istanbul": "^9.3.0",
     "yaml": "^2.8.2"
   },

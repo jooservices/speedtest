@@ -17,6 +17,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/shared/testenv"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/db"
@@ -31,9 +33,7 @@ func database(t *testing.T) (*pgxpool.Pool, context.Context) {
 	if err != nil {
 		t.Fatal("worktree .env required")
 	}
-	for k, v := range env {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, env)
 	cfg, err := config.LoadCenter()
 	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
 		t.Fatal("configured non-live test database required")
@@ -211,9 +211,7 @@ func TestSharedMailpitSMTP(t *testing.T) {
 	if err != nil {
 		t.Fatal("worktree environment required")
 	}
-	for k, v := range env {
-		t.Setenv(k, v)
-	}
+	testenv.Apply(t, env)
 	cfg, err := config.LoadCenter()
 	if err != nil {
 		t.Fatal("configuration")
@@ -292,18 +290,13 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	if _, err := worker.Consume(ctx); err != nil {
 		t.Fatal(err)
 	}
-	// Later migrations (for example the SSH installer) sit above this one; roll back until the delivery table is gone.
+	// Roll back to the version immediately before notification deliveries.
 	var exists bool
-	for step := 0; step < 5; step++ {
-		if err := db.Migrate(ctx, p, "down"); err != nil {
-			t.Fatal("rollback step", step, err)
-		}
-		if err := p.QueryRow(ctx, `SELECT to_regclass('notification_deliveries') IS NOT NULL`).Scan(&exists); err != nil {
-			t.Fatal(err)
-		}
-		if !exists {
-			break
-		}
+	if err := db.MigrateDownTo(ctx, p, 5); err != nil {
+		t.Fatal("roll back through notification deliveries migration", err)
+	}
+	if err := p.QueryRow(ctx, `SELECT to_regclass('notification_deliveries') IS NOT NULL`).Scan(&exists); err != nil {
+		t.Fatal(err)
 	}
 	if exists {
 		t.Fatal("delivery table not dropped")
@@ -453,7 +446,8 @@ func TestQuietHoursHoldAlertDeliveries(t *testing.T) {
 		execute(t, p, `INSERT INTO alert_events(id,node_id,severity,ts,title) VALUES($1,'10000000-0000-4000-8000-000000000001',$2,now(),'Alert')`, id, sev)
 		execute(t, p, `INSERT INTO alert_notification_outbox(event_id,channels) VALUES($1,ARRAY['webhook'])`, id)
 	}
-	execute(t, p, `INSERT INTO settings(key,value) VALUES ('notifyQuietStart','"22:00"'),('notifyQuietEnd','"07:00"'),('notifyQuietTimezone','"Asia/Ho_Chi_Minh"'),('notifyQuietCritical','true')`)
+	execute(t, p, `INSERT INTO settings(key,value) VALUES ('notifyQuietStart','"22:00"'),('notifyQuietEnd','"07:00"'),('notifyQuietTimezone','"Asia/Ho_Chi_Minh"'),('notifyQuietCritical','true')
+		ON CONFLICT(key) DO UPDATE SET value=EXCLUDED.value`)
 	night := time.Date(2026, 11, 3, 18, 0, 0, 0, time.UTC) // 01:00 in Ho Chi Minh City
 	now := night
 	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: func() time.Time { return now }}
@@ -462,7 +456,11 @@ func TestQuietHoursHoldAlertDeliveries(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	test, err := worker.Test(ctx, "webhook")
+	channels := []string{"webhook"}
+	if _, err := (&EventStore{DB: p}).UpdateEvent(ctx, "test.success", EventPatch{Channels: channels}); err != nil {
+		t.Fatal("route template test to webhook", err)
+	}
+	test, err := worker.TestNotificationEvent(ctx, "test.success", "webhook")
 	if err != nil {
 		t.Fatal(err)
 	}

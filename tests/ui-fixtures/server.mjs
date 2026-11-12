@@ -6,12 +6,13 @@ import { resolve, extname } from 'node:path';
 export function fixture() {
   const ts = new Date().toISOString();
   const node = { id: 'node-contract', name: 'Contract node', label: 'Test connection', provider: 'Fixture', plan: '',
-    expectedDown: 100, expectedUp: 50, threads: 4, server: 'auto', note: '', enabled: true, binding: { iface: '', sourceIp: null }, autoUpdate: false,
+    expectedDown: 100, expectedUp: 50, threads: 4, server: 'auto', ispPlanId: null, note: '', enabled: true, binding: { iface: '', sourceIp: null }, autoUpdate: false,
     colorSlot: 1, interval: 30, offset: 0, host: '', agent: 'test', createdAt: ts, lastSeen: ts, status: 'online',
-    latest: null, latestGood: null, currentIp: '203.0.113.9', geo: null, updateVersion: null };
+    latest: null, latestGood: null, currentIp: '203.0.113.9', geo: null, isp: null, updateVersion: null };
   const result = { id: 'a4bbcf7b-8938-4e90-8128-59047d35b087', nodeId: node.id, ts,
-    serverId: 1, threads: 4, ip: '203.0.113.9', status: 'ok', error: null, down: 90, up: 40, ping: 0,
-    jitter: null, loss: null, dLat: null, uLat: null, bytesDown: 1000, bytesUp: 500, duration: 1,
+    serverId: 1, pinnedServerId: null, serverSelectionKnown: false, threads: 4, ip: '203.0.113.9', status: 'ok', error: null, failureClass: 'other', ispId: null, down: 90, up: 40, ping: 0,
+    jitter: null, loss: null, dLat: null, uLat: null, bytesDown: 1000, bytesUp: 500, bytesTotal: 1500, duration: 1,
+    failureClass: 'other', ispId: null,
     manual: false, raw: {}, server: { id: 1, name: 'Fixture server', city: '', sponsor: '' }, geo: null };
   node.latest = result; node.latestGood = result;
   const metric = (value, n = 1) => ({ n, mean: value, median: value, min: value, max: value, p5: value, p95: value, std: 0 });
@@ -19,6 +20,8 @@ export function fixture() {
     jitter: metric(null, 0), loss: metric(null, 0), ipCount: 1, downPct: 90, upPct: 80, stability: 100 };
   const fleet = { down: 90, up: 80, ping: 0, success: 100, ips: 0, count: 1 };
   const dashboard = { current: fleet, previous: fleet, nodes: [{ node, summary, sparkline: [] }], latestResults: [result], openAlerts: [], openAlertCount: 0 };
+  const isp = { id: '9c96b615-8275-4df5-96e6-1ba67e5a16c7', asn: 64500, organisation: 'Fixture Network',
+    name: 'Fixture ISP', nodeCount: 1, avgDown: 90, p95Down: 90, pctExpected: 90, successRate: 1, avgPing: 10 };
   const notify = Object.fromEntries(['email', 'telegram', 'slack', 'webhook'].map(key => [key, { on: false, to: '', configured: false }]));
   const settings = { theme: 'dark', range: '7d', units: 'auto', timezone: 'browser', hour12: false, decimals: 1,
     retentionDays: 365, geoProvider: 'geolite2', geoFallback: 'ip-api', geoAutoUpdate: true, engine: 'ookla',
@@ -26,12 +29,12 @@ export function fixture() {
     centerUrl: 'http://localhost', geoKeyConfigured: false, enrollKeyConfigured: false, notify };
   const rule = { id: 'rule-fixture', name: 'Slow connection', metric: 'down_pct', op: '<', value: 60, forTests: 3,
     nodes: 'all', severity: 'warn', channels: ['email'], enabled: true };
-  const event = { id: 'event-fixture', ruleId: rule.id, nodeId: node.id, severity: 'warn', ts, resolvedAt: null,
+  const event = { id: 'event-fixture', ruleId: rule.id, nodeId: node.id, ispId: null, severity: 'warn', ts, resolvedAt: null,
     title: rule.name, detail: 'Fixture alert', acked: false };
   const schedules = { rules: { stagger: true, maxConcurrent: 1, quiet: { quietStart: '', quietEnd: '', timezone: 'UTC' } },
     nodes: [{ nodeId: node.id, config: { interval: 30, offset: 0, enabled: true }, nextRun: ts, upcoming: [ts], bytesPerDay: 72000, bytesPerMonth: 2160000 }],
     clashes: [] };
-  return { node, result, settings, rule, event, schedules, dashboard };
+  return { node, result, isp, settings, rule, event, schedules, dashboard };
 }
 const ts0 = () => new Date().toISOString();
 export const envelope = (data, meta = {}, code = 200) => ({ success: true, code, message: 'OK', data, meta, errors: null });
@@ -40,7 +43,8 @@ export const problem = status => ({ type: `/problems/test-${status}`, title: `HT
 
 export async function startServer() {
   const data = fixture();
-  const control = { status: 0, empty: false, delay: 0, requests: [], responses: [], session: true, failWrites: 0, failWriteStatus: 412 };
+  const control = { status: 0, empty: false, delay: 0, requests: [], responses: [], session: true, noMeasurements: false,
+    failWrites: 0, failWriteStatus: 412, failPaths: new Set() };
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     if (url.pathname.startsWith('/api/')) {
@@ -57,6 +61,7 @@ export async function startServer() {
         res.end(JSON.stringify(value));
       };
       if (control.status) { send(control.status, problem(control.status)); return; }
+      if (control.failPaths.has(url.pathname)) { send(500, problem(500)); return; }
       // failWrites: the next N writes are refused with failWriteStatus (a stale ETag by default).
       if (req.method !== 'GET' && control.failWrites > 0) { control.failWrites--; send(control.failWriteStatus, problem(control.failWriteStatus)); return; }
       if (req.method === 'POST' && url.pathname === '/api/auth/password') { control.responses.push({ path: url.pathname, method: 'post', status: 204, value: null }); res.writeHead(204, { 'Cache-Control': 'no-store' }); res.end(); return; }
@@ -81,7 +86,23 @@ export async function startServer() {
       if (req.method !== 'GET') {
         if (req.headers['x-csrf-token'] !== 'fixture-csrf') { send(403, problem(403)); return; }
         const input = body ? JSON.parse(body) : {};
-        if (['PUT', 'PATCH', 'DELETE'].includes(req.method) && !req.headers['if-match']) { send(428, problem(428)); return; }
+        if (url.pathname.startsWith('/api/notifications/')) {
+          const parts = url.pathname.split('/').slice(3);
+          if (req.method === 'PATCH' && parts.length === 2 && parts[0] === 'events') {
+            send(200, envelope({ key: parts[1], enabled: input.enabled, severity: input.severity || 'info', channels: input.channels || ['telegram'] })); return;
+          }
+          if (req.method === 'PUT' && parts.length === 4 && parts[0] === 'events' && parts[2] === 'nodes') {
+            send(200, envelope({ enabled: input.enabled })); return;
+          }
+          if (parts[0] === 'templates' && parts.length >= 3) {
+            const [key, channel, action] = parts.slice(1);
+            const template = { eventKey: key, channel, body: 'Hello {node}', isDefault: action === 'resets' };
+            if (req.method === 'PUT' && parts.length === 3) { send(200, envelope({ ...template, body: input.body, isDefault: false })); return; }
+            if (req.method === 'POST' && action === 'previews') { send(200, envelope({ channel, body: 'Hello Viettel Fast 50', sample: { node: 'Viettel Fast 50' } })); return; }
+            if (req.method === 'POST' && action === 'resets') { send(200, envelope(template)); return; }
+          }
+        }
+        if (['PUT', 'PATCH', 'DELETE'].includes(req.method) && !req.headers['if-match'] && !url.pathname.startsWith('/api/notifications/')) { send(428, problem(428)); return; }
         if (url.pathname === '/api/installer/probes') {
           send(201, envelope({ id: 'c0ffee00-0000-4000-8000-000000000001', fingerprint: 'SHA256:fixtureFingerprint0123456789', expiresAt: new Date(Date.now() + 600000).toISOString() }, {}, 201)); return;
         }
@@ -127,10 +148,11 @@ export async function startServer() {
         send(status, envelope(output, {}, status)); return;
       }
       if (url.pathname.startsWith('/api/stats/')) {
-        const id = data.node.id, summary = { n: 1, mean: 90, median: 90, min: 90, max: 90, p5: 90, p95: 90, std: 0 };
-        const node = { count: 1, ok: 1, failed: 0, successRate: 100, down: summary, up: summary, ping: summary, jitter: summary, loss: summary, ipCount: 1, downPct: 90, upPct: 80, stability: 100 };
+        const id = data.node.id, summary = { n: 1, mean: 90, median: 90, min: 90, max: 90, p5: 90, p50: 90, p95: 90, p99: 90, std: 0 };
+        const node = { count: 1, ok: 1, failed: 0, rateLimited: 0, successRate: 100, down: summary, up: summary, ping: summary, jitter: summary, loss: summary, ipCount: 1, downPct: 90, upPct: 80, stability: 100 };
         const day = new Date().toISOString().slice(0, 10) + 'T00:00:00Z', kind = url.pathname.split('/').pop();
-        const body = kind === 'summary' ? [{ nodeId: id, current: node, previous: node }]
+        const body = kind === 'events' ? { items: [], truncated: false }
+          : kind === 'summary' ? [{ nodeId: id, current: node, previous: node }]
           : kind === 'trend' ? [{ nodeId: id, name: data.node.name, metric: 'down', unit: 'Mbps', points: [{ ts: day, value: 90, count: 1 }], summary }]
           : kind === 'hour-of-day' ? [{ nodeId: id, hours: Array.from({ length: 24 }, (_, hour) => ({ hour, value: hour === 3 ? 90 : null, count: hour === 3 ? 1 : 0 })) }]
           : kind === 'heatmap' ? { nodeId: id, metric: 'down', timezone: 'UTC', cells: Array.from({ length: 168 }, (_, i) => ({ weekday: Math.floor(i / 24), hour: i % 24, value: i === 3 ? 90 : null, count: i === 3 ? 1 : 0 })) }
@@ -138,7 +160,48 @@ export async function startServer() {
         send(200, envelope(body)); return;
       }
       if (req.method === 'GET' && url.pathname === '/api/dashboard') { send(200, envelope(data.dashboard)); return; }
+      if (url.pathname === '/api/usage') {
+        const bytes = { bytesDown: data.result.bytesDown, bytesUp: data.result.bytesUp, totalBytes: data.result.bytesTotal };
+        const start = new Date(data.result.ts); start.setUTCHours(0, 0, 0, 0);
+        send(200, envelope({ from: url.searchParams.get('from'), to: url.searchParams.get('to'), group: url.searchParams.get('group') || 'day',
+          totals: bytes, monthToDate: bytes, projectedMonthEnd: bytes, previousMonth: { bytesDown: 0, bytesUp: 0, totalBytes: 0 },
+          comparison: { currentMonthToDateBytes: bytes.totalBytes, previousMonthBytes: 0, projectedMonthEndBytes: bytes.totalBytes, changePercent: null },
+          byNodeEngine: [{ nodeId: data.node.id, nodeName: data.node.name, engine: 'ookla', ...bytes, monthToDate: bytes, projectedMonthEnd: bytes, previousMonth: { bytesDown: 0, bytesUp: 0, totalBytes: 0 } }],
+          series: [{ nodeId: data.node.id, engine: 'ookla', start: start.toISOString(), ...bytes }], budgets: [] })); return;
+      }
+      if (url.pathname === '/api/usage/advice') {
+        if (control.noMeasurements) {
+          send(200, envelope({ nodeId: url.searchParams.get('node'), engine: url.searchParams.get('engine') || 'ookla', intervalMinutes: Number(url.searchParams.get('interval') || 60),
+            averageBytesPerTest: null, estimatedBytesPerDay: null, estimatedBytesPerMonth: null, budgetBytes: 1000, budgetScope: 'node-contract',
+            measurementAvailable: false, sharedMeasurementsAvailable: true, recommendedIntervalMinutes: null, recommendationStatus: 'unavailable' })); return;
+        }
+        const interval = Number(url.searchParams.get('interval') || 60), average = data.result.bytesTotal, budget = Number(url.searchParams.get('budgetBytes') || 0);
+        const estimatedBytesPerDay = average * 1440 / interval;
+        const needed = budget > 0 ? Math.ceil(average * 43200 / budget) : null;
+        const recommendationStatus = needed == null ? 'unavailable' : needed > 1440 ? 'infeasible' : 'feasible';
+        send(200, envelope({ nodeId: url.searchParams.get('node'), engine: url.searchParams.get('engine') || 'ookla', intervalMinutes: interval,
+          averageBytesPerTest: average, estimatedBytesPerDay, estimatedBytesPerMonth: estimatedBytesPerDay * 30, budgetBytes: budget || undefined,
+          measurementAvailable: true, sharedMeasurementsAvailable: true,
+          recommendedIntervalMinutes: recommendationStatus === 'feasible' ? Math.max(5, needed) : null, recommendationStatus })); return;
+      }
+      if (url.pathname === '/api/usage/budgets') { send(200, envelope([])); return; }
+      if (url.pathname === '/api/isps') { send(200, envelope(control.empty ? [] : [data.isp])); return; }
+      if (url.pathname === '/api/isps/compare') { send(200, envelope(control.empty ? [] : [data.isp])); return; }
+      if (url.pathname.endsWith('/trend') && url.pathname.startsWith('/api/isps/')) {
+        send(200, envelope(control.empty ? [] : [{ ts: ts0(), down: 90, up: 40, ping: 10, n: 1 }])); return;
+      }
+      if (url.pathname.startsWith('/api/isps/')) { send(200, envelope(data.isp)); return; }
       if (url.pathname === '/api/settings') { send(200, envelope(data.settings)); return; }
+      if (url.pathname === '/api/notifications/events') {
+        send(200, envelope([{ key: 'test.success', title: 'Test success', enabled: true, severity: 'info', channels: ['telegram'], nodeScoped: true }])); return;
+      }
+      if (/^\/api\/notifications\/events\/[^/]+\/nodes\/[^/]+$/.test(url.pathname)) {
+        send(200, envelope({ enabled: true })); return;
+      }
+      if (url.pathname.startsWith('/api/notifications/templates/')) {
+        const [, , , key, channel] = url.pathname.split('/');
+        send(200, envelope({ eventKey: key, channel, body: 'Hello {node}', isDefault: true })); return;
+      }
       if (url.pathname === '/api/schedules') { send(200, envelope(data.schedules)); return; }
       if (url.pathname.startsWith('/api/schedules/')) { send(200, envelope(data.schedules.nodes[0])); return; }
       if (/\/commands\/[^/]+$/.test(url.pathname)) {
@@ -159,8 +222,8 @@ export async function startServer() {
       if (url.pathname.startsWith('/api/alerts/rules/')) { send(200, envelope(data.rule)); return; }
       if (url.pathname.startsWith('/api/alerts/events/')) { send(200, envelope(data.event)); return; }
       const lists = {
-        '/api/nodes': [data.node], '/api/results': [data.result], '/api/alerts/rules': [], '/api/alerts/events': [],
-        '/api/audit': [{ id: '7d1c0000-0000-4000-8000-000000000001', ts: '2026-11-05T05:00:00Z', actor: 'owner@example.com', action: 'settings.update', targetType: 'settings', targetId: '', summary: 'Changed settings', remote: '127.0.0.1' }],
+        '/api/nodes': [data.node], '/api/results': [data.result], '/api/isps': [data.isp], '/api/alerts/rules': [], '/api/alerts/events': [],
+        '/api/audit': [{ id: '7d1c0000-0000-4000-8000-000000000001', ts: '2026-11-05T05:00:00Z', actor: 'owner@example.com', action: 'settings.update', authMethod: 'session', targetType: 'settings', targetId: '', summary: 'Changed settings', remote: '127.0.0.1' }],
         '/api/ip/addresses': [{ nodeId: data.node.id, ip: data.result.ip, first: data.result.ts, last: data.result.ts,
           tests: 1, avgDown: 90, avgUp: 40, geo: null }], '/api/ip/history': []
       };

@@ -27,7 +27,13 @@ func (r row) Scan(dest ...any) error {
 		return r.err
 	}
 	for i, v := range r.values {
-		reflect.ValueOf(dest[i]).Elem().Set(reflect.ValueOf(v))
+		target := reflect.ValueOf(dest[i]).Elem()
+		value := reflect.ValueOf(v)
+		if !value.IsValid() {
+			target.SetZero()
+			continue
+		}
+		target.Set(value)
 	}
 	return nil
 }
@@ -58,6 +64,10 @@ func (tx *transaction) Exec(_ context.Context, q string, _ ...any) (pgconn.Comma
 	return pgconn.NewCommandTag("INSERT 0 1"), nil
 }
 
+func (tx *transaction) Begin(context.Context) (pgx.Tx, error) { return tx, nil }
+func (tx *transaction) Commit(context.Context) error          { return nil }
+func (tx *transaction) Rollback(context.Context) error        { return nil }
+
 type lookup struct {
 	err   error
 	calls int
@@ -76,13 +86,81 @@ func testTransaction(before, after *position, cached bool) *transaction {
 			tx.rows = append(tx.rows, row{values: []any{p.id, p.ip}})
 		}
 	}
-	tx.rows = append(tx.rows, row{values: []any{[]byte(`{"city":"fixture"}`), "fixture", cached}})
+	lookedUpAt := time.Now().UTC()
+	raw, source := []byte(`{"city":"Fixture city","country":"ZZ","latitude":1,"longitude":1,"accuracy_radius":25,"asn":64512,"organisation":"Fixture Network"}`), "geolite2"
+	if !cached {
+		raw, source = []byte(`{}`), ""
+	}
+	tx.rows = append(tx.rows, row{values: []any{raw, cached, cached, source, lookedUpAt}})
+	if !cached {
+		tx.rows = append(tx.rows, row{values: []any{[]byte(`{}`), "", false, lookedUpAt}})
+		tx.rows = append(tx.rows, row{values: []any{[]byte(`{}`), "", false, lookedUpAt}})
+	}
 	return tx
 }
 func hookResult() agentapi.Result {
 	ip := "203.0.113.2"
 	return agentapi.Result{ID: "result", Status: "failed", IP: &ip}
 }
+
+func TestEnabledIPAPIWarnsAboutPlaintextAndTerms(t *testing.T) {
+	for _, key := range []string{"IPINFO", "IPWHO", "FREEIPAPI", "GEOJS", "RIPESTAT", "IPAPICO", "IPGEOLOCATION"} {
+		t.Setenv("SPEEDTEST_GEO_"+key+"_ENABLED", "false")
+	}
+	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "true")
+	t.Setenv("SPEEDTEST_GEO_IPAPI_URL", "http://127.0.0.1:18080/json")
+	var logs bytes.Buffer
+	watcher, closeReader, err := Open(slog.New(slog.NewTextHandler(&logs, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeReader() }()
+	if watcher == nil || !strings.Contains(logs.String(), "plaintext HTTP") || !strings.Contains(logs.String(), "non-commercial") {
+		t.Fatalf("missing ip-api safety warning: %q", logs.String())
+	}
+}
+
+func TestOpenObservedBuildsOfflineReaderAndBoundedProviderSet(t *testing.T) {
+	for _, name := range []string{"IPAPI", "IPINFO", "IPWHO", "FREEIPAPI", "GEOJS", "RIPESTAT", "IPAPICO", "IPGEOLOCATION"} {
+		t.Setenv("SPEEDTEST_GEO_"+name+"_ENABLED", "false")
+	}
+	t.Setenv("SPEEDTEST_GEO_CONSENSUS", "false")
+	var observed bool
+	watcher, closeReader, err := OpenObserved(slog.New(slog.NewTextHandler(io.Discard, nil)), nil, func(string, string) { observed = true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = closeReader() }()
+	if watcher.Reader == nil || len(watcher.Fallbacks) != 0 || watcher.Providers.Observe == nil || observed {
+		t.Fatalf("observed watcher = %+v, called observer=%v", watcher, observed)
+	}
+}
+
+type boundTestCache struct {
+	putIP string
+	err   error
+}
+
+func (c *boundTestCache) Get(context.Context, string) (geo.Location, string, bool, error) {
+	return geo.Location{}, "", false, nil
+}
+func (c *boundTestCache) Put(_ context.Context, ip string, _ geo.Location, _ string) error {
+	c.putIP = ip
+	return c.err
+}
+
+func TestBoundCachePutUsesLockedAddress(t *testing.T) {
+	cache := &boundTestCache{}
+	bound := boundCache{Cache: cache, ip: "203.0.113.10"}
+	if err := bound.Put(t.Context(), "198.51.100.20", geo.Location{Country: "GB"}, "ip-api"); err != nil || cache.putIP != bound.ip {
+		t.Fatalf("bound Put = %v, stored IP=%q", err, cache.putIP)
+	}
+	cache.err = errFailure
+	if err := bound.Put(t.Context(), "198.51.100.20", geo.Location{}, "ip-api"); !errors.Is(err, errFailure) {
+		t.Fatalf("bound Put error = %v", err)
+	}
+}
+
 func TestTimelineBranches(t *testing.T) {
 	different := &position{id: "previous", ip: "203.0.113.1"}
 	same := &position{id: "same", ip: "203.0.113.2"}
@@ -127,7 +205,7 @@ func TestTransactionFailures(t *testing.T) {
 			}
 		})
 	}
-	for i := 1; i <= 6; i++ {
+	for i := 1; i <= 5; i++ {
 		t.Run("exec"+string(rune('0'+i)), func(t *testing.T) {
 			tx := testTransaction(different, nil, false)
 			tx.execErrAt = i
@@ -149,7 +227,7 @@ func TestTransactionFailures(t *testing.T) {
 	}
 }
 func TestGeoLookupAndDegradation(t *testing.T) {
-	for _, err := range []error{nil, geo.ErrNotFound, errFailure} {
+	for _, err := range []error{nil, geo.ErrNotFound, geo.ErrBudgetExhausted, errFailure} {
 		tx := testTransaction(nil, nil, false)
 		source := &lookup{err: err}
 		w := &Watcher{Offline: source, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
@@ -166,6 +244,25 @@ func TestGeoLookupAndDegradation(t *testing.T) {
 		t.Fatal("default logger")
 	}
 }
+
+func TestWeakLinkedCacheStillRefreshes(t *testing.T) {
+	now := time.Now().UTC()
+	weak := []byte(`{"city":"Fixture city"}`)
+	tx := &transaction{rows: []row{
+		{values: []any{weak, true, true, "fixture", now}},
+		{values: []any{weak, "fixture", true, now}},
+		{values: []any{weak, "fixture", true, now}},
+	}}
+	offline := &lookup{err: geo.ErrNotFound}
+	watcher := &Watcher{Offline: offline, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	if err := watcher.resolveAndLink(t.Context(), tx, "node", "result", "203.0.113.1"); err != nil {
+		t.Fatal(err)
+	}
+	if offline.calls != 1 || len(tx.queries) != 3 {
+		t.Fatalf("weak linked cache skipped refresh: lookups=%d queries=%d", offline.calls, len(tx.queries))
+	}
+}
+
 func TestOpen(t *testing.T) {
 	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "false")
 	t.Setenv("SPEEDTEST_GEO_IPINFO_ENABLED", "false")

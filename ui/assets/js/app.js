@@ -1,7 +1,7 @@
 /* App shell: sidebar, top bar, hash router, theme. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h;
   ST.pages = ST.pages || {};
 
   var NAV = [
@@ -10,6 +10,7 @@
     { path: '/history', label: 'Results', icon: 'list' },
     { path: '/stats', label: 'Statistics', icon: 'chart' },
     { path: '/network', label: 'IP & location', icon: 'globe' },
+    { path: '/isps', label: 'ISPs', icon: 'globe' },
     { path: '/schedules', label: 'Schedules', icon: 'clock' },
     { path: '/alerts', label: 'Alerts', icon: 'bell', badge: true },
     { path: '/settings', label: 'Settings', icon: 'settings' }
@@ -34,6 +35,7 @@
       case 'history': return { page: 'history', path: '/history', params: {} };
       case 'stats': return { page: 'stats', path: '/stats', params: {} };
       case 'network': return { page: 'network', path: '/network', params: {} };
+      case 'isps': return { page: 'isps', path: '/isps', params: {} };
       case 'schedules': return { page: 'schedules', path: '/schedules', params: {} };
       case 'alerts': return { page: 'alerts', path: '/alerts', params: {} };
       case 'settings': return { page: 'settings', path: '/settings', params: {} };

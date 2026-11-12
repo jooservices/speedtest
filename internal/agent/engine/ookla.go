@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/jooservices/speedtest/internal/shared/failureclass"
 )
 
 // DefaultTimeout bounds a test when no per-run or environment timeout is supplied.
@@ -79,11 +81,16 @@ func NewOokla(c Config) (*Ookla, error) {
 type capture struct {
 	data     []byte
 	overflow bool
+	limit    int
 }
 
 func (b *capture) Write(p []byte) (int, error) {
 	n := len(p)
-	remaining := maxOutput - len(b.data)
+	limit := b.limit
+	if limit == 0 {
+		limit = maxOutput
+	}
+	remaining := limit - len(b.data)
 	if n > remaining {
 		b.overflow = true
 		p = p[:remaining]
@@ -143,6 +150,42 @@ func (e *Ookla) Run(ctx context.Context, opts Options) (Result, error) {
 	return ParseOokla(stdout.data)
 }
 
+// ListServers runs Ookla's JSON server enumeration command on the node's
+// configured network path; it does not start a measurement.
+func (e *Ookla) ListServers(ctx context.Context, opts Options) ([]ServerOption, error) {
+	if !validServerListOptions(opts) {
+		return nil, &RunError{Class: InvalidOptions}
+	}
+	data, err := runServerListCommand(ctx, e.config.Binary, ooklaServerArgs(e.config.Args, opts), e.config.Timeout)
+	if err != nil {
+		return nil, err
+	}
+	return ParseOoklaServers(data)
+}
+
+func ooklaServerArgs(configured []string, opts Options) []string {
+	args := []string{"--servers"}
+	for i := 0; i < len(configured); i++ {
+		arg := configured[i]
+		if arg == "-f" || arg == "--format" {
+			i++
+			continue
+		}
+		if strings.HasPrefix(arg, "--format=") {
+			continue
+		}
+		args = append(args, arg)
+	}
+	args = append(args, "-f", "json")
+	if opts.InterfaceName != "" {
+		args = append(args, "--interface", opts.InterfaceName)
+	}
+	if opts.SourceIP != "" {
+		args = append(args, "--ip", opts.SourceIP)
+	}
+	return args
+}
+
 func validNetworkOptions(opts Options) bool {
 	if opts.InterfaceName != "" && (strings.TrimSpace(opts.InterfaceName) != opts.InterfaceName || opts.SourceIP != "") {
 		return false
@@ -162,6 +205,8 @@ func validNetworkOptions(opts Options) bool {
 func classify(s string) ErrorClass {
 	s = strings.ToLower(s)
 	switch {
+	case failureclass.IsRateLimitedText(s):
+		return RateLimited
 	case strings.Contains(s, "license"), strings.Contains(s, "licence"), strings.Contains(s, "gdpr"):
 		return License
 	case strings.Contains(s, "timed out"), strings.Contains(s, "timeout"):

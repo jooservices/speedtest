@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Speedtest agent and UI API
   version: 1.0.0
-  description: "Contract-first API for JOOST-9; no endpoints implemented by this document. See api.md
+  description: "Contract for the Speedtest command center and MCP operation registry. See api.md
     for authentication, limits, formulas, UI mapping and compatibility. All JSON successes share
     Success; errors use RFC 9457 Problem. Timestamps use Timestamp; units use Mbps, Milliseconds and
     Percent. All responses are private, Cache-Control: no-store except conditional agent config
@@ -15,8 +15,12 @@ servers:
   - url: /
     description: Same configured command-center origin; no machine address embedded.
 tags:
+  - name: Reports
+    description: Monthly ISP and plan report
   - name: Auth
     description: UI session lifecycle
+  - name: Access tokens
+    description: Named bearer tokens owned by the signed-in user
   - name: Agent
     description: Node credential protocol
   - name: Nodes
@@ -25,6 +29,8 @@ tags:
     description: History and exports
   - name: Statistics
     description: Aggregates and charts
+  - name: Bandwidth
+    description: Measured test traffic, budgets and cost advice
   - name: Dashboard
     description: Fleet overview
   - name: Schedules
@@ -346,9 +352,125 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/TwoFactorRequest"
+  /api/access-tokens:
+    get:
+      operationId: listAccessTokens
+      tags:
+        - Access tokens
+      summary: List access tokens
+      description: Returns token metadata only. Bearer credentials and token hashes are never returned.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: page
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: size
+          in: query
+          required: false
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 25
+      responses:
+        "200":
+          description: Token metadata page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listAccessTokensResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    post:
+      operationId: createAccessToken
+      tags:
+        - Access tokens
+      summary: Create an access token
+      description: The bearer value is returned once. Store it securely before leaving the response; it cannot be recovered.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AccessTokenInput"
+      responses:
+        "201":
+          description: Created; bearer token shown once
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/createAccessTokenResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "413":
+          $ref: "#/components/responses/TooLarge"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/access-tokens/{id}:
+    delete:
+      operationId: revokeAccessToken
+      tags:
+        - Access tokens
+      summary: Revoke an access token
+      description: Revocation is immediate. Repeating the request returns 404 and creates no additional effect.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Token identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      responses:
+        "204":
+          description: Revoked
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "500":
+          $ref: "#/components/responses/ServerError"
   /api/nodes:
     get:
       operationId: listNodes
+      x-access-token-scope: read
+      x-mcp-tool: list_nodes
       tags:
         - Nodes
       summary: List nodes
@@ -356,6 +478,7 @@ paths:
         credentials.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -380,6 +503,7 @@ paths:
         - $ref: "#/components/parameters/Size"
     post:
       operationId: createNode
+      x-access-token-scope: read-write
       tags:
         - Nodes
       summary: Create node and one-time enrollment token
@@ -387,6 +511,7 @@ paths:
         idempotency key replays the issuance securely for its retention period.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "201":
           description: Created
@@ -503,12 +628,15 @@ paths:
   /api/nodes/{id}:
     get:
       operationId: getNode
+      x-access-token-scope: read
+      x-mcp-tool: get_node
       tags:
         - Nodes
       summary: Read node details
       description: Read node details.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -542,6 +670,7 @@ paths:
             $ref: "#/components/schemas/ID"
     patch:
       operationId: updateNode
+      x-access-token-scope: read-write
       tags:
         - Nodes
       summary: Update allowed node configuration
@@ -549,6 +678,7 @@ paths:
         agent config ETag; node name must remain unique.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -596,6 +726,7 @@ paths:
               $ref: "#/components/schemas/NodePatch"
     delete:
       operationId: deleteNode
+      x-access-token-scope: full
       tags:
         - Nodes
       summary: Delete node and its data
@@ -604,6 +735,7 @@ paths:
         command.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "204":
           description: No content.
@@ -645,6 +777,8 @@ paths:
   /api/nodes/{id}/run:
     post:
       operationId: runNode
+      x-access-token-scope: read-write
+      x-mcp-tool: run_test
       tags:
         - Nodes
       summary: Queue manual run
@@ -652,6 +786,7 @@ paths:
         or already running. Never overlaps tests on this node.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "202":
           description: Accepted; poll Location
@@ -687,9 +822,156 @@ paths:
             $ref: "#/components/schemas/ID"
         - $ref: "#/components/parameters/CSRF"
         - $ref: "#/components/parameters/Idempotency"
+  /api/nodes/{id}/servers:
+    get:
+      operationId: getNodeServerCatalog
+      x-access-token-scope: read
+      tags:
+        - Nodes
+      summary: Read a node's server catalog for one engine
+      description: Returns only servers previously discovered by this node and engine. The ETag is the
+        node configuration revision used for the subsequent selection update.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Node identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - name: engine
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Engine"
+      responses:
+        "200":
+          description: Server catalog
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getServerCatalogResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    post:
+      operationId: refreshNodeServerCatalog
+      x-access-token-scope: read-write
+      tags:
+        - Nodes
+      summary: Queue server discovery on a node
+      description: Queues list_servers for one installed engine. Poll the returned Location until the
+        command is terminal; a successful acknowledgement replaces only that engine's catalog.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Node identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - name: engine
+          in: query
+          required: true
+          schema:
+            $ref: "#/components/schemas/Engine"
+        - $ref: "#/components/parameters/CSRF"
+      responses:
+        "202":
+          description: Discovery queued; poll Location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/createCommandResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/nodes/{id}/server-selection:
+    put:
+      operationId: setNodeServerSelection
+      x-access-token-scope: read-write
+      tags:
+        - Nodes
+      summary: Pin a discovered server or select automatically
+      description: A numeric serverId must occur in the selected engine's stored catalog. Use auto to
+        remove the pin. The update advances node configuration and queues an agent config refresh.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: Node identifier.
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ServerSelectionInput"
+      responses:
+        "200":
+          description: Selection saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getServerCatalogResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          $ref: "#/components/responses/Conflict"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
   /api/nodes/{id}/commands:
     post:
       operationId: createCommand
+      x-access-token-scope: read-write
       tags:
         - Nodes
       summary: Queue node control command
@@ -697,6 +979,7 @@ paths:
         effective revision; update_agent requires version.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "202":
           description: Accepted; poll Location
@@ -741,12 +1024,14 @@ paths:
   /api/nodes/{id}/commands/{commandId}:
     get:
       operationId: getCommand
+      x-access-token-scope: read
       tags:
         - Nodes
       summary: Read command progress
       description: Read command progress.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -784,6 +1069,7 @@ paths:
   /api/nodes/{id}/credential:
     post:
       operationId: rotateCredential
+      x-access-token-scope: full
       tags:
         - Nodes
       summary: Rotate node credential
@@ -791,6 +1077,7 @@ paths:
         deliver securely to node; existing node data remains. Config contains only this node.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "201":
           description: Created
@@ -825,6 +1112,7 @@ paths:
         - $ref: "#/components/parameters/Idempotency"
     delete:
       operationId: revokeCredential
+      x-access-token-scope: full
       tags:
         - Nodes
       summary: Revoke node credential
@@ -832,6 +1120,7 @@ paths:
         no extra effect.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "204":
           description: No content; no response body.
@@ -1096,12 +1385,15 @@ paths:
   /api/results:
     get:
       operationId: listResults
+      x-access-token-scope: read
+      x-mcp-tool: list_results
       tags:
         - Results
       summary: Filter, sort and paginate results
       description: Filter, sort and paginate results.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1124,6 +1416,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
@@ -1138,12 +1431,14 @@ paths:
   /api/results/{id}:
     get:
       operationId: getResult
+      x-access-token-scope: read
       tags:
         - Results
       summary: Read all stored result fields and geolocation
       description: Read all stored result fields and geolocation.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1175,6 +1470,7 @@ paths:
   /api/results/export.csv:
     get:
       operationId: exportFilteredCSV
+      x-access-token-scope: read
       tags:
         - Results
       summary: Stream results export
@@ -1182,6 +1478,7 @@ paths:
         CSV columns and escaping are defined in docs/api.md; formula-like cells are neutralized.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Streaming export; no JSON envelope.
@@ -1209,6 +1506,7 @@ paths:
       parameters:
         - $ref: "#/components/parameters/Engine"
         - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
@@ -1221,12 +1519,14 @@ paths:
   /api/export/results.csv:
     get:
       operationId: exportAllCSV
+      x-access-token-scope: read
       tags:
         - Results
       summary: Stream results export
       description: All stored results, ts,id ascending, streamed; CSV columns match filtered export.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Streaming export; no JSON envelope.
@@ -1254,6 +1554,7 @@ paths:
   /api/export/results.json:
     get:
       operationId: exportAllJSON
+      x-access-token-scope: read
       tags:
         - Results
       summary: Stream results export
@@ -1261,6 +1562,7 @@ paths:
         exception to envelope. Do not materialize entire history in memory.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Streaming export; no JSON envelope.
@@ -1287,9 +1589,378 @@ paths:
           $ref: "#/components/responses/RateLimited"
         "500":
           $ref: "#/components/responses/ServerError"
+  /api/reports/monthly:
+    get:
+      operationId: getMonthlyReport
+      x-access-token-scope: read
+      tags:
+        - Reports
+      summary: Monthly ISP and plan report
+      description: >-
+        Per ISP and node for one UTC month: delivered against advertised speed, p95, worst hours, failures, downtime
+        minutes and IP changes. `format=csv` and `format=pdf` return a download. Engines are never blended.
+        An unlinked result follows the latest IP-history event; a latest event without an ISP stays in `Unknown ISP`.
+        When no IP-history event exists, the result can inherit an earlier ISP-linked result. IP changes belong to the
+        destination ISP; an unresolved destination uses `Unknown ISP` and can create a row with zero tests. Omitting
+        `month` uses the previous month.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: month
+          in: query
+          required: false
+          description: Month as YYYY-MM (UTC); a future month is refused.
+          schema:
+            type: string
+            pattern: "^[0-9]{4}-(0[1-9]|1[0-2])$"
+        - name: format
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [json, csv, pdf]
+            default: json
+        - name: isp
+          in: query
+          required: false
+          description: Limit the report to one ISP ID.
+          schema:
+            type: string
+            format: uuid
+        - $ref: "#/components/parameters/Engine"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getMonthlyReportResponse"
+            text/csv:
+              schema:
+                type: string
+            application/pdf:
+              schema:
+                type: string
+                format: binary
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/isps:
+    get:
+      operationId: listISPs
+      x-access-token-scope: read
+      tags:
+        - ISPs
+      summary: List ISPs with aggregate speed metrics
+      description: ISPs are derived from ASN/organisation geolocation data. Aggregates honour engine isolation.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      parameters:
+        - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listISPsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/isps/compare:
+    get:
+      operationId: compareISPs
+      x-access-token-scope: read
+      tags:
+        - ISPs
+      summary: Compare selected ISPs in the same period
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      parameters:
+        - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+        - name: isps
+          in: query
+          required: true
+          description: Comma-separated ISP IDs to compare (1–20).
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listISPsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/isps/{id}:
+    get:
+      operationId: getISP
+      x-access-token-scope: read
+      tags:
+        - ISPs
+      summary: Read one ISP with aggregate metrics
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getISPResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/isps/{id}/trend:
+    get:
+      operationId: getISPTrend
+      x-access-token-scope: read
+      tags:
+        - ISPs
+      summary: Download trend for one ISP
+      description: Uses hourly buckets for windows up to 24 hours and daily buckets for longer windows. Each bucket timestamp is the average sample time, so points remain within the requested window.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getISPTrendResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/isps/{id}/plans:
+    get:
+      operationId: listISPPlans
+      x-access-token-scope: read
+      tags:
+        - ISPs
+      summary: List optional advertised plans for an ISP
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listISPPlansResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    post:
+      operationId: createISPPlan
+      x-access-token-scope: read-write
+      tags:
+        - ISPs
+      summary: Create an advertised ISP plan
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ISPPlanInput"
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getISPPlanResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/isps/{id}/plans/{planId}:
+    put:
+      operationId: updateISPPlan
+      x-access-token-scope: read-write
+      tags:
+        - ISPs
+      summary: Replace an ISP plan
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - name: planId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ISPPlanInput"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getISPPlanResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    delete:
+      operationId: deleteISPPlan
+      x-access-token-scope: full
+      tags:
+        - ISPs
+      summary: Delete an ISP plan
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - name: planId
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      responses:
+        "204":
+          description: Deleted
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
   /api/stats/summary:
     get:
       operationId: getSummary
+      x-access-token-scope: read
+      x-mcp-tool: get_statistics
       tags:
         - Statistics
       summary: Read per-node statistics with previous period
@@ -1297,6 +1968,7 @@ paths:
         and formula rules.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1310,6 +1982,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1318,13 +1992,16 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
   /api/stats/trend:
     get:
       operationId: getTrend
+      x-access-token-scope: read
       tags:
         - Statistics
       summary: Read bucketed trend and optional display total
@@ -1334,6 +2011,7 @@ paths:
         values. Return 422 if requested fixed buckets exceed 300.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1347,6 +2025,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1355,7 +2035,9 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
@@ -1381,6 +2063,7 @@ paths:
   /api/stats/hour-of-day:
     get:
       operationId: getHourOfDay
+      x-access-token-scope: read
       tags:
         - Statistics
       summary: Read per-node hour-of-day averages
@@ -1388,6 +2071,7 @@ paths:
         local hour.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1401,6 +2085,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1409,7 +2095,9 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
@@ -1418,6 +2106,7 @@ paths:
   /api/stats/heatmap:
     get:
       operationId: getHeatmap
+      x-access-token-scope: read
       tags:
         - Statistics
       summary: Read weekday by hour heatmap
@@ -1425,6 +2114,7 @@ paths:
         Repeated DST hours contribute to the same cell.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1438,6 +2128,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1446,6 +2138,7 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - name: node
           in: query
           required: true
@@ -1457,6 +2150,7 @@ paths:
   /api/stats/distribution:
     get:
       operationId: getDistribution
+      x-access-token-scope: read
       tags:
         - Statistics
       summary: Read metric histograms
@@ -1464,6 +2158,7 @@ paths:
         on its value; bins=[] on empty data; final upper edge inclusive. Values/counts support UI tooltips.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1477,6 +2172,8 @@ paths:
           $ref: "#/components/responses/Unauthorized"
         "403":
           $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
         "422":
           $ref: "#/components/responses/Validation"
         "429":
@@ -1485,7 +2182,9 @@ paths:
           $ref: "#/components/responses/ServerError"
       parameters:
         - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
         - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/ISPs"
         - $ref: "#/components/parameters/Range"
         - $ref: "#/components/parameters/From"
         - $ref: "#/components/parameters/To"
@@ -1500,9 +2199,296 @@ paths:
             minimum: 1
             maximum: 100
             default: 15
+  /api/usage:
+    get:
+      operationId: getUsage
+      x-access-token-scope: read
+      x-mcp-tool: get_usage
+      tags:
+        - Bandwidth
+      summary: Read measured traffic by node, engine and UTC period
+      description: Omit from/to for a trailing 30-day range. Otherwise provide both inclusive/exclusive RFC 3339 bounds, at most 366 days. Optional isp filters by each result's recorded ISP. Buckets remain separated by node, engine and ISP.
+      security:
+        - SessionCookie: []
+      parameters:
+        - $ref: "#/components/parameters/Node"
+        - $ref: "#/components/parameters/Engine"
+        - name: isp
+          in: query
+          required: false
+          description: Filter by the ISP recorded on each result, including historical attribution.
+          schema:
+            $ref: "#/components/schemas/UUID"
+        - name: from
+          in: query
+          required: false
+          description: Inclusive RFC 3339 start; must be paired with to.
+          schema:
+            type: string
+            format: date-time
+        - name: to
+          in: query
+          required: false
+          description: Exclusive RFC 3339 end; must be paired with from.
+          schema:
+            type: string
+            format: date-time
+        - name: group
+          in: query
+          required: false
+          description: UTC calendar bucket size.
+          schema:
+            type: string
+            enum: [day, week, month]
+            default: day
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getUsageResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/usage/advice:
+    get:
+      operationId: getUsageAdvice
+      x-access-token-scope: read
+      tags:
+        - Bandwidth
+      summary: Estimate traffic at a selected node, engine and interval
+      description: Estimates daily and 30-day traffic from the selected node/engine's previous 30 days of results.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: node
+          in: query
+          required: true
+          description: Node UUID.
+          schema:
+            $ref: "#/components/schemas/UUID"
+        - name: engine
+          in: query
+          required: true
+          description: Measurement engine; engines are estimated independently.
+          schema:
+            $ref: "#/components/schemas/Engine"
+        - name: interval
+          in: query
+          required: true
+          description: Proposed test interval in minutes.
+          schema:
+            type: integer
+            minimum: 5
+            maximum: 1440
+        - name: budgetBytes
+          in: query
+          required: false
+          description: Optional monthly budget override; otherwise node then global budget is used.
+          schema:
+            type: integer
+            format: int64
+            minimum: 0
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getUsageAdviceResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/usage/budgets:
+    get:
+      operationId: getUsageBudgets
+      x-access-token-scope: read
+      tags:
+        - Bandwidth
+      summary: Read configured monthly budgets
+      description: Collection ETag is required in If-Match on every budget replacement or deletion.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getUsageBudgetsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+        "503":
+          description: The budget store is temporarily unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /api/usage/budgets/{scope}:
+    put:
+      operationId: replaceUsageBudget
+      x-access-token-scope: read-write
+      tags:
+        - Bandwidth
+      summary: Replace one global or node monthly budget
+      description: Requires owner privileges, same-origin CSRF and the current budget collection ETag.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: scope
+          in: path
+          required: true
+          description: The literal global or a node UUID.
+          schema:
+            type: string
+            pattern: "^(global|[0-9a-fA-F-]{36})$"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UsageBudgetInput"
+      responses:
+        "200":
+          description: Budget collection after replacement
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/replaceUsageBudgetResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+    delete:
+      operationId: deleteUsageBudget
+      x-access-token-scope: read-write
+      tags:
+        - Bandwidth
+      summary: Remove one global or node monthly budget
+      description: Requires owner privileges, same-origin CSRF and the current budget collection ETag.
+      security:
+        - SessionCookie: []
+      parameters:
+        - name: scope
+          in: path
+          required: true
+          description: The literal global or a node UUID.
+          schema:
+            type: string
+            pattern: "^(global|[0-9a-fA-F-]{36})$"
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+        - $ref: "#/components/parameters/Origin"
+      responses:
+        "204":
+          description: Budget removed
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/stats/events:
+    get:
+      operationId: getStatisticsEvents
+      x-access-token-scope: read
+      tags:
+        - Statistics
+      summary: Read bounded IP, ISP and alert marks for statistics
+      description: Returns the newest 500 marks in stable order (ts descending, then type and id ascending).
+        IP marks compare consecutive known result IPs per node and selected engine in timestamp/ID order,
+        skip null IPs and include the selected engine's predecessor before the requested range. ISP marks
+        compare consecutive known effective ISPs per node and engine, including the predecessor before the
+        requested range. An unlinked alert is included only
+        without an ISP filter and is labelled engine unknown. truncated is true when more marks match.
+        Event labels are plain text.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getEventsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "405":
+          $ref: "#/components/responses/MethodNotAllowed"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/Engine"
+        - $ref: "#/components/parameters/ISP"
+        - $ref: "#/components/parameters/Nodes"
+        - $ref: "#/components/parameters/Range"
+        - $ref: "#/components/parameters/From"
+        - $ref: "#/components/parameters/To"
   /api/dashboard:
     get:
       operationId: getDashboard
+      x-access-token-scope: read
+      x-mcp-tool: get_dashboard
       tags:
         - Dashboard
       summary: Read fleet tiles, node cards, recent results and alerts
@@ -1511,6 +2497,7 @@ paths:
         returns empty arrays, zero counts and null aggregates."
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1536,6 +2523,7 @@ paths:
   /api/series:
     get:
       operationId: getSeries
+      x-access-token-scope: read
       tags:
         - Dashboard
       summary: Read bounded comparison series
@@ -1544,6 +2532,7 @@ paths:
         before aggregation. At most maxPoints per node.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1593,12 +2582,14 @@ paths:
   /api/schedules:
     get:
       operationId: getSchedules
+      x-access-token-scope: read
       tags:
         - Schedules
       summary: Read rules, per-node upcoming runs, usage and clashes
       description: Read rules, per-node upcoming runs, usage and clashes.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1624,12 +2615,15 @@ paths:
   /api/schedules/{node}:
     get:
       operationId: getSchedule
+      x-access-token-scope: read
+      x-mcp-tool: get_schedule
       tags:
         - Schedules
       summary: Read one node schedule and estimates
       description: Read one node schedule and estimates.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1663,12 +2657,15 @@ paths:
             $ref: "#/components/schemas/ID"
     put:
       operationId: replaceSchedule
+      x-access-token-scope: read-write
+      x-mcp-tool: update_schedule
       tags:
         - Schedules
       summary: Replace node schedule
       description: Replace node schedule.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1719,6 +2716,7 @@ paths:
   /api/schedules/rules:
     put:
       operationId: replaceScheduleRules
+      x-access-token-scope: read-write
       tags:
         - Schedules
       summary: Replace center coordination rules
@@ -1727,6 +2725,7 @@ paths:
         before applying.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1767,6 +2766,7 @@ paths:
   /api/schedules/stagger:
     post:
       operationId: staggerSchedules
+      x-access-token-scope: read-write
       tags:
         - Schedules
       summary: Spread offsets evenly
@@ -1774,6 +2774,7 @@ paths:
         remaining clashes; no node learns peer identity.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1805,12 +2806,14 @@ paths:
   /api/alerts/rules:
     get:
       operationId: listRules
+      x-access-token-scope: read
       tags:
         - Alerts
       summary: List alert rules
       description: List alert rules.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1835,12 +2838,14 @@ paths:
         - $ref: "#/components/parameters/Size"
     post:
       operationId: createRule
+      x-access-token-scope: read-write
       tags:
         - Alerts
       summary: Create alert rule
       description: Create alert rule.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "201":
           description: Created
@@ -1878,12 +2883,14 @@ paths:
   /api/alerts/rules/{id}:
     get:
       operationId: getRule
+      x-access-token-scope: read
       tags:
         - Alerts
       summary: Read alert rule
       description: Read alert rule.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1917,12 +2924,14 @@ paths:
             $ref: "#/components/schemas/ID"
     put:
       operationId: replaceRule
+      x-access-token-scope: read-write
       tags:
         - Alerts
       summary: Replace alert rule
       description: Replace alert rule.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -1970,12 +2979,14 @@ paths:
               $ref: "#/components/schemas/AlertRuleInput"
     delete:
       operationId: deleteRule
+      x-access-token-scope: full
       tags:
         - Alerts
       summary: Delete alert rule
       description: Delete alert rule.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "204":
           description: No content; no response body.
@@ -2011,6 +3022,7 @@ paths:
   /api/audit:
     get:
       operationId: listAudit
+      x-access-token-scope: read
       tags:
         - Settings
       summary: List the log of owner changes
@@ -2018,6 +3030,7 @@ paths:
         never recorded. Entries older than the results retention period are removed nightly.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2050,6 +3063,8 @@ paths:
   /api/alerts/events:
     get:
       operationId: listEvents
+      x-access-token-scope: read
+      x-mcp-tool: list_alerts
       tags:
         - Alerts
       summary: List alert activity
@@ -2057,6 +3072,7 @@ paths:
         one-shot. Acknowledgement does not alter resolution; reopening sets acked=false.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2097,15 +3113,19 @@ paths:
           schema:
             $ref: "#/components/schemas/Severity"
         - $ref: "#/components/parameters/Node"
+        - $ref: "#/components/parameters/ISPId"
   /api/alerts/events/{id}:
     get:
       operationId: getEvent
+      x-access-token-scope: read
+      x-mcp-tool: get_alert
       tags:
         - Alerts
       summary: Read event
       description: Read event.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2140,15 +3160,21 @@ paths:
   /api/alerts/events/{id}/ack:
     put:
       operationId: ackEvent
+      x-access-token-scope: read-write
+      x-mcp-tool: acknowledge_alert
       tags:
         - Alerts
       summary: Acknowledge or reopen alert attention
       description: Acknowledge or reopen alert attention.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
           content:
             application/json:
               schema:
@@ -2191,12 +3217,14 @@ paths:
   /api/alerts/acknowledgements:
     post:
       operationId: ackAllEvents
+      x-access-token-scope: full
       tags:
         - Alerts
       summary: Acknowledge current unacknowledged alerts
       description: Snapshot bulk acknowledgement; newly arriving events are unaffected. Poll /api/jobs/{id}.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "202":
           description: Accepted; poll Location
@@ -2227,6 +3255,7 @@ paths:
   /api/notifications/test/{channel}:
     post:
       operationId: testNotification
+      x-access-token-scope: full
       tags:
         - Notifications
       summary: Queue test notification
@@ -2235,6 +3264,7 @@ paths:
         Requires same-origin Origin and the session CSRF token.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "202":
           description: Accepted; poll Location
@@ -2273,6 +3303,7 @@ paths:
   /api/notifications/deliveries:
     get:
       operationId: listDeliveries
+      x-access-token-scope: read
       tags:
         - Notifications
       summary: Read notification delivery log
@@ -2280,6 +3311,7 @@ paths:
         logical delivery per event/channel. Notification page is limited to 1000000.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2311,12 +3343,14 @@ paths:
   /api/notifications/deliveries/{id}:
     get:
       operationId: getDelivery
+      x-access-token-scope: read
       tags:
         - Notifications
       summary: Read delivery status
       description: Read delivery status.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2345,15 +3379,430 @@ paths:
           description: Resource identifier.
           schema:
             $ref: "#/components/schemas/ID"
+  /api/notifications/events:
+    get:
+      operationId: listNotificationEvents
+      x-access-token-scope: read
+      tags:
+        - Notifications
+      summary: List notification event catalog
+      description: Effective per-event on/off, severity, channels and catalog metadata.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listNotificationEventsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+  /api/notifications/events/{key}:
+    get:
+      operationId: getNotificationEvent
+      x-access-token-scope: read
+      tags:
+        - Notifications
+      summary: Read one notification event
+      description: Read one notification event.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationEventResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+    patch:
+      operationId: updateNotificationEvent
+      x-access-token-scope: read-write
+      tags:
+        - Notifications
+      summary: Update notification event settings
+      description: Owner overrides for event delivery and thresholds. `for_tests` on test.failed and quality events is an integer from 1 through 100. Requires CSRF.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationEventPatch"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationEventResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/events/{key}/tests/{channel}:
+    post:
+      operationId: testNotificationEventTemplate
+      x-access-token-scope: read-write
+      tags:
+        - Notifications
+      summary: Send a sample through an event template
+      description: Queues the selected event's saved template with sample placeholder values through the configured channel. Poll the returned delivery resource.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      responses:
+        "202":
+          description: Accepted; poll Location
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/testNotificationResponse"
+          headers:
+            Location:
+              $ref: "#/components/headers/Location"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/events/{key}/nodes/{id}:
+    get:
+      operationId: getNotificationNodeEventSetting
+      x-access-token-scope: read
+      tags:
+        - Notifications
+      summary: Read a node notification override
+      description: Read effective enablement for a node-scoped event.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      code:
+                        const: 200
+                      data:
+                        $ref: "#/components/schemas/NotificationNodeEventSetting"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+    put:
+      operationId: updateNotificationNodeEventSetting
+      x-access-token-scope: read-write
+      tags:
+        - Notifications
+      summary: Update a node notification override
+      description: Set node-scoped event enablement. Requires CSRF.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationNodeEventPatch"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Success"
+                  - type: object
+                    properties:
+                      code:
+                        const: 200
+                      data:
+                        $ref: "#/components/schemas/NotificationNodeEventSetting"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: id
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/ID"
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/templates/{key}/{channel}:
+    get:
+      operationId: getNotificationTemplate
+      x-access-token-scope: read
+      tags:
+        - Notifications
+      summary: Read a notification template
+      description: Effective body for one event and channel.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationTemplateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+    put:
+      operationId: putNotificationTemplate
+      x-access-token-scope: read-write
+      tags:
+        - Notifications
+      summary: Replace a notification template
+      description: Unknown placeholders are rejected. Requires CSRF.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationTemplateInput"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationTemplateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/templates/{key}/{channel}/previews:
+    post:
+      operationId: previewNotificationTemplate
+      x-access-token-scope: read
+      tags:
+        - Notifications
+      summary: Preview a notification template
+      description: Renders the body (or stored/default) with sample placeholder data.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/NotificationTemplateInput"
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/previewNotificationTemplateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - $ref: "#/components/parameters/CSRF"
+  /api/notifications/templates/{key}/{channel}/resets:
+    post:
+      operationId: resetNotificationTemplate
+      x-access-token-scope: read-write
+      tags:
+        - Notifications
+      summary: Reset a notification template
+      description: Deletes the owner override so the catalog default applies again.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/getNotificationTemplateResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: channel
+          in: path
+          required: true
+          schema:
+            $ref: "#/components/schemas/Channel"
+        - $ref: "#/components/parameters/CSRF"
   /api/settings:
     get:
       operationId: getSettings
+      x-access-token-scope: read
       tags:
         - Settings
       summary: Read public preferences and configured flags
       description: Read public preferences and configured flags.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2378,12 +3827,14 @@ paths:
           $ref: "#/components/responses/ServerError"
     put:
       operationId: replaceSettings
+      x-access-token-scope: full
       tags:
         - Settings
       summary: Replace preferences and optionally integration secrets
       description: Replace preferences and optionally integration secrets.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2424,6 +3875,7 @@ paths:
   /api/settings/enrolment-key:
     post:
       operationId: rotateEnrollmentKey
+      x-access-token-scope: full
       tags:
         - Settings
       summary: Rotate shared bootstrap enrollment key
@@ -2432,6 +3884,7 @@ paths:
         settings returns only configured flag.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "201":
           description: Created
@@ -2459,12 +3912,14 @@ paths:
   /api/ip/history:
     get:
       operationId: listIPChanges
+      x-access-token-scope: read
       tags:
         - IP
       summary: Read address-change timeline
       description: Newest ts,id first. Includes all independent nodes; no topology-based exclusion.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2491,6 +3946,7 @@ paths:
   /api/ip/addresses:
     get:
       operationId: listIPAddresses
+      x-access-token-scope: read
       tags:
         - IP
       summary: Read distinct node addresses and aggregates
@@ -2498,6 +3954,7 @@ paths:
         failed samples.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2524,6 +3981,7 @@ paths:
   /api/ip/lookup:
     get:
       operationId: lookupIP
+      x-access-token-scope: read
       tags:
         - IP
       summary: Look up literal IP location
@@ -2532,6 +3990,7 @@ paths:
         hostnames.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2558,9 +4017,35 @@ paths:
           description: IPv4/IPv6 literal; no DNS lookup.
           schema:
             $ref: "#/components/schemas/IP"
+  /api/ip/providers:
+    get:
+      operationId: listGeoProviders
+      x-access-token-scope: read
+      tags:
+        - IP
+      summary: Read configured geolocation providers and daily usage
+      description: Returns enabled state, whether a key is configured, and persisted UTC-day usage; secret values are never returned.
+      security:
+        - SessionCookie: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/listGeoProvidersResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
   /api/ip/map:
     get:
       operationId: getMap
+      x-access-token-scope: read
       tags:
         - IP
       summary: Read current location per node
@@ -2568,6 +4053,7 @@ paths:
         Join Node for label/color.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2592,12 +4078,14 @@ paths:
   /api/jobs/{id}:
     get:
       operationId: getJob
+      x-access-token-scope: read
       tags:
         - Jobs
       summary: Read asynchronous maintenance status
       description: Read asynchronous maintenance status.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2629,6 +4117,7 @@ paths:
   /api/installer/probes:
     post:
       operationId: probeSSH
+      x-access-token-scope: full
       tags:
         - Installer
       summary: Probe SSH and return host fingerprint
@@ -2637,6 +4126,7 @@ paths:
         never credentials; it does not authenticate or install.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "201":
           description: Created
@@ -2670,6 +4160,7 @@ paths:
   /api/nodes/{id}/installations:
     post:
       operationId: installAgent
+      x-access-token-scope: full
       tags:
         - Installer
       summary: Install or repair node agent
@@ -2678,6 +4169,7 @@ paths:
         key aborts and failure cleans up.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "202":
           description: Accepted; poll Location
@@ -2722,12 +4214,14 @@ paths:
   /api/installations/{id}:
     get:
       operationId: getInstallation
+      x-access-token-scope: read
       tags:
         - Installer
       summary: Read installation state
       description: Read installation state.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Success
@@ -2759,15 +4253,18 @@ paths:
   /api/installations/{id}/events:
     get:
       operationId: streamInstallEvents
+      x-access-token-scope: read
       tags:
         - Installer
       summary: Stream safe installer progress
       description: "SSE data is one InstallEvent JSON object per event, event: progress. id matches
         InstallEvent.id. Replay retained events on reconnect; 409 if cursor expired. Terminal event
         closes stream. Errors before opening use Problem; after opening use failed InstallEvent.
-        Session authorization checked before stream and on expiry."
+        The session or bearer credential that opened the stream is revalidated every 10 seconds
+        while the installation is nonterminal; expiry or revocation closes the stream on that check."
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "200":
           description: Server-sent events; no JSON envelope.
@@ -2814,6 +4311,7 @@ paths:
   /api/nodes/{id}/uninstallations:
     post:
       operationId: uninstallAgent
+      x-access-token-scope: full
       tags:
         - Installer
       summary: Uninstall agent before node deletion
@@ -2822,6 +4320,7 @@ paths:
         uninstall command; never claim remote cleanup succeeded.
       security:
         - SessionCookie: []
+        - OwnerBearer: []
       responses:
         "202":
           description: Accepted; poll Location
@@ -2894,6 +4393,10 @@ paths:
           $ref: "#/components/responses/ServerError"
 components:
   securitySchemes:
+    OwnerBearer:
+      type: http
+      scheme: bearer
+      bearerFormat: API token
     SessionCookie:
       type: apiKey
       in: cookie
@@ -2914,6 +4417,15 @@ components:
       description: Omission uses each node's primary engine; engines are never blended.
       schema:
         $ref: "#/components/schemas/Engine"
+    ISP:
+      name: isp
+      in: query
+      required: false
+      description: Optional trimmed, case-insensitive exact ISP match (1–200 characters). Effective ISP uses the result engine ISP, then cached IP organisation; records with unknown ISP are excluded when filtering.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 200
     Page:
       name: page
       in: query
@@ -2946,6 +4458,26 @@ components:
         uniqueItems: true
       style: form
       explode: false
+    ISPs:
+      name: isps
+      in: query
+      required: false
+      description: Comma-separated ISP IDs; omitted means all, empty means none.
+      schema:
+        type: array
+        items:
+          $ref: "#/components/schemas/ID"
+        maxItems: 100
+        uniqueItems: true
+      style: form
+      explode: false
+    ISPId:
+      name: isp
+      in: query
+      required: false
+      description: Optional ISP entity ID filter for alert events.
+      schema:
+        $ref: "#/components/schemas/ID"
     Node:
       name: node
       in: query
@@ -3287,7 +4819,20 @@ components:
         enabled:
           type: boolean
           default: false
+        serverId:
+          description: Pinned server ID for this engine, or auto to let the engine choose.
+          oneOf:
+            - const: auto
+              type: string
+            - type: integer
+              minimum: 1
+              maximum: 2147483647
       required: [engine, enabled]
+    AgentEngineSchedule:
+      allOf:
+        - $ref: "#/components/schemas/EngineScheduleInput"
+        - type: object
+          required: [serverId]
     NodeEngineSchedulesInput:
       type: object
       additionalProperties: false
@@ -3375,6 +4920,17 @@ components:
         - ok
         - degraded
         - failed
+    FailureClass:
+      type: string
+      description: Fixed vocabulary for why a test failed. Successful results use other.
+      enum:
+        - rate_limited
+        - no_network
+        - server_unreachable
+        - engine_missing
+        - timeout
+        - other
+      default: other
     Secret:
       type: string
       description: Write-only secret; never returned, logged or included in errors.
@@ -3493,6 +5049,7 @@ components:
         asn:
           type: integer
           minimum: 0
+          maximum: 4294967295
         asnOrg:
           type: string
         isp:
@@ -3525,6 +5082,30 @@ components:
           type: string
         source:
           type: string
+        qualityScore:
+          type: integer
+          minimum: 0
+          maximum: 100
+        fieldSources:
+          type: object
+          additionalProperties: false
+          properties:
+            city:
+              type: string
+            region:
+              type: string
+            country:
+              type: string
+            time_zone:
+              type: string
+            organisation:
+              type: string
+            coordinates:
+              type: string
+            asn:
+              type: string
+            accuracy_radius:
+              type: string
       required:
         - ip
         - version
@@ -3570,6 +5151,8 @@ components:
           description: User-supplied display label.
           maxLength: 200
           default: ""
+        ispPlanId:
+          $ref: "#/components/schemas/ID"
         expectedDown:
           type: number
           exclusiveMinimum: 0
@@ -3601,8 +5184,12 @@ components:
           default: false
       required:
         - name
-        - expectedDown
-        - expectedUp
+      allOf:
+        - if:
+            required: [ispPlanId]
+          then: {}
+          else:
+            required: [expectedDown, expectedUp]
     NodePatch:
       type: object
       additionalProperties: false
@@ -3625,6 +5212,10 @@ components:
           description: User-supplied display label.
           maxLength: 200
           default: ""
+        ispPlanId:
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
         expectedDown:
           type: number
           exclusiveMinimum: 0
@@ -3666,7 +5257,7 @@ components:
           type: integer
           minimum: 5
           maximum: 1440
-          default: 30
+          default: 60
         offset:
           type: integer
           minimum: 0
@@ -3803,7 +5394,7 @@ components:
           minItems: 1
           maxItems: 2
           items:
-            $ref: "#/components/schemas/EngineScheduleInput"
+            $ref: "#/components/schemas/AgentEngineSchedule"
         revision:
           type: string
         name:
@@ -3825,6 +5416,9 @@ components:
             - librespeed
             - cloudflare
           default: ookla
+        serverSelectionSnapshots:
+          type: boolean
+          description: True when result reports may include the pin captured at measurement time.
         threads:
           type: integer
           minimum: 1
@@ -3874,6 +5468,11 @@ components:
         host:
           type: string
           maxLength: 255
+        endpoint:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: Full engine endpoint identity. LibreSpeed includes this so servers sharing a host remain distinct.
         city:
           type: string
         sponsor:
@@ -3890,6 +5489,75 @@ components:
               type: string
               pattern: "\\S"
       description: Engine server identity. Numeric ID is optional for automatic LibreSpeed selection.
+    ServerOption:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          type: integer
+          minimum: 1
+          maximum: 2147483647
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        city:
+          type: string
+          maxLength: 120
+        isp:
+          type: string
+          maxLength: 200
+        host:
+          type: string
+          maxLength: 255
+        endpoint:
+          type: string
+          format: uri
+          maxLength: 2048
+          description: Present for LibreSpeed; preserves the configured endpoint path for server matching.
+        distanceKm:
+          type: number
+          minimum: 0
+          description: Present only when supplied by the engine, currently Ookla.
+      required: [id, name, city, isp, host]
+    ServerCatalog:
+      type: object
+      additionalProperties: false
+      properties:
+        engine:
+          $ref: "#/components/schemas/Engine"
+        servers:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/ServerOption"
+        serverId:
+          oneOf:
+            - const: auto
+              type: string
+            - type: integer
+              minimum: 1
+              maximum: 2147483647
+        refreshedAt:
+          anyOf:
+            - $ref: "#/components/schemas/Timestamp"
+            - type: "null"
+      required: [engine, servers, serverId, refreshedAt]
+    ServerSelectionInput:
+      type: object
+      additionalProperties: false
+      properties:
+        engine:
+          $ref: "#/components/schemas/Engine"
+        serverId:
+          description: Use auto to clear the pin; numeric IDs must be in this engine's catalog.
+          oneOf:
+            - const: auto
+              type: string
+            - type: integer
+              minimum: 1
+              maximum: 2147483647
+      required: [engine, serverId]
     ResultInput:
       type: object
       additionalProperties: false
@@ -3926,6 +5594,16 @@ components:
             - type: integer
               minimum: 1
             - type: "null"
+        serverSelectionKnown:
+          type: boolean
+          description: Present on agents that support pin snapshots; false or absent means the effective selection is unknown.
+        pinnedServerId:
+          anyOf:
+            - type: integer
+              minimum: 1
+              maximum: 2147483647
+            - type: "null"
+          description: Pin active when the measurement ran; omitted by older agents and null when no pin was active.
         ip:
           anyOf:
             - $ref: "#/components/schemas/IP"
@@ -3950,6 +5628,8 @@ components:
             - string
             - "null"
           maxLength: 2000
+        failureClass:
+          $ref: "#/components/schemas/FailureClass"
         manual:
           type: boolean
           default: false
@@ -4018,7 +5698,8 @@ components:
         loss/jitter/loaded metrics may be null even on success when unavailable; never invent zero.
         Optional typed engine details preserve low/iqm/high, ISP, external IP, result ID/URL; raw
         retains remaining fields. warnings records an engine/public-IP mismatch without changing
-        selected binding.
+        selected binding. failureClass is a fixed vocabulary; omitted failed results are classified
+        from the error text, and successful results use other.
       allOf:
         - if:
             properties:
@@ -4045,6 +5726,260 @@ components:
                 $ref: "#/components/schemas/Server"
               error:
                 type: "null"
+              failureClass:
+                const: other
+    UsageBytes:
+      type: object
+      additionalProperties: false
+      properties:
+        bytesDown:
+          type: integer
+          format: int64
+          minimum: 0
+        bytesUp:
+          type: integer
+          format: int64
+          minimum: 0
+        totalBytes:
+          type: integer
+          format: int64
+          minimum: 0
+      required: [bytesDown, bytesUp, totalBytes]
+    UsageBucket:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/UUID"
+        engine:
+          $ref: "#/components/schemas/Engine"
+        ispId:
+          $ref: "#/components/schemas/UUID"
+        ispName:
+          type: string
+        start:
+          $ref: "#/components/schemas/Timestamp"
+        bytesDown:
+          type: integer
+          format: int64
+          minimum: 0
+        bytesUp:
+          type: integer
+          format: int64
+          minimum: 0
+        totalBytes:
+          type: integer
+          format: int64
+          minimum: 0
+      required: [nodeId, engine, start, bytesDown, bytesUp, totalBytes]
+    UsageNodeEngine:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/UUID"
+        nodeName:
+          type: string
+        engine:
+          $ref: "#/components/schemas/Engine"
+        ispId:
+          $ref: "#/components/schemas/UUID"
+        ispName:
+          type: string
+        bytesDown:
+          type: integer
+          format: int64
+          minimum: 0
+        bytesUp:
+          type: integer
+          format: int64
+          minimum: 0
+        totalBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        monthToDate:
+          $ref: "#/components/schemas/UsageBytes"
+        projectedMonthEnd:
+          $ref: "#/components/schemas/UsageBytes"
+        previousMonth:
+          $ref: "#/components/schemas/UsageBytes"
+      required: [nodeId, nodeName, engine, bytesDown, bytesUp, totalBytes, monthToDate, projectedMonthEnd, previousMonth]
+    UsageComparison:
+      type: object
+      additionalProperties: false
+      properties:
+        currentMonthToDateBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        previousMonthBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        projectedMonthEndBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        changePercent:
+          type:
+            - number
+            - "null"
+      required: [currentMonthToDateBytes, previousMonthBytes, projectedMonthEndBytes, changePercent]
+    UsageBudgetStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        scopeKey:
+          type: string
+        nodeId:
+          $ref: "#/components/schemas/UUID"
+        monthlyBytes:
+          type: integer
+          format: int64
+          minimum: 1
+        usedBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        ratio:
+          type: number
+          minimum: 0
+        action:
+          type: string
+          enum: [widen, pause]
+        atMaximumInterval:
+          type: boolean
+        alert:
+          type: boolean
+      required: [scopeKey, monthlyBytes, usedBytes, ratio, action, atMaximumInterval, alert]
+    Usage:
+      type: object
+      additionalProperties: false
+      properties:
+        from:
+          $ref: "#/components/schemas/Timestamp"
+        to:
+          $ref: "#/components/schemas/Timestamp"
+        group:
+          type: string
+          enum: [day, week, month]
+        totals:
+          $ref: "#/components/schemas/UsageBytes"
+        monthToDate:
+          $ref: "#/components/schemas/UsageBytes"
+        projectedMonthEnd:
+          $ref: "#/components/schemas/UsageBytes"
+        previousMonth:
+          $ref: "#/components/schemas/UsageBytes"
+        comparison:
+          $ref: "#/components/schemas/UsageComparison"
+        byNodeEngine:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageNodeEngine"
+        series:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageBucket"
+        budgets:
+          type: array
+          items:
+            $ref: "#/components/schemas/UsageBudgetStatus"
+      required: [from, to, group, totals, monthToDate, projectedMonthEnd, previousMonth, comparison, byNodeEngine, series, budgets]
+    UsageBudget:
+      type: object
+      additionalProperties: false
+      properties:
+        scopeKey:
+          type: string
+          description: global or a lower-case node UUID.
+        nodeId:
+          $ref: "#/components/schemas/UUID"
+        monthlyBytes:
+          type: integer
+          format: int64
+          minimum: 1
+        action:
+          type: string
+          enum: [widen, pause]
+        widenMultiplier:
+          type: integer
+          minimum: 2
+          maximum: 10
+        revision:
+          type: integer
+          format: int64
+          minimum: 1
+      required: [scopeKey, monthlyBytes, action, widenMultiplier, revision]
+    UsageBudgetInput:
+      type: object
+      additionalProperties: false
+      properties:
+        monthlyBytes:
+          type: integer
+          format: int64
+          minimum: 1
+        action:
+          type: string
+          enum: [widen, pause]
+        widenMultiplier:
+          type: integer
+          minimum: 2
+          maximum: 10
+          default: 2
+      required: [monthlyBytes, action]
+    UsageAdvice:
+      type: object
+      additionalProperties: false
+      properties:
+        nodeId:
+          $ref: "#/components/schemas/UUID"
+        engine:
+          $ref: "#/components/schemas/Engine"
+        intervalMinutes:
+          type: integer
+          minimum: 5
+          maximum: 1440
+        averageBytesPerTest:
+          type:
+            - number
+            - "null"
+          minimum: 0
+        estimatedBytesPerDay:
+          type:
+            - number
+            - "null"
+          minimum: 0
+        estimatedBytesPerMonth:
+          type:
+            - number
+            - "null"
+          minimum: 0
+        measurementAvailable:
+          type: boolean
+        sharedMeasurementsAvailable:
+          type: boolean
+        budgetBytes:
+          type: integer
+          format: int64
+          minimum: 1
+        budgetScope:
+          type: string
+        remainingBudgetBytes:
+          type: integer
+          format: int64
+          minimum: 0
+        recommendedIntervalMinutes:
+          type:
+            - integer
+            - "null"
+          minimum: 5
+          maximum: 1440
+        recommendationStatus:
+          type: string
+          enum: [feasible, infeasible, unavailable]
+      required: [nodeId, engine, intervalMinutes, averageBytesPerTest, estimatedBytesPerDay, estimatedBytesPerMonth, measurementAvailable, sharedMeasurementsAvailable, recommendedIntervalMinutes, recommendationStatus]
     Result:
       type: object
       additionalProperties: false
@@ -4083,6 +6018,16 @@ components:
             - type: integer
               minimum: 1
             - type: "null"
+        pinnedServerId:
+          anyOf:
+            - type: integer
+              minimum: 1
+              maximum: 2147483647
+            - type: "null"
+          description: Pin reported for this measurement; null for automatic selection or older records without a snapshot.
+        serverSelectionKnown:
+          type: boolean
+          description: False when an older agent or historical record did not report the selection used at measurement time.
         ip:
           anyOf:
             - $ref: "#/components/schemas/IP"
@@ -4093,10 +6038,19 @@ components:
           maximum: 64
           default: 4
         bytesDown:
-          type: integer
+          type:
+            - integer
+            - "null"
           minimum: 0
         bytesUp:
-          type: integer
+          type:
+            - integer
+            - "null"
+          minimum: 0
+        bytesTotal:
+          type:
+            - integer
+            - "null"
           minimum: 0
         duration:
           type: number
@@ -4107,6 +6061,8 @@ components:
             - string
             - "null"
           maxLength: 2000
+        failureClass:
+          $ref: "#/components/schemas/FailureClass"
         manual:
           type: boolean
           default: false
@@ -4123,6 +6079,11 @@ components:
           anyOf:
             - $ref: "#/components/schemas/Geo"
             - type: "null"
+        ispId:
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
+          description: ISP associated with the result's public IP at ingestion time.
         loadedDown:
           anyOf:
             - $ref: "#/components/schemas/LoadedLatency"
@@ -4167,22 +6128,28 @@ components:
         - uLat
         - loss
         - serverId
+        - pinnedServerId
+        - serverSelectionKnown
         - ip
         - threads
         - bytesDown
         - bytesUp
+        - bytesTotal
         - duration
         - error
+        - failureClass
         - manual
         - raw
         - server
         - geo
+        - ispId
       description: Stored fields plus resolved server and location. nodeId is derived from the credential
         on ingestion, never trusted from agent input. raw is {} if no raw engine JSON was supplied.
         Engine-specific loss/jitter/loaded metrics may be null even on success when unavailable;
         never invent zero. Optional typed engine details preserve low/iqm/high, ISP, external IP,
         result ID/URL; raw retains remaining fields. warnings records an engine/public-IP mismatch
-        without changing selected binding.
+        without changing selected binding. failureClass is the fixed failure vocabulary.
+
       allOf:
         - if:
             properties:
@@ -4209,6 +6176,8 @@ components:
                 $ref: "#/components/schemas/Server"
               error:
                 type: "null"
+              failureClass:
+                const: other
     Node:
       type: object
       additionalProperties: false
@@ -4239,6 +6208,10 @@ components:
           description: User-supplied display label.
           maxLength: 200
           default: ""
+        ispPlanId:
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
         expectedDown:
           type: number
           exclusiveMinimum: 0
@@ -4275,6 +6248,7 @@ components:
           type: integer
           minimum: 5
           maximum: 1440
+          default: 60
         offset:
           type: integer
           minimum: 0
@@ -4314,6 +6288,11 @@ components:
           anyOf:
             - $ref: "#/components/schemas/Geo"
             - type: "null"
+        isp:
+          anyOf:
+            - $ref: "#/components/schemas/ISPRef"
+            - type: "null"
+          description: Current ISP derived from the node's current public IP ASN.
         updateVersion:
           type:
             - string
@@ -4346,6 +6325,8 @@ components:
         - latestGood
         - currentIp
         - geo
+        - isp
+        - ispPlanId
         - updateVersion
       description: paused if disabled; otherwise offline if never seen or heartbeat age >90 seconds (three
         30-second heartbeat intervals); otherwise failed/degraded from latest result, else online.
@@ -4534,6 +6515,12 @@ components:
             - resume
             - update_config
             - update_agent
+            - list_servers
+        engine:
+          description: Set for list_servers; null on other commands.
+          anyOf:
+            - $ref: "#/components/schemas/Engine"
+            - type: "null"
         version:
           type:
             - string
@@ -4600,11 +6587,16 @@ components:
             - string
             - "null"
           maxLength: 2000
+        servers:
+          type: array
+          maxItems: 1000
+          items:
+            $ref: "#/components/schemas/ServerOption"
       required:
         - status
       description: Monotonic status/progress. Repeating an identical acknowledgement is idempotent; a
         conflicting terminal acknowledgement returns 409. Failed acknowledgements require safe error
-        detail.
+        detail. A successful list_servers acknowledgement includes servers.
     User:
       type: object
       additionalProperties: false
@@ -4754,7 +6746,19 @@ components:
             - "null"
           description: Same unit as the selected metric; null for no samples.
           minimum: 0
+        p50:
+          type:
+            - number
+            - "null"
+          description: Median percentile, equal to median; null for no samples.
+          minimum: 0
         p95:
+          type:
+            - number
+            - "null"
+          description: Same unit as the selected metric; null for no samples.
+          minimum: 0
+        p99:
           type:
             - number
             - "null"
@@ -4773,7 +6777,9 @@ components:
         - min
         - max
         - p5
+        - p50
         - p95
+        - p99
         - std
       description: Population std deviation. Percentiles interpolate at (n-1)*p. A single sample has
         std=0; empty aggregates have n=0 and null values.
@@ -4790,6 +6796,10 @@ components:
         failed:
           type: integer
           minimum: 0
+        rateLimited:
+          type: integer
+          minimum: 0
+          description: Failed results classified as rate_limited; excluded from successRate.
         successRate:
           anyOf:
             - $ref: "#/components/schemas/Percent"
@@ -4819,6 +6829,7 @@ components:
         - count
         - ok
         - failed
+        - rateLimited
         - successRate
         - down
         - up
@@ -4829,8 +6840,9 @@ components:
         - downPct
         - upPct
         - stability
-      description: ok counts all nonfailed results. Ratios of expected may exceed 100.
-        stability=clamp(100-220*down.std/down.mean,0,100); null for zero/no mean.
+      description: ok counts all nonfailed results. successRate = ok/(count-rateLimited)*100.
+        Ratios of expected may exceed 100. stability=clamp(100-220*down.std/down.mean,0,100);
+        null for zero/no mean.
     SummaryComparison:
       type: object
       additionalProperties: false
@@ -5019,6 +7031,46 @@ components:
         - count
       description: Empty data returns bins=[] and count=0; constant data uses a nonzero width centered on
         the constant.
+    StatisticsEvent:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        nodeId:
+          $ref: "#/components/schemas/ID"
+        ts:
+          $ref: "#/components/schemas/Timestamp"
+        type:
+          type: string
+          enum:
+            - ip_change
+            - isp_change
+            - alert
+        label:
+          type: string
+          description: Plain text change or alert title/details.
+      required:
+        - id
+        - nodeId
+        - ts
+        - type
+        - label
+    StatisticsEvents:
+      type: object
+      additionalProperties: false
+      properties:
+        items:
+          type: array
+          items:
+            $ref: "#/components/schemas/StatisticsEvent"
+          maxItems: 500
+        truncated:
+          type: boolean
+          description: True when more than 500 matching marks exist.
+      required:
+        - items
+        - truncated
     Fleet:
       type: object
       additionalProperties: false
@@ -5033,6 +7085,10 @@ components:
           anyOf:
             - $ref: "#/components/schemas/Percent"
             - type: "null"
+        rateLimited:
+          type: integer
+          minimum: 0
+          description: Rate-limited failures excluded from success.
         ips:
           type: integer
           minimum: 0
@@ -5044,10 +7100,11 @@ components:
         - up
         - ping
         - success
+        - rateLimited
         - ips
         - count
       description: "down/up: unweighted mean of nonnull node percentages. ping: median of ok-only pings.
-        success: nonfailed/total*100. ips: number of address changes for all independent nodes; no
+        success: ok/(count-rateLimited)*100. ips: number of address changes for all independent nodes; no
         demo topology exclusion."
     NodeCard:
       type: object
@@ -5249,7 +7306,13 @@ components:
             - $ref: "#/components/schemas/ID"
             - type: "null"
         nodeId:
-          $ref: "#/components/schemas/ID"
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
+        ispId:
+          anyOf:
+            - $ref: "#/components/schemas/ID"
+            - type: "null"
         severity:
           $ref: "#/components/schemas/Severity"
         ts:
@@ -5268,6 +7331,7 @@ components:
         - id
         - ruleId
         - nodeId
+        - ispId
         - severity
         - ts
         - resolvedAt
@@ -5275,7 +7339,7 @@ components:
         - detail
         - acked
       description: Acknowledgement is independent of resolution. Setting acked=false reopens attention,
-        not the underlying streak. One event per streak; system offline events may have ruleId=null.
+        not the underlying streak. One event per streak; system events may have null ruleId or nodeId.
     Acknowledgement:
       type: object
       additionalProperties: false
@@ -5716,6 +7780,202 @@ components:
         - lastAttempt
         - error
       description: Safe delivery metadata only; no payload secrets or destination credentials.
+    NotificationEvent:
+      type: object
+      additionalProperties: false
+      properties:
+        key:
+          type: string
+        category:
+          type: string
+        title:
+          type: string
+        description:
+          type: string
+        enabled:
+          type: boolean
+        severity:
+          $ref: "#/components/schemas/Severity"
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Channel"
+          minItems: 1
+          maxItems: 4
+        nodeScoped:
+          type: boolean
+        engineScoped:
+          type: boolean
+        alertMetric:
+          type: string
+        thresholds:
+          type: object
+          properties:
+            for_tests:
+              type: integer
+              minimum: 1
+              maximum: 100
+            attempts:
+              type: integer
+              minimum: 1
+              maximum: 100
+          additionalProperties:
+            type: number
+        cooldownSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+        repeatSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+        maintenanceStart:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$|^$'
+        maintenanceEnd:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$|^$'
+        maintenanceTimezone:
+          type: string
+        ispScopes:
+          type: array
+          items:
+            type: string
+        placeholders:
+          type: array
+          items:
+            type: string
+        customized:
+          type: boolean
+      required:
+        - key
+        - category
+        - title
+        - description
+        - enabled
+        - severity
+        - channels
+        - nodeScoped
+        - engineScoped
+        - thresholds
+        - cooldownSeconds
+        - repeatSeconds
+        - maintenanceStart
+        - maintenanceEnd
+        - maintenanceTimezone
+        - ispScopes
+        - placeholders
+        - customized
+    NotificationEventPatch:
+      type: object
+      additionalProperties: false
+      properties:
+        enabled:
+          type: boolean
+        severity:
+          $ref: "#/components/schemas/Severity"
+        channels:
+          type: array
+          items:
+            $ref: "#/components/schemas/Channel"
+          minItems: 1
+          maxItems: 4
+        thresholds:
+          type: object
+          properties:
+            for_tests:
+              type: integer
+              minimum: 1
+              maximum: 100
+            attempts:
+              type: integer
+              minimum: 1
+              maximum: 100
+          additionalProperties:
+            type: number
+        cooldownSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+        repeatSeconds:
+          type: integer
+          minimum: 0
+          maximum: 604800
+        maintenanceStart:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$|^$'
+        maintenanceEnd:
+          type: string
+          pattern: '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$|^$'
+        maintenanceTimezone:
+          type: string
+        ispScopes:
+          type: array
+          items:
+            type: string
+    NotificationNodeEventPatch:
+      type: object
+      additionalProperties: false
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+    NotificationNodeEventSetting:
+      type: object
+      additionalProperties: false
+      required:
+        - enabled
+      properties:
+        enabled:
+          type: boolean
+    NotificationTemplate:
+      type: object
+      additionalProperties: false
+      properties:
+        eventKey:
+          type: string
+        channel:
+          $ref: "#/components/schemas/Channel"
+        body:
+          type: string
+          minLength: 1
+          maxLength: 4000
+        isDefault:
+          type: boolean
+        updatedAt:
+          type: string
+      required:
+        - eventKey
+        - channel
+        - body
+        - isDefault
+    NotificationTemplateInput:
+      type: object
+      additionalProperties: false
+      properties:
+        body:
+          type: string
+          minLength: 1
+          maxLength: 4000
+      required:
+        - body
+    NotificationTemplatePreview:
+      type: object
+      additionalProperties: false
+      properties:
+        channel:
+          $ref: "#/components/schemas/Channel"
+        body:
+          type: string
+        sample:
+          type: object
+          additionalProperties:
+            type: string
+      required:
+        - channel
+        - body
+        - sample
     IPChange:
       type: object
       additionalProperties: false
@@ -5738,6 +7998,14 @@ components:
           anyOf:
             - $ref: "#/components/schemas/Geo"
             - type: "null"
+        fromIsp:
+          anyOf:
+            - $ref: "#/components/schemas/ISPRef"
+            - type: "null"
+        toIsp:
+          anyOf:
+            - $ref: "#/components/schemas/ISPRef"
+            - type: "null"
       required:
         - id
         - nodeId
@@ -5746,6 +8014,8 @@ components:
         - to
         - fromGeo
         - toGeo
+        - fromIsp
+        - toIsp
     IPAddress:
       type: object
       additionalProperties: false
@@ -5814,6 +8084,38 @@ components:
         - fallback
         - updatedAt
         - cachedAddresses
+    GeoProviderStatus:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          enum:
+            - freeipapi
+            - geojs
+            - ip-api
+            - ipapi-co
+            - ipgeolocation
+            - ipinfo-lite
+            - ipwho
+            - ripestat
+        enabled:
+          type: boolean
+        keyConfigured:
+          type: boolean
+        requestsToday:
+          type: integer
+          minimum: 0
+        dailyBudget:
+          type: integer
+          minimum: 0
+          description: Zero means no local daily cap.
+      required:
+        - name
+        - enabled
+        - keyConfigured
+        - requestsToday
+        - dailyBudget
     Job:
       type: object
       additionalProperties: false
@@ -6021,6 +8323,101 @@ components:
                   $ref: "#/components/schemas/Pagination"
               required:
                 - pagination
+    AccessToken:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        scope:
+          type: string
+          enum: [read, read-write, full]
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+        lastUsedAt:
+          type: [string, "null"]
+          format: date-time
+        revokedAt:
+          type: [string, "null"]
+          format: date-time
+      required: [id, name, scope, createdAt, expiresAt, lastUsedAt, revokedAt]
+    AccessTokenInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        scope:
+          type: string
+          enum: [read, read-write, full]
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+      required: [name, scope]
+    IssuedAccessToken:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        scope:
+          type: string
+          enum: [read, read-write, full]
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        expiresAt:
+          type: [string, "null"]
+          format: date-time
+        lastUsedAt:
+          type: [string, "null"]
+          format: date-time
+        revokedAt:
+          type: [string, "null"]
+          format: date-time
+        token:
+          type: string
+          writeOnly: true
+      required: [id, name, scope, createdAt, expiresAt, lastUsedAt, revokedAt, token]
+    listAccessTokensResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/AccessToken"
+            meta:
+              type: object
+              additionalProperties: false
+              properties:
+                pagination:
+                  $ref: "#/components/schemas/Pagination"
+              required: [pagination]
+    createAccessTokenResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 201
+            data:
+              $ref: "#/components/schemas/IssuedAccessToken"
     createNodeResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
@@ -6093,6 +8490,15 @@ components:
               const: 200
             data:
               $ref: "#/components/schemas/Command"
+    getServerCatalogResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/ServerCatalog"
     rotateCredentialResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
@@ -6197,6 +8603,230 @@ components:
                   $ref: "#/components/schemas/Pagination"
               required:
                 - pagination
+    ISPRef:
+      type: object
+      additionalProperties: false
+      description: Compact ISP identity used on nodes and IP history.
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        asn:
+          type: integer
+          minimum: 1
+          maximum: 4294967295
+        organisation:
+          type: string
+        name:
+          type: string
+      required:
+        - id
+        - asn
+        - organisation
+        - name
+    ISP:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        asn:
+          type: integer
+          minimum: 1
+          maximum: 4294967295
+        organisation:
+          type: string
+        name:
+          type: string
+        nodeCount:
+          type: integer
+          minimum: 0
+        avgDown:
+          anyOf:
+            - $ref: "#/components/schemas/Mbps"
+            - type: "null"
+        p95Down:
+          anyOf:
+            - $ref: "#/components/schemas/Mbps"
+            - type: "null"
+        pctExpected:
+          anyOf:
+            - type: number
+            - type: "null"
+        successRate:
+          anyOf:
+            - type: number
+              minimum: 0
+              maximum: 1
+            - type: "null"
+        avgPing:
+          anyOf:
+            - $ref: "#/components/schemas/Milliseconds"
+            - type: "null"
+      required:
+        - id
+        - asn
+        - organisation
+        - name
+        - nodeCount
+    ISPPlan:
+      type: object
+      additionalProperties: false
+      properties:
+        id:
+          $ref: "#/components/schemas/ID"
+        name:
+          type: string
+        advertisedDown:
+          $ref: "#/components/schemas/Mbps"
+        advertisedUp:
+          $ref: "#/components/schemas/Mbps"
+        createdAt:
+          $ref: "#/components/schemas/Timestamp"
+        updatedAt:
+          $ref: "#/components/schemas/Timestamp"
+      required:
+        - id
+        - name
+        - advertisedDown
+        - advertisedUp
+        - createdAt
+        - updatedAt
+    ISPPlanInput:
+      type: object
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 200
+        advertisedDown:
+          $ref: "#/components/schemas/Mbps"
+        advertisedUp:
+          $ref: "#/components/schemas/Mbps"
+      required:
+        - name
+        - advertisedDown
+        - advertisedUp
+    MonthlyReportRow:
+      type: object
+      required: [ispId, isp, asn, nodeId, node, plan, advertisedDownMbps, advertisedUpMbps, tests, failures, avgDownMbps, p95DownMbps, avgUpMbps, p95UpMbps, deliveredPercent, worstHoursUtc, downtimeMinutes, ipChanges]
+      properties:
+        ispId: {type: [string, "null"], format: uuid, description: Null when no ISP can be attributed at the measurement time.}
+        isp: {type: string, description: Unknown ISP when no attribution is available.}
+        asn: {type: integer, description: 0 when the ISP is unknown.}
+        nodeId: {type: string, format: uuid}
+        node: {type: string}
+        plan: {type: [string, "null"]}
+        advertisedDownMbps: {type: [number, "null"]}
+        advertisedUpMbps: {type: [number, "null"]}
+        tests: {type: integer}
+        failures: {type: integer}
+        avgDownMbps: {type: [number, "null"]}
+        p95DownMbps: {type: [number, "null"]}
+        avgUpMbps: {type: [number, "null"]}
+        p95UpMbps: {type: [number, "null"]}
+        deliveredPercent: {type: [number, "null"], description: Average download as a percentage of the advertised plan speed.}
+        worstHoursUtc: {type: array, items: {type: integer, minimum: 0, maximum: 23}, description: The three UTC hours with the lowest average download for this ISP and node.}
+        downtimeMinutes: {type: integer, description: Minutes from each failed test to the next test or report boundary, at most a day per failure.}
+        ipChanges: {type: integer, description: Actual transitions only; attributed to the destination ISP.}
+    MonthlyReport:
+      type: object
+      required: [month, from, to, partial, engine, generatedAt, rows]
+      properties:
+        month: {type: string}
+        from: {type: string, format: date-time}
+        to: {type: string, format: date-time}
+        partial: {type: boolean, description: True while the month is not over.}
+        engine: {type: string}
+        generatedAt: {type: string, format: date-time}
+        rows:
+          type: array
+          items:
+            $ref: "#/components/schemas/MonthlyReportRow"
+    getMonthlyReportResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/MonthlyReport"
+    listISPsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/ISP"
+    getISPResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/ISP"
+    getISPTrendResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  ts:
+                    $ref: "#/components/schemas/Timestamp"
+                  down:
+                    anyOf:
+                      - $ref: "#/components/schemas/Mbps"
+                      - type: "null"
+                  up:
+                    anyOf:
+                      - $ref: "#/components/schemas/Mbps"
+                      - type: "null"
+                  ping:
+                    anyOf:
+                      - $ref: "#/components/schemas/Milliseconds"
+                      - type: "null"
+                  n:
+                    type: integer
+                    minimum: 0
+                required:
+                  - ts
+                  - n
+    listISPPlansResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/ISPPlan"
+    getISPPlanResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              enum:
+                - 200
+                - 201
+            data:
+              $ref: "#/components/schemas/ISPPlan"
     getResultResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
@@ -6259,6 +8889,48 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/Distribution"
+    getUsageResponse:
+    getEventsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/Usage"
+    getUsageAdviceResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/UsageAdvice"
+    getUsageBudgetsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/UsageBudget"
+    replaceUsageBudgetResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/UsageBudget"
+              $ref: "#/components/schemas/StatisticsEvents"
     getDashboardResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
@@ -6382,6 +9054,13 @@ components:
           pattern: Z$
         actor:
           type: string
+        authMethod:
+          type: string
+          enum: [session, bearer]
+          description: Authentication method used for the change.
+        credentialId:
+          $ref: "#/components/schemas/ID"
+          description: Non-secret API token ID that authorized a bearer change; omitted for session changes.
         action:
           type: string
         targetType:
@@ -6397,6 +9076,7 @@ components:
         - id
         - ts
         - actor
+        - authMethod
         - action
         - targetType
         - targetId
@@ -6504,6 +9184,44 @@ components:
               const: 200
             data:
               $ref: "#/components/schemas/Delivery"
+    listNotificationEventsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/NotificationEvent"
+    getNotificationEventResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/NotificationEvent"
+    getNotificationTemplateResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/NotificationTemplate"
+    previewNotificationTemplateResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/NotificationTemplatePreview"
     getSettingsResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
@@ -6580,6 +9298,17 @@ components:
               anyOf:
                 - $ref: "#/components/schemas/Geo"
                 - type: "null"
+    listGeoProvidersResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              type: array
+              items:
+                $ref: "#/components/schemas/GeoProviderStatus"
     getMapResponse:
       allOf:
         - $ref: "#/components/schemas/Success"

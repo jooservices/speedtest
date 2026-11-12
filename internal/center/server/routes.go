@@ -3,14 +3,25 @@ package server
 import (
 	"net/http"
 	"strings"
+
+	"github.com/jooservices/speedtest/internal/center/apicontract"
+	"github.com/jooservices/speedtest/internal/center/apitoken"
 )
 
 // route is one area of the HTTP API: which requests it takes and the handler that serves them. Areas are tried in
 // order, so a more specific route must be registered before a general one. Adding an endpoint means adding a route
 // here, not changing a dispatcher.
 type route struct {
-	matches func(*http.Request) bool
-	handler http.Handler
+	matches    func(*http.Request) bool
+	handler    http.Handler
+	tokenScope func(*http.Request) (apitoken.Scope, bool)
+}
+
+// addToken registers an owner route whose bearer permission comes from its OpenAPI operation.
+func (t *routeTable) addToken(handler http.Handler, matches func(*http.Request) bool, scope func(*http.Request) (apitoken.Scope, bool)) {
+	if handler != nil {
+		*t = append(*t, route{matches: matches, handler: handler, tokenScope: scope})
+	}
 }
 
 type routeTable []route
@@ -37,49 +48,87 @@ func (t routeTable) handlerFor(r *http.Request) http.Handler {
 	return nil
 }
 
+func (t routeTable) tokenPermission(r *http.Request) (apitoken.Scope, bool) {
+	for _, rt := range t {
+		if rt.matches(r) && rt.tokenScope != nil {
+			scope, ok := rt.tokenScope(r)
+			if !ok {
+				return apitoken.Full, true
+			}
+			return scope, true
+		}
+	}
+	operation, ok, err := apicontract.Find(r.Method, r.URL.Path)
+	return apitoken.Scope(operation.Scope), ok && err == nil && operation.Scope != ""
+}
+
+func operationScope(r *http.Request) (apitoken.Scope, bool) {
+	operation, ok, err := apicontract.Find(r.Method, r.URL.Path)
+	return apitoken.Scope(operation.Scope), ok && err == nil && operation.Scope != ""
+}
+
+func accessTokenRoute(path string) bool {
+	return path == "/api/access-tokens" || strings.HasPrefix(path, "/api/access-tokens/")
+}
+
 // ownerAreas builds the session-protected owner APIs in the order they are matched. Each area exists only when its
 // store is configured.
 func ownerAreas(o Options, auth *serverAuth) routeTable {
 	var t routeTable
 	t.add(authRoutes(auth), onPath(func(p string) bool { return p == "/api/auth" || strings.HasPrefix(p, "/api/auth/") }))
 	if o.Audit != nil {
-		t.add(newOwnerAuditHandler(o.Audit, auth), onPath(auditRoute))
+		t.addToken(newOwnerAuditHandler(o.Audit, auth), onPath(auditRoute), operationScope)
 	}
 	if o.Installer != nil {
-		t.add(newInstallerHandler(o.Installer, auth, o.AgentRateLimit), onPath(installerRoute))
+		t.addToken(newInstallerHandler(o.Installer, auth, o.AgentRateLimit), onPath(installerRoute), operationScope)
+	}
+	if o.OwnerServers != nil {
+		t.add(newOwnerServersHandler(o.OwnerServers, auth), onPath(ownerServersRoute))
 	}
 	if o.OwnerNodes != nil {
 		// Creating a node belongs to the enrolment handler.
-		t.add(newOwnerNodesHandler(o.OwnerNodes, auth), func(r *http.Request) bool {
+		t.addToken(newOwnerNodesHandler(o.OwnerNodes, auth), func(r *http.Request) bool {
 			return ownerNodesRoute(r.URL.Path) && (r.Method != http.MethodPost || r.URL.Path != "/api/nodes")
-		})
+		}, operationScope)
 	}
 	if o.OwnerSchedules != nil {
-		t.add(newOwnerSchedulesHandler(o.OwnerSchedules, auth), onPath(ownerSchedulesRoute))
+		t.addToken(newOwnerSchedulesHandler(o.OwnerSchedules, auth), onPath(ownerSchedulesRoute), operationScope)
+	}
+	if o.OwnerUsage != nil {
+		t.add(newOwnerUsageHandler(o.OwnerUsage, auth), onPath(ownerUsageRoute))
 	}
 	if o.OwnerJobs != nil {
-		t.add(newOwnerJobsHandler(o.OwnerJobs, auth), onPath(ownerJobsRoute))
+		t.addToken(newOwnerJobsHandler(o.OwnerJobs, auth), onPath(ownerJobsRoute), operationScope)
 	}
 	if o.OwnerDashboard != nil {
-		t.add(newOwnerDashboardHandler(o.OwnerDashboard, auth), onPath(ownerDashboardRoute))
+		t.addToken(newOwnerDashboardHandler(o.OwnerDashboard, auth), onPath(ownerDashboardRoute), operationScope)
 	}
 	if o.OwnerNotifications != nil {
-		t.add(newOwnerNotificationsHandler(o.OwnerNotifications, auth, o.AgentRateLimit), onPath(ownerNotificationsRoute))
+		t.addToken(newOwnerNotificationsHandler(o.OwnerNotifications, auth, o.AgentRateLimit), onPath(ownerNotificationsRoute), operationScope)
 	}
 	if o.OwnerIP != nil {
-		t.add(newOwnerIPHandler(o.OwnerIP, auth), onPath(ownerIPRoute))
+		t.addToken(newOwnerIPHandler(o.OwnerIP, auth), onPath(ownerIPRoute), operationScope)
 	}
 	if o.Settings != nil {
-		t.add(newOwnerSettingsHandler(o.Settings, auth), onPath(ownerSettingsRoute))
+		t.addToken(newOwnerSettingsHandler(o.Settings, auth), onPath(ownerSettingsRoute), operationScope)
 	}
 	if o.OwnerResults != nil {
-		t.add(newOwnerResultsHandler(o.OwnerResults, auth), onPath(ownerResultsRoute))
+		t.addToken(newOwnerResultsHandler(o.OwnerResults, auth, o.NotificationEvents), onPath(ownerResultsRoute), operationScope)
 	}
 	if o.OwnerStats != nil {
-		t.add(newOwnerStatsHandler(o.OwnerStats, auth), onPath(ownerStatsRoute))
+		t.addToken(newOwnerStatsHandler(o.OwnerStats, auth), onPath(ownerStatsRoute), operationScope)
+	}
+	if o.OwnerReport != nil {
+		t.add(newOwnerReportHandler(o.OwnerReport, auth), onPath(ownerReportRoute))
+	}
+	if o.OwnerISP != nil {
+		t.addToken(newOwnerISPHandler(o.OwnerISP, auth), onPath(ownerISPRoute), operationScope)
 	}
 	if o.OwnerAlerts != nil {
-		t.add(newOwnerAlertsHandler(o.OwnerAlerts, auth), onPath(ownerAlertsRoute))
+		t.addToken(newOwnerAlertsHandler(o.OwnerAlerts, auth), onPath(ownerAlertsRoute), operationScope)
+	}
+	if o.AccessTokens != nil {
+		t.add(newAccessTokenHandler(o.AccessTokens, auth), onPath(accessTokenRoute))
 	}
 	return t
 }
