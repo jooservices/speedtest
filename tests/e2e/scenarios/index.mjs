@@ -60,8 +60,8 @@ export function scenarios({ T, S }) {
     { id: 'SC-SET-10', area: 'settings', title: 'API access tokens are issued once, authorize scoped calls and can be revoked', covers: 'token creation, digest storage, bearer auth without cookies or CSRF, scope enforcement, installation event stream revalidation, revocation', run: S.settings.apiTokenCanBeCreatedUsedAndRevoked },
 
     // Adds a real agent and a node; the removal scenario below deletes it again.
-    { id: 'SC-NODE-09', area: 'nodes', title: 'server discovery, per-engine pinning and automatic fallback work', covers: 'captured LibreSpeed v1.0.14 list format, successful JSON null for an unavailable pinned server, same-host endpoint identity, per-engine catalog pin, fallback warning and history/detail mismatch', run: S.nodes.discoverPinAndFallback },
     { id: 'SC-NODE-05', area: 'nodes', title: 'a node is added with the install command, reports and recovers from provider limits', covers: 'wizard, 60-minute default, real agent enrolment/sync, test-success and manual notifications, rule failure/recovery delivery, node offline/online recovery with downtime, rate-limit classification and restart backoff', run: S.nodes.addWithCommandAndRunTest },
+    { id: 'SC-NODE-09', area: 'nodes', title: 'server discovery, per-engine pinning and automatic fallback work', covers: 'captured LibreSpeed v1.0.14 list format, successful JSON null for an unavailable pinned server, same-host endpoint identity, per-engine catalog pin, fallback warning and history/detail mismatch', run: S.nodes.discoverPinAndFallback },
     { id: 'SC-NODE-06', area: 'nodes', title: 'a node can be removed from the dashboard', covers: 'node removal', run: () => S.nodes.removeFromDashboard('E2E-1') },
 
     { id: 'SC-SET-08', area: 'settings', title: 'the activity log lists owner changes without secrets', covers: 'audit log, filter, no secrets', run: S.settings.activityLog },
