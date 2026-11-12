@@ -292,15 +292,6 @@ func completeResultOutcome(w http.ResponseWriter, outcome Outcome) Outcome {
 	return outcome
 }
 
-func resultItemID(item []byte) *string {
-	var fields map[string]json.RawMessage
-	var identity string
-	if json.Unmarshal(item, &fields) != nil || json.Unmarshal(fields["id"], &identity) != nil || !UUID(identity) {
-		return nil
-	}
-	identity = strings.ToLower(identity)
-	return &identity
-}
 
 func (h Handler) config(w http.ResponseWriter, r *http.Request, node string) {
 	config, err := h.Store.Config(r.Context(), node)
