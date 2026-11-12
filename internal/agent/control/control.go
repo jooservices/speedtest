@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/agent/engine"
 	"github.com/jooservices/speedtest/internal/agent/sched"
 )
 
@@ -52,6 +53,8 @@ type Controller struct {
 	OfferUpdate func(AgentConfig)
 	// UpdateAgent handles an owner's update_agent command against the freshly fetched configuration.
 	UpdateAgent func(Command, AgentConfig) CommandAck
+	// ListServers discovers one engine's selectable servers when the owner asks.
+	ListServers func(context.Context, string) ([]engine.ServerOption, error)
 	interval    time.Duration
 	poll        time.Duration
 	now         func() time.Time
@@ -287,9 +290,22 @@ func (c *Controller) execute(ctx context.Context, cmd Command) CommandAck {
 			return CommandAck{Status: "failed", Error: strPtr("could not read the advertised release")}
 		}
 		return c.UpdateAgent(cmd, cfg)
+	case "list_servers":
+		return c.listServers(ctx, cmd.Engine)
 	default:
 		return CommandAck{Status: "failed", Error: strPtr("unsupported command: " + cmd.Type)}
 	}
+}
+
+func (c *Controller) listServers(ctx context.Context, name string) CommandAck {
+	if (name != "ookla" && name != "librespeed") || c.ListServers == nil {
+		return CommandAck{Status: "failed", Error: strPtr("server discovery is unavailable for this engine")}
+	}
+	servers, err := c.ListServers(ctx, name)
+	if err != nil {
+		return CommandAck{Status: "failed", Error: strPtr("could not retrieve the engine server list")}
+	}
+	return CommandAck{Status: "succeeded", Phase: "done", Pct: 100, Servers: &servers}
 }
 
 // updateConfig forces a fresh configuration fetch and applies it.

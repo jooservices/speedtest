@@ -84,7 +84,7 @@ func TestLegacyFailureReplayAfterMigrationAndOldBinaryWrite(t *testing.T) {
 					t.Fatal("could not simulate old-binary insert")
 				}
 			} else {
-				args[29] = "other"
+				args[len(args)-1] = "other"
 				if _, err := pool.Exec(ctx, resultInsertQuery, args...); err != nil {
 					t.Fatal("could not create migrated legacy row")
 				}

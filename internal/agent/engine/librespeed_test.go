@@ -37,7 +37,7 @@ func TestParseLibreSpeedRealSample(t *testing.T) {
 	if r.BytesDown != 77692920 || r.BytesUp != 6291456 || r.ExternalIP != "203.0.113.10" || r.ISP != "AS64496 Example Network" {
 		t.Fatalf("client/bytes = %+v", r)
 	}
-	if r.Server == nil || r.Server.ID != 0 || r.Server.Name != "Example LibreSpeed server" || r.Server.Host != "speed.example.test" || r.Server.Location != "" {
+	if r.Server == nil || r.Server.ID != 0 || r.Server.Name != "Example LibreSpeed server" || r.Server.Host != "speed.example.test" || r.Server.Endpoint != "https://speed.example.test/" || r.Server.Location != "" {
 		t.Fatalf("server = %+v", r.Server)
 	}
 	if r.Loss != nil || r.LoadedDown != nil || r.LoadedUp != nil || r.Duration != 0 || r.ResultID != "" || r.ResultURL != "" || r.Error != "" {
@@ -178,6 +178,18 @@ func TestLibreSpeedRunnerArgumentsAndPinnedServer(t *testing.T) {
 	if r.Server.ID != 79 {
 		t.Fatalf("pinned server id = %d, want 79", r.Server.ID)
 	}
+}
+
+func TestLibreSpeedPinnedNullReportMeansServerUnavailable(t *testing.T) {
+	runner, err := NewLibreSpeed(LibreSpeedConfig{Binary: script(t, "printf 'null\\n'\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runner.Run(t.Context(), Options{ServerID: 52})
+	assertClass(t, result, err, ServerUnavailable)
+
+	result, err = runner.Run(t.Context(), Options{})
+	assertClass(t, result, err, InvalidResult)
 }
 
 func TestLibreSpeedRunnerDefaultsAndConcurrentRuns(t *testing.T) {

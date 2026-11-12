@@ -15,7 +15,8 @@ import (
 const ResultColumns = `r.id::text, r.node_id::text, r.ts, r.status, r.down_mbps, r.up_mbps, r.ping_ms, r.jitter_ms,
 	r.down_latency_ms, r.up_latency_ms, r.loss_percent, r.server_id, r.server, host(r.ip), r.threads, r.bytes_down,
 	r.bytes_up, r.duration_seconds, r.error, r.manual, r.raw, r.loaded_down, r.loaded_up, r.engine_isp,
-	r.engine_result_id, r.engine_result_url, host(r.engine_ip), r.warnings, r.engine, r.failure_class, r.isp_id::text`
+	r.engine_result_id, r.engine_result_url, host(r.engine_ip), r.warnings, r.engine, r.failure_class,
+	r.server_selection_known, r.pinned_server_id_at_test, r.isp_id::text`
 
 // ResultView is a result in the shape of the contract plus the IP used to attach its location.
 type ResultView struct {
@@ -35,9 +36,11 @@ func ScanResult(row pgx.Row, extra ...any) (ResultView, error) {
 	var ip, errText, engineISP, engineResultID, engineResultURL, engineIP, ispID *string
 	var manual bool
 	var sid *int32
+	var selectionKnown bool
+	var pinnedSID *int64
 	dest := []any{&id, &nodeID, &ts, &status, &down, &up, &ping, &jitter, &dLat, &uLat, &loss, &sid, &server, &ip,
 		&threads, &bytesDown, &bytesUp, &duration, &errText, &manual, &raw, &loadedDown, &loadedUp, &engineISP,
-		&engineResultID, &engineResultURL, &engineIP, &warnings, &engine, &failureClass, &ispID}
+		&engineResultID, &engineResultURL, &engineIP, &warnings, &engine, &failureClass, &selectionKnown, &pinnedSID, &ispID}
 	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return ResultView{}, err
 	}
@@ -54,7 +57,8 @@ func ScanResult(row pgx.Row, extra ...any) (ResultView, error) {
 		"raw": jsonObject(raw), "server": jsonOrNil(server), "geo": nil,
 		"loadedDown": jsonOrNil(loadedDown), "loadedUp": jsonOrNil(loadedUp),
 		"engineISP": nullable(engineISP), "engineResultId": nullable(engineResultID),
-		"engineResultUrl": nullable(engineResultURL), "engineIp": nullable(engineIP), "warnings": jsonArray(warnings), "ispId": nullable(ispID),
+		"engineResultUrl": nullable(engineResultURL), "engineIp": nullable(engineIP), "warnings": jsonArray(warnings), "pinnedServerId": nullable(pinnedSID),
+		"serverSelectionKnown": selectionKnown, "ispId": nullable(ispID),
 	}
 	view := ResultView{Object: obj}
 	if ip != nil {

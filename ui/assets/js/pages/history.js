@@ -54,7 +54,12 @@
           { key: 'ping', label: 'Ping', sort: true, num: true, render: function (r) { return F.ms(r.ping); } },
           { key: 'jitter', label: 'Jitter', sort: true, num: true, render: function (r) { return F.ms(r.jitter); } },
           { key: 'loss', label: 'Loss', sort: true, num: true, render: function (r) { return r.loss == null ? '—' : F.num(r.loss, 1) + '%'; } },
-          { key: 'server', label: 'Server', sort: true, render: function (r) { if (r.serverId == null && !r.server) return '—'; var s = r.server || ST.server(r.serverId); return s.name + (s.city ? ', ' + s.city : ''); } },
+          { key: 'server', label: 'Server', sort: true, render: function (r) {
+            if (r.serverId == null && !r.server) return '—';
+            var s = r.server || ST.server(r.serverId), used = r.serverId == null && r.server ? r.server.id : r.serverId;
+            var differs = r.pinnedServerId != null && used != null && Number(r.pinnedServerId) !== Number(used);
+            return h('span', { class: 'row wrap' }, s.name + (s.city ? ', ' + s.city : ''), differs ? U.chip('Different from pinned', 'warn', 'alert') : null);
+          } },
           { key: 'ip', label: 'Public IP', sort: true, render: function (r) { return h('span', { class: 'mono' }, r.ip); } },
           { key: 'status', label: 'Status', sort: true, render: function (r) {
             var chips = h('span', { class: 'row', style: 'gap:6px' }, U.statusChip(r.status));
