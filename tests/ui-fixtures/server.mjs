@@ -15,6 +15,11 @@ export function fixture() {
     failureClass: 'other', ispId: null,
     manual: false, raw: {}, server: { id: 1, name: 'Fixture server', city: '', sponsor: '' }, geo: null };
   node.latest = result; node.latestGood = result;
+  const metric = (value, n = 1) => ({ n, mean: value, median: value, min: value, max: value, p5: value, p95: value, std: 0 });
+  const summary = { count: 1, ok: 1, failed: 0, successRate: 100, down: metric(90), up: metric(40), ping: metric(0),
+    jitter: metric(null, 0), loss: metric(null, 0), ipCount: 1, downPct: 90, upPct: 80, stability: 100 };
+  const fleet = { down: 90, up: 80, ping: 0, success: 100, ips: 0, count: 1 };
+  const dashboard = { current: fleet, previous: fleet, nodes: [{ node, summary, sparkline: [] }], latestResults: [result], openAlerts: [], openAlertCount: 0 };
   const isp = { id: '9c96b615-8275-4df5-96e6-1ba67e5a16c7', asn: 64500, organisation: 'Fixture Network',
     name: 'Fixture ISP', nodeCount: 1, avgDown: 90, p95Down: 90, pctExpected: 90, successRate: 1, avgPing: 10 };
   const notify = Object.fromEntries(['email', 'telegram', 'slack', 'webhook'].map(key => [key, { on: false, to: '', configured: false }]));
@@ -29,7 +34,7 @@ export function fixture() {
   const schedules = { rules: { stagger: true, maxConcurrent: 1, quiet: { quietStart: '', quietEnd: '', timezone: 'UTC' } },
     nodes: [{ nodeId: node.id, config: { interval: 30, offset: 0, enabled: true }, nextRun: ts, upcoming: [ts], bytesPerDay: 72000, bytesPerMonth: 2160000 }],
     clashes: [] };
-  return { node, result, isp, settings, rule, event, schedules };
+  return { node, result, isp, settings, rule, event, schedules, dashboard };
 }
 const ts0 = () => new Date().toISOString();
 export const envelope = (data, meta = {}, code = 200) => ({ success: true, code, message: 'OK', data, meta, errors: null });
@@ -154,6 +159,7 @@ export async function startServer() {
           : [{ nodeId: id, metric: 'down', count: 1, bins: [{ from: 90, to: 91, count: 1, percent: 100 }] }];
         send(200, envelope(body)); return;
       }
+      if (req.method === 'GET' && url.pathname === '/api/dashboard') { send(200, envelope(data.dashboard)); return; }
       if (url.pathname === '/api/usage') {
         const bytes = { bytesDown: data.result.bytesDown, bytesUp: data.result.bytesUp, totalBytes: data.result.bytesTotal };
         const start = new Date(data.result.ts); start.setUTCHours(0, 0, 0, 0);

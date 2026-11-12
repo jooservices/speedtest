@@ -42,8 +42,7 @@ export function qualitySuite(T) {
       await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
     },
 
-    // On a phone the top bar stays one row, keeps "Run all tests" and the page does not scroll sideways;
-    // download buttons carry the download icon, not the info icon.
+    // On a phone the top bar stays one row and the menu carries status, theme and account actions.
     async phoneTopBar() {
       const original = page.viewportSize();
       try {
@@ -51,11 +50,25 @@ export function qualitySuite(T) {
         await T.open('#/', 'Dashboard');
         const box = await page.locator('#topbar').boundingBox();
         assert.ok(box.height <= 64, `the top bar must fit on one row on a phone (was ${box.height}px)`);
+        assert.ok(await page.getByRole('button', { name: 'Open menu' }).isVisible(), 'the menu stays in the top bar');
+        assert.ok(await page.getByLabel('Time range').isVisible(), 'the time range stays in the top bar');
         assert.ok(await page.getByRole('button', { name: 'Run all tests' }).isVisible(), 'Run all tests must stay visible on a phone');
         const sideways = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
         assert.ok(sideways <= 1, `the page scrolls sideways by ${sideways}px on a phone`);
-        const signOut = await page.getByRole('button', { name: 'Sign out' }).boundingBox();
-        assert.ok(signOut && signOut.width >= 20, 'Sign out must stay visible (as an icon) on a phone');
+        const topbar = page.locator('#topbar');
+        assert.equal(await topbar.getByRole('button', { name: 'Sign out' }).count(), 0, 'sign out is moved out of the top bar');
+        assert.equal(await topbar.getByRole('button', { name: /^(Light|Dark) theme$/ }).count(), 0, 'theme is moved out of the top bar');
+        assert.equal(await topbar.getByText(/5 of 5 nodes active/).count(), 0, 'the active-node status is moved out of the top bar');
+        await page.getByRole('button', { name: 'Open menu' }).click();
+        const menu = page.locator('.sidebar.open'), actions = menu.locator('.sidebar-actions');
+        await actions.getByRole('status').getByText('5 of 5 nodes active').waitFor();
+        await actions.getByRole('button', { name: 'Sign out' }).waitFor();
+        const theme = actions.getByRole('button', { name: /^(Light|Dark) theme$/ });
+        const before = await page.evaluate(() => document.documentElement.getAttribute('data-theme'));
+        await theme.click();
+        await page.waitForFunction(value => document.documentElement.getAttribute('data-theme') !== value, before);
+        await actions.getByRole('button', { name: /^(Light|Dark) theme$/ }).click();
+        await page.waitForFunction(value => document.documentElement.getAttribute('data-theme') === value, before);
         await T.open('#/history', 'Results');
         const path = await page.getByRole('button', { name: 'Export CSV' }).locator('svg path').first().getAttribute('d');
         assert.ok(path.startsWith('M12 3v12'), `Export CSV must use the download icon (path was ${path})`);
@@ -69,7 +82,7 @@ export function qualitySuite(T) {
       await T.open('#/', 'Dashboard');
       const theme = () => page.evaluate(() => document.documentElement.getAttribute('data-theme'));
       const start = await theme();
-      await T.press('Toggle theme');
+      await page.locator('.sidebar-actions').getByRole('button', { name: /^(Light|Dark) theme$/ }).click();
       await page.waitForFunction(t => document.documentElement.getAttribute('data-theme') !== t, start);
       const flipped = await theme();
       assert.notEqual(flipped, start);
@@ -77,16 +90,23 @@ export function qualitySuite(T) {
       await page.reload();
       await T.heading('Dashboard').waitFor();
       assert.equal(await theme(), flipped, 'the theme survives a reload');
-      await T.press('Toggle theme');
+      await page.locator('.sidebar-actions').getByRole('button', { name: /^(Light|Dark) theme$/ }).click();
       await page.waitForFunction(t => document.documentElement.getAttribute('data-theme') !== t, flipped);
       await T.settled();
     },
 
     // Keyboard and screen-reader basics: controls have names, the keyboard reaches them, exactly one h1.
     async accessibility() {
-      for (const [hash, title] of ROUTES) {
+      for (const [hash, title, tab] of ROUTES.concat([['#/settings', 'Settings', 'Bandwidth']])) {
         await T.open(hash, title);
+        if (tab) await T.tab(tab);
         await page.waitForLoadState('networkidle');
+        await page.addScriptTag({ url: new URL('/__e2e_axe.js', T.url(hash)).href });
+        const violations = await page.evaluate(async () => {
+          const result = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } });
+          return result.violations.map(rule => ({ id: rule.id, help: rule.help, targets: rule.nodes.map(node => ({ target: node.target, summary: node.failureSummary })) }));
+        });
+        assert.deepEqual(violations, [], `${title}: axe WCAG 2.2 AA violations`);
         const found = await page.evaluate(() => {
           const out = [];
           const name = el => (el.getAttribute('aria-label') || el.getAttribute('aria-labelledby') || el.getAttribute('title') || el.textContent || '').trim()
@@ -101,9 +121,34 @@ export function qualitySuite(T) {
         });
         assert.deepEqual(found, [], `${title}: ${found.join('; ')}`);
         await page.keyboard.press('Tab'); await page.keyboard.press('Tab'); await page.keyboard.press('Tab');
-        const focused = await page.evaluate(() => document.activeElement && document.activeElement !== document.body ? document.activeElement.tagName : '');
-        assert.ok(focused, `${title}: Tab does not move focus into the page`);
+        const focused = await page.evaluate(() => ({ tag: document.activeElement && document.activeElement.tagName,
+          visible: !!document.activeElement && document.activeElement.matches(':focus-visible'), outline: getComputedStyle(document.activeElement).outlineStyle }));
+        assert.ok(focused.tag && focused.tag !== 'BODY', `${title}: Tab does not move focus into the page`);
+        assert.ok(focused.visible && focused.outline !== 'none', `${title}: keyboard focus is not visible`);
       }
+    },
+
+    async sharedUiActionsAreOperable() {
+      await T.open('#/', 'Dashboard');
+      await page.evaluate(() => {
+        const view = document.getElementById('view'), data = ST.ui.h('div', { dataset: { coverageProbe: 'true' } });
+        if (data.dataset.coverageProbe !== 'true') throw new Error('data attributes are not applied');
+        view.appendChild(data);
+        view.appendChild(ST.ui.nodeTag(ST.nodes()[0]));
+        view.appendChild(ST.ui.code('Coverage copy sample'));
+        Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+      });
+      try {
+        await page.getByRole('button', { name: 'Copy', exact: true }).last().click();
+        await T.toast('Copied to clipboard').waitFor();
+      } finally {
+        await page.evaluate(() => { delete navigator.clipboard; });
+      }
+      await page.evaluate(() => ST.ui.modal({ title: 'Coverage modal', body: 'Close this modal with its named control.' }));
+      await page.getByRole('dialog', { name: 'Coverage modal' }).getByRole('button', { name: 'Close' }).click();
+      await page.evaluate(() => ST.ui.drawer({ title: 'Coverage drawer', body: 'Close this drawer with its named control.' }));
+      await page.getByRole('dialog', { name: 'Coverage drawer' }).getByRole('button', { name: 'Close' }).click();
+      await T.expectNoLoadError();
     },
   };
 }

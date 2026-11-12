@@ -45,8 +45,8 @@ what the page shows; put the change back (or order the scenario last) when it al
 
 ## Scenarios
 
-44 scenarios across auth, dashboard, nodes, results, statistics, IP, ISPs, schedules, alerts, settings and quality (layout, accessibility,
-theme): see [e2e-scenarios.md](e2e-scenarios.md).
+Scenarios cover auth, dashboard, nodes, results, statistics, IP, schedules, alerts, settings and quality, including axe WCAG checks,
+keyboard focus, layout, themes and UI improvements: see [e2e-scenarios.md](e2e-scenarios.md).
 
 The SSH install wizard (host-key confirmation, live progress, failure) is covered against the contract fixture by
 `npm run test:wizard`; the SSH, sudo, scripts and PostgreSQL side is covered by the installer integration tests

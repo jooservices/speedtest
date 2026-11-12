@@ -76,6 +76,7 @@
           q.ispId = v;
           ST.refresh();
         }, 'auto'))));
+      filt.querySelector('select').setAttribute('aria-label', 'Filter by importance');
       root.appendChild(filt);
       var list = events.filter(function (e) { return (!q.ispId || e.ispId === q.ispId) && (q.show === 'all' || !e.acked) && (q.sev === 'all' || e.severity === q.sev); });
       var card = h('div', { class: 'card card-pad' });

@@ -47,7 +47,7 @@
 
   function renderSidebar() {
     var sb = document.getElementById('sidebar'); U.clear(sb);
-    var open = ST.openEventCount();
+    var open = ST.openEventCount(), settings = ST.settings(), nodes = ST.nodes();
     sb.appendChild(h('div', { class: 'brand' },
       h('div', { class: 'brand-mark' }, U.icon('gauge', 18)),
       h('div', null, h('div', { class: 'brand-name' }, 'Speedtest'), h('div', { class: 'brand-sub' }, 'Network monitor'))));
@@ -63,6 +63,11 @@
       h('button', { class: 'btn sm', type: 'button', onClick: function () {
         U.confirm({ title: 'Reset demo data?', text: 'This clears everything you changed in this preview (nodes, rules, settings, manual tests) and restores the sample data.', confirm: 'Reset', danger: true }).then(function (ok) { if (ok) ST.resetDemo(); });
       } }, U.icon('refresh', 14), 'Reset demo data')));
+    var actions = h('div', { class: 'sidebar-actions' }), dark = settings.theme !== 'light';
+    actions.appendChild(h('div', { class: 'chip good', role: 'status', title: 'Nodes reporting' }, U.icon('activity', 12), nodes.filter(function (n) { return n.enabled; }).length + ' of ' + nodes.length + ' nodes active'));
+    actions.appendChild(U.btn(dark ? 'Light theme' : 'Dark theme', { icon: dark ? 'sun' : 'moon', variant: 'ghost sidebar-action', title: dark ? 'Switch to light theme' : 'Switch to dark theme', onClick: ST.toggleTheme }));
+    if (!ST.demo) actions.appendChild(U.btn('Sign out', { icon: 'logout', variant: 'ghost sidebar-action', onClick: function () { ST.signOut(); } }));
+    sb.appendChild(actions);
   }
 
   function renderTopbar() {
@@ -72,15 +77,11 @@
     tb.appendChild(h('span', { class: 'row muted', style: 'gap:6px' }, U.icon('clock', 15), h('span', { class: 'hide-phone' }, 'Time range')));
     tb.appendChild(U.rangeSelect(s.range, function (v) { savePreferences({ range: v }); }));
     tb.appendChild(h('div', { class: 'spacer' }));
-    tb.appendChild(h('span', { class: 'chip good', title: 'Nodes reporting' }, U.icon('activity', 12), nodes.filter(function (n) { return n.enabled; }).length + ' of ' + nodes.length + ' nodes active'));
     tb.appendChild(U.btn('Run all tests', { icon: 'play', variant: 'primary', onClick: function () {
       var ids = nodes.filter(function (n) { return n.enabled; }).map(function (n) { return n.id; });
       if (!ids.length) { U.toast('No active nodes to test', 'error'); return; }
       U.runTestDialog(ids);
     } }));
-    var dark = s.theme !== 'light';
-    tb.appendChild(U.btn('', { icon: dark ? 'sun' : 'moon', variant: 'ghost', title: dark ? 'Switch to light theme' : 'Switch to dark theme', aria: 'Toggle theme', onClick: ST.toggleTheme }));
-    if (!ST.demo) tb.appendChild(U.btn('Sign out', { icon: 'logout', variant: 'ghost signout', onClick: function () { ST.signOut(); } }));
   }
   function closeMenu() { document.getElementById('sidebar').classList.remove('open'); }
 

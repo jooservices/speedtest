@@ -157,7 +157,15 @@
   U.failureChip = function (r) {
     if (!r || r.status !== 'failed') return null;
     var cls = r.failureClass || 'other';
-    return U.chip(U.failureClassLabel(cls), cls === 'rate_limited' ? 'warn' : 'crit');
+    var chip = U.chip(U.failureClassLabel(cls), cls === 'rate_limited' ? 'warn' : 'crit');
+    chip.classList.add('result-reason');
+    return chip;
+  };
+  U.resultStatus = function (r) {
+    var chips = h('span', { class: 'row', style: 'gap:6px' }, U.statusChip(r.status));
+    var reason = U.failureChip(r);
+    if (reason) chips.appendChild(reason);
+    return chips;
   };
   U.dot = function (color) { return h('span', { class: 'dot', style: { background: color } }); };
   U.nodeTag = function (n) { return h('span', { class: 'row', style: 'gap:7px' }, U.dot(ST.nodeColor(n)), h('span', null, n.name), h('span', { class: 'muted' }, n.label)); };
@@ -176,6 +184,13 @@
   };
 
   /* ---------- Data table ---------- */
+  function rowActionControl(action, row, content) {
+    var common = { class: 'table-row-action', onClick: function (e) { e.stopPropagation(); } };
+    if (action.label) common['aria-label'] = action.label(row);
+    if (action.href) return h('a', Object.assign(common, { href: action.href(row) }), content);
+    return h('button', Object.assign(common, { type: 'button', onClick: function (e) { e.stopPropagation(); action.onClick(row); } }), content);
+  }
+
   U.table = function (o) {
     var wrap = h('div', { class: 'table-wrap' }), t = h('table', { class: 'data' + (o.cards ? ' cards' : '') });
     var thead = h('thead'), tr = h('tr');
@@ -189,8 +204,12 @@
     var tb = h('tbody');
     o.rows.forEach(function (r) {
       var row = h('tr', { class: o.onRow ? 'clickable' : '', tabindex: o.onRow ? 0 : null, onClick: o.onRow ? function () { o.onRow(r); } : null,
-        onKeydown: o.onRow ? function (e) { if (e.key === 'Enter') o.onRow(r); } : null });
-      o.columns.forEach(function (c) { row.appendChild(h('td', { class: c.num ? 'num' : '', 'data-label': o.cards && c.label ? c.label : null }, c.render ? c.render(r) : r[c.key])); });
+        onKeydown: o.onRow ? function (e) { if (e.key === 'Enter' && e.target === e.currentTarget) o.onRow(r); } : null });
+      o.columns.forEach(function (c) {
+        var content = c.render ? c.render(r) : r[c.key];
+        if (o.rowAction && c.key === o.rowAction.column) content = rowActionControl(o.rowAction, r, content);
+        row.appendChild(h('td', { class: c.num ? 'num' : '', 'data-label': o.cards && c.label ? c.label : null }, content));
+      });
       tb.appendChild(row);
     });
     t.appendChild(tb); wrap.appendChild(t);
@@ -268,13 +287,19 @@
       h('i', { style: { width: pct + '%', background: color } }), h('b', { style: { left: (expected / max * 100) + '%' }, title: 'Expected ' + ST.fmt.speed(expected) }));
   };
   U.deltaTag = function (cur, prev, goodHigh) {
-    if (cur == null || prev == null || prev === 0) return h('span', { class: 'delta flat' }, '—');
+    if (cur == null) return h('span', { class: 'delta flat' }, 'No data');
+    if (prev == null) return h('span', { class: 'delta flat' }, 'No previous period');
+    if (prev === 0) return h('span', { class: 'delta flat' }, cur === 0 ? 'No change' : 'New this period');
     var d = (cur - prev) / Math.abs(prev) * 100, flat = Math.abs(d) < 1;
     var good = goodHigh ? d > 0 : d < 0;
-    return h('span', { class: 'delta ' + (flat ? 'flat' : good ? 'up' : 'down') }, flat ? '≈ same' : (d > 0 ? '▲ ' : '▼ ') + Math.abs(d).toFixed(1) + '%');
+    return h('span', { class: 'delta ' + (flat ? 'flat' : good ? 'up' : 'down'), title: 'Compared with the previous period',
+      'aria-label': (flat ? 'About the same' : (d > 0 ? 'Up ' : 'Down ') + Math.abs(d).toFixed(1) + '%') + ' compared with the previous period' },
+    flat ? '≈ same' : (d > 0 ? '▲ ' : '▼ ') + Math.abs(d).toFixed(1) + '%');
   };
   U.rangeSelect = function (value, onChange) {
-    return U.select(Object.keys(ST.ranges).map(function (k) { return { value: k, label: ST.rangeLabels[k] }; }), value, onChange, 'auto');
+    var select = U.select(Object.keys(ST.ranges).map(function (k) { return { value: k, label: ST.rangeLabels[k] }; }), value, onChange, 'auto');
+    select.setAttribute('aria-label', 'Time range');
+    return select;
   };
   U.legend = function (items, hidden, onToggle) {
     var wrap = h('div', { class: 'legend' });

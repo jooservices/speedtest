@@ -26,6 +26,15 @@ export function linesOf(text, mask) {
   return { lines, covered };
 }
 
+export function functionsOf(text, functions) {
+  return functions.flatMap(fn => {
+    const range = fn.ranges[0];
+    if (!range || (fn.functionName === '' && range.startOffset === 0 && range.endOffset >= text.length)) return [];
+    const line = text.slice(0, range.startOffset).split('\n').length;
+    return [{ id: `${range.startOffset}:${range.endOffset}`, name: fn.functionName || '(anonymous)', line, covered: range.count > 0 }];
+  });
+}
+
 // entries come from page.coverage.stopJSCoverage(); returns { file: { lines: [...], covered: [...] } }
 export function summarise(entries) {
   const out = {};
@@ -33,10 +42,17 @@ export function summarise(entries) {
     const m = UI.exec(new URL(e.url).pathname);
     if (!m) continue;
     const file = m[0].replace(/^\//, 'ui/');
-    const { lines, covered } = linesOf(e.source ?? '', coveredMask(e.source ?? '', e.functions));
+    const source = e.source ?? '', { lines, covered } = linesOf(source, coveredMask(source, e.functions));
+    const functions = functionsOf(source, e.functions);
     // The page is reloaded many times, so one file appears once per load: union them.
-    const o = out[file] ??= { lines: [], covered: [] };
+    const o = out[file] ??= { lines: [], covered: [], functions: [] };
     o.lines = [...new Set([...o.lines, ...lines])]; o.covered = [...new Set([...o.covered, ...covered])];
+    const merged = new Map(o.functions.map(fn => [fn.id, fn]));
+    for (const fn of functions) {
+      const previous = merged.get(fn.id);
+      merged.set(fn.id, { ...fn, covered: fn.covered || Boolean(previous && previous.covered) });
+    }
+    o.functions = [...merged.values()];
   }
   return out;
 }
@@ -51,8 +67,12 @@ export function merge(paths) {
   for (const p of paths) {
     if (!existsSync(p)) continue;
     for (const [file, v] of Object.entries(JSON.parse(readFileSync(p, 'utf8')))) {
-      const a = all[file] ??= { lines: new Set(), covered: new Set() };
+      const a = all[file] ??= { lines: new Set(), covered: new Set(), functions: new Map() };
       v.lines.forEach(l => a.lines.add(l)); v.covered.forEach(l => a.covered.add(l));
+      for (const fn of v.functions || []) {
+        const previous = a.functions.get(fn.id);
+        a.functions.set(fn.id, { ...fn, covered: fn.covered || Boolean(previous && previous.covered) });
+      }
     }
   }
   return all;
@@ -68,13 +88,19 @@ export async function trackCoverage(page) {
     const part = summarise(await page.coverage.stopJSCoverage());
     await page.coverage.startJSCoverage({ resetOnNavigation: false });
     for (const [file, v] of Object.entries(part)) {
-      const a = parts[file] ??= { lines: new Set(), covered: new Set() };
+      const a = parts[file] ??= { lines: new Set(), covered: new Set(), functions: new Map() };
       v.lines.forEach(l => a.lines.add(l)); v.covered.forEach(l => a.covered.add(l));
+      for (const fn of v.functions) {
+        const previous = a.functions.get(fn.id);
+        a.functions.set(fn.id, { ...fn, covered: fn.covered || Boolean(previous && previous.covered) });
+      }
     }
   };
   for (const method of ['goto', 'reload']) { const raw = page[method].bind(page); page[method] = async (...args) => { await take(); return raw(...args); }; }
   return { take, async finish(name) {
     await take();
-    save(join('.tmp', 'coverage', `${name}.json`), Object.fromEntries(Object.entries(parts).map(([f, v]) => [f, { lines: [...v.lines], covered: [...v.covered] }])));
+    save(join('.tmp', 'coverage', `${name}.json`), Object.fromEntries(Object.entries(parts).map(([f, v]) => [f, {
+      lines: [...v.lines], covered: [...v.covered], functions: [...v.functions.values()]
+    }])));
   } };
 }

@@ -33,7 +33,10 @@ export function authSuite(T) {
     },
 
     async signOutEndsSession() {
-      await T.signOut();
+      await page.setViewportSize({ width: 390, height: 844 });
+      await page.getByRole('button', { name: 'Open menu' }).click();
+      await page.locator('.sidebar.open').getByRole('button', { name: 'Sign out' }).click();
+      await T.heading('Sign in').waitFor();
       await page.goto(T.url('#/nodes'));
       await T.heading('Sign in').waitFor({ timeout: 15000 });
       assert.equal((await T.api('/api/nodes')).status, 401, 'the API refuses a signed-out visitor');

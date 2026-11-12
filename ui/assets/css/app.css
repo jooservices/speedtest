@@ -116,7 +116,9 @@ button, input, select, textarea { font: inherit; color: inherit; }
 }
 .topbar .spacer { flex: 1; }
 .topbar .menu-btn { display: none; }
-.topbar .btn.signout svg { display: none; }
+.sidebar-actions { display: grid; gap: 8px; margin-top: auto; padding: 10px 6px 4px; border-top: 1px solid var(--line); }
+.sidebar-actions .chip { justify-content: flex-start; white-space: normal; }
+.sidebar-actions .sidebar-action { width: 100%; justify-content: flex-start; }
 .content { padding: 24px 28px 56px; max-width: 1480px; width: 100%; margin: 0 auto; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 20px; flex-wrap: wrap; }
 .page-head p { color: var(--text-2); margin-top: 2px; }
@@ -198,6 +200,7 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; }
 .chip.warn { background: var(--warn-soft); color: var(--warn); }
 .chip.crit { background: var(--crit-soft); color: var(--crit); }
 .chip.info { background: var(--info-soft); color: var(--accent-strong); }
+.result-reason { max-width: 180px; overflow: hidden; text-overflow: ellipsis; }
 .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: none; }
 .badge { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 99px; background: var(--crit); color: #fff; font-size: 11.5px; font-weight: 700; display: inline-grid; place-items: center; }
 
@@ -218,6 +221,9 @@ textarea.input { height: auto; padding: 8px 10px; resize: vertical; }
 
 /* ---------- Tables ---------- */
 .table-wrap { overflow-x: auto; }
+.table-row-action { color: var(--accent-strong); font: inherit; text-align: left; text-decoration: underline; text-underline-offset: 2px; }
+button.table-row-action { border: 0; background: none; padding: 0; cursor: pointer; }
+.table-row-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 3px; }
 table.data { width: 100%; border-collapse: collapse; }
 table.data th { text-align: left; font-weight: 600; font-size: 12.5px; color: var(--muted); padding: 9px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; user-select: none; }
 table.data th.sortable { cursor: pointer; }
@@ -402,13 +408,10 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
 }
 @media (max-width: 560px) {
   .topbar { flex-wrap: nowrap; gap: 6px; padding-left: 12px; padding-right: 12px; }
-  .topbar .hide-phone, .topbar .chip { display: none; }
+  .topbar .hide-phone { display: none; }
   .topbar .btn.primary { white-space: nowrap; gap: 0; }
   .topbar .btn.primary svg { display: none; }
   .topbar select { min-width: 0; max-width: 7.5em; }
-  /* Sign out keeps its text for screen readers but shows only the icon on a phone. */
-  .topbar .btn.signout { font-size: 0; gap: 0; padding-left: 8px; padding-right: 8px; }
-  .topbar .btn.signout svg { display: inline-block; }
   .cols-5, .cols-4 { grid-template-columns: 1fr; }
   .speeds { grid-template-columns: 1fr 1fr; }
   .kv { grid-template-columns: 1fr; }
@@ -432,7 +435,7 @@ pre.code { background: var(--surface-2); border: 1px solid var(--line); border-r
 .topbar .row.muted { white-space: nowrap; }
 .topbar select { min-width: 8.5em; }
 .leaflet-control-attribution { background: color-mix(in srgb, var(--surface) 88%, transparent) !important; color: var(--text-2) !important; }
-.leaflet-control-attribution a { color: var(--accent-strong) !important; }
+.leaflet-control-attribution a { color: var(--accent-strong) !important; text-decoration: underline; }
 
 /* Tables marked "cards" (the node list) turn each row into a card on phones instead of scrolling sideways. */
 @media (max-width: 640px) {

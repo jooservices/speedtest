@@ -9,6 +9,7 @@ All notable changes to Speedtest are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- UI/UX improvements (JOOST-82): failure-class chips in result tables, KPI comparison with the previous period, a one-row mobile top bar, a download icon on exports, a not-enough-data note with expected-speed reference lines on sparse charts, upload percentage of expected in the Nodes table, the engine selector, keyboard fixes and an automated axe accessibility check in the E2E suite.
 - Statistics analytics now include p50/p95/p99, an ISP filter, a fixed-window heatmap, week-over-week means and bounded IP/ISP/alert events.
 - JOOST-83 (B1): Go function complexity limits, a systemd installer test, UI JavaScript type checking, per-package test timing budgets, and a flaky-test log.
 - Monthly ISP and plan report (JOOST-79): per-ISP/per-node metrics, destination-attributed IP changes, an explicit unknown-attribution row, a Unicode PDF and CSV export, a populated UI preview, and optional previous-month e-mail with a renewable lease and stale-claim recovery.

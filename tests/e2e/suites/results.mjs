@@ -7,6 +7,10 @@ export function resultsSuite(T) {
       await page.getByRole('columnheader', { name: 'Data used' }).waitFor();
       const status = T.selectWith('Any status');
       await status.selectOption('failed');
+      const reason = page.locator('.result-reason').first();
+      await reason.waitFor();
+      const reasonText = await reason.innerText();
+      assert.ok(reasonText.length > 0 && reasonText.length <= 32, 'failed rows show a short reason chip: ' + reasonText);
       const failed = await page.locator('text=/\\d[\\d,]* results?/').first().innerText();
       assert.ok(/^(\d+) results?$/.test(failed.replace(/,/g, '')) && Number.parseInt(failed, 10) < 1680, `status filter: ${failed}`);
       await page.getByRole('row').nth(1).click();
@@ -19,7 +23,11 @@ export function resultsSuite(T) {
       await T.see('0 results');
       await T.fill('Minimum download', '');
       await T.fill('Search results', '');
-      await page.getByRole('row').nth(1).click();
+      assert.equal(await page.getByRole('table').count(), 1, 'the results list keeps table semantics');
+      const firstResult = page.getByRole('row').nth(1), openResult = firstResult.getByRole('button', { name: /Open result details for/ });
+      assert.equal(await openResult.count(), 1, 'the result row exposes its primary action in the accessibility tree');
+      await openResult.focus();
+      await page.keyboard.press('Enter');
       await page.getByRole('dialog').or(page.locator('.drawer')).first().waitFor();
       await T.see('Data used');
       await T.dismiss();

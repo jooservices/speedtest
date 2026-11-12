@@ -62,14 +62,12 @@
             return h('span', { class: 'row wrap' }, s.name + (s.city ? ', ' + s.city : ''), differs ? U.chip('Different from pinned', 'warn', 'alert') : null);
           } },
           { key: 'ip', label: 'Public IP', sort: true, render: function (r) { return h('span', { class: 'mono' }, r.ip); } },
-          { key: 'status', label: 'Status', sort: true, render: function (r) {
-            var chips = h('span', { class: 'row', style: 'gap:6px' }, U.statusChip(r.status));
-            var reason = U.failureChip(r);
-            if (reason) chips.appendChild(reason);
-            return chips;
-          } }],
+          { key: 'status', label: 'Status', sort: true, render: U.resultStatus }],
         rows: slice, sortKey: q.sort, sortDir: q.dir, onSort: function (k) { if (q.sort === k) q.dir = q.dir === 'asc' ? 'desc' : 'asc'; else { q.sort = k; q.dir = k === 'ts' ? 'desc' : 'asc'; } draw(); },
-        onRow: function (r) { ST.openResult(r); },
+        onRow: function (r) { ST.openResult(r); }, rowAction: {
+          column: 'ts', label: function (r) { var n = ST.node(r.nodeId); return 'Open result details for ' + (n ? n.name : 'unknown node') + ' at ' + F.date(r.ts); },
+          onClick: function (r) { ST.openResult(r); }
+        },
         empty: U.empty('No results match', 'Try a wider time range or clear some filters.', U.btn('Clear filters', { onClick: function () {
           q.allNodes = true; q.nodes = nodes.map(function (n) { return n.id; }); q.status = 'all'; q.ispId = ''; q.text = ''; q.minDown = ''; q.maxDown = ''; q.page = 1;
           if (statusSelect) statusSelect.value = 'all';
@@ -81,8 +79,10 @@
           draw();
         } }))
       }));
+      var pageSize = U.select([10, 25, 50, 100], q.size, function (v) { q.size = +v; q.page = 1; draw(); }, 'auto');
+      pageSize.setAttribute('aria-label', 'Rows per page');
       var pager = h('div', { class: 'pager' },
-        h('span', { class: 'row' }, 'Rows per page', U.select([10, 25, 50, 100], q.size, function (v) { q.size = +v; q.page = 1; draw(); }, 'auto')),
+        h('span', { class: 'row' }, 'Rows per page', pageSize),
         h('span', { class: 'muted tabnum' }, rows.length ? ((q.page - 1) * q.size + 1) + '–' + Math.min(rows.length, q.page * q.size) + ' of ' + F.num(rows.length) : '0 of 0'),
         h('span', { class: 'row' },
           U.btn('', { icon: 'chevron', size: 'sm', title: 'Previous page', disabled: q.page <= 1, onClick: function () { q.page--; draw(); } }),
@@ -120,6 +120,7 @@
           h('div', { style: 'width:280px;position:relative' }, (searchInput = U.input(q.text, function (v) { q.text = v; q.page = 1; draw(); }, { type: 'search', placeholder: 'Search IP, server, city, error', 'aria-label': 'Search results' })))),
         countHost),
       nodeBox);
+    statusSelect.setAttribute('aria-label', 'Result status');
     root.appendChild(filters);
     root.appendChild(h('div', { class: 'card' }, listHost));
     draw();
