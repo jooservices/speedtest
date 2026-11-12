@@ -2,7 +2,7 @@
    Everything is generated in the browser — there is no backend in this preview. */
 (function () {
   'use strict';
-  var ST = (window.ST = window.ST || {});
+  var ST = ((/** @type {any} */ (window)).ST = (/** @type {any} */ (window)).ST || {});
 
   function hash32(str) {
     var h = 2166136261;

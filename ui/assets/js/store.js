@@ -1,7 +1,7 @@
 /* State, persistence (localStorage), formatting, queries, statistics, alert evaluation. */
 (function () {
   'use strict';
-  var ST = window.ST;
+  var ST = (/** @type {any} */ (window)).ST;
   var KEY = 'st.demo.v1';
   ST.demo = new URLSearchParams(location.search).get('demo') === '1';
   var MIN = 60000, HOUR = 3600000, DAY = 86400000;
@@ -37,7 +37,7 @@
     ];
   };
 
-  var state = ST.state = { nodes: [], results: [], isps: [], settings: defaultSettings(), rules: defaultRules(), acked: {}, events: [], now: Date.now() };
+  var state = /** @type {any} */ (ST.state = { nodes: [], results: [], isps: [], settings: defaultSettings(), rules: defaultRules(), acked: {}, events: [], now: Date.now() });
 
   function load() {
     var saved = {};
@@ -174,7 +174,7 @@
   ST.server = function (id) { return ST.servers.filter(function (s) { return s.id === id; })[0] || { id: id, name: 'Unknown server', city: '', sponsor: '' }; };
 
   /* ---------- Statistics ---------- */
-  var S = ST.stats = {};
+  var S = /** @type {any} */ (ST.stats = {});
   S.mean = function (a) { return a.length ? a.reduce(function (x, y) { return x + y; }, 0) / a.length : null; };
   S.sum = function (a) { return a.reduce(function (x, y) { return x + y; }, 0); };
   S.pct = function (sorted, p) {
@@ -321,7 +321,7 @@
   ST.ackAll = function () { state.events.forEach(function (e) { state.acked[e.id] = 1; }); persist(); ST.recomputeEvents(); ST.emit('data'); };
 
   /* ---------- Formatting ---------- */
-  var F = ST.fmt = {};
+  var F = /** @type {any} */ (ST.fmt = {});
   function tz() { var t = state.settings.timezone; return t === 'browser' ? undefined : t; }
   var dtCache = {};
   function dtf(opts) {
