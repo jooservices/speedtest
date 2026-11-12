@@ -29,7 +29,9 @@ export function scenarios({ T, S }) {
 
     { id: 'SC-STAT-01', area: 'statistics', title: 'statistics show the center figures', covers: '/api/stats summary on the page', run: S.statistics.summaryMatchesApi },
     { id: 'SC-STAT-02', area: 'statistics', title: 'every statistics control works', covers: 'metric tabs, chips, combined total, table, heat map, range', run: S.statistics.everyControl },
-    { id: 'SC-STAT-03', area: 'statistics', title: 'demo statistics explain excluded rate-limited tests', covers: 'demo Statistics table and node detail show mixed and all-rate-limited counts', run: S.statistics.demoRateLimitExclusions },
+    { id: 'SC-STAT-03', area: 'statistics', title: 'analytics filters, percentiles, weekly comparison, heatmap and event cap work', covers: 'center percentile and week figures, ISP filter across every statistics request, empty heatmap, accessible cells, 500-event list/status semantics', run: S.statistics.analyticsFiltersEventsAndHeatmap },
+    { id: 'SC-STAT-04', area: 'statistics', title: 'demo analytics match and remote errors can be retried', covers: 'demo percentile/week parity and numeric-epoch event marker positions/types, retry after events endpoint failure, 390/768/1440 layout in both themes', run: S.statistics.demoParityAndRetry },
+    { id: 'SC-STAT-05', area: 'statistics', title: 'demo statistics explain excluded rate-limited tests', covers: 'demo Statistics table and node detail show mixed and all-rate-limited counts', run: S.statistics.demoRateLimitExclusions },
 
     { id: 'SC-IP-01', area: 'ip', title: 'the map, lookup and address details work', covers: 'map, lookup, details', run: S.network.mapLookupAndDetails },
     { id: 'SC-IP-02', area: 'ip', title: 'the IP page filters by node and lists address changes', covers: 'node filter, change timeline', run: S.network.filterAndHistory },
