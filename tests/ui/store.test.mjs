@@ -50,6 +50,53 @@ test('demo mode seeds and persists locally without making API calls', () => {
   ST.updateNode('n1', { name: 'Local demo' });
   assert.equal(ST.node('n1').name, 'Local demo'); assert.ok(storage.has('st.demo.v1'));
 });
+test('percentiles and week changes use interpolated values and preserve undefined cases', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  const summary = ST.stats.summary([10, 20, 30, 40, 50]);
+  assert.equal(summary.p50, 30); assert.equal(summary.median, summary.p50);
+  assert.equal(summary.p95, 48); assert.equal(summary.p99, 49.6);
+  assert.equal(ST.stats.summary([]).p50, null); assert.equal(ST.stats.summary([]).p99, null);
+  assert.equal(ST.stats.summary([7]).p50, 7); assert.equal(ST.stats.summary([7]).p99, 7);
+  assert.equal(ST.stats.weekChange(120, 100), 20);
+  assert.equal(ST.stats.weekChange(100, 0), null); assert.equal(ST.stats.weekChange(null, 100), null);
+});
+test('effective ISP prefers the trimmed engine value and falls back to cached IP organisation', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  assert.equal(ST.stats.effectiveISP({ engineISP: '  Engine ISP  ', ip: '203.0.113.9' }), 'Engine ISP');
+  assert.equal(ST.stats.effectiveISP({ engineISP: ' ', ip: '203.0.113.9' }), 'Viettel Group');
+  assert.equal(ST.stats.effectiveISP({ ip: '192.0.2.99' }), 'VNPT Corp');
+  assert.equal(ST.stats.effectiveISP({ status: 'failed', failureClass: 'rate_limited', ip: null }), null);
+  assert.equal(ST.stats.effectiveISP({ ip: '203.0.114.9' }), null);
+  const filtered = ST.results({ nodeIds: ['n1'], isp: 'viettel group' });
+  assert.ok(filtered.length > 0);
+  assert.ok(filtered.every(result => ST.stats.effectiveISP(result).toLowerCase() === 'viettel group'));
+  assert.equal(ST.results({ nodeIds: ['n1'], isp: 'unknown isp' }).length, 0);
+});
+test('demo IP marks compare known results within one engine across nulls and range edges', () => {
+  const { ST } = runtime('http://localhost', { demo: true });
+  const interleaved = [
+    { id: 'a', ts: 1, engine: 'ookla', ip: '203.0.113.1' },
+    { id: 'b', ts: 2, engine: 'librespeed', ip: '203.0.113.2' },
+    { id: 'c', ts: 3, engine: 'ookla', ip: '203.0.113.1' },
+    { id: 'd', ts: 4, engine: 'ookla', ip: '203.0.113.1' },
+    { id: 'e', ts: 5, engine: 'librespeed', ip: '203.0.113.2' },
+    { id: 'f', ts: 6, engine: 'ookla', ip: '203.0.113.2' },
+  ];
+  const interleavedChanges = Array.from(ST.stats.ipChanges(interleaved, 'ookla', 0, 7), change => [change.from, change.result.ip]);
+  assert.equal(JSON.stringify(interleavedChanges), JSON.stringify([['203.0.113.1', '203.0.113.2']]));
+  const boundaryAndNull = [
+    { id: 'before', ts: 0, engine: 'ookla', ip: '203.0.113.3' },
+    { id: 'start', ts: 1, engine: 'ookla', ip: '203.0.113.4' },
+    { id: 'null', ts: 2, engine: 'ookla', ip: null },
+    { id: 'after-null', ts: 3, engine: 'ookla', ip: '203.0.113.5' },
+    { id: 'end', ts: 5, engine: 'ookla', ip: '203.0.113.6' },
+  ];
+  const boundaryChanges = Array.from(ST.stats.ipChanges(boundaryAndNull, 'ookla', 1, 5), change => [change.result.id, change.from, change.result.ip]);
+  assert.equal(JSON.stringify(boundaryChanges), JSON.stringify([
+    ['start', '203.0.113.3', '203.0.113.4'],
+    ['after-null', '203.0.113.4', '203.0.113.5'],
+  ]));
+});
 test('engine selector updates the selected engine and refreshes demo data', () => {
   const { ST } = runtime('http://localhost', { demo: true });
   let refreshes = 0;
@@ -241,6 +288,8 @@ test('remote schedules, rules, stagger, key rotation, agent update, manual tests
   await ST.load();
   assert.equal(ST.scheduleInfo().rules.maxConcurrent, 1);
   assert.equal(ST.scheduleInfo().nodes[0].nodeId, data.node.id);
+  assert.equal(JSON.stringify(ST.engineSchedules(data.node)), JSON.stringify([{ engine: 'ookla', interval: 30, offset: 0, enabled: true }]));
+  assert.equal(ST.engineSchedules({ id: 'unconfigured' }).length, 0);
   await ST.saveSchedule(data.node.id, { interval: 60, offset: 5, enabled: true });
   const put = control.requests.find(r => r.method === 'PUT' && r.path === '/api/schedules/' + data.node.id);
   assert.deepEqual(put.body, { interval: 60, offset: 5, enabled: true }); assert.equal(put.headers['if-match'], '"fixture-v1"');
