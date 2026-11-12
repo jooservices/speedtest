@@ -45,6 +45,9 @@ func (s *Store) replaceEngines(ctx context.Context, id string, engines []EngineS
 	if nodeScheduleETag(rows) != tag {
 		return nil, "", ErrStale
 	}
+	if err := s.publishWidenedSchedules(ctx, tx, id, rows, engines); err != nil {
+		return nil, "", err
+	}
 	for _, e := range engines {
 		if !slices.Contains(installed, e.Engine) {
 			return nil, "", ErrInvalid

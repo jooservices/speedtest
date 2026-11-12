@@ -24,7 +24,7 @@ func TestHTTPSenders(t *testing.T) {
 				body   string
 				ok     bool
 			}{{200, `{"ok":true}`, true}, {204, ``, channel != "telegram"}, {200, `{"ok":false}`, channel != "telegram"}, {200, `invalid`, channel != "telegram"}, {302, `secret`, false}, {429, `secret`, false}, {500, `secret`, false}} {
-				var got map[string]string
+				var got map[string]any
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.Method != "POST" || r.Header.Get("Content-Type") != "application/json" {
 						t.Error("HTTP request contract")
@@ -49,11 +49,20 @@ func TestHTTPSenders(t *testing.T) {
 				if (err == nil) != result.ok {
 					t.Fatalf("status %d body %s: err=%v", result.status, result.body, err)
 				}
-				if got["text"] != "test message" {
-					t.Fatal("message payload")
-				}
-				if channel == "telegram" && got["chat_id"] != "123" {
-					t.Fatal("Telegram chat")
+				switch channel {
+				case "telegram":
+					if got["text"] != "test message" || got["chat_id"] != "123" || got["parse_mode"] != "HTML" {
+						t.Fatal("Telegram payload")
+					}
+				case "slack":
+					blocks, ok := got["blocks"].([]any)
+					if !ok || len(blocks) != 1 {
+						t.Fatal("Slack blocks payload")
+					}
+				case "webhook":
+					if got["text"] != "test message" {
+						t.Fatal("webhook fallback payload")
+					}
 				}
 				if err != nil && err.Error() != "notification transport failed" {
 					t.Fatal("unsafe transport error")
@@ -80,11 +89,37 @@ func TestHTTPFailureAndCancellation(t *testing.T) {
 	}
 }
 
+func TestWebhookSendsConfiguredJSONWithoutWrapping(t *testing.T) {
+	var received map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&received); err != nil {
+			t.Error(err)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	body := `{"event":"test.success","node":"quote \" slash \\\\ newline\\n","metrics":{"download":12}}`
+	if err := (&Transport{Client: srv.Client()}).Send(t.Context(), "webhook", "", srv.URL, body); err != nil {
+		t.Fatal(err)
+	}
+	if received["event"] != "test.success" || received["node"] != `quote " slash \\ newline\n` {
+		t.Fatalf("receiver got wrapped or altered JSON: %#v", received)
+	}
+}
+
 func TestMessageAndBackoff(t *testing.T) {
 	since := time.Date(2026, 11, 3, 10, 0, 0, 0, time.FixedZone("local", 7*3600))
 	got := Message("Speed\nlow", "Node\rOne", since, "https://dashboard.example/")
 	if got != "Speed low — Node One\nSince 2026-11-03T03:00:00Z\nhttps://dashboard.example/#/alerts" {
 		t.Fatal(got)
+	}
+	// An optional detail (the old and the new address of an IP change) sits under the title; blank or multi-line details are tidied.
+	detailed := Message("Public IP changed", "Home", since, "https://dashboard.example/", "Changed from 203.0.113.1 to 203.0.113.2\n(Hanoi)")
+	if detailed != "Public IP changed — Home\nChanged from 203.0.113.1 to 203.0.113.2 (Hanoi)\nSince 2026-11-03T03:00:00Z\nhttps://dashboard.example/#/alerts" {
+		t.Fatal(detailed)
+	}
+	if Message("x", "n", since, "https://d/", "  ") != Message("x", "n", since, "https://d/") {
+		t.Fatal("a blank detail must not add a line")
 	}
 	for n, want := range map[int]time.Duration{-1: time.Minute, 0: time.Minute, 1: time.Minute, 2: 2 * time.Minute, 6: 32 * time.Minute, 7: time.Hour, 8: time.Hour, 100: time.Hour} {
 		if Backoff(n) != want {

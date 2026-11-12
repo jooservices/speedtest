@@ -23,6 +23,36 @@ type fakeAudit struct {
 	filter  audit.Filter
 }
 
+type eventRecord struct {
+	key     string
+	nodeID  string
+	payload map[string]string
+}
+
+type fakeNotificationEvents struct {
+	published []eventRecord
+	signIns   int
+	failures  int
+	userKey   string
+	signInIP  string
+	failureIP string
+}
+
+func (f *fakeNotificationEvents) PublishEvent(_ context.Context, key, nodeID string, payload map[string]string) error {
+	f.published = append(f.published, eventRecord{key: key, nodeID: nodeID, payload: payload})
+	return nil
+}
+func (f *fakeNotificationEvents) RecordSignIn(_ context.Context, userKey, ip string) error {
+	f.signIns++
+	f.userKey, f.signInIP = userKey, ip
+	return nil
+}
+func (f *fakeNotificationEvents) RecordLoginFailure(_ context.Context, ip string) error {
+	f.failures++
+	f.failureIP = ip
+	return nil
+}
+
 func (f *fakeAudit) Record(_ context.Context, e audit.Entry) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -73,7 +103,7 @@ func TestAuditRecordsSuccessfulOwnerWritesOnly(t *testing.T) {
 func TestAuditDistinguishesBearerCredentials(t *testing.T) {
 	store := &fakeAudit{}
 	write := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusCreated) })
-	handler := withAudit(write, store, &serverAuth{}, nil)
+	handler := withAudit(write, store, &serverAuth{}, nil, nil)
 	credentials := []string{"10000000-0000-4000-8000-000000000101", "10000000-0000-4000-8000-000000000102"}
 	for _, credentialID := range credentials {
 		request := httptest.NewRequest(http.MethodPost, "/api/nodes", nil)
@@ -99,17 +129,39 @@ func TestAuditDistinguishesBearerCredentials(t *testing.T) {
 
 func TestAuditRecordsCreatedTokenTarget(t *testing.T) {
 	store := &fakeAudit{}
+	events := &fakeNotificationEvents{}
 	createdID := "10000000-0000-4000-8000-000000000103"
 	create := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		setAuditTargetID(r.Context(), createdID)
 		w.WriteHeader(http.StatusCreated)
 	})
-	handler := withAudit(create, store, &serverAuth{service: nodeTestAuth{}}, nil)
+	handler := withAudit(create, store, &serverAuth{service: nodeTestAuth{}}, events, nil)
 	request := httptest.NewRequest(http.MethodPost, "/api/access-tokens", nil)
 	ownerWrite(request)
 	handler.ServeHTTP(httptest.NewRecorder(), request)
 	if len(store.entries) != 1 || store.entries[0].TargetID != createdID || store.entries[0].AuthMethod != audit.AuthMethodSession {
 		t.Fatalf("token creation entry = %+v", store.entries)
+	}
+	if len(events.published) != 1 || events.published[0].key != "security.api_token_created" || events.published[0].nodeID != "" {
+		t.Fatalf("token creation notification = %+v", events.published)
+	}
+}
+
+func TestAuditNotificationMappingContainsNoRequestSecrets(t *testing.T) {
+	for action, want := range map[string][2]string{
+		"auth.password":           {"security.password_changed", ""},
+		"access_token.create":     {"security.api_token_created", ""},
+		"auth.two_factor_enable":  {"security.2fa_changed", "enabled"},
+		"auth.two_factor_disable": {"security.2fa_changed", "disabled"},
+		"node.update":             {"", ""},
+	} {
+		key, value := auditNotification(action)
+		if key != want[0] || value != want[1] {
+			t.Errorf("%s = %q/%q, want %q/%q", action, key, value, want[0], want[1])
+		}
+	}
+	if key, value := auditNotification("auth.password"); key == "" || value != "" {
+		t.Fatalf("password notification unexpectedly includes user input: %q %q", key, value)
 	}
 }
 

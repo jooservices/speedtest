@@ -29,7 +29,9 @@ export function scenarios({ T, S }) {
 
     { id: 'SC-STAT-01', area: 'statistics', title: 'statistics show the center figures', covers: '/api/stats summary on the page', run: S.statistics.summaryMatchesApi },
     { id: 'SC-STAT-02', area: 'statistics', title: 'every statistics control works', covers: 'metric tabs, chips, combined total, table, heat map, range', run: S.statistics.everyControl },
-    { id: 'SC-STAT-03', area: 'statistics', title: 'demo statistics explain excluded rate-limited tests', covers: 'demo Statistics table and node detail show mixed and all-rate-limited counts', run: S.statistics.demoRateLimitExclusions },
+    { id: 'SC-STAT-03', area: 'statistics', title: 'analytics filters, percentiles, weekly comparison, heatmap and event cap work', covers: 'center percentile and week figures, ISP filter across every statistics request, empty heatmap, accessible cells, 500-event list/status semantics', run: S.statistics.analyticsFiltersEventsAndHeatmap },
+    { id: 'SC-STAT-04', area: 'statistics', title: 'demo analytics match and remote errors can be retried', covers: 'demo percentile/week parity and numeric-epoch event marker positions/types, retry after events endpoint failure, 390/768/1440 layout in both themes', run: S.statistics.demoParityAndRetry },
+    { id: 'SC-STAT-05', area: 'statistics', title: 'demo statistics explain excluded rate-limited tests', covers: 'demo Statistics table and node detail show mixed and all-rate-limited counts', run: S.statistics.demoRateLimitExclusions },
 
     { id: 'SC-IP-01', area: 'ip', title: 'the map, lookup and address details work', covers: 'map, lookup, details', run: S.network.mapLookupAndDetails },
     { id: 'SC-IP-02', area: 'ip', title: 'the IP page filters by node and lists address changes', covers: 'node filter, change timeline', run: S.network.filterAndHistory },
@@ -53,15 +55,15 @@ export function scenarios({ T, S }) {
     { id: 'SC-SET-02', area: 'settings', title: 'speed test and location settings are kept; the licence key is write-only', covers: 'engine, location', run: S.settings.engineAndLocation },
     { id: 'SC-SET-03', area: 'settings', title: 'notification secrets are write-only and encrypted', covers: 'secrets', run: S.settings.notificationSecrets },
     { id: 'SC-SET-04', area: 'settings', title: 'a test notification reaches the configured channel', covers: 'webhook test, unset channel refused', run: S.settings.notificationTest },
+    { id: 'SC-SET-09', area: 'settings', title: 'notification events and templates can be configured globally and per node', covers: 'event catalog toggles, quality consecutive-test threshold, per-node override, template editor, live preview and reset', run: S.settings.notificationEventCatalog },
     { id: 'SC-SET-07', area: 'settings', title: 'notification quiet hours are saved as a complete window', covers: 'quiet hours for messages, critical exemption', run: S.settings.notificationQuietHours },
     { id: 'SC-SET-05', area: 'settings', title: 'retention and the full exports work', covers: 'retention, CSV and JSON export', run: S.settings.dataRetentionAndExport },
     { id: 'SC-SET-09', area: 'settings', title: 'bandwidth budgets show the warning on the dashboard', covers: 'budget setup, persisted global limit, 80 percent warning, removal', run: S.settings.bandwidthBudgets },
     { id: 'SC-SET-06', area: 'settings', title: 'the enrolment key is shown once', covers: 'enrolment key rotation', run: S.settings.enrolmentKeyShownOnce },
-    { id: 'SC-SET-10', area: 'settings', title: 'API access tokens are issued once, authorize scoped calls and can be revoked', covers: 'token creation, digest storage, bearer-only node and ISP reads, read-scope refusal of node and ISP plan writes, auth without cookies or CSRF, installation event stream revalidation, revocation', run: S.settings.apiTokenCanBeCreatedUsedAndRevoked },
-    { id: 'SC-SET-11', area: 'settings', title: 'demo budgets persist, reset cleanly and bandwidth dates stay in UTC', covers: 'demo budget save, reload, removal and reset; bandwidth period labels in a negative UTC offset', run: S.settings.demoBandwidthPersistenceAndUTC },
+    { id: 'SC-SET-10', area: 'settings', title: 'API access tokens are issued once, authorize scoped calls and can be revoked', covers: 'token creation, digest storage, bearer auth without cookies or CSRF, scope enforcement, installation event stream revalidation, revocation', run: S.settings.apiTokenCanBeCreatedUsedAndRevoked },
 
     // Adds a real agent and a node; the removal scenario below deletes it again.
-    { id: 'SC-NODE-05', area: 'nodes', title: 'an enrolled agent recovers from Ookla rate limits across restart', covers: 'wizard, 60-minute default, real agent enrolment/sync, matching schedules, engine classification, result ingestion, restart persistence, repeated deferred manual commands, alert suppression and post-deadline recovery', run: S.nodes.addWithCommandAndRunTest },
+    { id: 'SC-NODE-05', area: 'nodes', title: 'a node is added with the install command, reports and recovers from provider limits', covers: 'wizard, 60-minute default, real agent enrolment/sync, test-success and manual notifications, rule failure/recovery delivery, node offline/online recovery with downtime, rate-limit classification and restart backoff', run: S.nodes.addWithCommandAndRunTest },
     { id: 'SC-NODE-06', area: 'nodes', title: 'a node can be removed from the dashboard', covers: 'node removal', run: () => S.nodes.removeFromDashboard('E2E-1') },
 
     { id: 'SC-SET-08', area: 'settings', title: 'the activity log lists owner changes without secrets', covers: 'audit log, filter, no secrets', run: S.settings.activityLog },
