@@ -19,7 +19,7 @@ INSERT INTO ip_addresses (ip,geo,source,looked_up_at,isp_id) VALUES
  ('198.51.100.21','{"city":"Da Nang","region":"Da Nang","country":"VN","latitude":16.0544,"longitude":108.2022,"time_zone":"Asia/Ho_Chi_Minh","accuracy_radius":50,"asn":45899,"organisation":"VNPT"}','GeoLite2',now(),'22000000-0000-4000-8000-000000000002'),
  ('198.51.100.22','{"city":"Hue","region":"Thua Thien Hue","country":"VN","latitude":16.4637,"longitude":107.5909,"time_zone":"Asia/Ho_Chi_Minh","accuracy_radius":50,"asn":45899,"organisation":"VNPT"}','GeoLite2',now(),'22000000-0000-4000-8000-000000000002'),
  ('203.0.113.99','{"city":"Hanoi","region":"Hanoi","country":"VN","latitude":21.0285,"longitude":105.8542,"time_zone":"Asia/Ho_Chi_Minh","accuracy_radius":20,"asn":4294967295,"organisation":"Boundary Network Ltd."}','GeoLite2',now(),'22000000-0000-4000-8000-000000000003');
-INSERT INTO results (id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,loss_percent,server_id,server,ip,threads,bytes_down,bytes_up,duration_seconds,error,isp_id)
+INSERT INTO results (id,node_id,ts,status,down_mbps,up_mbps,ping_ms,jitter_ms,loss_percent,server_id,server,ip,threads,bytes_down,bytes_up,duration_seconds,error,engine_isp,isp_id)
 SELECT gen_random_uuid(), n.id, now() - (g * interval '30 minutes') - (n.color_slot * interval '1 minute'),
   CASE WHEN g % 97 = 0 THEN 'failed' WHEN g % 41 = 0 THEN 'degraded' ELSE 'ok' END,
   CASE WHEN g % 97 = 0 THEN NULL WHEN n.color_slot = 5 THEN 123.4 ELSE n.expected_down_mbps * (0.62 + 0.33 * abs(sin(g / 7.0 + n.color_slot))) END,
@@ -32,18 +32,20 @@ SELECT gen_random_uuid(), n.id, now() - (g * interval '30 minutes') - (n.color_s
   CASE WHEN n.color_slot <= 2 THEN (CASE WHEN g > 150 THEN '203.0.113.11' ELSE '203.0.113.12' END)::inet WHEN n.color_slot = 5 THEN '203.0.113.99'::inet ELSE (CASE WHEN g > 200 THEN '198.51.100.21' ELSE '198.51.100.22' END)::inet END,
   4, 400000000 + g, 50000000 + g, 28.0,
   CASE WHEN g % 97 = 0 THEN 'The test server did not answer in time' END,
+  CASE WHEN n.color_slot=1 THEN CASE WHEN g > 150 THEN 'Carrier A' ELSE 'Carrier B' END END,
   CASE WHEN n.color_slot <= 2 THEN '22000000-0000-4000-8000-000000000001'::uuid WHEN n.color_slot = 5 THEN '22000000-0000-4000-8000-000000000003'::uuid ELSE '22000000-0000-4000-8000-000000000002'::uuid END
 FROM nodes n CROSS JOIN generate_series(0, 335) g;
 INSERT INTO node_ip_addresses (node_id, ip, tests, first_seen, last_seen, speed_tests, down_sum, up_sum)
 SELECT node_id, ip, count(*), min(ts), max(ts), count(*) FILTER (WHERE status <> 'failed'), coalesce(sum(down_mbps::numeric),0), coalesce(sum(up_mbps::numeric),0) FROM results GROUP BY node_id, ip;
 INSERT INTO node_ip_history (id,node_id,ts,from_ip,to_ip)
-SELECT gen_random_uuid(), node_id, first_seen, NULL, ip FROM node_ip_addresses a WHERE first_seen = (SELECT min(first_seen) FROM node_ip_addresses b WHERE b.node_id = a.node_id);
-INSERT INTO node_ip_history (id,node_id,ts,from_ip,to_ip)
-SELECT gen_random_uuid(), a.node_id, a.first_seen, (SELECT ip FROM node_ip_addresses b WHERE b.node_id = a.node_id AND b.first_seen < a.first_seen ORDER BY first_seen DESC LIMIT 1), a.ip
-FROM node_ip_addresses a WHERE a.first_seen > (SELECT min(first_seen) FROM node_ip_addresses b WHERE b.node_id = a.node_id);
+SELECT id,node_id,ts,previous_ip,ip FROM (
+  SELECT id,node_id,ts,ip,lag(ip) OVER (PARTITION BY node_id ORDER BY ts,id) AS previous_ip
+  FROM results WHERE ip IS NOT NULL
+) timeline WHERE previous_ip IS DISTINCT FROM ip;
 INSERT INTO alert_rules (id,name,metric,op,value,for_tests,severity,channels,enabled) VALUES
  ('20000000-0000-4000-8000-000000000001','Download below 50% of expected','down_pct','<',50,3,'warn',ARRAY['email'],true),
  ('20000000-0000-4000-8000-000000000002','Test failed twice in a row','failed','=',1,2,'crit',ARRAY['email','telegram'],true);
-INSERT INTO alert_events (id,rule_id,node_id,severity,ts,title,detail,acked,isp_id) VALUES
- (gen_random_uuid(),'20000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000003','warn',now() - interval '5 hours','VM3 download is slow','Download stayed below 50% of the expected speed for 3 tests',false,'22000000-0000-4000-8000-000000000002'),
- (gen_random_uuid(),'20000000-0000-4000-8000-000000000002','10000000-0000-4000-8000-000000000004','crit',now() - interval '2 hours','VM4 tests are failing','2 tests in a row failed',false,'22000000-0000-4000-8000-000000000002');
+INSERT INTO alert_events (id,rule_id,node_id,severity,ts,title,detail,acked,trigger_result_id,isp_id) VALUES
+ (gen_random_uuid(),'20000000-0000-4000-8000-000000000001','10000000-0000-4000-8000-000000000003','warn',now() - interval '5 hours','VM3 download is slow','Download stayed below 50% of the expected speed for 3 tests',false,
+  (SELECT id FROM results WHERE node_id='10000000-0000-4000-8000-000000000003' ORDER BY ts DESC,id DESC LIMIT 1),'22000000-0000-4000-8000-000000000002'),
+ (gen_random_uuid(),'20000000-0000-4000-8000-000000000002','10000000-0000-4000-8000-000000000004','crit',now() - interval '2 hours','VM4 tests are failing','2 tests in a row failed',false,NULL,'22000000-0000-4000-8000-000000000002');

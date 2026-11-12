@@ -1,6 +1,7 @@
 # UI decisions and open questions
 
 ## Decisions
+- **Statistics analytics (JOOST-81).** Extend the existing statistics pipeline and add a bounded events endpoint; keep the rolling 30-day, Monday-first 168-cell heatmap. Show p50/p95/p99 with the selected metric's unit, compare the selected metric over consecutive seven-day periods, and add weekday/hour congestion plus IP/ISP/alert marks. The exact ISP filter uses trimmed `engine_isp`, then the cached IP organisation; unknown attribution is explained in the filter help and excluded from specific ISP matches. Event marks and their list disclose the 500-item cap. Demo mode follows the same formulas and filters as the center.
 - **Plain HTML/CSS/JS, no build step, no framework.** The preview opens from a static server with `?demo=1`; without it, the store reads the same-origin command-center API. Charts are a small SVG kit in `ui/assets/js/charts.js` (line/area, bars, heatmap, sparkline, map) so the preview has no external requests.
 - **Dark theme by default**, switchable to light; the choice is remembered. Chart colours come from a validated categorical palette; each node keeps its colour for its whole life.
 - **Nodes are independent.** No WAN or load-balancer concept in the data model. Expected speed is the only thing a node needs to be judged against, so "% of expected" is the fair way to compare nodes of different capacity (offered on the dashboard chart).
