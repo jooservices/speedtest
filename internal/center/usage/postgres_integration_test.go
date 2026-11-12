@@ -539,12 +539,12 @@ func verifyActiveOverrideRollback(t *testing.T, pool *pgxpool.Pool, ctx context.
 	if _, err := pool.Exec(ctx, `UPDATE engine_schedules SET interval_minutes=75,enabled=true WHERE node_id=$1 AND engine='ookla'`, usageNodeA); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.Migrate(ctx, pool, "down"); err != nil {
+	if err := db.MigrateDownTo(ctx, pool, 32); err != nil {
 		t.Fatal(err)
 	}
 	var version int64
-	if err := pool.QueryRow(ctx, `SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY version_id DESC LIMIT 1`).Scan(&version); err != nil || version != 22 {
-		t.Fatalf("usage rollback left migration version %d applied, error %v; want develop version 00022", version, err)
+	if err := pool.QueryRow(ctx, `SELECT version_id FROM goose_db_version WHERE is_applied ORDER BY version_id DESC LIMIT 1`).Scan(&version); err != nil || version != 32 {
+		t.Fatalf("usage rollback left migration version %d applied, error %v; want develop version 00032", version, err)
 	}
 	var scheduleDefault string
 	if err := pool.QueryRow(ctx, `SELECT column_default FROM information_schema.columns WHERE table_schema='public' AND table_name='schedules' AND column_name='interval_minutes'`).Scan(&scheduleDefault); err != nil || scheduleDefault != "60" {
