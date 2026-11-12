@@ -56,6 +56,13 @@ func (f *fakeOwnerStats) Distribution(_ context.Context, q stats.Query) ([]stats
 	return []stats.Distribution{}, f.err
 }
 
+func (f *fakeOwnerStats) Events(_ context.Context, q stats.Query) (stats.EventsResponse, error) {
+	f.query = q
+	f.count("events")
+	f.queries["events"] = q
+	return stats.EventsResponse{Items: []stats.Event{}}, f.err
+}
+
 func (f *fakeOwnerStats) count(name string) {
 	if f.calls == nil {
 		f.calls = make(map[string]int)
@@ -72,7 +79,7 @@ func statsHandlerFor(store *fakeOwnerStats) http.Handler {
 
 func TestOwnerStatsEndpointsRequireSession(t *testing.T) {
 	h := statsHandlerFor(&fakeOwnerStats{})
-	for _, path := range []string{"/api/stats/summary", "/api/stats/trend", "/api/stats/hour-of-day", "/api/stats/heatmap", "/api/stats/distribution"} {
+	for _, path := range []string{"/api/stats/summary", "/api/stats/trend", "/api/stats/hour-of-day", "/api/stats/heatmap", "/api/stats/distribution", "/api/stats/events"} {
 		if rec := do(h, http.MethodGet, path, "", nil); rec.Code != http.StatusUnauthorized {
 			t.Errorf("%s without a session = %d, want 401", path, rec.Code)
 		}
@@ -91,6 +98,7 @@ func TestOwnerStatsRoutesParseAndDispatch(t *testing.T) {
 		{"hour-of-day", "?range=24h&metric=ping&timezone=UTC", http.MethodGet, "hour-of-day"},
 		{"heatmap", "?node=" + nodeID + "&metric=loss&timezone=UTC", http.MethodGet, "heatmap"},
 		{"distribution", "?from=" + from + "&to=" + to + "&bins=5&metric=jitter", http.MethodGet, "distribution"},
+		{"events", "?range=7d&nodes=" + nodeID + "&engine=ookla&isp=%20Fixture%20ISP%20", http.MethodGet, "events"},
 	}
 	for _, tc := range cases {
 		rec := do(h, tc.method, "/api/stats/"+tc.path+tc.query, "", ownerRead)
@@ -103,6 +111,9 @@ func TestOwnerStatsRoutesParseAndDispatch(t *testing.T) {
 	}
 	if store.queries["distribution"].Metric != stats.Jitter || store.queries["distribution"].Bins != 5 {
 		t.Fatalf("distribution query = %+v", store.query)
+	}
+	if store.queries["events"].Engine != "ookla" || store.queries["events"].ISP != "Fixture ISP" || len(store.queries["events"].NodeIDs) != 1 {
+		t.Fatalf("events query filters = %+v", store.queries["events"])
 	}
 	if store.nodeID != nodeID || store.queries["heatmap"].Metric != stats.Loss || store.queries["heatmap"].To.Sub(store.queries["heatmap"].From) != 30*24*time.Hour {
 		t.Fatalf("heatmap query node=%s window=%s metric=%s", store.nodeID, store.queries["heatmap"].To.Sub(store.queries["heatmap"].From), store.queries["heatmap"].Metric)
@@ -121,7 +132,7 @@ func TestOwnerStatsRoutesParseAndDispatch(t *testing.T) {
 }
 
 func TestOwnerStatsRouteAndDirectServeGuards(t *testing.T) {
-	for _, path := range []string{"/api/stats/summary", "/api/stats/trend", "/api/stats/hour-of-day", "/api/stats/heatmap", "/api/stats/distribution"} {
+	for _, path := range []string{"/api/stats/summary", "/api/stats/trend", "/api/stats/hour-of-day", "/api/stats/heatmap", "/api/stats/distribution", "/api/stats/events"} {
 		if !ownerStatsRoute(path) {
 			t.Errorf("ownerStatsRoute(%q) = false", path)
 		}
@@ -184,6 +195,9 @@ func TestOwnerStatsValidationStopsBeforeStore(t *testing.T) {
 	tooManyDays := "2025-10-01T00:00:00Z"
 	cases := []struct{ name, path string }{
 		{"unpaired range", "/api/stats/summary?from=2026-11-01T00:00:00Z"},
+		{"repeated ISP", "/api/stats/summary?isp=One&isp=Two"},
+		{"blank ISP", "/api/stats/summary?isp=%20%20%20"},
+		{"too long ISP", "/api/stats/summary?isp=" + strings.Repeat("x", 201)},
 		{"repeated from", "/api/stats/summary?from=2026-11-01T00:00:00Z&from=2026-11-02T00:00:00Z&to=2026-11-03T00:00:00Z"},
 		{"repeated to", "/api/stats/summary?from=2026-11-01T00:00:00Z&to=2026-11-02T00:00:00Z&to=2026-11-03T00:00:00Z"},
 		{"repeated range", "/api/stats/summary?range=6h&range=7d"},
@@ -226,6 +240,9 @@ func TestOwnerStatsValidationStopsBeforeStore(t *testing.T) {
 		{"invalid bins integer", "/api/stats/distribution?bins=1.5"},
 		{"too many bins", "/api/stats/distribution?bins=101"},
 		{"repeated bins", "/api/stats/distribution?bins=5&bins=6"},
+		{"invalid event range", "/api/stats/events?range=90d"},
+		{"repeated event engine", "/api/stats/events?engine=ookla&engine=librespeed"},
+		{"invalid event nodes", "/api/stats/events?nodes=not-a-node-id"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -267,6 +284,7 @@ func TestEveryOwnerStatsEndpointHandlesStoreErrors(t *testing.T) {
 		"/api/stats/hour-of-day?from=" + from + "&to=" + to,
 		"/api/stats/heatmap?node=" + nodeID,
 		"/api/stats/distribution?from=" + from + "&to=" + to,
+		"/api/stats/events?from=" + from + "&to=" + to,
 	} {
 		t.Run(path, func(t *testing.T) {
 			rec := do(statsHandlerFor(&fakeOwnerStats{err: errors.New("database details must not be returned")}), http.MethodGet, path, "", ownerRead)

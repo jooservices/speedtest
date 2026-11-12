@@ -60,7 +60,7 @@ type Rule struct {
 type Event struct {
 	ID         string  `json:"id"`
 	RuleID     *string `json:"ruleId"`
-	NodeID     string  `json:"nodeId"`
+	NodeID     *string `json:"nodeId"`
 	ISPID      *string `json:"ispId"`
 	Severity   string  `json:"severity"`
 	TS         string  `json:"ts"`
@@ -132,15 +132,16 @@ func ruleView(r Rule) Rule {
 }
 
 type streakTransition struct {
-	count    int
-	active   bool
-	opened   bool
-	resolved bool
+	count     int
+	active    bool
+	opened    bool
+	resolved  bool
+	recovered bool
 }
 
 func advanceStreak(count int, active, hit bool, threshold int) streakTransition {
 	if !hit {
-		return streakTransition{resolved: active}
+		return streakTransition{resolved: active, recovered: !active && count > 0}
 	}
 	if count < threshold {
 		count++

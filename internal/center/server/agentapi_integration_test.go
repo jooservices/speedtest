@@ -22,8 +22,10 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/agentapi"
+	"github.com/jooservices/speedtest/internal/center/alerts"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
 	"github.com/jooservices/speedtest/internal/center/nodes"
+	"github.com/jooservices/speedtest/internal/center/notify"
 )
 
 const ingestionResult = `{"id":"00000000-0000-4000-8000-000000000001","ts":"2026-11-03T00:00:00Z","status":"ok","down":123.4,"up":56.7,"ping":3,"jitter":null,"dLat":null,"uLat":null,"loss":null,"serverId":1,"ip":"203.0.113.1","threads":4,"bytesDown":1024,"bytesUp":512,"duration":2.3,"error":null,"manual":false,"raw":{"nested":[1,true]},"loadedDown":{"low":null,"iqm":4,"high":10},"loadedUp":{"low":1,"iqm":2,"high":3},"server":{"id":1,"name":"edge","city":"city","sponsor":"isp","host":"test.example"},"engineISP":"isp","engineResultId":"engine-1","engineResultUrl":"https://example.test/result/1","engineIp":"2001:db8::1","warnings":["IP mismatch"]}`
@@ -315,9 +317,87 @@ func TestAgentIngestionProtocolIntegration(t *testing.T) {
 	t.Log("PASS: batch partial failure; all fields/raw persisted; identical, changed and cross-node replays; concurrent UUID; transactional hook rollback; config ETag; heartbeat; command ack ownership/progress/idempotency; IP proxy trust; immediate revocation on all six operations")
 }
 
-// The paced test measures the production executable, not the race/coverage
-// instrumented test harness or the load generator. The service shares this
-// suite's verified worktree database and is stopped before fixture cleanup.
+func TestSuccessfulResultCreatesCatalogNotificationIntegration(t *testing.T) {
+	pool, ctx, key := openServerIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	service := nodes.NewService(pool, key)
+	nodeID, token := enrollIngestionNode(t, ctx, service, "success-event-edge")
+	alertStore := &alerts.Store{DB: pool, AppKey: key}
+	store := &agentapi.Postgres{Pool: pool, Hook: alertStore}
+	handler := NewHandler(Options{NodeCredentials: service, AgentAPI: store, AgentRateLimit: 10000})
+	result := strings.Replace(ingestionResult, `"jitter":null`, `"jitter":7.5`, 1)
+	result = strings.Replace(result, `"loss":null`, `"loss":0.5`, 1)
+	if response := ingestRequest(t, handler, token, http.MethodPost, "/api/agent/results", `{"results":[`+result+`]}`); response.Code != 207 {
+		t.Fatalf("success ingestion = %d %s", response.Code, response.Body.String())
+	}
+	var eventID, eventKey, resultID string
+	var raw []byte
+	if err := pool.QueryRow(ctx, `SELECT id::text,event_key,trigger_result_id::text,payload FROM alert_events WHERE node_id=$1 AND event_key='test.success'`, nodeID).
+		Scan(&eventID, &eventKey, &resultID, &raw); err != nil {
+		t.Fatal("successful result notification missing:", err)
+	}
+	var payload map[string]string
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatal("notification payload:", err)
+	}
+	if eventKey != "test.success" || resultID != "00000000-0000-4000-8000-000000000001" ||
+		payload["download"] != "123.4 Mbps" || payload["upload"] != "56.7 Mbps" || payload["ping"] != "3" ||
+		payload["jitter"] != "7.5" || payload["loss"] != "0.5" || payload["download_limit"] != "65% of expected" ||
+		payload["upload_limit"] != "40% of expected" || payload["ping_limit"] != "30" || payload["jitter_limit"] != "10" ||
+		payload["loss_limit"] != "2" || payload["download_ok"] != "no" || payload["upload_ok"] != "yes" ||
+		payload["ping_ok"] != "yes" || payload["jitter_ok"] != "yes" || payload["loss_ok"] != "yes" {
+		t.Fatalf("notification payload = %#v", payload)
+	}
+	var channels []string
+	if err := pool.QueryRow(ctx, `SELECT channels FROM alert_notification_outbox WHERE event_id=$1`, eventID).Scan(&channels); err != nil || len(channels) != 1 || channels[0] != "telegram" {
+		t.Fatalf("notification channels = %v: %v", channels, err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO notification_event_node_settings(event_key,node_id,enabled) VALUES('test.success',$1,false)`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	second := strings.Replace(result, "00000000-0000-4000-8000-000000000001", "00000000-0000-4000-8000-000000000002", 1)
+	if response := ingestRequest(t, handler, token, http.MethodPost, "/api/agent/results", `{"results":[`+second+`]}`); response.Code != 207 {
+		t.Fatalf("node-disabled success ingestion = %d %s", response.Code, response.Body.String())
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM alert_events WHERE node_id=$1 AND event_key='test.success'`, nodeID).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("node-disabled event count = %d: %v", count, err)
+	}
+	t.Log("PASS: successful test creates a catalog event with measurements, configured limits, status flags and Telegram outbox; per-node disable suppresses the next event")
+}
+
+func TestAgentUpdateAcknowledgementsCreateCatalogEventsIntegration(t *testing.T) {
+	pool, ctx, _ := openServerIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	const nodeID = "10000000-0000-4000-8000-000000000091"
+	const successID = "10000000-0000-4000-8000-000000000092"
+	const failedID = "10000000-0000-4000-8000-000000000093"
+	if _, err := pool.Exec(ctx, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES($1,'update-node',100,50)`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{successID, failedID} {
+		if _, err := pool.Exec(ctx, `INSERT INTO agent_commands(id,node_id,type,version) VALUES($1,$2,'update_agent','1.2.3')`, id, nodeID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	store := &agentapi.Postgres{Pool: pool, Events: &notify.Store{DB: pool}}
+	if command, err := store.Ack(ctx, nodeID, successID, agentapi.Ack{Status: "succeeded"}); err != nil || command.Status != "succeeded" {
+		t.Fatalf("successful update ack: %+v %v", command, err)
+	}
+	reason := "updater returned an error"
+	if command, err := store.Ack(ctx, nodeID, failedID, agentapi.Ack{Status: "failed", Error: &reason}); err != nil || command.Status != "failed" {
+		t.Fatalf("failed update ack: %+v %v", command, err)
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM alert_events WHERE node_id=$1 AND event_key IN ('agent.update_applied','agent.update_failed')`, nodeID).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("agent update events = %d %v", count, err)
+	}
+}
+
 func TestAgentIngestionLoad1000PerMinuteIntegration(t *testing.T) {
 	pool, ctx, key := openServerIntegrationPool(t)
 	dbtest.Reset(t, pool)
@@ -334,6 +414,11 @@ func TestAgentIngestionLoad1000PerMinuteIntegration(t *testing.T) {
 	INSERT INTO ip_addresses(ip,geo,source,looked_up_at,isp_id)
 	SELECT '203.0.113.1','{"city":"fixture","country":"ZZ","latitude":1,"longitude":1,"accuracy_radius":25,"asn":64512,"organisation":"Fixture Network"}'::jsonb,
 		'fixture',clock_timestamp(),id FROM fixture_isp`); err != nil {
+		t.Fatal(err)
+	}
+	// Isolate ingestion throughput from optional per-result success notifications.
+	// Their transactional path and delivery are covered by the catalog integration and SC-NODE-05 E2E tests.
+	if _, err := pool.Exec(ctx, `INSERT INTO notification_event_settings(event_key,enabled,severity,channels) VALUES ('test.success',false,'info',ARRAY['telegram'])`); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("SPEEDTEST_GEO_IPAPI_ENABLED", "false")

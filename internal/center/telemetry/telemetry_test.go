@@ -211,6 +211,18 @@ func TestAllDocumentedRoutesAndAssets(t *testing.T) {
 			}
 		}
 	}
+	for _, tc := range []struct{ path, want string }{
+		{"/api/notifications/events/test.success", "/api/notifications/events/{id}"},
+		{"/api/notifications/events/test.success/nodes/00000000-0000-4000-8000-000000000001", "/api/notifications/events/{id}/nodes/{id}"},
+		{"/api/notifications/templates/test.success/telegram", "/api/notifications/templates/{id}/{id}"},
+		{"/api/notifications/templates/test.success/telegram/previews", "/api/notifications/templates/{id}/{id}/previews"},
+		{"/api/notifications/templates/test.success/telegram/resets", "/api/notifications/templates/{id}/{id}/resets"},
+		{"/api/notifications/templates/unknown/channel/extra", "other"},
+	} {
+		if got := Route(tc.path); got != tc.want {
+			t.Fatalf("%s: %s != %s", tc.path, got, tc.want)
+		}
+	}
 }
 
 type fakeDB struct {

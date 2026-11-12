@@ -76,13 +76,17 @@ func qualifyEventColumns(alias string) string {
 
 func scanEvent(row rowScanner) (Event, error) {
 	var e Event
-	var ruleID, ispID *string
+	var ruleID *string
+	var nodeID *string
+	var ispID *string
 	var ts time.Time
 	var resolved *time.Time
-	if err := row.Scan(&e.ID, &ruleID, &e.NodeID, &ispID, &e.Severity, &ts, &resolved, &e.Title, &e.Detail, &e.Acked); err != nil {
+	if err := row.Scan(&e.ID, &ruleID, &nodeID, &ispID, &e.Severity, &ts, &resolved, &e.Title, &e.Detail, &e.Acked); err != nil {
 		return Event{}, err
 	}
-	e.RuleID, e.ISPID = ruleID, ispID
+	e.RuleID = ruleID
+	e.NodeID = nodeID
+	e.ISPID = ispID
 	e.TS = ts.UTC().Format(time.RFC3339Nano)
 	if resolved != nil {
 		value := resolved.UTC().Format(time.RFC3339Nano)
