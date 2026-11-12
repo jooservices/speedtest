@@ -589,6 +589,38 @@
       return schedules.nodes.filter(function (x) { return x.nodeId === node.id; }).map(function (x) { return Object.assign({ engine: x.engine || 'ookla' }, x.config); });
     };
     ST.saveEngineSchedules = function (id, engines) { return ST.saveSchedule(id, { engines: engines }); };
+    ST.serverCatalog = function (id, engine) {
+      var path = '/api/nodes/' + encodeURIComponent(id) + '/servers?engine=' + encodeURIComponent(engine);
+      return API.request(path).then(function (response) { return Object.assign({}, response.data, { etag: response.etag }); });
+    };
+    ST.refreshServerCatalog = function (id, engine) {
+      var path = '/api/nodes/' + encodeURIComponent(id) + '/servers?engine=' + encodeURIComponent(engine);
+      return API.request(path, { method: 'POST' }).then(function (response) {
+        return waitForServerCommand(id, response.data.id, Date.now() + 120000).then(function () { return ST.serverCatalog(id, engine); });
+      });
+    };
+    function waitForServerCommand(id, commandId, deadline) {
+      var path = '/api/nodes/' + encodeURIComponent(id) + '/commands/' + encodeURIComponent(commandId);
+      return API.request(path).then(function (response) {
+        var command = response.data;
+        if (command.status === 'succeeded') return command;
+        if (command.status === 'failed') throw new Error(command.error || 'The agent could not retrieve its server list.');
+        if (Date.now() >= deadline) throw new Error('Server discovery is still running. Retry the server list refresh.');
+        return new Promise(function (resolve) { setTimeout(resolve, 500); }).then(function () { return waitForServerCommand(id, commandId, deadline); });
+      });
+    }
+    ST.selectServer = function (id, engine, serverId, etag) {
+      var path = '/api/nodes/' + encodeURIComponent(id) + '/server-selection';
+      return API.request(path, { method: 'PUT', ifMatch: etag, body: { engine: engine, serverId: serverId } }).then(function (response) {
+        return ST.load().then(function () { return Object.assign({}, response.data, { etag: response.etag }); });
+      });
+    };
+    function quietZone() {
+      var zone = state.settings.timezone;
+      if (zone && zone !== 'browser') return zone;
+      return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+    }
+    ST.timezone = quietZone;
     // Two-factor sign-in (authenticator app): status, start setup, confirm, turn off.
     ST.twoFactorStatus = function () { return API.request('/api/auth/2fa').then(function (r) { return r.data; }); };
     ST.twoFactorSetup = function (currentPassword) { return API.request('/api/auth/2fa/setup', { method: 'POST', body: { currentPassword: currentPassword } }).then(function (r) { return r.data; }); };
