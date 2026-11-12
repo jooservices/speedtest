@@ -163,6 +163,7 @@
       } }, U.dot(ST.nodeColor(n)), ST.nodeTitle(n)));
     });
     root.appendChild(nodeBox);
+    ST.bandwidth.panel(root);
     root.appendChild(h('div', { class: 'mb', style: 'max-width:280px' }, U.field('ISP', U.select([{ value: '', label: 'Any ISP' }].concat(ST.ispOptions()), q.ispId, function (v) { q.ispId = v; remote.key = null; ST.refresh(); }))));
 
     /* ---- summary table ---- */

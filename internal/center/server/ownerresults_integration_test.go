@@ -59,7 +59,7 @@ func TestOwnerResultsHTTPFlowIntegration(t *testing.T) {
 		down       float64
 		age        time.Duration
 	}{{"00000000-0000-4000-8000-0000000000b1", "ok", 300, time.Minute}, {"00000000-0000-4000-8000-0000000000b2", "ok", 120, time.Hour}, {"00000000-0000-4000-8000-0000000000b3", "ok", 50, 10 * 24 * time.Hour}} {
-		if _, err := pool.Exec(ctx, `INSERT INTO results (id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads) VALUES ($1,$2,$3,$4,$5,40,11,9,'{"id":9,"name":"Viettel","city":"Hanoi","sponsor":"Viettel"}','203.0.113.5',4)`,
+		if _, err := pool.Exec(ctx, `INSERT INTO results (id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,server,ip,threads,bytes_down,bytes_up) VALUES ($1,$2,$3,$4,$5,40,11,9,'{"id":9,"name":"Viettel","city":"Hanoi","sponsor":"Viettel"}','203.0.113.5',4,700,300)`,
 			spec.id, node, now.Add(-spec.age), spec.status, spec.down); err != nil {
 			t.Fatal(i, err)
 		}
@@ -111,7 +111,8 @@ VALUES ($1,$2,$3,'failed',4,'Too many requests','ookla','rate_limited',0,0,0)`, 
 	}
 	export := get("/api/results/export.csv?range=30d&sort=ts&dir=asc", true)
 	records, err := csv.NewReader(export.Body).ReadAll()
-	if export.Code != http.StatusOK || err != nil || len(records) != 5 || records[1][1] != "VM1 Home" || records[1][3] != "50" || records[4][11] != "203.0.113.5" || records[1][10] != "Viettel - Hanoi" {
+	if export.Code != http.StatusOK || err != nil || len(records) != 5 || records[1][1] != "VM1 Home" || records[1][3] != "50" ||
+		records[1][8] != "700" || records[1][9] != "300" || records[1][10] != "1000" || records[4][14] != "203.0.113.5" || records[1][13] != "Viettel - Hanoi" {
 		t.Fatalf("export = %d %v %v", export.Code, records, err)
 	}
 	if rec := get("/api/results?minDown=500&maxDown=100", true); rec.Code != http.StatusUnprocessableEntity {

@@ -147,6 +147,8 @@ var rules = []rule{
 	{"POST", "/api/nodes/{id}/installations", "node.install", "node", "Installed the agent over SSH"},
 	{"POST", "/api/nodes/{id}/uninstallations", "node.uninstall", "node", "Removed the agent over SSH"},
 	{"PUT", "/api/schedules/{id}", "schedule.update", "schedule", "Changed a node schedule"},
+	{"PUT", "/api/usage/budgets/{id}", "usage_budget.update", "usage_budget", "Changed a bandwidth budget"},
+	{"DELETE", "/api/usage/budgets/{id}", "usage_budget.delete", "usage_budget", "Removed a bandwidth budget"},
 	{"PUT", "/api/schedules/rules", "schedule.rules", "schedule", "Changed the schedule rules"},
 	{"POST", "/api/schedules/stagger", "schedule.stagger", "schedule", "Spread out start times"},
 	{"POST", "/api/alerts/rules", "alert.rule.create", "alert_rule", "Created an alert rule"},

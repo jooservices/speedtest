@@ -37,7 +37,7 @@
     ];
   };
 
-  var state = /** @type {any} */ (ST.state = { nodes: [], results: [], isps: [], settings: defaultSettings(), rules: defaultRules(), acked: {}, events: [], now: Date.now() });
+  var state = /** @type {any} */ (ST.state = { nodes: [], results: [], isps: [], settings: defaultSettings(), rules: defaultRules(), acked: {}, events: [], bandwidthBudgets: [], now: Date.now() });
 
   function load() {
     var saved = {};
@@ -48,6 +48,7 @@
     state.settings.notify = Object.assign(defaultSettings().notify, (saved.settings || {}).notify || {});
     state.rules = saved.rules || defaultRules();
     state.acked = saved.acked || {};
+    state.bandwidthBudgets = saved.bandwidthBudgets || [];
     state.extra = saved.extra || [];
     var seedNodes = ST.seedNodes();
     var seeded = ST.buildSeedResults(seedNodes, state.now);
@@ -60,11 +61,13 @@
   function persist() {
     if (!ST.demo) return;
     try {
-      localStorage.setItem(KEY, JSON.stringify({ nodes: state.nodes, settings: state.settings, rules: state.rules, acked: state.acked, extra: state.extra }));
+      localStorage.setItem(KEY, JSON.stringify({ nodes: state.nodes, settings: state.settings, rules: state.rules, acked: state.acked, bandwidthBudgets: state.bandwidthBudgets, extra: state.extra }));
     } catch (e) { /* storage full or disabled: demo keeps working in memory */ }
   }
   ST.persist = persist;
   ST.resetDemo = function () { if (!ST.demo) return; try { localStorage.removeItem(KEY); } catch (e) {} location.reload(); };
+  ST.demoBandwidthBudgets = function () { return state.bandwidthBudgets.map(function (budget) { return Object.assign({}, budget); }); };
+  ST.setDemoBandwidthBudgets = function (items) { state.bandwidthBudgets = items.map(function (budget) { return Object.assign({}, budget); }); persist(); ST.emit('data'); };
 
   var byNode = {};
   function reindex() {
@@ -382,7 +385,8 @@
   F.speed = function (mbps) { var p = F.speedParts(mbps); return mbps == null ? '—' : p.v + ' ' + p.u; };
   F.ms = function (v) { return v == null ? '—' : F.num(v, 1) + ' ms'; };
   F.pct = function (v, d) { return v == null ? '—' : F.num(v, d == null ? 0 : d) + '%'; };
-  F.bytes = function (b) { if (!b) return '—'; var u = ['B', 'KB', 'MB', 'GB']; var i = 0; while (b >= 1024 && i < 3) { b /= 1024; i++; } return F.num(b, i ? 1 : 0) + ' ' + u[i]; };
+  F.bytes = function (b) { if (b == null || !Number.isFinite(b) || b < 0) return '—'; var u = ['B', 'KB', 'MB', 'GB']; var i = 0; while (b >= 1024 && i < 3) { b /= 1024; i++; } return F.num(b, i ? 1 : 0) + ' ' + u[i]; };
+  F.bytesTotal = function (down, up) { return down == null || up == null ? null : down + up; };
   F.metric = function (m, v) {
     if (v == null) return '—';
     var info = ST.metrics[m]; if (!info) return F.num(v, 1);
@@ -425,11 +429,11 @@
   };
 
   ST.csv = function (rows) {
-    var head = ['time', 'node', 'status', 'download_mbps', 'upload_mbps', 'ping_ms', 'jitter_ms', 'packet_loss_pct', 'loaded_latency_down_ms', 'loaded_latency_up_ms', 'server', 'public_ip', 'error', 'failure_class', 'engine'];
+    var head = ['time', 'node', 'status', 'download_mbps', 'upload_mbps', 'ping_ms', 'jitter_ms', 'packet_loss_pct', 'bytes_down', 'bytes_up', 'bytes_total', 'loaded_latency_down_ms', 'loaded_latency_up_ms', 'server', 'public_ip', 'error', 'failure_class', 'engine'];
     var esc = function (v) { v = v == null ? '' : String(v); return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v; };
     return [head.join(',')].concat(rows.map(function (r) {
       var n = ST.node(r.nodeId), s = ST.server(r.serverId);
-      return [new Date(r.ts).toISOString(), n ? n.name + ' ' + n.label : r.nodeId, r.status, r.down, r.up, r.ping, r.jitter, r.loss, r.dLat, r.uLat, s.name + ' - ' + s.city, r.ip, r.error, r.failureClass || 'other', r.engine || 'ookla'].map(esc).join(',');
+      return [new Date(r.ts).toISOString(), n ? n.name + ' ' + n.label : r.nodeId, r.status, r.down, r.up, r.ping, r.jitter, r.loss, r.bytesDown, r.bytesUp, F.bytesTotal(r.bytesDown, r.bytesUp), r.dLat, r.uLat, s.name + ' - ' + s.city, r.ip, r.error, r.failureClass || 'other', r.engine || 'ookla'].map(esc).join(',');
     })).join('\n');
   };
 
@@ -632,7 +636,19 @@
     };
     ST.saveSchedule = function (id, input) {
       var path = '/api/schedules/' + encodeURIComponent(id);
-      return conditional(path, function (response) { return mutation(path, 'PUT', input, { ifMatch: response.etag }); });
+      return conditional(path, function (response) { return API.request(path, { method: 'PUT', body: input, ifMatch: response.etag }); }).then(function (saved) {
+        return API.request('/api/schedules').then(function (response) {
+          schedules = response.data;
+          var node = state.nodes.filter(function (item) { return item.id === id; })[0];
+          if (node) ['interval', 'offset', 'enabled'].forEach(function (key) { if (Object.prototype.hasOwnProperty.call(input, key)) node[key] = input[key]; });
+          ST.emit('data');
+          return saved.data;
+        }, function (error) {
+          ST.remote = { status: 'error', error: error };
+          ST.emit('remote');
+          return saved.data;
+        });
+      });
     };
     ST.saveScheduleRules = function (patch) {
       return conditional('/api/schedules', function (response) {

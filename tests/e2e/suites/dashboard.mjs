@@ -9,6 +9,15 @@ export function dashboardSuite(T, ctx) {
       await T.open('#/', 'Dashboard');
       await T.see('5 of 5 nodes active');
       for (const label of ['Download vs. expected', 'Upload vs. expected', 'Median latency', 'Tests succeeded', 'IP changes']) await T.see(label);
+      for (const label of ['Bandwidth', 'Month to date', 'Projected month end', 'Previous month']) await T.see(label);
+      await page.getByRole('columnheader', { name: 'Engine' }).last().waitFor();
+      await page.getByRole('img', { name: 'Daily bandwidth usage by node and engine' }).waitFor();
+      const bandwidth = T.bandwidthCard();
+      assert.equal(await bandwidth.count(), 1, 'the dashboard has one Bandwidth section');
+      const usage = (await T.api('/api/usage?group=day')).body.data;
+      const expectedBuckets = new Set(usage.series.map(bucket => [bucket.start, bucket.nodeId, bucket.engine, bucket.ispId || ''].join('|'))).size;
+      const dailyRows = bandwidth.locator('table').last().locator('tbody tr');
+      assert.equal(await dailyRows.count(), expectedBuckets, 'the daily bandwidth table shows every available numeric bucket');
       for (const name of ['VM1', 'VM2', 'VM3', 'VM4', 'VM5']) await page.locator('.node-card').filter({ hasText: name }).first().waitFor();
       const changes = await page.locator('.stat').filter({ hasText: 'IP changes' }).locator('.stat-value').innerText();
       assert.match(changes, /^[1-9]\d*\s*change/, 'the seeded address changes must be counted, got ' + JSON.stringify(changes));
@@ -95,7 +104,7 @@ export function dashboardSuite(T, ctx) {
         await T.open('#/stats', 'Statistics');
         await T.choose(page.locator('#topbar select').first(), '6h');
         await T.settled();
-        assert.match(await T.row('VM1').innerText(), /3\s+—\s+3 rate-limited excluded/, 'all-rate-limited statistics show the excluded count');
+        assert.match(await T.summaryRow('VM1').innerText(), /3\s+—\s+3 rate-limited excluded/, 'all-rate-limited statistics show the excluded count');
         const nodeId = T.db("SELECT id::text FROM nodes WHERE name='VM1'");
         await T.open('#/nodes/' + nodeId, 'VM1');
         let nodeSuccess = page.locator('.stat').filter({ hasText: 'Success rate' });
@@ -114,7 +123,7 @@ export function dashboardSuite(T, ctx) {
         await T.open('#/stats', 'Statistics');
         await T.choose(page.locator('#topbar select').first(), '6h');
         await T.settled();
-        assert.match(await T.row('VM1').innerText(), /2\s+100\.0%\s+1 rate-limited excluded/, 'mixed statistics show one eligible success and the excluded rate limit');
+        assert.match(await T.summaryRow('VM1').innerText(), /2\s+100\.0%\s+1 rate-limited excluded/, 'mixed statistics show one eligible success and the excluded rate limit');
         await T.open('#/nodes/' + nodeId, 'VM1');
         nodeSuccess = page.locator('.stat').filter({ hasText: 'Success rate' });
         assert.match(await nodeSuccess.innerText(), /100\.0%[\s\S]*1 failed; 1 rate-limited excluded of 2/, 'node detail explains the mixed success rate');
