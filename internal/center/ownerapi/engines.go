@@ -8,6 +8,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/jooservices/speedtest/internal/center/schedules"
+	"github.com/jooservices/speedtest/internal/center/usage"
 )
 
 // EngineSchedule is the independently configurable schedule of one installed engine.
@@ -27,6 +28,9 @@ func (s *Store) replaceEngines(ctx context.Context, id string, engines []EngineS
 		return nil, "", err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := usage.LockBudgetEvaluation(ctx, tx); err != nil {
+		return nil, "", err
+	}
 	var installed []string
 	if err := tx.QueryRow(ctx, `SELECT installed_engines FROM nodes WHERE id=$1 FOR UPDATE`, id).Scan(&installed); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -63,6 +67,9 @@ func (s *Store) replaceEngines(ctx context.Context, id string, engines []EngineS
 		names = append(names, e.Engine)
 	}
 	if _, err := tx.Exec(ctx, `DELETE FROM engine_schedules WHERE node_id=$1 AND NOT(engine=ANY($2::text[]))`, id, names); err != nil {
+		return nil, "", err
+	}
+	if err := usage.ReconcileScheduleEdit(ctx, tx, id, s.now()); err != nil {
 		return nil, "", err
 	}
 	if err := tx.Commit(ctx); err != nil {

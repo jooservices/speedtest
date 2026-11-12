@@ -30,7 +30,8 @@ SELECT gen_random_uuid(), n.id, now() - (g * interval '30 minutes') - (n.color_s
   CASE WHEN g % 97 = 0 THEN NULL ELSE 9 END,
   CASE WHEN g % 97 = 0 THEN NULL ELSE '{"id":9,"name":"Viettel","city":"Hanoi","sponsor":"Viettel Group"}'::jsonb END,
   CASE WHEN n.color_slot <= 2 THEN (CASE WHEN g > 150 THEN '203.0.113.11' ELSE '203.0.113.12' END)::inet WHEN n.color_slot = 5 THEN '203.0.113.99'::inet ELSE (CASE WHEN g > 200 THEN '198.51.100.21' ELSE '198.51.100.22' END)::inet END,
-  4, 400000000 + g, 50000000 + g, 28.0,
+  4, CASE WHEN g % 97 = 0 THEN NULL ELSE 400000000 + g END,
+  CASE WHEN g % 97 = 0 THEN NULL ELSE 50000000 + g END, 28.0,
   CASE WHEN g % 97 = 0 THEN 'The test server did not answer in time' END,
   CASE WHEN n.color_slot=1 THEN CASE WHEN g > 150 THEN 'Carrier A' ELSE 'Carrier B' END END,
   CASE WHEN n.color_slot <= 2 THEN '22000000-0000-4000-8000-000000000001'::uuid WHEN n.color_slot = 5 THEN '22000000-0000-4000-8000-000000000003'::uuid ELSE '22000000-0000-4000-8000-000000000002'::uuid END

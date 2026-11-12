@@ -48,6 +48,7 @@ absent if the center has no database.
 | `speedtest_notification_oldest_pending_age_seconds` | > 600 (notifier stuck) |
 | `speedtest_notification_outbox_pending` | > 0 for 10 min |
 | `speedtest_alerts_open` | informational |
+| `speedtest_bandwidth_budget_ratio` | >= 0.8: application emits one budget warning per scope/month; at 1.0 it applies the configured schedule policy |
 
 `/healthz` is process liveness; `/readyz` also pings PostgreSQL.
 

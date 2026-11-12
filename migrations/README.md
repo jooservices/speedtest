@@ -62,6 +62,10 @@ from `nodes.server_id`; the legacy column remains synchronized for older agents.
 Results store whether the measurement-time selection and pin are known; old rows
 remain unknown. Terminal catalog acknowledgements store a payload digest to reject
 conflicting retries without replacing a newer catalog refresh.
+`00033_bandwidth_usage_budgets.sql` adds a monthly per-node/engine byte rollup
+refreshed when a budget is configured and maintained by an insert trigger while
+budgets exist (so older center writers remain compatible),
+optional global/node budget state, a durable budget-event extension queue and
 `00021_isp_entities.sql` adds ASN-derived ISP entities, plan records and links
 from results, addresses, IP history and alert events. `00022_isp_plan_default_provenance.sql`
 adds separate per-speed flags so plan updates change only expected speeds that
@@ -75,6 +79,8 @@ and a resumable node-first geolocation refresh cursor. Its down migration
 preserves cached locations and address history. `00035_geo_provider_rolling_window.sql`
 adds the persisted next-request time used to enforce ip-api's 15-per-minute batch
 limit across minute boundaries; its down migration drops only that column.
+otherwise intact. Usage down preserves the 60-minute schedule default from
+00015 and restores overrides without changing rows that were not overridden.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file
@@ -159,6 +165,10 @@ that a subsequent up can reapply version 1.
 | `installer_events` | Safe, replayable plain-language progress events |
 | `installer_idempotency` | HMAC-protected install request digest and job link, expiring after 24 hours |
 | `audit_log` | Owner changes, authentication method, optional bearer credential ID, and resolved client address; never bearer values |
+| `usage_monthly_totals` | Insert-maintained UTC calendar-month byte totals by node and engine |
+| `usage_budgets` | Optional global or per-node monthly byte limits and at-limit action |
+| `usage_budget_events` | Deduplicated warning/limit/action events and JOOST-78 extension queue |
+| `usage_budget_overrides` | Original schedule state used for next-month restoration |
 | `notification_event_settings` | Owner overrides for event enabled state, severity and channels |
 | `notification_event_node_settings` | Per-node enable overrides for node-scoped events |
 | `notification_templates` | Per-event, per-channel owner template overrides |

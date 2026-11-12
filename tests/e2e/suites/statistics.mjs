@@ -36,12 +36,22 @@ export function statisticsSuite(T) {
       await page.getByRole('columnheader', { name: 'Average' }).waitFor();
       const summary = (await T.api('/api/stats/summary?range=7d')).body;
       const vm1 = summary.data.find(x => x.nodeId === '10000000-0000-4000-8000-000000000001').current.down.mean;
-      assert.ok((await T.row('VM1').innerText()).includes(vm1.toFixed(1)), 'the summary shows the center average');
-      const before = await page.locator('table').first().innerText();
+      const summaryCard = page.locator('.card').filter({ hasText: 'Summary by node' });
+      assert.ok((await summaryCard.getByRole('row').filter({ hasText: 'VM1' }).innerText()).includes(vm1.toFixed(1)), 'the summary shows the center average');
+      const before = await summaryCard.locator('table').innerText();
       await T.tab('Upload');
       await page.getByRole('heading', { name: 'Summary by node' }).waitFor();
-      assert.notEqual(await page.locator('table').first().innerText(), before, 'switching to upload changes the figures');
+      assert.notEqual(await page.locator('.card').filter({ hasText: 'Summary by node' }).locator('table').innerText(), before, 'switching to upload changes the figures');
       for (const section of ['Trend', 'Time of day', 'Week at a glance', 'Distribution']) await page.getByRole('heading', { name: section, exact: true }).waitFor();
+      await page.getByRole('heading', { name: 'Bandwidth' }).waitFor();
+      await page.getByRole('img', { name: 'Daily bandwidth usage by node and engine' }).waitFor();
+      await page.getByRole('columnheader', { name: 'Month to date' }).waitFor();
+      const bandwidth = T.bandwidthCard();
+      assert.equal(await bandwidth.count(), 1, 'Statistics has one Bandwidth section');
+      const usage = (await T.api('/api/usage?group=day')).body.data;
+      const expectedBuckets = new Set(usage.series.map(bucket => [bucket.start, bucket.nodeId, bucket.engine, bucket.ispId || ''].join('|'))).size;
+      const dailyRows = bandwidth.locator('table').last().locator('tbody tr');
+      assert.equal(await dailyRows.count(), expectedBuckets, 'Statistics shows every available daily bandwidth bucket');
       await T.expectNoLoadError();
     },
 
@@ -189,7 +199,7 @@ export function statisticsSuite(T) {
     async demoRateLimitExclusions() {
       const origin = new URL(T.url('#/')).origin;
       await loadDemoCase(page, origin, ['ok', 'failed']);
-      assert.match(await T.row('Review fixture').innerText(), /2\s+100\.0%\s+1 rate-limited excluded/);
+      assert.match(await T.summaryRow('Review fixture').innerText(), /2\s+100\.0%\s+1 rate-limited excluded/);
       await page.setViewportSize({ width: 390, height: 900 });
       assert.ok(await page.getByText('1 rate-limited excluded', { exact: true }).isVisible());
       await page.goto(`${origin}/?demo=1#/nodes/demo73`);
@@ -198,7 +208,7 @@ export function statisticsSuite(T) {
       assert.match(await mixed.innerText(), /100\.0%[\s\S]*1 failed; 1 rate-limited excluded of 2/);
 
       await loadDemoCase(page, origin, ['failed']);
-      assert.match(await T.row('Review fixture').innerText(), /1\s+—\s+1 rate-limited excluded/);
+      assert.match(await T.summaryRow('Review fixture').innerText(), /1\s+—\s+1 rate-limited excluded/);
       await page.goto(`${origin}/?demo=1#/nodes/demo73`);
       const allLimited = page.locator('.stat').filter({ hasText: 'Success rate' });
       await allLimited.waitFor();

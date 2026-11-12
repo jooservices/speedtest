@@ -79,6 +79,8 @@
     cards.appendChild(addCard);
     root.appendChild(cards);
 
+    ST.bandwidth.panel(root);
+
     /* ---- comparison chart ---- */
     var chartHost = h('div'), legendHost = h('div'), tableMode = false;
     var metricSeg = U.seg([{ value: 'down', label: 'Download' }, { value: 'up', label: 'Upload' }, { value: 'ping', label: 'Latency' }, { value: 'jitter', label: 'Jitter' }, { value: 'loss', label: 'Loss' }], state.metric, function (v) { state.metric = v; drawChart(); modeHost.style.display = (v === 'down' || v === 'up') ? '' : 'none'; });
@@ -155,7 +157,7 @@
     var n = ST.node(r.nodeId), srv = r.server || ST.server(r.serverId), geo = ST.geo(r.ip);
     var usedServerID = r.serverId == null && r.server ? r.server.id : r.serverId;
     var differsFromPin = r.pinnedServerId != null && usedServerID != null && Number(r.pinnedServerId) !== Number(usedServerID);
-    var json = JSON.stringify({ id: r.id, time: new Date(r.ts).toISOString(), node: n && n.name, status: r.status, download_mbps: r.down, upload_mbps: r.up, ping_ms: r.ping, jitter_ms: r.jitter, packet_loss_pct: r.loss, loaded_latency_download_ms: r.dLat, loaded_latency_upload_ms: r.uLat, server: srv.name + ' - ' + srv.city, public_ip: r.ip, threads: r.threads }, null, 2);
+    var json = JSON.stringify({ id: r.id, time: new Date(r.ts).toISOString(), node: n && n.name, status: r.status, download_mbps: r.down, upload_mbps: r.up, ping_ms: r.ping, jitter_ms: r.jitter, packet_loss_pct: r.loss, bytes_down: r.bytesDown, bytes_up: r.bytesUp, bytes_total: F.bytesTotal(r.bytesDown, r.bytesUp), loaded_latency_download_ms: r.dLat, loaded_latency_upload_ms: r.uLat, server: srv.name + ' - ' + srv.city, public_ip: r.ip, threads: r.threads }, null, 2);
     var body = h('div', { class: 'stack' },
       h('div', { class: 'row between' }, h('span', { class: 'row' }, U.dot(ST.nodeColor(n)), h('b', null, ST.nodeTitle(n))), U.statusChip(r.status)),
       r.status === 'failed' ? U.callout(r.error || 'The test could not finish.', 'crit', 'alert') : null,
@@ -168,7 +170,7 @@
       U.kv([
         ['Time', F.date(r.ts, 'full')], ['Packet loss', r.status === 'failed' ? '—' : F.num(r.loss, 1) + '%'],
         ['Latency under load', r.status === 'failed' ? '—' : 'Down ' + F.ms(r.dLat) + ' · Up ' + F.ms(r.uLat)],
-        ['Data used', r.status === 'failed' ? '—' : F.bytes(r.bytesDown) + ' down · ' + F.bytes(r.bytesUp) + ' up'], ['Duration', F.num(r.duration, 0) + ' s'], ['Connections', r.threads],
+        ['Data used', F.bytes(r.bytesDown) + ' down · ' + F.bytes(r.bytesUp) + ' up · ' + F.bytes(F.bytesTotal(r.bytesDown, r.bytesUp)) + ' total'], ['Duration', F.num(r.duration, 0) + ' s'], ['Connections', r.threads],
         ['Test server', srv.name + ', ' + srv.city + ' (#' + srv.id + ')'], ['Public IP', h('span', { class: 'mono' }, r.ip)],
         ['Location', geo ? geo.city + ', ' + geo.country + ' · ' + geo.isp + ' (AS' + geo.asn + ')' : 'Unknown'], ['Started by', r.manual ? 'You (manual test)' : 'Schedule']]),
       h('div', null, h('div', { class: 'label', style: 'margin-bottom:6px' }, 'Raw result'), U.code(json)));
