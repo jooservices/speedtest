@@ -1,7 +1,7 @@
 /* Shared bandwidth summaries, budgets and interval cost advice. */
 (function () {
   'use strict';
-  var ST = window.ST, U = ST.ui, h = U.h, F = ST.fmt;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt;
   var usageCache = {}, adviceCache = {}, adviceDrafts = {}, budgets = { items: null, etag: null, pending: null, error: null }, demoBudgets = ST.demo ? ST.demoBandwidthBudgets() : [], usageGroup = 'day', usageISP = '';
   var engines = ['ookla', 'librespeed'];
 
@@ -84,7 +84,7 @@
     var key = [ST.selectedEngine, usageISP, Math.floor(now / 60000)].join('|');
     Object.keys(usageCache).forEach(function (cached) { if (cached !== key) delete usageCache[cached]; });
     if (usageCache[key]) return usageCache[key];
-    var result = usageCache[key] = { loading: true };
+    var result = usageCache[key] = /** @type {any} */ ({ loading: true });
     var path = '/api/usage?from=' + encodeURIComponent(from) + '&to=' + encodeURIComponent(to) + '&group=day' + ST.engineQuery();
     if (usageISP) path += '&isp=' + encodeURIComponent(usageISP);
     ST.api.request(path)
@@ -269,7 +269,7 @@
   ST.bandwidth.advice = function (node, engine, interval, budgetBytes) {
     var key = [node.id, engine, interval, budgetBytes || 0].join('|');
     if (adviceCache[key]) return adviceCache[key];
-    var result = adviceCache[key] = { loading: true };
+    var result = adviceCache[key] = /** @type {any} */ ({ loading: true });
     if (ST.demo) {
       var since = Date.now() - 30 * 86400000, values = ST.results({ nodeIds: [node.id], engine: engine, from: since }).filter(function (r) {
         return (r.status === 'ok' || r.status === 'degraded') && r.bytesDown != null && r.bytesUp != null;
