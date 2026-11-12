@@ -131,11 +131,11 @@ var idSegment = regexp.MustCompile(`^(?:[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F
 
 // routeWords are the fixed words that appear in this API's paths; any other segment is shown as *.
 var routeWords = map[string]bool{
-	"api": true, "auth": true, "agent": true, "nodes": true, "schedules": true, "alerts": true, "settings": true, "notifications": true,
+	"api": true, "auth": true, "agent": true, "nodes": true, "schedules": true, "alerts": true, "settings": true, "notifications": true, "access-tokens": true,
 	"ip": true, "stats": true, "results": true, "export": true, "dashboard": true, "series": true, "installations": true,
 	"installer": true, "jobs": true, "audit": true, "rules": true, "events": true, "stagger": true, "ack": true, "acknowledgements": true,
 	"run": true, "commands": true, "credential": true, "uninstallations": true, "tokens": true, "enroll": true, "heartbeat": true,
-	"config": true, "test": true, "deliveries": true, "summary": true, "trend": true, "hour-of-day": true, "heatmap": true,
+	"config": true, "test": true, "tests": true, "deliveries": true, "summary": true, "trend": true, "hour-of-day": true, "heatmap": true,
 	"distribution": true, "password": true, "isps": true, "reports": true, "monthly": true, "compare": true, "plans": true, "2fa": true, "setup": true, "enable": true, "disable": true, "me": true, "login": true, "logout": true, "enrolment-key": true, "lookup": true,
 	"map": true, "history": true, "addresses": true, "probes": true, "csv": true, "json": true, "csv.": true, "results.csv": true,
 	"results.json": true, "export.csv": true, "export.json": true, "events.": true, "ack.": true, "install.sh": true, "download": true,

@@ -111,6 +111,7 @@ func (s *serverAuth) serve(w http.ResponseWriter, r *http.Request) {
 
 type serverAuth struct {
 	service           AuthService
+	events            NotificationEvents
 	requireHTTPS      bool
 	trustedProxyCIDRs string
 	tokens            AccessTokenStore
@@ -186,12 +187,16 @@ func (s *serverAuth) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if errors.Is(err, auth.ErrInvalidCredentials) {
+		s.recordLoginFailure(r, clientIP)
 		w.Header().Set("WWW-Authenticate", "Session")
 		writeProblemResponse(w, http.StatusUnauthorized, problemResponse{
 			Type: "/problems/unauthorized", Title: "Invalid email or password", Status: http.StatusUnauthorized,
 			Detail: "Invalid email or password.", TraceID: requestIDFromContext(r.Context()),
 		})
 		return
+	}
+	if errors.Is(err, auth.ErrInvalidTwoFactorCode) {
+		s.recordLoginFailure(r, clientIP)
 	}
 	if writeTwoFactorProblem(w, r, err) {
 		return
@@ -208,8 +213,17 @@ func (s *serverAuth) login(w http.ResponseWriter, r *http.Request) {
 		writeAuthInternalError(w, r)
 		return
 	}
+	if created.Identity != nil && s.events != nil {
+		_ = s.events.RecordSignIn(context.WithoutCancel(r.Context()), created.Identity.ID, clientIP)
+	}
 	s.setCookie(w, r, created)
 	writeAuthSuccess(w, r, http.StatusOK, "Signed in.", sessionResponse(created))
+}
+
+func (s *serverAuth) recordLoginFailure(r *http.Request, ip string) {
+	if s.events != nil {
+		_ = s.events.RecordLoginFailure(context.WithoutCancel(r.Context()), ip)
+	}
 }
 
 func (s *serverAuth) logout(w http.ResponseWriter, r *http.Request) {
