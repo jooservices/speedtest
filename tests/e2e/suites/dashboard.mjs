@@ -123,6 +123,14 @@ export function dashboardSuite(T, ctx) {
           const cards = page.locator('.grid.cols-5 .stat'), values = await cards.locator('.delta').allInnerTexts();
           return await cards.count() === 5 && values.length === 5 && values.every(value => value !== 'Loading comparison…');
         }, 'the dashboard comparison has loaded');
+        // The center caches the dashboard snapshot for 5 s, so an earlier scenario's figures can still be served: reload until the fixture shows.
+        await T.eventually(async () => {
+          const shown = (await page.locator('.stat').filter({ hasText: 'Download vs. expected' }).first().locator('.stat-value').innerText()).replace(/\s/g, '');
+          if (shown === '80%') return true;
+          await page.reload();
+          await T.settled();
+          return shown;
+        }, 'the dashboard snapshot shows the KPI fixture', 20000);
         await assertKpi(T, 'Download vs. expected', '80%', '▲ 33.3%');
         await assertKpi(T, 'Upload vs. expected', '70%', '▲ 40.0%');
         await assertKpi(T, 'Median latency', '30.0 ms', '▼ 25.0%');
@@ -320,6 +328,14 @@ export function dashboardSuite(T, ctx) {
         const hint = success.locator('.stat-hint');
         await hint.waitFor();
         assert.equal(await hint.getAttribute('aria-hidden'), null, 'rate-limit count remains exposed to assistive technology');
+        // The center caches the dashboard snapshot for 5 s, so the figure of the previous range can still be served: reload until it refreshes.
+        await T.eventually(async () => {
+          const shown = (await success.locator('.stat-value').innerText()).trim();
+          if (shown === '—%') return true;
+          await page.reload();
+          await T.settled();
+          return shown;
+        }, 'an all-rate-limited range has no success percentage', 20000);
         assert.equal((await success.locator('.stat-value').innerText()).trim(), '—%', 'an all-rate-limited range has no success percentage');
         assert.equal((await hint.innerText()).replaceAll(/\s+/g, ' ').trim(), '3 rate-limited tests excluded from success rate · no eligible tests');
         await T.open('#/stats', 'Statistics');

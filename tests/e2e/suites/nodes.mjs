@@ -412,7 +412,9 @@ export function nodesSuite(T, ctx) {
         await page.evaluate(() => {
           const one = ST.addNode({ name: 'One bucket fixture', label: 'Three samples', expectedDown: 200, expectedUp: 100 });
           const two = ST.addNode({ name: 'Two bucket fixture', label: 'Five samples', expectedDown: 200, expectedUp: 100 });
-          const anchor = Date.now() - 12 * 60 * 60 * 1000;
+          // Noon of yesterday: the samples (up to 2 and 25 hours earlier) then always stay inside one day bucket each, whatever the time of day.
+          const midnight = new Date(); midnight.setHours(0, 0, 0, 0);
+          const anchor = midnight.getTime() - 12 * 60 * 60 * 1000;
           const add = (node, hours, seq) => ({ id: 'bucket-' + node.id + '-' + seq, nodeId: node.id, ts: anchor - hours * 3600000,
             status: 'ok', down: 100 + seq, up: 50 + seq, ping: 10 + seq, jitter: 1, loss: 0, dLat: 10, uLat: 10,
             serverId: 1001, ip: '198.51.100.101', threads: 4, bytesDown: 1000, bytesUp: 500, duration: 1, engine: 'ookla' });

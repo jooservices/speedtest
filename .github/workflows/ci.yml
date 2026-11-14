@@ -48,6 +48,7 @@ jobs:
       - name: UI contract, unit tests and coverage
         run: |
           npm ci
+          npx playwright install --with-deps chromium
           npm run lint
           npm run typecheck
           npm run test:coverage
@@ -57,9 +58,7 @@ jobs:
         run: python3 -m unittest discover -s tests/lib
 
       - name: UI browser smoke (demo and contract API)
-        run: |
-          npx playwright install --with-deps chromium
-          npm run test:ui
+        run: npm run test:ui
 
       - name: Every API operation has a test
         run: |

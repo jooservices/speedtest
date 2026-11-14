@@ -3,7 +3,7 @@
 import { chromium } from 'playwright';
 import { mkdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import http from 'node:http';
+import { Worker } from 'node:worker_threads';
 import { startStack, startAgent, fetchAgentConfig, submitScheduledResult, submitFailedResult, sendAgentHeartbeat, stopAll, query, root } from './lib.mjs';
 import { coreSteps } from './steps/core.mjs';
 import { enginesSuite } from './suites/engines.mjs';
@@ -42,9 +42,12 @@ page.on('pageerror', e => problems.push(`pageerror: ${e.message}`));
 
 // A local receiver for webhook test messages.
 const receiver = { bodies: [], url: '' };
-const receiverServer = http.createServer((req, res) => { const chunks = []; req.on('data', c => chunks.push(c)); req.on('end', () => { try { receiver.bodies.push(JSON.parse(Buffer.concat(chunks).toString())); } catch { receiver.bodies.push({ raw: true }); } res.writeHead(200); res.end('ok'); }); });
-await new Promise(resolve => receiverServer.listen(0, '127.0.0.1', resolve));
-receiver.url = `http://127.0.0.1:${receiverServer.address().port}/hook`;
+const receiverWorker = new Worker(new URL('./receiver-worker.mjs', import.meta.url));
+await new Promise(resolve => receiverWorker.on('message', function onMessage(message) {
+  if (message.body) { receiver.bodies.push(message.body); return; }
+  receiver.url = `http://127.0.0.1:${message.port}/hook`;
+  resolve();
+}));
 const ctx = { page, stack, startAgent, fetchAgentConfig, submitScheduledResult, submitFailedResult, sendAgentHeartbeat, query, problems, receiver, browser };
 const T = coreSteps(ctx);
 const S = { engines: enginesSuite(T, ctx), auth: authSuite(T, ctx), dashboard: dashboardSuite(T, ctx), nodes: nodesSuite(T, ctx), results: resultsSuite(T, ctx), statistics: statisticsSuite(T, ctx),
@@ -81,7 +84,7 @@ console.log(`contract: ${contractResult.responses} responses checked against doc
 for (const v of contractResult.violations) console.log('  CONTRACT ' + v);
 if (contractResult.violations.length && !only) failed++;
 await browser.close();
-receiverServer.close();
+receiverWorker.postMessage('close');
 stopAll();
 void query;
 process.exit(failed ? 1 : 0);

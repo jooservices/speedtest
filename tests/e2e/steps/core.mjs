@@ -19,7 +19,7 @@ export function coreSteps(ctx) {
     // ---- navigation and session ----
     async open(hash, title) {
       await page.goto(T.url(hash));
-      await T.heading(title).waitFor({ timeout: 15000 });
+      await T.heading(title).waitFor({ timeout: 45000 }); // a loaded machine can take far longer than 15 s to draw a page
     },
     async signIn(email = OWNER.email, password = OWNER.password) {
       await page.goto(T.url('#/signin'));

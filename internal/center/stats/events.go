@@ -21,59 +21,53 @@ type EventsResponse struct {
 	Truncated bool    `json:"truncated"`
 }
 
-const eventsSQL = `WITH selected_nodes AS (` + selectedNodes + `),
-scoped AS (
- SELECT r.id, r.node_id, r.ts, r.engine, r.ip,
-        CASE WHEN NULLIF(btrim(r.engine_isp),'') IS NOT NULL THEN btrim(r.engine_isp)
-             ELSE COALESCE(NULLIF(btrim((SELECT address.geo->>'organisation' FROM ip_addresses address WHERE address.ip=r.ip)),''),'') END AS isp
- FROM results r JOIN selected_nodes n ON n.id=r.node_id
- WHERE r.ts >= $2 AND r.ts < $3
-   AND r.engine=COALESCE(NULLIF($4::text,''),n.primary_engine)
-),
-window_groups AS (SELECT DISTINCT node_id,engine FROM scoped),
-prior AS (
- SELECT g.node_id,g.engine,p.id,p.ts,p.isp
- FROM window_groups g
- JOIN LATERAL (
-   SELECT r.id,r.ts,COALESCE(NULLIF(btrim(r.engine_isp),''),NULLIF(btrim(a.geo->>'organisation'),''),'') AS isp
-   FROM results r LEFT JOIN ip_addresses a ON a.ip=r.ip
-   WHERE r.node_id=g.node_id AND r.engine=g.engine AND r.ts < $2
-     AND COALESCE(NULLIF(btrim(r.engine_isp),''),NULLIF(btrim(a.geo->>'organisation'),''),'') <> ''
-   ORDER BY r.ts DESC,r.id DESC LIMIT 1
- ) p ON true
-),
-prior_ip AS (
- SELECT g.node_id,g.engine,p.id,p.ts,p.ip
- FROM window_groups g
- JOIN LATERAL (
-   SELECT r.id,r.ts,r.ip
+// resultISP is the ISP the engine reported, falling back to the cached IP
+// organisation; it is empty when neither is known. It expects the results row
+// aliased r; the cached organisation is only looked up when the engine reported none.
+const resultISP = `COALESCE(NULLIF(btrim(r.engine_isp),''),NULLIF(btrim((SELECT a.geo->>'organisation' FROM ip_addresses a WHERE a.ip=r.ip)),''),'')`
+
+// previousKnown looks up the latest earlier result of the same node and engine
+// that carries a value (resultISP or the IP). It only runs for rows whose
+// immediate predecessor in the window has no value, which includes the first
+// row of each group (the result just before the requested range).
+const previousKnown = `(SELECT %s
    FROM results r
-   WHERE r.node_id=g.node_id AND r.engine=g.engine AND r.ts < $2 AND r.ip IS NOT NULL
-   ORDER BY r.ts DESC,r.id DESC LIMIT 1
- ) p ON true
-),
-known AS (
- SELECT id,node_id,engine,ts,isp FROM scoped WHERE isp <> ''
- UNION ALL SELECT id,node_id,engine,ts,isp FROM prior
-),
-known_ip AS (
- SELECT id,node_id,engine,ts,ip,isp FROM scoped WHERE ip IS NOT NULL
- UNION ALL SELECT id,node_id,engine,ts,ip,''::text AS isp FROM prior_ip
+   WHERE r.node_id=o.node_id AND r.engine=o.engine AND r.ts <= o.ts AND (r.ts,r.id) < (o.ts,o.id)
+     AND %s
+   ORDER BY r.ts DESC,r.id DESC LIMIT 1)`
+
+var (
+	previousISPLookup = fmt.Sprintf(previousKnown, `NULLIF(`+resultISP+`,'')`, resultISP+` <> ''`)
+	previousIPLookup  = fmt.Sprintf(previousKnown, `r.ip`, `r.ip IS NOT NULL`)
+)
+
+var eventsSQL = `WITH selected_nodes AS (` + selectedNodes + `),
+neighbours AS (
+ SELECT s.*
+ FROM selected_nodes n
+ CROSS JOIN LATERAL (
+  SELECT id,node_id,engine,ts,ip,isp,
+         lag(NULLIF(isp,'')) OVER w AS lag_isp,
+         lag(ip) OVER w AS lag_ip
+  FROM (
+   SELECT r.id, r.node_id, r.ts, r.engine, r.ip, ` + resultISP + ` AS isp
+   FROM results r
+   WHERE r.node_id=n.id AND r.engine=COALESCE(NULLIF($4::text,''),n.primary_engine)
+     AND r.ts >= $2 AND r.ts < $3
+  ) scoped
+  WINDOW w AS (ORDER BY ts,id)
+ ) s
 ),
 ordered AS (
- SELECT id,node_id,engine,ts,isp,
-        lag(isp) OVER (PARTITION BY node_id,engine ORDER BY ts,id) AS previous_isp
- FROM known
-),
-ordered_ip AS (
- SELECT id,node_id,engine,ts,ip,isp,
-        lag(ip) OVER (PARTITION BY node_id,engine ORDER BY ts,id) AS previous_ip
- FROM known_ip
+ SELECT o.id,o.node_id,o.ts,o.ip,o.isp,
+        CASE WHEN o.isp <> '' THEN COALESCE(o.lag_isp,` + previousISPLookup + `) END AS previous_isp,
+        CASE WHEN o.ip IS NOT NULL THEN COALESCE(o.lag_ip,` + previousIPLookup + `) END AS previous_ip
+ FROM neighbours o
 ),
 ip_events AS (
  SELECT id::text,node_id::text,ts,'ip_change'::text AS type,
         'IP '||host(previous_ip)||' → '||host(ip) AS label
- FROM ordered_ip
+ FROM ordered
  WHERE previous_ip IS NOT NULL AND ip <> previous_ip
    AND ts >= $2 AND ts < $3
    AND ($5::text='' OR (isp <> '' AND lower(isp)=lower($5::text)))
