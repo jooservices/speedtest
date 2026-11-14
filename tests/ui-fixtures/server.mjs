@@ -186,6 +186,12 @@ export async function startServer() {
       }
       if (url.pathname === '/api/usage/budgets') { send(200, envelope([])); return; }
       if (url.pathname === '/api/isps') { send(200, envelope(control.empty ? [] : [data.isp])); return; }
+      if (url.pathname === '/api/reports/monthly') {
+        const month = url.searchParams.get('month') || '2026-10';
+        const from = new Date(`${month}-01T00:00:00Z`), to = new Date(Date.UTC(from.getUTCFullYear(), from.getUTCMonth() + 1, 1));
+        send(200, envelope({ month, from: from.toISOString(), to: to.toISOString(), partial: false, engine: url.searchParams.get('engine') || 'ookla', generatedAt: to.toISOString(), rows: [] }));
+        return;
+      }
       if (url.pathname === '/api/isps/compare') { send(200, envelope(control.empty ? [] : [data.isp])); return; }
       if (url.pathname.endsWith('/trend') && url.pathname.startsWith('/api/isps/')) {
         send(200, envelope(control.empty ? [] : [{ ts: ts0(), down: 90, up: 40, ping: 10, n: 1 }])); return;

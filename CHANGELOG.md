@@ -9,6 +9,7 @@ All notable changes to Speedtest are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Delivery flow (JOOST-94): the project profile `.ai/project.json`, the pull request template and guard, and per-worktree databases from `scripts/db/tree` (the test database guard accepts `wt_<ticket>` names).
 - UI/UX improvements (JOOST-82): failure-class chips in result tables, KPI comparison with the previous period, a one-row mobile top bar, a download icon on exports, a not-enough-data note with expected-speed reference lines on sparse charts, upload percentage of expected in the Nodes table, the engine selector, keyboard fixes and an automated axe accessibility check in the E2E suite.
 - Statistics analytics now include p50/p95/p99, an ISP filter, a fixed-window heatmap, week-over-week means and bounded IP/ISP/alert events.
 - JOOST-83 (B1): Go function complexity limits, a systemd installer test, UI JavaScript type checking, per-package test timing budgets, and a flaky-test log.
@@ -20,6 +21,12 @@ All notable changes to Speedtest are recorded here. The format follows
 - Optional two-factor sign-in with an authenticator app (TOTP) and ten one-time recovery codes, in Settings > Access; the operator command `disable-2fa` is the recovery path.
 - Geolocation: ipwho.is, ipapi.co and ipgeolocation.io providers (off by default), consensus mode, and a built-in monthly DB-IP Lite database updater.
 - Fixed failure classes on test results; Ookla rate limits use capped exponential backoff, and rate-limited tests are counted separately from success rates and ignored by failure alerts.
+
+### Fixed
+- OpenAPI (JOOST-94): `/api/stats/events` answers with the statistics-events schema and `getUsageResponse` carries the usage schema again, so the UI contract test passes.
+- Statistics events (JOOST-94): the events query computes the ISP and IP changes in one ordered pass, about 40% faster on a one-year dataset, with identical results; the bandwidth usage latency check no longer assumes five node-engine pairs.
+- Bandwidth usage (JOOST-94): the usage query aggregates results before joining nodes and ISPs, about 35% faster on a one-year dataset, with identical results; the UI fixture server answers the monthly report and the dashboard scenario waits for the cached snapshot to refresh.
+- E2E stability (JOOST-94): the webhook receiver of the E2E harness runs in its own thread so a blocked scenario cannot make a delivery attempt fail, and two sparse-trend fixtures no longer depend on the time of day.
 
 ### Changed
 - New nodes, missing agent intervals, and newly enabled engine schedules default to 60 minutes; existing schedules retain their configured values.

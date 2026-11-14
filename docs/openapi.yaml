@@ -2464,7 +2464,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/getEventsResponse"
+                $ref: "#/components/schemas/getStatisticsEventsResponse"
         "401":
           $ref: "#/components/responses/Unauthorized"
         "403":
@@ -8890,7 +8890,6 @@ components:
               items:
                 $ref: "#/components/schemas/Distribution"
     getUsageResponse:
-    getEventsResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
         - type: object
@@ -8899,6 +8898,15 @@ components:
               const: 200
             data:
               $ref: "#/components/schemas/Usage"
+    getStatisticsEventsResponse:
+      allOf:
+        - $ref: "#/components/schemas/Success"
+        - type: object
+          properties:
+            code:
+              const: 200
+            data:
+              $ref: "#/components/schemas/StatisticsEvents"
     getUsageAdviceResponse:
       allOf:
         - $ref: "#/components/schemas/Success"
@@ -8930,7 +8938,6 @@ components:
               type: array
               items:
                 $ref: "#/components/schemas/UsageBudget"
-              $ref: "#/components/schemas/StatisticsEvents"
     getDashboardResponse:
       allOf:
         - $ref: "#/components/schemas/Success"

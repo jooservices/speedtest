@@ -143,17 +143,23 @@ func (s *Store) nodeEngineTotals(ctx context.Context, q Query, monthStart, previ
 	dimensions, args := usageFilterConditions(q, "r", false)
 	fromParam, toParam, monthParam, nowParam, previousParam := len(args)+1, len(args)+2, len(args)+3, len(args)+4, len(args)+5
 	args = append(args, q.From, q.To, monthStart, now, previousStart)
-	query := fmt.Sprintf(`SELECT r.node_id::text,n.name,r.engine,COALESCE(r.isp_id::text,''),COALESCE(i.name,''),
- COALESCE(sum(r.bytes_down) FILTER (WHERE r.ts >= $%d AND r.ts < $%d),0),
- COALESCE(sum(r.bytes_up) FILTER (WHERE r.ts >= $%d AND r.ts < $%d),0),
- COALESCE(sum(r.bytes_down) FILTER (WHERE r.ts >= $%d AND r.ts < $%d),0),
- COALESCE(sum(r.bytes_up) FILTER (WHERE r.ts >= $%d AND r.ts < $%d),0),
- COALESCE(sum(r.bytes_down) FILTER (WHERE r.ts >= $%d AND r.ts < $%d),0),
- COALESCE(sum(r.bytes_up) FILTER (WHERE r.ts >= $%d AND r.ts < $%d),0)
-	 FROM results r JOIN nodes n ON n.id=r.node_id LEFT JOIN isps i ON i.id=r.isp_id
- WHERE ((r.ts >= $%d AND r.ts < $%d) OR (r.ts >= $%d AND r.ts < $%d))%s
- AND (r.bytes_down IS NOT NULL OR r.bytes_up IS NOT NULL)
-	 GROUP BY r.node_id,n.name,r.engine,r.isp_id,i.name ORDER BY lower(n.name),r.engine,lower(COALESCE(i.name,'')),r.isp_id`,
+	// Aggregate the result rows first and join the (few) node and ISP names afterwards.
+	query := fmt.Sprintf(`SELECT t.node_id::text,n.name,t.engine,COALESCE(t.isp_id::text,''),COALESCE(i.name,''),
+ t.down,t.up,t.month_down,t.month_up,t.previous_down,t.previous_up
+ FROM (
+  SELECT r.node_id,r.engine,r.isp_id,
+   COALESCE(sum(r.bytes_down) FILTER (WHERE r.ts >= $%d AND r.ts < $%d),0) AS down,
+   COALESCE(sum(r.bytes_up) FILTER (WHERE r.ts >= $%d AND r.ts < $%d),0) AS up,
+   COALESCE(sum(r.bytes_down) FILTER (WHERE r.ts >= $%d AND r.ts < $%d),0) AS month_down,
+   COALESCE(sum(r.bytes_up) FILTER (WHERE r.ts >= $%d AND r.ts < $%d),0) AS month_up,
+   COALESCE(sum(r.bytes_down) FILTER (WHERE r.ts >= $%d AND r.ts < $%d),0) AS previous_down,
+   COALESCE(sum(r.bytes_up) FILTER (WHERE r.ts >= $%d AND r.ts < $%d),0) AS previous_up
+  FROM results r
+  WHERE ((r.ts >= $%d AND r.ts < $%d) OR (r.ts >= $%d AND r.ts < $%d))%s
+   AND (r.bytes_down IS NOT NULL OR r.bytes_up IS NOT NULL)
+  GROUP BY r.node_id,r.engine,r.isp_id
+ ) t JOIN nodes n ON n.id=t.node_id LEFT JOIN isps i ON i.id=t.isp_id
+ ORDER BY lower(n.name),t.engine,lower(COALESCE(i.name,'')),t.isp_id`,
 		fromParam, toParam, fromParam, toParam,
 		monthParam, nowParam, monthParam, nowParam,
 		previousParam, monthParam, previousParam, monthParam,
@@ -190,8 +196,13 @@ func (s *Store) series(ctx context.Context, q Query) ([]Bucket, error) {
 	conditions, args := usageFilterConditions(q, "r", true)
 	groupParam := len(args) + 1
 	args = append(args, q.Group)
-	query := fmt.Sprintf(`SELECT r.node_id::text,r.engine,COALESCE(r.isp_id::text,''),COALESCE(i.name,''),date_trunc($%d,r.ts AT TIME ZONE 'UTC') AT TIME ZONE 'UTC',COALESCE(sum(r.bytes_down),0),COALESCE(sum(r.bytes_up),0)
-	 FROM results r LEFT JOIN isps i ON i.id=r.isp_id WHERE (r.bytes_down IS NOT NULL OR r.bytes_up IS NOT NULL)%s GROUP BY r.node_id,r.engine,r.isp_id,i.name,5 ORDER BY 5,r.node_id,r.engine,r.isp_id`, groupParam, filterSuffix(conditions))
+	query := fmt.Sprintf(`SELECT t.node_id::text,t.engine,COALESCE(t.isp_id::text,''),COALESCE(i.name,''),t.bucket_start,t.down,t.up
+	 FROM (
+	  SELECT r.node_id,r.engine,r.isp_id,date_trunc($%d,r.ts AT TIME ZONE 'UTC') AT TIME ZONE 'UTC' AS bucket_start,
+	   COALESCE(sum(r.bytes_down),0) AS down,COALESCE(sum(r.bytes_up),0) AS up
+	  FROM results r WHERE (r.bytes_down IS NOT NULL OR r.bytes_up IS NOT NULL)%s
+	  GROUP BY r.node_id,r.engine,r.isp_id,bucket_start
+	 ) t LEFT JOIN isps i ON i.id=t.isp_id ORDER BY t.bucket_start,t.node_id,t.engine,t.isp_id`, groupParam, filterSuffix(conditions))
 	rows, err := s.DB.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err

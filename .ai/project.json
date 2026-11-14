@@ -1,0 +1,364 @@
+{
+  "identity": {
+    "name": "Viet Vu",
+    "email": "jooservices@gmail.com",
+    "forbiddenTraces": [
+      "(?i)co-authored-by:.*(claude|anthropic|codex|openai|chatgpt|gpt|copilot|gemini|grok|opencode|deepseek|cursor)",
+      "(?i)generated (with|by)\\b",
+      "🤖",
+      "(?i)\\bclaude code\\b"
+    ],
+    "sshKey": "~/.ssh/github_ed25519",
+    "githubUser": "soulevilx"
+  },
+  "setup": [
+    {
+      "name": "geo-fixtures",
+      "cmd": "python3 scripts/geo-test-fixtures.py",
+      "cwd": "."
+    },
+    {
+      "name": "node-deps",
+      "cmd": "npm ci --no-audit --no-fund",
+      "cwd": "."
+    }
+  ],
+  "stages": [
+    {
+      "name": "vet",
+      "group": "static",
+      "order": 1,
+      "cmd": "go vet ./...",
+      "changedCmd": "go vet ./...",
+      "cwd": ".",
+      "when": [
+        "**/*.go",
+        "go.mod",
+        "go.sum"
+      ],
+      "parallel": "static",
+      "expectedSeconds": 60,
+      "requiresServices": []
+    },
+    {
+      "name": "lint",
+      "group": "static",
+      "order": 1,
+      "cmd": "golangci-lint run --allow-parallel-runners",
+      "changedCmd": "golangci-lint run --allow-parallel-runners",
+      "cwd": ".",
+      "when": [
+        "**/*.go",
+        "go.mod",
+        "go.sum"
+      ],
+      "parallel": "static",
+      "expectedSeconds": 120,
+      "requiresServices": []
+    },
+    {
+      "name": "typecheck",
+      "group": "static",
+      "order": 1,
+      "cmd": "npm run typecheck",
+      "changedCmd": "npm run typecheck",
+      "cwd": ".",
+      "when": [
+        "ui/**/*.js",
+        "tests/**/*.mjs",
+        "scripts/**/*.mjs",
+        "package.json"
+      ],
+      "parallel": "static",
+      "expectedSeconds": 60,
+      "requiresServices": []
+    },
+    {
+      "name": "ui-syntax",
+      "group": "static",
+      "order": 1,
+      "cmd": "npm run lint",
+      "changedCmd": "npm run lint",
+      "cwd": ".",
+      "when": [
+        "ui/**/*.js"
+      ],
+      "parallel": "static",
+      "expectedSeconds": 20,
+      "requiresServices": []
+    },
+    {
+      "name": "shell",
+      "group": "static",
+      "order": 1,
+      "cmd": "make shellcheck",
+      "changedCmd": "make shellcheck",
+      "cwd": ".",
+      "when": [
+        "**/*.sh",
+        "Makefile"
+      ],
+      "parallel": "static",
+      "expectedSeconds": 30,
+      "requiresServices": []
+    },
+    {
+      "name": "secrets",
+      "group": "static",
+      "order": 1,
+      "cmd": "gitleaks git --no-banner --redact .",
+      "changedCmd": "gitleaks git --no-banner --redact .",
+      "cwd": ".",
+      "when": [],
+      "parallel": "static",
+      "expectedSeconds": 30,
+      "requiresServices": []
+    },
+    {
+      "name": "unit-go",
+      "group": "test",
+      "order": 2,
+      "cmd": "make test",
+      "cwd": ".",
+      "when": [
+        "**/*.go",
+        "go.mod",
+        "go.sum"
+      ],
+      "parallel": "",
+      "expectedSeconds": 300,
+      "requiresServices": []
+    },
+    {
+      "name": "unit-ui",
+      "group": "test",
+      "order": 2,
+      "cmd": "npm test",
+      "changedCmd": "npm test",
+      "cwd": ".",
+      "when": [
+        "ui/**/*.js",
+        "tests/**/*.mjs",
+        "scripts/**/*.mjs",
+        "package.json"
+      ],
+      "parallel": "",
+      "expectedSeconds": 60,
+      "requiresServices": []
+    },
+    {
+      "name": "python",
+      "group": "test",
+      "order": 2,
+      "cmd": "make python-tests",
+      "changedCmd": "make python-tests",
+      "cwd": ".",
+      "when": [
+        "scripts/**/*.py",
+        "tests/lib/**/*.py",
+        "tests/observability/**/*.py"
+      ],
+      "parallel": "",
+      "expectedSeconds": 30,
+      "requiresServices": []
+    },
+    {
+      "name": "scripts",
+      "group": "test",
+      "order": 2,
+      "cmd": "make test-install test-docker-staging",
+      "cwd": ".",
+      "when": [
+        "deploy/**",
+        "scripts/**/*.sh",
+        "tests/install-systemd/**"
+      ],
+      "parallel": "",
+      "expectedSeconds": 120,
+      "requiresServices": []
+    },
+    {
+      "name": "test-matrix",
+      "group": "test",
+      "order": 2,
+      "cmd": "make test-matrix",
+      "cwd": ".",
+      "when": [
+        "docs/openapi.yaml",
+        "docs/test-matrix.md",
+        "tests/**",
+        "internal/**"
+      ],
+      "parallel": "",
+      "expectedSeconds": 30,
+      "requiresServices": []
+    },
+    {
+      "name": "integration",
+      "group": "test",
+      "order": 3,
+      "cmd": "go test -race -p 1 -tags integration -count=1 ./...",
+      "cwd": ".",
+      "when": [
+        "**/*.go",
+        "go.mod",
+        "go.sum",
+        "migrations/**"
+      ],
+      "parallel": "",
+      "expectedSeconds": 1500,
+      "requiresServices": []
+    },
+    {
+      "name": "e2e",
+      "group": "test",
+      "order": 4,
+      "cmd": "make e2e",
+      "cwd": ".",
+      "when": [
+        "ui/**",
+        "internal/**",
+        "cmd/**",
+        "tests/e2e/**",
+        "tests/ui-fixtures/**",
+        "docs/openapi.yaml"
+      ],
+      "parallel": "",
+      "expectedSeconds": 900,
+      "requiresServices": []
+    },
+    {
+      "name": "ui-coverage",
+      "group": "test",
+      "order": 5,
+      "cmd": "make ui-coverage",
+      "cwd": ".",
+      "when": [
+        "ui/**",
+        "tests/e2e/**",
+        "tests/ui/**",
+        "tests/lib/**",
+        "scripts/ui-coverage.mjs"
+      ],
+      "parallel": "",
+      "expectedSeconds": 1500,
+      "requiresServices": []
+    },
+    {
+      "name": "mutation",
+      "group": "test",
+      "order": 6,
+      "cmd": "python3 scripts/mutation-check.py",
+      "cwd": ".",
+      "when": [
+        "internal/**",
+        "cmd/**",
+        "tests/**"
+      ],
+      "parallel": "",
+      "expectedSeconds": 600,
+      "requiresServices": []
+    },
+    {
+      "name": "sonar",
+      "group": "analysis",
+      "order": 7,
+      "cmd": "{workspace}/scripts/dev/sonar",
+      "cwd": ".",
+      "when": [],
+      "parallel": "",
+      "expectedSeconds": 300,
+      "requiresServices": []
+    }
+  ],
+  "testGlobs": [
+    "internal/**/*_test.go",
+    "cmd/**/*_test.go",
+    "tests/ui/**/*.test.mjs",
+    "tests/e2e/**/*.mjs",
+    "tests/lib/test_*.py",
+    "tests/observability/test_*.py"
+  ],
+  "testNamePatterns": [
+    "func (Test[A-Za-z0-9_]+)\\(",
+    "(?:it|test)\\(\\s*['\"`]([^'\"`]+)['\"`]",
+    "(?m)^\\s*def\\s+(test_[A-Za-z0-9_]+)\\(",
+    "(SC-[A-Z]+-[0-9]+)"
+  ],
+  "commitMessage": {
+    "regex": "^(?=.{1,120}$)(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)\\([^()\\r\\n]+\\): [A-Z](?:.*[^.])? \\([A-Z][A-Z0-9]*-[0-9]+\\)$",
+    "rules": {
+      "requireTicketKeyMatch": true
+    }
+  },
+  "protectedBranches": [
+    "develop",
+    "master"
+  ],
+  "ticketKeyRegex": "JOOST-[0-9]+",
+  "forbiddenPatterns": [
+    "//\\s*nolint",
+    "eslint-disable",
+    "@ts-ignore",
+    "# noqa",
+    "// NOSONAR"
+  ],
+  "mechanicalPaths": [
+    "**/*.md",
+    "docs/**",
+    "CHANGELOG.md"
+  ],
+  "skills": [
+    "engineering-principles",
+    "go-coding-practice",
+    "go-testing",
+    "node-coding-practice"
+  ],
+  "touchPoints": [
+    "cmd/**",
+    "internal/**",
+    "migrations/**",
+    "ui/**",
+    "tests/**",
+    "docs/**",
+    "deploy/**",
+    "scripts/**"
+  ],
+  "reviewers": [
+    {
+      "provider": "grok",
+      "model": "grok-4.7",
+      "effort": "xhigh"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-sonnet-5-5",
+      "effort": "max"
+    },
+    {
+      "provider": "codex",
+      "model": "gpt-6.1-terra",
+      "account": "ngocvu",
+      "effort": "xhigh"
+    }
+  ],
+  "developers": [
+    {
+      "provider": "codex",
+      "model": "gpt-6-luna",
+      "account": "ngocvu",
+      "effort": "xhigh",
+      "count": 2
+    },
+    {
+      "provider": "opencode",
+      "model": "opencode/deepseek-v4.1-flash-free",
+      "effort": "max"
+    },
+    {
+      "provider": "claude",
+      "model": "claude-haiku-5-5",
+      "effort": "max"
+    }
+  ]
+}
