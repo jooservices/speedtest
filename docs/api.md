@@ -67,7 +67,7 @@ present in local or test environments. `APP_ENV` must be `local` or `test`; the
 command refuses staging, production and unknown values. It inserts only when the
 email does not already exist, hashes the password with Argon2id, and never resets
 an existing password. Local/test commands require `speedtest_test` or a
-`speedtest_wt*` database with the Workspaces ownership marker. Keep the default
+`speedtest_wt*` or `wt_<ticket>` database with the Workspaces ownership marker. Keep the default
 credential limited to local/test data.
 
 1. `GET /api/auth/me` without a cookie establishes an anonymous session and returns
