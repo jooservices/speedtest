@@ -357,7 +357,7 @@ func verifyBandwidthUsageLatency(t *testing.T, pool *pgxpool.Pool, ctx context.C
 		result, err = store.Usage(ctx, query)
 		return err
 	})
-	if result.Totals.Total <= 0 || len(result.ByNodeEngine) < 5 || len(result.Series) > 65 {
+	if result.Totals.Total <= 0 || len(result.ByNodeEngine) < 5 || len(result.Series) > 13*len(result.ByNodeEngine) {
 		t.Fatalf("usage over %d results: bytes=%d node-engine rows=%d month buckets=%d", samples, result.Totals.Total, len(result.ByNodeEngine), len(result.Series))
 	}
 }

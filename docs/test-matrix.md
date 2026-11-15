@@ -6,7 +6,7 @@ Operations: 102. Without a test: 0.
 
 | Operation | Method | Path | Tests |
 |---|---|---|---|
-| getSession | GET | `/api/auth/me` | `cmd/center/notifications_integration_test.go`<br>`internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/auth_twofactor_test.go`<br>+7 more |
+| getSession | GET | `/api/auth/me` | `cmd/center/notifications_integration_test.go`<br>`internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>`internal/center/server/auth_twofactor_test.go`<br>+8 more |
 | login | POST | `/api/auth/login` | `cmd/center/notifications_integration_test.go`<br>`internal/center/audit/audit_test.go`<br>`internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>+4 more |
 | logout | POST | `/api/auth/logout` | `internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go` |
 | changePassword | POST | `/api/auth/password` | `internal/center/audit/audit_test.go`<br>`internal/center/auth/auth_integration_test.go`<br>`internal/center/server/auth_test.go`<br>`tests/ui/api.test.mjs`<br>+2 more |
@@ -43,13 +43,13 @@ Operations: 102. Without a test: 0.
 | exportFilteredCSV | GET | `/api/results/export.csv` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | exportAllCSV | GET | `/api/export/results.csv` | `internal/center/server/httpx_test.go`<br>`internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
 | exportAllJSON | GET | `/api/export/results.json` | `internal/center/server/ownerresults_integration_test.go`<br>`internal/center/server/ownerresults_test.go` |
-| getMonthlyReport | GET | `/api/reports/monthly` | `internal/center/report/report_test.go`<br>`internal/center/server/ownerreport_test.go`<br>`tests/e2e/suites/isps.mjs` |
+| getMonthlyReport | GET | `/api/reports/monthly` | `internal/center/report/report_test.go`<br>`internal/center/server/ownerreport_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | listISPs | GET | `/api/isps` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/e2e/suites/settings.mjs`<br>`tests/ui/contract.test.mjs`<br>+2 more |
 | compareISPs | GET | `/api/isps/compare` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/ui-fixtures/server.mjs` |
-| getISP | GET | `/api/isps/{id}` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/e2e/suites/settings.mjs`<br>`tests/ui/smoke.mjs`<br>+1 more |
+| getISP | GET | `/api/isps/{id}` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/e2e/suites/settings.mjs`<br>`tests/ui/smoke.mjs`<br>+2 more |
 | getISPTrend | GET | `/api/isps/{id}/trend` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs`<br>`tests/ui/smoke.mjs` |
-| listISPPlans | GET | `/api/isps/{id}/plans` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/settings.mjs` |
-| createISPPlan | POST | `/api/isps/{id}/plans` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/settings.mjs` |
+| listISPPlans | GET | `/api/isps/{id}/plans` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/settings.mjs`<br>`tests/ui/store.test.mjs` |
+| createISPPlan | POST | `/api/isps/{id}/plans` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/settings.mjs`<br>`tests/ui/store.test.mjs` |
 | updateISPPlan | PUT | `/api/isps/{id}/plans/{planId}` | `internal/center/server/ownerisp_test.go`<br>`tests/e2e/suites/isps.mjs` |
 | deleteISPPlan | DELETE | `/api/isps/{id}/plans/{planId}` | `internal/center/server/ownerisp_test.go` |
 | getSummary | GET | `/api/stats/summary` | `internal/center/server/httpx_test.go`<br>`internal/center/server/ownerisp_test.go`<br>`internal/center/server/ownerstats_integration_test.go`<br>`internal/center/server/ownerstats_test.go`<br>+5 more |
@@ -82,11 +82,11 @@ Operations: 102. Without a test: 0.
 | ackAllEvents | POST | `/api/alerts/acknowledgements` | `internal/center/server/owneralerts_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | testNotification | POST | `/api/notifications/test/{channel}` | `cmd/center/notifications_integration_test.go`<br>`internal/center/audit/audit_test.go`<br>`internal/center/server/ownernotifications_test.go` |
 | listDeliveries | GET | `/api/notifications/deliveries` | `cmd/center/notifications_integration_test.go`<br>`internal/center/server/ownernotifications_test.go` |
-| getDelivery | GET | `/api/notifications/deliveries/{id}` | `internal/center/server/ownernotifications_test.go` |
+| getDelivery | GET | `/api/notifications/deliveries/{id}` | `internal/center/server/ownernotifications_test.go`<br>`tests/ui/store.test.mjs` |
 | listNotificationEvents | GET | `/api/notifications/events` | `internal/center/server/ownernotifications_test.go`<br>`tests/ui/store.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
 | getNotificationEvent | GET | `/api/notifications/events/{key}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownernotifications_test.go`<br>`internal/center/telemetry/telemetry_test.go`<br>`tests/ui/store.test.mjs` |
 | updateNotificationEvent | PATCH | `/api/notifications/events/{key}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownernotifications_test.go`<br>`tests/ui/store.test.mjs` |
-| testNotificationEventTemplate | POST | `/api/notifications/events/{key}/tests/{channel}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownernotifications_test.go` |
+| testNotificationEventTemplate | POST | `/api/notifications/events/{key}/tests/{channel}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownernotifications_test.go`<br>`tests/ui/store.test.mjs` |
 | getNotificationNodeEventSetting | GET | `/api/notifications/events/{key}/nodes/{id}` | `internal/center/server/ownernotifications_test.go`<br>`internal/center/telemetry/telemetry_test.go`<br>`tests/ui/store.test.mjs` |
 | updateNotificationNodeEventSetting | PUT | `/api/notifications/events/{key}/nodes/{id}` | `internal/center/server/ownernotifications_test.go`<br>`tests/ui/store.test.mjs` |
 | getNotificationTemplate | GET | `/api/notifications/templates/{key}/{channel}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownernotifications_test.go`<br>`internal/center/telemetry/telemetry_test.go`<br>`tests/ui/store.test.mjs` |

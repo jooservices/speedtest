@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { runtime } from './runtime.mjs';
-import { startServer } from '../ui-fixtures/server.mjs';
+import { startServer, envelope, problem } from '../ui-fixtures/server.mjs';
 
 async function setup(t) {
   const server = await startServer(); t.after(server.close);
@@ -536,4 +536,77 @@ test('changing the password posts both passwords to the center', async t => {
   await ST.changePassword('current one', 'a much longer new passphrase');
   const call = control.requests.filter(r => r.path === '/api/auth/password' && r.method === 'POST').at(-1);
   assert.deepEqual(call.body, { currentPassword: 'current one', newPassword: 'a much longer new passphrase' });
+});
+test('ISP plans are requested for a known ISP and never requested without one', async t => {
+  const { ST, control, data } = await setup(t);
+  await ST.load();
+  assert.equal((await ST.listISPPlans('')).length, 0); assert.equal((await ST.listISPPlans(undefined)).length, 0);
+  assert.equal(control.requests.some(r => r.path.endsWith('/plans')), false);
+  const plans = await ST.listISPPlans(data.isp.id);
+  assert.equal(control.requests.at(-1).path, '/api/isps/' + encodeURIComponent(data.isp.id) + '/plans');
+  assert.equal(plans.id, data.isp.id);
+});
+test('a schedule save still resolves when the schedule list cannot refresh, and reports the remote error', async t => {
+  const { ST, control, data } = await setup(t);
+  await ST.load();
+  const seen = [];
+  ST.on('remote', () => seen.push(ST.remote));
+  control.failPaths.add('/api/schedules');
+  const saved = await ST.saveSchedule(data.node.id, { interval: 45, offset: 1, enabled: true });
+  assert.equal(saved.config.interval, 45);
+  assert.equal(control.requests.some(r => r.method === 'PUT' && r.path === '/api/schedules/' + data.node.id), true);
+  assert.equal(ST.remote.status, 'error'); assert.equal(ST.remote.error.status, 500);
+  assert.equal(seen.length, 1); assert.equal(seen[0].status, 'error');
+});
+// A fake command center for the event-template test flow: the test is accepted, then each poll gets the next status.
+function templateTestCenter(pollStatuses) {
+  const requests = [];
+  const fetch = async (url, init = {}) => {
+    const method = init.method || 'GET', headers = new Headers(init.headers);
+    requests.push({ method, path: url.pathname, idempotencyKey: headers.get('Idempotency-Key'), csrf: headers.get('X-CSRF-Token') });
+    if (url.pathname === '/api/auth/me') return Response.json(envelope({ user: { id: 'owner' }, csrfToken: 'fake-csrf', expiresAt: null }));
+    if (method === 'POST') return Response.json(envelope({ id: 'delivery-1', eventId: null, channel: 'webhook', status: 'pending', attempts: 0, createdAt: null, lastAttempt: null, error: null }, {}, 202), { status: 202 });
+    if (!pollStatuses.length) throw new Error('unexpected extra poll');
+    const next = pollStatuses.shift();
+    if (next === 'error') return Response.json(problem(500), { status: 500 });
+    return Response.json(envelope({ id: 'delivery-1', eventId: null, channel: 'webhook', status: next, attempts: 1, createdAt: null, lastAttempt: null, error: next === 'failed' ? 'the receiver answered 500' : null }));
+  };
+  return { fetch, requests };
+}
+test('an event template test is queued, then polled one second apart until the delivery is sent', async () => {
+  const center = templateTestCenter(['pending', 'sent']);
+  const { ST, context } = runtime('http://localhost', { fetch: center.fetch });
+  const waits = [];
+  context.setTimeout = (fn, ms) => { waits.push(ms); fn(); return 0; };
+  const delivery = await ST.sendEventTemplateTest('test.success', 'telegram');
+  assert.equal(delivery.status, 'sent');
+  const queued = center.requests.find(r => r.method === 'POST');
+  assert.equal(queued.path, '/api/notifications/events/test.success/tests/telegram');
+  assert.equal(queued.csrf, 'fake-csrf'); assert.ok(queued.idempotencyKey);
+  assert.deepEqual(center.requests.filter(r => r.path.startsWith('/api/notifications/deliveries/')).map(r => r.path),
+    ['/api/notifications/deliveries/delivery-1', '/api/notifications/deliveries/delivery-1']);
+  assert.deepEqual(waits, [1000]);
+});
+test('an event template test resolves with a failed delivery and rejects when a poll fails', async () => {
+  const failing = templateTestCenter(['failed']);
+  const failed = runtime('http://localhost', { fetch: failing.fetch });
+  failed.context.setTimeout = fn => { fn(); return 0; };
+  const delivery = await failed.ST.sendEventTemplateTest('test.success', 'webhook');
+  assert.deepEqual({ status: delivery.status, error: delivery.error }, { status: 'failed', error: 'the receiver answered 500' });
+  const broken = templateTestCenter(['error']);
+  const { ST, context } = runtime('http://localhost', { fetch: broken.fetch });
+  context.setTimeout = fn => { fn(); return 0; };
+  await assert.rejects(ST.sendEventTemplateTest('test.success', 'webhook'), error => error.status === 500);
+});
+test('an event template test that the center never answers fails after 30 seconds without waiting in real time', async () => {
+  const center = templateTestCenter(['pending', 'pending']);
+  const { ST, context } = runtime('http://localhost', { fetch: center.fetch });
+  const vm = await import('node:vm');
+  const waits = [];
+  context.setTimeout = (fn, ms) => { waits.push(ms); fn(); return 0; };
+  vm.runInContext('var templateClock = 0; Date.now = function () { templateClock += 16000; return templateClock; };', context);
+  const delivery = await ST.sendEventTemplateTest('test.success', 'webhook');
+  assert.deepEqual({ status: delivery.status, error: delivery.error }, { status: 'failed', error: 'no answer from the center in time' });
+  assert.equal(center.requests.filter(r => r.path.startsWith('/api/notifications/deliveries/')).length, 2);
+  assert.deepEqual(waits, [1000]);
 });

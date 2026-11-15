@@ -108,7 +108,7 @@ unknown environments, and it does not replace an existing administrator
 password. The local/test default login is documented in
 `JOOservices/guides/default-credentials.md`.
 For local/test startup and seeding, the configured database must be
-`speedtest_test` or this worktree's `speedtest_wt*` database and carry the
+`speedtest_test` or this worktree's `speedtest_wt*` or `wt_<ticket>` database and carry the
 Workspaces ownership marker; the live `speedtest` database is refused.
 Read [the migration runbook](migrations/README.md) and verify the non-live
 database before any migration or database test. `make test-db` verifies the

@@ -14,6 +14,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # The secrets stage scans the whole git history, so the clone must not be shallow.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -21,23 +24,33 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Install ShellCheck and gitleaks
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+          go install github.com/zricethezav/gitleaks/v8@v8.30.1
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Shell scripts (ShellCheck)
+        run: make shellcheck
+
+      - name: Secrets (gitleaks, whole history)
+        run: gitleaks git --no-banner --redact .
+
       - name: Build
         run: go build ./...
 
       - name: Vet
         run: go vet ./...
 
-      - name: Fetch verified MaxMind test fixtures
-        run: python3 scripts/geo-test-fixtures.py
-
-      - name: Test
-        run: go test ./...
-
       - name: Lint
         uses: golangci/golangci-lint-action@v9
         with:
           version: v2.15.0
           args: --enable=funlen --enable=gocyclo
+
+      - name: Go unit tests
+        run: make test
 
       - name: Set up Node for UI checks
         uses: actions/setup-node@v6
@@ -48,22 +61,25 @@ jobs:
       - name: UI contract, unit tests and coverage
         run: |
           npm ci
+          npx playwright install --with-deps chromium
           npm run lint
           npm run typecheck
+          npm test
           npm run test:coverage
           npm audit
 
       - name: Python unit tests
-        run: python3 -m unittest discover -s tests/lib
+        run: make python-tests
+
+      - name: Installer and staging script tests
+        run: make test-install test-docker-staging
 
       - name: UI browser smoke (demo and contract API)
-        run: |
-          npx playwright install --with-deps chromium
-          npm run test:ui
+        run: npm run test:ui
 
       - name: Every API operation has a test
         run: |
-          node scripts/test-matrix.mjs
+          make test-matrix
           node scripts/e2e-scenarios.mjs
 
       - name: Observability tooling (dashboard and alert definitions, Vector config)

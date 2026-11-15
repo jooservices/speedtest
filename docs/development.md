@@ -49,42 +49,47 @@ SPEEDTEST_NODE_NAME=vm1 SPEEDTEST_NODE_EXPECTED_DOWNLOAD_MBPS=300 make run-agent
 
 Service addresses are never hard-coded to Docker or to a specific machine.
 
+## Delivery flow
+
+Every change is a Jira ticket (`JOOST-<n>`, template v3), developed in its own worktree and merged through a pull
+request on `github.com/jooservices/speedtest`:
+
+1. `scripts/dev/develop JOOST-<n> --repo JOOservices/projects/speedtest --description <words>` makes the worktree
+   under `.worktrees/` and runs the `setup` of `.ai/project.json` (geo test fixtures, `npm ci`).
+2. If the work needs a database, run `scripts/db/tree create joost-<n> --services postgres` in the worktree. It writes
+   `.env.tree` with a database, a user and a password of your own. Copy those five values into the worktree's `.env` as
+   `SPEEDTEST_DB_HOST`, `_PORT`, `_NAME`, `_USER`, `_PASSWORD` (plus `SPEEDTEST_DB_SSLMODE=disable`) and mark the database with
+   `COMMENT ON DATABASE <name> IS 'workspaces-project:speedtest'`. Never use a root account and never print the values.
+3. Check the work: `scripts/dev/check quick` (what you changed) until it passes, then `scripts/dev/check final` (every
+   stage) once, then `scripts/dev/handoff run`.
+4. Push with `scripts/git push`, open the pull request with `scripts/git pr create`; CI runs, then the reviewer.
+5. After the merge, drop the database: `scripts/db/tree drop joost-<n>`.
+
+Commits follow `type(scope): Subject (JOOST-<n>)`, are authored as `Viet Vu <jooservices@gmail.com>` and never
+mention an AI. The profile `.ai/project.json` declares the checks (stages).
+
 ## Database provisioning
 
-The command center stores everything in PostgreSQL, provided by the shared
-Workspaces service. There are three databases per environment:
+The command center stores everything in PostgreSQL, provided by the shared Workspaces service. There are three kinds
+of database:
 
 - `speedtest` — live data, never deleted.
 - `speedtest_test` — wiped on every test run.
-- `speedtest_wt<id>` — one per ticket worktree.
-
-### Workspaces Dev VM
-
-The shared helper tools are not yet adapted to this VM's native services.
-Create databases directly with `createdb`/`psql` on native PostgreSQL at
-`127.0.0.1:15435`: `speedtest`, `speedtest_test` and `speedtest_wt<id>`.
-Mark each with `COMMENT ON DATABASE <name> IS 'workspaces-project:speedtest'`
-(substitute its actual name). Credentials live in the private Workspaces root
-`.env.docker`; `.env` holds other credentials and `.env.homelab` is for homelab
-access, not development. Never print or commit credentials. Set the worktree's
-`SPEEDTEST_DB_*` variables in its private `.env`, including port `15435` and its
-own `speedtest_wt<id>` database name.
+- `wt_<ticket>` — one per ticket worktree, made and removed by `scripts/db/tree` (the legacy `speedtest_wt<id>`
+  names are still accepted by the guard).
 
 ### Anywhere else
 
-Run your own PostgreSQL and point `SPEEDTEST_DB_*` in `.env` at it. Use the same
-live, test and worktree naming scheme and ownership comments above.
+Run your own PostgreSQL and point `SPEEDTEST_DB_*` in `.env` at it, with the same naming scheme and the ownership
+comment `COMMENT ON DATABASE <name> IS 'workspaces-project:speedtest'`.
 
 ### Safety
 
-Migrate or test only on `speedtest_test` or `speedtest_wt<id>`, never on
-`speedtest`. Verify the configured database name before any database operation.
-Unit tests need no database. Database-backed tests carry the `integration` build
-tag, run serially (`-p 1`, they share one database) and refuse any database other
-than `speedtest_test` or `speedtest_wt<id>` (guard in `internal/center/db`,
-helpers in `internal/center/db/dbtest`). Migrations in `migrations/` are applied
-by the embedded runner (`make migrate`, `make migrate-down`; see
-`migrations/README.md`).
+Migrate or test only on a test or worktree database, never on `speedtest`. Verify the configured database name before
+any database operation. Unit tests need no database. Database-backed tests carry the `integration` build tag, run
+serially (`-p 1`, they share one database) and refuse any database other than `speedtest_test`, `speedtest_wt<id>` or
+`wt_<ticket>` (guard in `internal/center/db`, helpers in `internal/center/db/dbtest`). Migrations in `migrations/` are
+applied by the embedded runner (`make migrate`, `make migrate-down`; see `migrations/README.md`).
 
 ## Running the center and the agent locally
 

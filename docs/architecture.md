@@ -74,7 +74,8 @@ per environment keep real data safe during development:
 |---|---|
 | `speedtest` | Live data; never deleted or wiped. |
 | `speedtest_test` | Tests; wiped on every test run. |
-| `speedtest_wt<id>` | One per ticket worktree. |
+| `speedtest_wt<id>` | Legacy per-worktree database. |
+| `wt_<ticket>` | One per ticket worktree, made and removed by `scripts/db/tree`. |
 
 The schema (nodes, results, IP history, alert rules and events) is applied by
 migrations in `migrations/`; see [development.md](development.md) for
