@@ -106,7 +106,8 @@ Replace `<id>` with the worktree's own ID, or `--mode test` for `speedtest_test`
 Do not proceed if validation fails. On the Dev Workspaces VM only, Claude's
 JOOST-10 unblock comment 24165 authorizes manual verification because this
 helper targets the retired Docker stack: verify the configured name is
-`speedtest_test` or matches `^speedtest_wt[a-z0-9]{1,12}$`, then check the
+`speedtest_test`, matches `^speedtest_wt[a-z0-9]{1,12}$` (legacy worktree) or matches `^wt_[a-z0-9_]{2,35}$` (the
+`wt_<ticket>` database of `scripts/db/tree`), then check the
 connected database's marker:
 
 ```sql

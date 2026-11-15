@@ -142,7 +142,7 @@ idempotent and works offline after the verified files are cached.
 python3 scripts/geo-test-fixtures.py
 # Unit and race tests use local MMDB fixtures and loopback HTTP test servers.
 go test -race ./internal/center/geo/... ./internal/center/ipwatch ./internal/center/ipapi
-# Database tests use only this worktree's configured speedtest_wt<ID> database.
+# Database tests use only this worktree's configured database (speedtest_wt<ID> or wt_<ticket>).
 go test -p 1 -tags integration ./internal/center/geo/... -run 'Integration$' -count=1
 E2E_ONLY=SC-SET-02 node tests/e2e/main.mjs
 E2E_ONLY=SC-IP-01 node tests/e2e/main.mjs
