@@ -360,5 +360,33 @@
       "model": "claude-haiku-5-5",
       "effort": "max"
     }
-  ]
+  ],
+  "environment": {
+    "runtimes": {
+      "go": ">=1.27",
+      "node": ">=22"
+    },
+    "services": [
+      "postgres"
+    ],
+    "envFiles": [
+      {
+        "file": ".env",
+        "from": ".env.example",
+        "set": {
+          "SPEEDTEST_DB_HOST": "{TREE_POSTGRES_HOST}",
+          "SPEEDTEST_DB_PORT": "{TREE_POSTGRES_PORT}",
+          "SPEEDTEST_DB_NAME": "{TREE_POSTGRES_DATABASE}",
+          "SPEEDTEST_DB_USER": "{TREE_POSTGRES_USER}",
+          "SPEEDTEST_DB_PASSWORD": "{TREE_POSTGRES_PASSWORD}"
+        }
+      }
+    ],
+    "databaseComment": "workspaces-project:speedtest",
+    "baselineStages": [
+      "vet",
+      "lint",
+      "unit-go"
+    ]
+  }
 }
