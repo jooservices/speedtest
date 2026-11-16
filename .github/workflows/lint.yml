@@ -51,6 +51,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          # The new-code lint compares with the base branch, so it needs the history.
+          fetch-depth: 0
 
       - name: Set up Go
         uses: actions/setup-go@v7
@@ -66,6 +69,10 @@ jobs:
         with:
           version: v2.15.0
           args: --enable=funlen --enable=gocyclo
+
+      - name: Lint new code
+        if: github.event_name == 'pull_request'
+        run: make lint-new-code BASE=origin/${{ github.base_ref }}
 
   ui-lint:
     name: UI lint and type check
