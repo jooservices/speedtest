@@ -133,7 +133,7 @@ func TestSettingsLanguagePatchIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES ('00000000-0000-4000-8000-000000000902','language-owner@example.test',$1)`, hash); err != nil {
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES ('00000000-0000-4000-8000-000000000902','owner@example.test',$1)`, hash); err != nil {
 		t.Fatal(err)
 	}
 	authStore, err := auth.NewPostgresStore(pool)
