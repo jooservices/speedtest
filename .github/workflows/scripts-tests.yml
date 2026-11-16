@@ -1,0 +1,76 @@
+# Script, installer, API-matrix and observability tests. On a pull request it runs only when scripts, deploy files, tests or the API contract change; a push to develop or master always runs it.
+name: Script tests
+
+on:
+  push:
+    branches: [develop, master]
+  pull_request:
+    paths:
+      - scripts/**
+      - deploy/**
+      - tests/**
+      - docs/openapi.yaml
+      - internal/center/install/**
+      - internal/center/installer/**
+      - '**/*_test.go'
+      - Makefile
+      - .github/workflows/scripts-tests.yml
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    name: Python, installer and staging scripts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Make sure ShellCheck is installed
+        run: command -v shellcheck >/dev/null || (sudo apt-get update && sudo apt-get install -y shellcheck)
+
+      - name: Python unit tests
+        run: make python-tests
+
+      - name: Installer and staging script tests
+        run: make test-install test-docker-staging
+
+  api-matrix:
+    name: Every API operation has a test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+
+      - name: Test matrix and e2e scenario list
+        run: |
+          make test-matrix
+          node scripts/e2e-scenarios.mjs
+
+  observability:
+    name: Observability tooling (dashboards, alerts, Vector config)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Dashboard and alert definitions
+        run: python3 -m unittest discover -s tests/observability
+
+      - name: Vector configuration
+        run: |
+          docker run --rm -e OPENOBSERVE_URL=http://127.0.0.1:5080 -e OPENOBSERVE_USER=u -e OPENOBSERVE_PASSWORD=p \
+            -v "$PWD/deploy/observability/vector.yaml":/etc/vector/vector.yaml:ro timberio/vector:0.43.1-alpine test /etc/vector/vector.yaml
