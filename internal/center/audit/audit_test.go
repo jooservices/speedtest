@@ -28,6 +28,7 @@ func TestClassify(t *testing.T) {
 		{"DELETE", "/api/usage/budgets/" + id, "usage_budget.delete", id, true},
 		{"POST", "/api/schedules/stagger", "schedule.stagger", "", true},
 		{"PUT", "/api/settings", "settings.update", "", true},
+		{"PATCH", "/api/settings", "settings.update", "", true},
 		{"POST", "/api/settings/enrolment-key", "settings.enrolment_key", "", true},
 		{"POST", "/api/auth/password", "auth.password", "", true},
 		{"PUT", "/api/alerts/events/" + id + "/ack", "alert.ack", id, true},
