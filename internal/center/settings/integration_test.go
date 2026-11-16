@@ -63,6 +63,7 @@ func integrationCipher(t *testing.T) *Cipher {
 func validInputWithSecrets() SettingsInput {
 	input := SettingsInput{
 		Theme:          "light",
+		Language:       "en",
 		Range:          "24h",
 		Units:          "Gbps",
 		Timezone:       "Asia/Ho_Chi_Minh",

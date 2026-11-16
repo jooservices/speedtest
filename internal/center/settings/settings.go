@@ -67,6 +67,7 @@ type NotificationSettings struct {
 // are represented by configured flags, never by masked placeholder values.
 type Settings struct {
 	Theme               string               `json:"theme"`
+	Language            string               `json:"language"`
 	Range               string               `json:"range"`
 	Units               string               `json:"units"`
 	Timezone            string               `json:"timezone"`
@@ -113,6 +114,7 @@ type NotificationSettingsWrite struct {
 // non-secret preferences; optional secrets replace only when supplied.
 type SettingsInput struct {
 	Theme               string                    `json:"theme"`
+	Language            string                    `json:"language"`
 	Range               string                    `json:"range"`
 	Units               string                    `json:"units"`
 	Timezone            string                    `json:"timezone"`
@@ -149,6 +151,7 @@ type IssuedKey struct {
 func Defaults(centerURL string) Settings {
 	return Settings{
 		Theme:               "dark",
+		Language:            DefaultLanguage,
 		Range:               "7d",
 		Units:               "auto",
 		Timezone:            "browser",
@@ -375,11 +378,19 @@ func loopbackHost(host string) bool {
 	return ip != nil && ip.IsLoopback()
 }
 
+// DefaultLanguage is the interface language for installs that have not chosen one.
+const DefaultLanguage = "en"
+
 func validateDisplay(input SettingsInput, add func(string, string)) {
 	switch input.Theme {
 	case "dark", "light":
 	default:
 		add("theme", "must be dark or light")
+	}
+	switch input.Language {
+	case "en", "vi":
+	default:
+		add("language", "must be en or vi")
 	}
 	switch input.Range {
 	case "6h", "24h", "7d", "30d":

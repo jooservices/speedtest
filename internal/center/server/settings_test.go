@@ -12,7 +12,7 @@ import (
 )
 
 // validSettingsPayload is a complete, schema-valid PUT /api/settings body.
-const validSettingsPayload = `{"theme":"light","range":"24h","units":"auto","timezone":"browser","hour12":false,"decimals":1,"retentionDays":365,"geoProvider":"geolite2","geoFallback":"ip-api","geoAutoUpdate":true,"engine":"ookla","defaultThreads":4,"serverMode":"auto","maxConcurrent":1,"stagger":true,"quietStart":"","quietEnd":"","centerUrl":"https://speedtest.example.com","notify":{"email":{"on":true,"to":"ops@example.com"},"telegram":{"on":false,"to":""},"slack":{"on":false,"to":""},"webhook":{"on":false,"to":""}}}`
+const validSettingsPayload = `{"theme":"light","language":"en","range":"24h","units":"auto","timezone":"browser","hour12":false,"decimals":1,"retentionDays":365,"geoProvider":"geolite2","geoFallback":"ip-api","geoAutoUpdate":true,"engine":"ookla","defaultThreads":4,"serverMode":"auto","maxConcurrent":1,"stagger":true,"quietStart":"","quietEnd":"","centerUrl":"https://speedtest.example.com","notify":{"email":{"on":true,"to":"ops@example.com"},"telegram":{"on":false,"to":""},"slack":{"on":false,"to":""},"webhook":{"on":false,"to":""}}}`
 
 // fakeStore records calls and returns canned responses.
 type fakeStore struct {
