@@ -1,6 +1,7 @@
 GO ?= go
+BASE ?= origin/develop
 
-.PHONY: build test vet lint ci run-center run-agent release test-install test-docker-staging shellcheck typecheck test-timing python-tests
+.PHONY: build test vet lint lint-new-code ci run-center run-agent release test-install test-docker-staging shellcheck typecheck test-timing python-tests
 
 ## build compiles every package.
 build:
@@ -18,6 +19,19 @@ vet:
 ## lint runs golangci-lint with the repository configuration.
 lint:
 	golangci-lint run
+	$(MAKE) lint-new-code BASE="$(BASE)"
+
+## lint-new-code checks complexity in changed functions against BASE.
+lint-new-code:
+	@if ! git rev-parse --verify --quiet "$(BASE)^{commit}" >/dev/null; then \
+		printf 'error: BASE ref "%s" cannot be resolved\n' "$(BASE)" >&2; \
+		exit 1; \
+	fi
+	@if ! git merge-base HEAD "$(BASE)" >/dev/null 2>&1; then \
+		printf 'error: BASE ref "%s" has no merge base with HEAD\n' "$(BASE)" >&2; \
+		exit 1; \
+	fi
+	golangci-lint run --config .golangci-new-code.yml --new-from-merge-base "$(BASE)"
 
 ## ci runs the same checks as CI: vet, test, build and lint.
 ci: vet test build lint test-install test-docker-staging test-matrix typecheck python-tests
