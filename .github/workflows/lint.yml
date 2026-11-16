@@ -1,0 +1,91 @@
+# The fast gate: static checks, Go lint and UI lint run side by side and report in about a minute and a half.
+name: Lint
+
+on:
+  push:
+    branches: [develop, master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    name: Shell scripts and secrets
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # The secrets stage scans the whole git history, so the clone must not be shallow.
+          fetch-depth: 0
+
+      - name: Make sure ShellCheck is installed
+        run: command -v shellcheck >/dev/null || (sudo apt-get update && sudo apt-get install -y shellcheck)
+
+      - name: Shell scripts (ShellCheck)
+        run: make shellcheck
+
+      - name: Install gitleaks (pinned release, checksum verified)
+        run: |
+          v=8.30.1
+          curl -sSfL -o gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_linux_x64.tar.gz"
+          curl -sSfL -o checksums.txt "https://github.com/gitleaks/gitleaks/releases/download/v${v}/gitleaks_${v}_checksums.txt"
+          grep " gitleaks_${v}_linux_x64.tar.gz$" checksums.txt | sed "s/gitleaks_${v}_linux_x64.tar.gz/gitleaks.tgz/" | sha256sum -c -
+          tar -xzf gitleaks.tgz gitleaks
+          sudo mv gitleaks /usr/local/bin/gitleaks
+          rm -f gitleaks.tgz checksums.txt
+
+      - name: Secrets (gitleaks, whole history)
+        run: gitleaks git --no-banner --redact .
+
+  go-lint:
+    name: Go vet and lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.15.0
+          args: --enable=funlen --enable=gocyclo
+
+  ui-lint:
+    name: UI lint and type check
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: UI lint
+        run: npm run lint
+
+      - name: UI type check
+        run: npm run typecheck

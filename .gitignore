@@ -15,3 +15,7 @@ deploy/docker/*.env
 deploy/observability/vector.env
 __pycache__/
 *.pyc
+
+# Compiled binaries of cmd/center and cmd/agent (go build writes them to the repository root); they are build outputs, never committed.
+/center
+/agent
