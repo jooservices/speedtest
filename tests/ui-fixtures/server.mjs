@@ -23,7 +23,7 @@ export function fixture() {
   const isp = { id: '9c96b615-8275-4df5-96e6-1ba67e5a16c7', asn: 64500, organisation: 'Fixture Network',
     name: 'Fixture ISP', nodeCount: 1, avgDown: 90, p95Down: 90, pctExpected: 90, successRate: 1, avgPing: 10 };
   const notify = Object.fromEntries(['email', 'telegram', 'slack', 'webhook'].map(key => [key, { on: false, to: '', configured: false }]));
-  const settings = { theme: 'dark', range: '7d', units: 'auto', timezone: 'browser', hour12: false, decimals: 1,
+  const settings = { theme: 'dark', language: 'en', range: '7d', units: 'auto', timezone: 'browser', hour12: false, decimals: 1,
     retentionDays: 365, geoProvider: 'geolite2', geoFallback: 'ip-api', geoAutoUpdate: true, engine: 'ookla',
     defaultThreads: 4, serverMode: 'auto', maxConcurrent: 1, stagger: true, quietStart: '', quietEnd: '', notifyQuietStart: '', notifyQuietEnd: '', notifyQuietTimezone: 'UTC', notifyQuietCritical: true,
     centerUrl: 'http://localhost', geoKeyConfigured: false, enrollKeyConfigured: false, notify };

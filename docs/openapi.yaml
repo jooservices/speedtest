@@ -3872,6 +3872,54 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/SettingsInput"
+    patch:
+      operationId: patchSettings
+      x-access-token-scope: full
+      tags:
+        - Settings
+      summary: Change some preferences as a JSON merge patch
+      description: >-
+        Applies an RFC 7396 merge patch to the saved preferences. Omitted fields keep their saved
+        value; each field sent is validated as PUT validates it. A null answers 422 and changes
+        nothing. Language accepts only en or vi.
+      security:
+        - SessionCookie: []
+        - OwnerBearer: []
+      responses:
+        "200":
+          description: Success
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/replaceSettingsResponse"
+          headers:
+            ETag:
+              $ref: "#/components/headers/ETag"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "412":
+          $ref: "#/components/responses/Stale"
+        "422":
+          $ref: "#/components/responses/Validation"
+        "428":
+          $ref: "#/components/responses/PreconditionRequired"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "500":
+          $ref: "#/components/responses/ServerError"
+      parameters:
+        - $ref: "#/components/parameters/IfMatch"
+        - $ref: "#/components/parameters/CSRF"
+      requestBody:
+        required: true
+        content:
+          application/merge-patch+json:
+            schema:
+              $ref: "#/components/schemas/SettingsPatch"
   /api/settings/enrolment-key:
     post:
       operationId: rotateEnrollmentKey
@@ -7428,6 +7476,13 @@ components:
             - dark
             - light
           default: dark
+        language:
+          type: string
+          description: Interface language. Only en and vi are supported; an installation that has not chosen one reads en.
+          enum:
+            - en
+            - vi
+          default: en
         range:
           $ref: "#/components/schemas/Range"
         units:
@@ -7548,6 +7603,7 @@ components:
           $ref: "#/components/schemas/NotificationSettings"
       required:
         - theme
+        - language
         - range
         - units
         - timezone
@@ -7574,6 +7630,144 @@ components:
         - notify
       description: Defaults follow store.js. Credentials are represented by configured flags, never a
         masked placeholder that could accidentally be saved.
+    SettingsPatch:
+      type: object
+      additionalProperties: false
+      description: >-
+        JSON merge patch over SettingsInput (RFC 7396). Every property of SettingsInput is accepted
+        and none is required. An omitted property keeps its saved value; a null answers 422 with a
+        field error, because each setting has a value. The language property accepts only en or vi,
+        and any other value (fr, empty string, VI, null) answers 422 and changes nothing.
+      properties:
+        theme:
+          type: string
+          enum:
+            - dark
+            - light
+          default: dark
+        language:
+          type: string
+          description: Interface language. Only en and vi are accepted. A PUT that omits it keeps the saved language.
+          enum:
+            - en
+            - vi
+          default: en
+        range:
+          $ref: "#/components/schemas/Range"
+        units:
+          type: string
+          enum:
+            - auto
+            - Mbps
+            - Gbps
+            - MBps
+          default: auto
+        timezone:
+          type: string
+          description: browser or valid IANA time zone.
+          default: browser
+        hour12:
+          type: boolean
+          default: false
+        decimals:
+          type: integer
+          minimum: 0
+          maximum: 2
+          default: 1
+        retentionDays:
+          type: integer
+          enum:
+            - 0
+            - 30
+            - 90
+            - 365
+            - 1095
+          default: 365
+        geoProvider:
+          type: string
+          enum:
+            - geolite2
+            - ipinfo
+            - ip-api
+          default: geolite2
+        geoFallback:
+          type: string
+          enum:
+            - none
+            - ip-api
+            - ipinfo
+          default: ip-api
+        geoAutoUpdate:
+          type: boolean
+          default: true
+        engine:
+          type: string
+          enum:
+            - ookla
+            - librespeed
+            - cloudflare
+          default: ookla
+        defaultThreads:
+          type: integer
+          minimum: 1
+          maximum: 64
+          default: 4
+        serverMode:
+          type: string
+          enum:
+            - auto
+            - pinned
+          default: auto
+        maxConcurrent:
+          type: integer
+          minimum: 1
+          maximum: 5
+          default: 1
+        stagger:
+          type: boolean
+          default: true
+        quietStart:
+          type: string
+          description: HH:mm or empty; both quiet fields must be empty or set.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        quietEnd:
+          type: string
+          description: HH:mm or empty; equal nonempty endpoints are invalid. Crossing midnight is allowed.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        notifyQuietStart:
+          type: string
+          description: HH:mm or empty. Alert notifications are held between notifyQuietStart and notifyQuietEnd
+            (test messages never are); both must be empty or both set.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        notifyQuietEnd:
+          type: string
+          description: HH:mm or empty; crossing midnight is allowed.
+          pattern: ^(|([01][0-9]|2[0-3]):[0-5][0-9])$
+          default: ""
+        notifyQuietTimezone:
+          type: string
+          description: IANA zone in which the notification quiet hours are read; empty means UTC.
+          default: UTC
+        notifyQuietCritical:
+          type: boolean
+          description: When true, critical alerts are delivered even during the notification quiet hours.
+          default: true
+        centerUrl:
+          type: string
+          description: Configured public HTTPS origin (empty when not configured); HTTP permitted only
+            for local/test.
+          anyOf:
+            - type: string
+              format: uri
+            - type: string
+              const: ""
+        geoKey:
+          $ref: "#/components/schemas/Secret"
+        notify:
+          $ref: "#/components/schemas/NotificationSettingsWrite"
     SettingsInput:
       type: object
       additionalProperties: false
@@ -7584,6 +7778,13 @@ components:
             - dark
             - light
           default: dark
+        language:
+          type: string
+          description: Interface language. Only en and vi are accepted. A PUT that omits it keeps the saved language.
+          enum:
+            - en
+            - vi
+          default: en
         range:
           $ref: "#/components/schemas/Range"
         units:

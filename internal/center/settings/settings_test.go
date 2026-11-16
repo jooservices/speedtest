@@ -10,6 +10,7 @@ import (
 func validInput() SettingsInput {
 	return SettingsInput{
 		Theme:          "dark",
+		Language:       "en",
 		Range:          "7d",
 		Units:          "auto",
 		Timezone:       "browser",
@@ -42,6 +43,16 @@ func TestValidateAcceptsDefaults(t *testing.T) {
 	}
 }
 
+func TestValidateAcceptsSupportedLanguages(t *testing.T) {
+	for _, language := range []string{"en", "vi"} {
+		input := validInput()
+		input.Language = language
+		if err := Validate(input); err != nil {
+			t.Fatalf("Validate(language=%q) = %v, want nil", language, err)
+		}
+	}
+}
+
 func TestValidateRejectsInvalidFields(t *testing.T) {
 	tests := []struct {
 		name   string
@@ -49,6 +60,9 @@ func TestValidateRejectsInvalidFields(t *testing.T) {
 		field  string
 	}{
 		{name: "theme", mutate: func(i *SettingsInput) { i.Theme = "blue" }, field: "theme"},
+		{name: "language fr", mutate: func(i *SettingsInput) { i.Language = "fr" }, field: "language"},
+		{name: "language empty", mutate: func(i *SettingsInput) { i.Language = "" }, field: "language"},
+		{name: "language uppercase", mutate: func(i *SettingsInput) { i.Language = "VI" }, field: "language"},
 		{name: "range", mutate: func(i *SettingsInput) { i.Range = "12h" }, field: "range"},
 		{name: "units", mutate: func(i *SettingsInput) { i.Units = "Kbps" }, field: "units"},
 		{name: "timezone empty", mutate: func(i *SettingsInput) { i.Timezone = "" }, field: "timezone"},
@@ -213,6 +227,7 @@ func TestDefaultsMatchPreview(t *testing.T) {
 	got := Defaults("")
 	want := Settings{
 		Theme:            "dark",
+		Language:         "en",
 		Range:            "7d",
 		Units:            "auto",
 		Timezone:         "browser",
@@ -294,5 +309,19 @@ func TestValidateNotificationQuietHours(t *testing.T) {
 	}
 	if d := Defaults(""); !d.NotifyQuietCritical || d.NotifyQuietZone != "Asia/Bangkok" || d.NotifyQuietStart != "23:00" || d.NotifyQuietEnd != "07:00" {
 		t.Fatalf("defaults: %+v", d)
+	}
+}
+
+// TestInputOfRoundTripsTheSavedView checks that the merge base built by a PATCH is itself valid input and keeps
+// the language of the saved view.
+func TestInputOfRoundTripsTheSavedView(t *testing.T) {
+	view := Defaults("")
+	view.Language = "vi"
+	input := InputOf(view)
+	if input.Language != "vi" {
+		t.Fatalf("InputOf language = %q, want vi", input.Language)
+	}
+	if err := Validate(input); err != nil {
+		t.Fatalf("Validate(InputOf(defaults)) = %v, want nil", err)
 	}
 }

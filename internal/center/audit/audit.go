@@ -157,6 +157,7 @@ var rules = []rule{
 	{"PUT", "/api/alerts/events/{id}/ack", "alert.ack", "alert_event", "Acknowledged or reopened an alert"},
 	{"POST", "/api/alerts/acknowledgements", "alert.ack_all", "alert_event", "Acknowledged all alerts"},
 	{"PUT", "/api/settings", "settings.update", "settings", "Changed settings"},
+	{"PATCH", "/api/settings", "settings.update", "settings", "Changed settings"},
 	{"POST", "/api/settings/enrolment-key", "settings.enrolment_key", "settings", "Generated a new enrolment key"},
 	{"POST", "/api/notifications/test/{id}", "notification.test", "notification", "Sent a test notification"},
 	{"PATCH", "/api/notifications/events/{id}", "notification.event.update", "notification_event", "Changed a notification event"},

@@ -81,6 +81,10 @@ func (s *PostgresStore) Get(ctx context.Context) (Settings, string, error) {
 			return Settings{}, "", errors.New("stored settings are malformed")
 		}
 		view = stored
+		// Rows saved before the language setting existed read as the default language.
+		if view.Language == "" {
+			view.Language = DefaultLanguage
+		}
 	}
 
 	if err := overlayShared(ctx, s.pool, &view); err != nil {
@@ -366,6 +370,7 @@ func writeShared(ctx context.Context, tx pgx.Tx, view Settings) error {
 func replacementView(input SettingsInput, geoConfigured, enrolConfigured, emailConfigured, telegramConfigured, slackConfigured, webhookConfigured bool) Settings {
 	view := Settings{
 		Theme:               input.Theme,
+		Language:            input.Language,
 		Range:               input.Range,
 		Units:               input.Units,
 		Timezone:            input.Timezone,

@@ -65,7 +65,7 @@ func TestSettingsHTTPFlowIntegration(t *testing.T) {
 	if first.Code != http.StatusOK || tag != `"0"` || responseString(t, first.Body.Bytes(), "data", "theme") != "dark" || responseString(t, first.Body.Bytes(), "data", "centerUrl") != "https://speedtest.example.com" {
 		t.Fatalf("defaults = %d etag %q %s", first.Code, tag, first.Body.String())
 	}
-	body := `{"theme":"light","range":"30d","units":"Gbps","timezone":"Asia/Ho_Chi_Minh","hour12":true,"decimals":2,"retentionDays":90,"geoProvider":"geolite2","geoFallback":"ip-api","geoAutoUpdate":false,"engine":"librespeed","defaultThreads":8,"serverMode":"auto","maxConcurrent":2,"stagger":false,"quietStart":"23:00","quietEnd":"06:00","centerUrl":"https://speedtest.example.com","geoKey":"super-secret-geo-key","notify":{"email":{"on":true,"to":"ops@example.com","secret":"smtp-password"},"telegram":{"on":false,"to":""},"slack":{"on":false,"to":""},"webhook":{"on":true,"to":"","secret":"https://hooks.example.com/secret-path"}}}`
+	body := `{"theme":"light","language":"en","range":"30d","units":"Gbps","timezone":"Asia/Ho_Chi_Minh","hour12":true,"decimals":2,"retentionDays":90,"geoProvider":"geolite2","geoFallback":"ip-api","geoAutoUpdate":false,"engine":"librespeed","defaultThreads":8,"serverMode":"auto","maxConcurrent":2,"stagger":false,"quietStart":"23:00","quietEnd":"06:00","centerUrl":"https://speedtest.example.com","geoKey":"super-secret-geo-key","notify":{"email":{"on":true,"to":"ops@example.com","secret":"smtp-password"},"telegram":{"on":false,"to":""},"slack":{"on":false,"to":""},"webhook":{"on":true,"to":"","secret":"https://hooks.example.com/secret-path"}}}`
 	if rec := call(http.MethodPut, "/api/settings", body, true, nil); rec.Code != http.StatusPreconditionRequired {
 		t.Fatalf("PUT without If-Match = %d", rec.Code)
 	}
@@ -119,5 +119,98 @@ func TestSettingsHTTPFlowIntegration(t *testing.T) {
 	}
 	if rec := call(http.MethodPost, "/api/settings/enrolment-key", "", false, nil); rec.Code != http.StatusUnauthorized && rec.Code != http.StatusForbidden {
 		t.Fatalf("rotate without credentials = %d", rec.Code)
+	}
+}
+
+// TestSettingsLanguagePatchIntegration covers AC1 to AC3 over HTTP against the real store: a fresh install reads en,
+// PATCH saves vi, unsupported values answer 422 and leave vi in place, and PATCH without language keeps vi.
+func TestSettingsLanguagePatchIntegration(t *testing.T) {
+	pool, ctx, _ := openServerIntegrationPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	dbtest.MigrateUp(t, pool)
+	hash, err := auth.HashPassword("integration test owner password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `INSERT INTO users(id,email,password_hash) VALUES ('00000000-0000-4000-8000-000000000902','owner@example.test',$1)`, hash); err != nil {
+		t.Fatal(err)
+	}
+	authStore, err := auth.NewPostgresStore(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	authService, err := auth.NewService(authStore, auth.Config{SessionTTL: time.Hour, LoginMaxAttempts: 5, LoginWindow: time.Minute})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cipher, err := settings.NewCipher(hex.EncodeToString([]byte("0123456789abcdef0123456789abcdef")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(Options{Auth: authService, Settings: settings.NewPostgresStore(pool, cipher, settings.Defaults("https://speedtest.example.com"))})
+	session, csrf := loginIntegrationOwner(t, handler)
+	call := func(method, body string, headers map[string]string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(method, "http://center.test/api/settings", strings.NewReader(body))
+		if method == http.MethodGet {
+			req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: session})
+		} else {
+			ownerHTTPWrite(req, session, csrf)
+		}
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	languageOf := func() string {
+		t.Helper()
+		rec := call(http.MethodGet, "", nil)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET status = %d: %s", rec.Code, rec.Body.String())
+		}
+		var body struct {
+			Data struct {
+				Language string `json:"language"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body.Data.Language
+	}
+
+	fresh := call(http.MethodGet, "", nil)
+	if got := languageOf(); got != "en" {
+		t.Fatalf("fresh language = %q, want en", got)
+	}
+	tag := fresh.Header().Get("ETag")
+
+	saved := call(http.MethodPatch, `{"language":"vi"}`, map[string]string{"If-Match": tag})
+	if saved.Code != http.StatusOK {
+		t.Fatalf("PATCH vi status = %d: %s", saved.Code, saved.Body.String())
+	}
+	if got := languageOf(); got != "vi" {
+		t.Fatalf("saved language = %q, want vi", got)
+	}
+	tag = saved.Header().Get("ETag")
+
+	for _, body := range []string{`{"language":"fr"}`, `{"language":""}`, `{"language":null}`, `{"language":"VI"}`} {
+		rec := call(http.MethodPatch, body, map[string]string{"If-Match": tag})
+		if rec.Code != http.StatusUnprocessableEntity {
+			t.Fatalf("PATCH %s status = %d, want 422: %s", body, rec.Code, rec.Body.String())
+		}
+		if got := languageOf(); got != "vi" {
+			t.Fatalf("after PATCH %s language = %q, want the saved vi", body, got)
+		}
+	}
+
+	kept := call(http.MethodPatch, `{"theme":"light"}`, map[string]string{"If-Match": tag})
+	if kept.Code != http.StatusOK {
+		t.Fatalf("PATCH without language status = %d: %s", kept.Code, kept.Body.String())
+	}
+	if got := languageOf(); got != "vi" {
+		t.Fatalf("PATCH without language changed the language to %q", got)
 	}
 }
