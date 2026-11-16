@@ -140,6 +140,42 @@ type SettingsInput struct {
 	Notify              NotificationSettingsWrite `json:"notify"`
 }
 
+// InputOf returns the write model that reproduces the non-secret preferences of view, so that a partial update can be
+// merged into the saved values. Secrets are left nil, which keeps the stored ones.
+func InputOf(view Settings) SettingsInput {
+	return SettingsInput{
+		Theme:               view.Theme,
+		Language:            view.Language,
+		Range:               view.Range,
+		Units:               view.Units,
+		Timezone:            view.Timezone,
+		Hour12:              view.Hour12,
+		Decimals:            view.Decimals,
+		RetentionDays:       view.RetentionDays,
+		GeoProvider:         view.GeoProvider,
+		GeoFallback:         view.GeoFallback,
+		GeoAutoUpdate:       view.GeoAutoUpdate,
+		Engine:              view.Engine,
+		DefaultThreads:      view.DefaultThreads,
+		ServerMode:          view.ServerMode,
+		MaxConcurrent:       view.MaxConcurrent,
+		Stagger:             view.Stagger,
+		QuietStart:          view.QuietStart,
+		QuietEnd:            view.QuietEnd,
+		NotifyQuietStart:    view.NotifyQuietStart,
+		NotifyQuietEnd:      view.NotifyQuietEnd,
+		NotifyQuietZone:     view.NotifyQuietZone,
+		NotifyQuietCritical: view.NotifyQuietCritical,
+		CenterURL:           view.CenterURL,
+		Notify: NotificationSettingsWrite{
+			Email:    ChannelWrite{On: view.Notify.Email.On, To: view.Notify.Email.To},
+			Telegram: ChannelWrite{On: view.Notify.Telegram.On, To: view.Notify.Telegram.To},
+			Slack:    ChannelWrite{On: view.Notify.Slack.On, To: view.Notify.Slack.To},
+			Webhook:  ChannelWrite{On: view.Notify.Webhook.On, To: view.Notify.Webhook.To},
+		},
+	}
+}
+
 // IssuedKey is a newly generated enrolment key, shown once at issuance.
 type IssuedKey struct {
 	EnrollToken string `json:"enrollToken"`

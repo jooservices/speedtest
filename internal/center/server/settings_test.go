@@ -199,7 +199,7 @@ func TestSettingsMethodNotAllowed(t *testing.T) {
 	for _, tt := range []struct {
 		path, method, allow string
 	}{
-		{"/api/settings", http.MethodPost, "GET, PUT"},
+		{"/api/settings", http.MethodPost, "GET, PUT, PATCH"},
 		{"/api/settings/enrolment-key", http.MethodGet, "POST"},
 	} {
 		recorder := httptest.NewRecorder()
