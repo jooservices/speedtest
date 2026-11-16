@@ -344,3 +344,43 @@ func TestMalformedStoredSettingsAreReported(t *testing.T) {
 		t.Fatal("a malformed stored value must not be served")
 	}
 }
+
+// TestLanguageSettingStore covers AC1 at the store: a fresh store reads en, a saved vi reads back as vi, and a row
+// saved before the language setting existed reads as en.
+func TestLanguageSettingStore(t *testing.T) {
+	pool := settingsPool(t)
+	ctx := context.Background()
+	store := NewPostgresStore(pool, integrationCipher(t), Defaults(""))
+
+	fresh, etag, err := store.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fresh.Language != "en" {
+		t.Fatalf("fresh language = %q, want en", fresh.Language)
+	}
+
+	input := validInputWithSecrets()
+	input.Language = "vi"
+	if _, _, err := store.Replace(ctx, etag, input); err != nil {
+		t.Fatal(err)
+	}
+	saved, _, err := store.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Language != "vi" {
+		t.Fatalf("saved language = %q, want vi", saved.Language)
+	}
+
+	if _, err := pool.Exec(ctx, `UPDATE settings SET value = value - 'language' WHERE key = 'display'`); err != nil {
+		t.Fatal(err)
+	}
+	legacy, _, err := store.Get(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if legacy.Language != "en" {
+		t.Fatalf("language of a row saved before the setting = %q, want en", legacy.Language)
+	}
+}
