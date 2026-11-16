@@ -311,3 +311,17 @@ func TestValidateNotificationQuietHours(t *testing.T) {
 		t.Fatalf("defaults: %+v", d)
 	}
 }
+
+// TestInputOfRoundTripsTheSavedView checks that the merge base built by a PATCH is itself valid input and keeps
+// the language of the saved view.
+func TestInputOfRoundTripsTheSavedView(t *testing.T) {
+	view := Defaults("")
+	view.Language = "vi"
+	input := InputOf(view)
+	if input.Language != "vi" {
+		t.Fatalf("InputOf language = %q, want vi", input.Language)
+	}
+	if err := Validate(input); err != nil {
+		t.Fatalf("Validate(InputOf(defaults)) = %v, want nil", err)
+	}
+}

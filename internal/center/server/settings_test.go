@@ -260,3 +260,135 @@ func TestSettingsRequireTheRightCredentials(t *testing.T) {
 		t.Fatal("route matching")
 	}
 }
+
+// settingsWithLanguage returns the defaults with the given saved language and the ETag a client would hold.
+func settingsWithLanguage(language string) *fakeStore {
+	view := settings.Defaults("")
+	view.Language = language
+	return &fakeStore{getView: view, getETag: `"3"`, replaceView: view, replaceETag: `"4"`}
+}
+
+func patchSettings(t *testing.T, store *fakeStore, body, ifMatch string) *httptest.ResponseRecorder {
+	t.Helper()
+	request := httptest.NewRequest(http.MethodPatch, "/api/settings", strings.NewReader(body))
+	if ifMatch != "" {
+		request.Header.Set("If-Match", ifMatch)
+	}
+	recorder := httptest.NewRecorder()
+	settingsHandler(t, store).ServeHTTP(recorder, request)
+	return recorder
+}
+
+// TestPatchSettingsAcceptsVietnamese covers AC1: a saved vi is stored and returned as vi.
+func TestPatchSettingsAcceptsVietnamese(t *testing.T) {
+	store := settingsWithLanguage("en")
+	store.replaceView.Language = "vi"
+	recorder := patchSettings(t, store, `{"language":"vi"}`, `"3"`)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if store.lastInput.Language != "vi" {
+		t.Errorf("stored language = %q, want vi", store.lastInput.Language)
+	}
+}
+
+// TestPatchSettingsRejectsUnsupportedLanguage covers AC2: anything other than en or vi answers 422 and nothing is
+// stored, so the saved language stays unchanged.
+func TestPatchSettingsRejectsUnsupportedLanguage(t *testing.T) {
+	tests := map[string]string{
+		"fr":    `{"language":"fr"}`,
+		"empty": `{"language":""}`,
+		"null":  `{"language":null}`,
+		"VI":    `{"language":"VI"}`,
+	}
+	for name, body := range tests {
+		t.Run(name, func(t *testing.T) {
+			store := settingsWithLanguage("vi")
+			recorder := patchSettings(t, store, body, `"3"`)
+
+			if recorder.Code != http.StatusUnprocessableEntity {
+				t.Fatalf("status = %d, want 422: %s", recorder.Code, recorder.Body.String())
+			}
+			if store.lastIfMatch != "" {
+				t.Errorf("Replace was called for %s; the saved language must not change", name)
+			}
+			if !strings.Contains(recorder.Body.String(), `"language"`) {
+				t.Errorf("422 body does not name the language field: %s", recorder.Body.String())
+			}
+		})
+	}
+}
+
+// TestPatchSettingsKeepsLanguageWhenOmitted covers AC3: a PATCH without language keeps the saved value and still
+// applies the fields it sends.
+func TestPatchSettingsKeepsLanguageWhenOmitted(t *testing.T) {
+	store := settingsWithLanguage("vi")
+	recorder := patchSettings(t, store, `{"theme":"light"}`, `"3"`)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if store.lastInput.Language != "vi" {
+		t.Errorf("language = %q, want the saved vi", store.lastInput.Language)
+	}
+	if store.lastInput.Theme != "light" {
+		t.Errorf("theme = %q, want the patched light", store.lastInput.Theme)
+	}
+	if store.lastInput.Range != "7d" {
+		t.Errorf("range = %q, want the saved 7d", store.lastInput.Range)
+	}
+}
+
+func TestPatchSettingsPreconditions(t *testing.T) {
+	store := settingsWithLanguage("en")
+	if recorder := patchSettings(t, store, `{"theme":"light"}`, ""); recorder.Code != http.StatusPreconditionRequired {
+		t.Errorf("missing If-Match status = %d, want 428", recorder.Code)
+	}
+	if recorder := patchSettings(t, store, `{"theme":"light"}`, `"2"`); recorder.Code != http.StatusPreconditionFailed {
+		t.Errorf("stale If-Match status = %d, want 412", recorder.Code)
+	}
+}
+
+func TestPatchSettingsMalformedBody(t *testing.T) {
+	store := settingsWithLanguage("en")
+	for _, body := range []string{`null`, `[]`, `{"unexpected":true}`, `{"theme":`} {
+		if recorder := patchSettings(t, store, body, `"3"`); recorder.Code != http.StatusBadRequest {
+			t.Errorf("body %s status = %d, want 400", body, recorder.Code)
+		}
+	}
+}
+
+// TestPutSettingsKeepsLanguageWhenOmitted covers AC3 for PUT: a body without language keeps the saved language.
+func TestPutSettingsKeepsLanguageWhenOmitted(t *testing.T) {
+	store := settingsWithLanguage("vi")
+	body := strings.Replace(validSettingsPayload, `"language":"en",`, "", 1)
+	request := httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body))
+	request.Header.Set("If-Match", `"3"`)
+	recorder := httptest.NewRecorder()
+	settingsHandler(t, store).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", recorder.Code, recorder.Body.String())
+	}
+	if store.lastInput.Language != "vi" {
+		t.Errorf("language = %q, want the saved vi", store.lastInput.Language)
+	}
+}
+
+// TestPutSettingsRejectsEmptyLanguage covers AC2 for PUT: an explicit empty language is not "omitted" and answers 422.
+func TestPutSettingsRejectsEmptyLanguage(t *testing.T) {
+	store := settingsWithLanguage("vi")
+	body := strings.Replace(validSettingsPayload, `"language":"en"`, `"language":""`, 1)
+	request := httptest.NewRequest(http.MethodPut, "/api/settings", strings.NewReader(body))
+	request.Header.Set("If-Match", `"3"`)
+	recorder := httptest.NewRecorder()
+	settingsHandler(t, store).ServeHTTP(recorder, request)
+
+	if recorder.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422: %s", recorder.Code, recorder.Body.String())
+	}
+	if store.lastIfMatch != "" {
+		t.Error("Replace was called for an empty language")
+	}
+}
