@@ -165,7 +165,7 @@ See the [SSH installer runbook](ssh-installer.md) for operations, repair and rol
   configuration uses `private, no-cache` and ETag/If-None-Match (304 has no body).
   For editable resources use the GET ETag in required `If-Match`: missing=428,
   stale=412. Settings/schedule updates advance effective node config revisions.
-- PUT replaces documented nonsecret fields. Node PATCH uses
+- PUT replaces documented nonsecret fields. Node and settings PATCH use
   `application/merge-patch+json`; null is rejected for its nonnullable fields.
   `Idempotency-Key` on retryable creates replays the original status/body/Location
   for the same principal/key/body for 24h; a changed body returns 409. Securely
@@ -699,7 +699,11 @@ The IP history, addresses, map and lookup routes require a session and only read
 
 ## Settings
 
-`GET /api/settings` (session) returns the owner's preferences with `ETag`; `PUT /api/settings` (session, CSRF, origin, `If-Match`) replaces them and answers 422 with field-level `errors` for invalid values, 428 without `If-Match` and 412 when the tag is stale. Before anything is saved the ETag is `"0"`, so the first save always moves it. Defaults match the UI preview (dark theme, 7d range, auto units, 1 decimal, 365 days retention, offline geolocation plus configured quota-aware fallbacks, Ookla, 4 threads, concurrency 1, stagger on).
+`GET /api/settings` (session) returns the owner's preferences with `ETag`; `PUT /api/settings` (session, CSRF, origin, `If-Match`) replaces them and answers 422 with field-level `errors` for invalid values, 428 without `If-Match` and 412 when the tag is stale. Before anything is saved the ETag is `"0"`, so the first save always moves it. Defaults match the UI preview (dark theme, English interface, 7d range, auto units, 1 decimal, 365 days retention, offline geolocation plus configured quota-aware fallbacks, Ookla, 4 threads, concurrency 1, stagger on).
+
+`PATCH /api/settings` (session, CSRF, origin, `If-Match`, `application/merge-patch+json`) changes only the fields it sends: an omitted field keeps its saved value, and each field sent is validated exactly as PUT validates it. A `null` value answers 422 and changes nothing. It answers 428 without `If-Match` and 412 when the tag is stale, like PUT.
+
+`language` is the interface language. It accepts exactly `en` or `vi`; any other value (`fr`, an empty string, `VI`, `null`) answers 422 with a `language` error and the saved language stays unchanged. A row saved before this field existed reads as `en`. A PUT that omits `language` keeps the saved language instead of resetting it, so existing clients keep working.
 
 Secrets (the location-service key, email/Telegram/Slack credentials and the webhook URL) are write-only: they are encrypted with AES-GCM using `APP_KEY` from `.env` before they are stored and are never returned; the read model only says which are configured. Omitting a secret on PUT keeps the stored one.
 
