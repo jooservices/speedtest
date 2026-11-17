@@ -105,8 +105,8 @@
     var limitedText = F.num(cur.rateLimited || 0) + ' rate-limited ' + (cur.rateLimited === 1 ? 'test' : 'tests') + ' excluded from success rate';
     if (cur.rateLimited > 0 && cur.count - cur.rateLimited === 0) limitedText += ' · no eligible tests';
     tiles.appendChild(tile('Tests succeeded', 'check', cur.success == null ? '—' : F.num(cur.success, 1), '%', delta(cur.success, prev.success, true), F.num(cur.count) + ' tests in this range', 'success', function (v) { return v == null ? '—' : F.num(v, 1); }, true, limitedText));
-    tiles.appendChild(tile('IP changes', 'swap', String(cur.ips), cur.ips === 1 ? 'change' : 'changes',
-      h('span', { class: 'row wrap', style: 'gap:8px' }, delta(cur.ips, prev.ips, false), h('a', { href: '#/network', class: 'hint' }, 'See history')), null, 'ips', String, false));
+    tiles.appendChild(tile('IP changes', 'swap', F.count(cur.ips), cur.ips === 1 ? 'change' : 'changes',
+      h('span', { class: 'row wrap', style: 'gap:8px' }, delta(cur.ips, prev.ips, false), h('a', { href: '#/network', class: 'hint' }, 'See history')), null, 'ips', F.count, false));
     root.appendChild(tiles);
 
     /* ---- node cards ---- */

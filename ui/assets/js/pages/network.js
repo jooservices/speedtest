@@ -13,6 +13,11 @@
   function finite(v) { return v != null && v !== '' && Number.isFinite(+v); }
   function row(label, v) { return has(v) ? [label, v] : null; }
   function rows(list) { return list.filter(Boolean); }
+  function localizedNumber(value) {
+    if (ST.i18n.lang() !== 'vi') return String(value);
+    return ST.i18n.localize(value, { type: 'number', maximumFractionDigits: 20, useGrouping: true });
+  }
+  function coordinates(geo) { return localizedNumber(geo.lat) + ', ' + localizedNumber(geo.lon); }
 
   function openIp(entry, node) {
     var g = entry.geo;
@@ -22,8 +27,8 @@
       U.kv([['First seen', F.date(entry.first, 'full')], ['Last seen', F.date(entry.last, 'full')], ['Held for', F.dur(entry.last - entry.first)], ['Tests on this address', F.num(entry.tests)],
         ['Average download', F.speed(entry.avgDown)], ['Average upload', F.speed(entry.avgUp)]]),
       g ? h('div', null, h('h3', { style: 'margin:6px 0' }, 'Location'), U.kv(rows([row('City', g.city), row('Region', g.region), row('Country', has(g.country) ? g.country + (has(g.countryCode) ? ' (' + g.countryCode + ')' : '') : null),
-        finite(g.lat) && finite(g.lon) ? ['Coordinates', g.lat + ', ' + g.lon] : null, finite(g.radiusKm) ? ['Accuracy', 'About ' + g.radiusKm + ' km'] : null, row('Time zone', g.timezone), row('Provider', g.isp),
-        has(g.asn) ? ['Network', 'AS' + g.asn + (has(g.asnOrg) ? ' · ' + g.asnOrg : '')] : null, row('Connection', g.connection), row('Looked up with', g.source), finite(g.qualityScore) ? ['Quality score', g.qualityScore + ' / 100'] : null])))
+        finite(g.lat) && finite(g.lon) ? ['Coordinates', coordinates(g)] : null, finite(g.radiusKm) ? ['Accuracy', 'About ' + localizedNumber(g.radiusKm) + ' km'] : null, row('Time zone', g.timezone), row('Provider', g.isp),
+        has(g.asn) ? ['Network', 'AS' + g.asn + (has(g.asnOrg) ? ' · ' + g.asnOrg : '')] : null, row('Connection', g.connection), row('Looked up with', g.source), finite(g.qualityScore) ? ['Quality score', localizedNumber(g.qualityScore) + ' / 100'] : null])))
         : U.callout('No location data is available for this address.', 'warn', 'alert')) });
   }
 
@@ -79,7 +84,7 @@
       columns: [
         { key: 'ip', label: 'Address', render: function (r) { return h('span', { class: 'mono' }, r.e.ip); } },
         { key: 'node', label: 'Node', render: function (r) { return h('span', { class: 'row' }, U.dot(ST.nodeColor(r.n)), r.n.name); } },
-        { key: 'loc', label: 'Location', render: function (r) { return h('div', null, geoLine(r.e.geo), r.e.geo && finite(r.e.geo.qualityScore) ? h('div', { class: 'hint' }, 'Quality ' + r.e.geo.qualityScore + ' / 100 · ' + (r.e.geo.source || 'unknown source')) : null); } },
+        { key: 'loc', label: 'Location', render: function (r) { return h('div', null, geoLine(r.e.geo), r.e.geo && finite(r.e.geo.qualityScore) ? h('div', { class: 'hint' }, 'Quality ' + localizedNumber(r.e.geo.qualityScore) + ' / 100 · ' + (r.e.geo.source || 'unknown source')) : null); } },
         { key: 'isp', label: 'Provider', render: function (r) { return r.e.geo ? r.e.geo.isp + ' · AS' + r.e.geo.asn : '—'; } },
         { key: 'first', label: 'First seen', render: function (r) { return F.date(r.e.first); } },
         { key: 'last', label: 'Last seen', render: function (r) { return F.rel(r.e.last); } },
@@ -91,7 +96,7 @@
     var resBox = h('div', { class: 'mt' });
     function showGeo(g) {
       resBox.appendChild(g ? h('div', { class: 'card card-pad' }, h('div', { class: 'row between' }, h('b', { class: 'mono' }, g.ip), U.chip(g.source || 'database', 'info')),
-        U.kv(rows([['Location', geoLine(g) + (finite(g.lat) && finite(g.lon) ? ' (' + g.lat + ', ' + g.lon + ')' : '')], has(g.isp) || has(g.asn) ? ['Provider', [g.isp, has(g.asn) ? 'AS' + g.asn : ''].filter(Boolean).join(' · ')] : null, finite(g.radiusKm) ? ['Accuracy', 'About ' + g.radiusKm + ' km'] : null, finite(g.qualityScore) ? ['Quality score', g.qualityScore + ' / 100'] : null])))
+        U.kv(rows([['Location', geoLine(g) + (finite(g.lat) && finite(g.lon) ? ' (' + coordinates(g) + ')' : '')], has(g.isp) || has(g.asn) ? ['Provider', [g.isp, has(g.asn) ? 'AS' + g.asn : ''].filter(Boolean).join(' · ')] : null, finite(g.radiusKm) ? ['Accuracy', 'About ' + localizedNumber(g.radiusKm) + ' km'] : null, finite(g.qualityScore) ? ['Quality score', localizedNumber(g.qualityScore) + ' / 100'] : null])))
         : U.callout(ST.demo ? 'This preview only knows the sample addresses used by the demo nodes. The real service looks up any public address.' : 'No location is known for this address.', 'warn', 'info'));
     }
     function doLookup(v) {

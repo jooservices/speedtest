@@ -139,7 +139,7 @@
   U.tabs = function (items, active, onChange) {
     var wrap = h('div', { class: 'tabs', role: 'tablist' });
     items.forEach(function (it) {
-      var b = h('button', { type: 'button', role: 'tab', class: it.value === active ? 'on' : '', onClick: function () { onChange(it.value); } }, it.label, it.count != null ? h('span', { class: 'muted', style: 'margin-left:6px' }, it.count) : null);
+      var b = h('button', { type: 'button', role: 'tab', class: it.value === active ? 'on' : '', onClick: function () { onChange(it.value); } }, it.label, it.count != null ? h('span', { class: 'muted', style: 'margin-left:6px' }, ST.fmt.count(it.count)) : null);
       wrap.appendChild(b);
     });
     return wrap;
@@ -292,9 +292,13 @@
     if (prev === 0) return h('span', { class: 'delta flat' }, cur === 0 ? 'No change' : 'New this period');
     var d = (cur - prev) / Math.abs(prev) * 100, flat = Math.abs(d) < 1;
     var good = goodHigh ? d > 0 : d < 0;
+    var fixedPercent = Math.abs(d).toFixed(1);
+    var percent = ST.i18n.lang() === 'vi'
+      ? ST.i18n.localize(Number(fixedPercent), { type: 'number', minimumFractionDigits: 1, maximumFractionDigits: 1, useGrouping: true })
+      : fixedPercent;
     return h('span', { class: 'delta ' + (flat ? 'flat' : good ? 'up' : 'down'), title: 'Compared with the previous period',
-      'aria-label': (flat ? 'About the same' : (d > 0 ? 'Up ' : 'Down ') + Math.abs(d).toFixed(1) + '%') + ' compared with the previous period' },
-    flat ? '≈ same' : (d > 0 ? '▲ ' : '▼ ') + Math.abs(d).toFixed(1) + '%');
+    'aria-label': (flat ? 'About the same' : (d > 0 ? 'Up ' : 'Down ') + percent + '%') + ' compared with the previous period' },
+    flat ? '≈ same' : (d > 0 ? '▲ ' : '▼ ') + percent + '%');
   };
   U.rangeSelect = function (value, onChange) {
     var select = U.select(Object.keys(ST.ranges).map(function (k) { return { value: k, label: ST.rangeLabels[k] }; }), value, onChange, 'auto');

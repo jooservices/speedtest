@@ -221,9 +221,9 @@
           var v = o.values[ri][ci], idx = v == null ? -1 : Math.min(6, Math.floor((v - min) / (max - min || 1) * 6.999));
           if (o.invert && idx >= 0) idx = 6 - idx;
           var count = o.counts ? o.counts[ri][ci] : 0;
-          var detail = r + ' ' + c + ':00, ' + (v == null ? 'no data' : o.name + ' ' + o.format(v)) + ', ' + count + ' tests';
+          var detail = r + ' ' + c + ':00, ' + (v == null ? 'no data' : o.name + ' ' + o.format(v)) + ', ' + ST.fmt.count(count) + ' tests';
           var rect = svg('rect', { x: M.l + ci * cw + 1, y: M.t + ri * cellH + 1, width: Math.max(1, cw - 2), height: cellH - 2, rx: 3, tabindex: 0, role: 'gridcell', 'aria-label': detail, style: idx < 0 ? 'fill:var(--surface-3)' : 'fill:var(--heat-' + idx + ')' });
-          function show() { tip.show(M.l + ci * cw + cw / 2, M.t + ri * cellH, r + ' · ' + c + ':00', [{ label: o.name, value: v == null ? 'No data' : o.format(v) }, { label: 'Tests', value: String(count) }]); }
+          function show() { tip.show(M.l + ci * cw + cw / 2, M.t + ri * cellH, r + ' · ' + c + ':00', [{ label: o.name, value: v == null ? 'No data' : o.format(v) }, { label: 'Tests', value: ST.fmt.count(count) }]); }
           rect.addEventListener('mousemove', show);
           rect.addEventListener('focus', show);
           rect.addEventListener('mouseleave', function () { tip.hide(); });

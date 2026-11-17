@@ -13,6 +13,19 @@
   }
   var real = !ST.demo, pending = {};
   function saved() { if (!real) U.toast('Saved'); }
+  function saveLanguage(select, language) {
+    if (!real) {
+      ST.setSettings({ language: language });
+      saved();
+      return;
+    }
+    ST.saveLanguage(language).then(function (result) {
+      if (!result.stale) U.toast('Saved');
+    }, function () {
+      select.value = ST.settings().language || 'en';
+      U.toast(ST.i18n.t('Could not save language'), 'error');
+    });
+  }
   function fail(error) {
     U.toast(error.status === 412 ? 'Settings were changed elsewhere. Reload the page and try again.' : error.status === 422 ? invalidMessage(error) : error.message, 'error');
   }
@@ -511,6 +524,8 @@
 
     if (tab === 'general') {
       var tzs = [{ value: 'browser', label: 'This device (' + Intl.DateTimeFormat().resolvedOptions().timeZone + ')' }, { value: 'UTC', label: 'UTC' }, { value: 'Asia/Ho_Chi_Minh', label: 'Ho Chi Minh City' }, { value: 'Asia/Singapore', label: 'Singapore' }, { value: 'Europe/London', label: 'London' }, { value: 'America/New_York', label: 'New York' }];
+      var languageSelect = U.select([{ value: 'en', label: 'English' }, { value: 'vi', label: 'Tiếng Việt' }], s.language || 'en', function (value) { saveLanguage(languageSelect, value); });
+      body.appendChild(row('Language', 'Choose the language used for dates and numbers.', languageSelect));
       body.appendChild(row('Theme', 'Dark is the default. You can also use the sun/moon button at the top.', U.seg([{ value: 'dark', label: 'Dark' }, { value: 'light', label: 'Light' }], s.theme === 'light' ? 'light' : 'dark', function (v) { set({ theme: v }); })));
       body.appendChild(row('Speed units', 'How speeds are shown everywhere.', U.select([{ value: 'auto', label: 'Automatic (Mbps / Gbps)' }, { value: 'Mbps', label: 'Always Mbps' }, { value: 'Gbps', label: 'Always Gbps' }, { value: 'MBps', label: 'Megabytes per second (MB/s)' }], s.units, function (v) { set({ units: v }); saved(); })));
       body.appendChild(row('Decimal places', null, U.select([0, 1, 2].map(function (x) { return { value: x, label: String(x) }; }), s.decimals, function (v) { set({ decimals: +v }); saved(); })));
@@ -576,7 +591,7 @@
           { key: 'remote', label: 'From', render: function (r) { return h('span', { class: 'mono' }, r.remote || '—'); } }],
           rows: rows, empty: U.empty('No changes recorded yet', 'Changes you make from now on appear here.') }));
         if (rows.length < total) more.appendChild(U.btn('Show more', { size: 'sm', onClick: function () { load(); } }));
-        else if (rows.length) more.appendChild(h('p', { class: 'hint' }, rows.length + ' changes shown.'));
+        else if (rows.length) more.appendChild(h('p', { class: 'hint' }, F.count(rows.length) + ' changes shown.'));
       }
       function load() {
         if (loading) return; loading = true; page++;
