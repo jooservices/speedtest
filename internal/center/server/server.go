@@ -99,9 +99,14 @@ type Options struct {
 	AccessTokenBurst     int
 }
 
-// NewHandler builds the whole HTTP handler: owner APIs, agent API, health endpoints and the static UI, wrapped in
-// the request id, access log, panic recovery, security headers and audit middleware.
+// NewHandler builds the whole HTTP handler: the router wrapped in the /api/v1 rewrite.
 func NewHandler(options Options) http.Handler {
+	return withAPIVersion(newRouter(options), options)
+}
+
+// newRouter builds the owner APIs, agent API, health endpoints and the static UI, wrapped in the request id, access
+// log, panic recovery, security headers and audit middleware. It does not rewrite /api/v1; NewHandler does.
+func newRouter(options Options) http.Handler {
 	logger := options.Logger
 	if logger == nil {
 		logger = slog.Default()
