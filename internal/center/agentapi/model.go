@@ -211,41 +211,15 @@ func text(value *string, max int) bool { return value == nil || utf8.RuneCountIn
 // ParseResult validates one item independently of its siblings.
 func ParseResult(data []byte) (Result, error) {
 	var r Result
-	fields, err := decodeFields(data, &r, "id", "ts", "status", "down", "up", "ping", "jitter", "dLat", "uLat", "loss", "serverId", "ip", "threads", "bytesDown", "bytesUp", "duration", "error", "manual")
-	if err != nil || !nonNullFields(fields, "id", "ts", "status", "threads", "bytesDown", "bytesUp", "duration", "manual", "raw", "warnings") {
-		return r, ErrInvalid
-	}
-	_, present := fields["failureClass"]
-	r.classOmitted = !present
-	if present && (!nonNullFields(fields, "failureClass") || r.FailureClass == "") {
-		return r, ErrInvalid
-	}
-	if r.Engine == "" {
-		r.Engine = "ookla"
-	}
-	if r.Engine != "ookla" && r.Engine != "librespeed" {
-		return r, ErrInvalid
-	}
-	if !UUID(r.ID) || !timestamp(r.TS) || (r.IP != nil && !address(*r.IP)) || r.Threads < 1 || r.Threads > 64 || r.BytesDown < 0 || r.BytesUp < 0 || !number(&r.Duration) || !text(r.Error, 2000) {
-		return r, ErrInvalid
-	}
-	for _, metric := range []*float64{r.Down, r.Up, r.Ping, r.Jitter, r.DLat, r.ULat, r.Loss} {
-		if !number(metric) {
-			return r, ErrInvalid
-		}
-	}
-	if r.Loss != nil && *r.Loss > 100 || r.ServerID != nil && *r.ServerID < 1 || r.PinnedServerID != nil && (*r.PinnedServerID < 1 || *r.PinnedServerID > math.MaxInt32 || !r.ServerSelectionKnown) {
-		return r, ErrInvalid
-	}
-	if err := r.validateStatus(); err != nil {
+	fields, err := decodeResultFields(data, &r)
+	if err != nil {
 		return r, err
 	}
-	if r.Raw == nil {
-		r.Raw = json.RawMessage(`{}`)
+	if err := validateDecodedResult(&r, fields); err != nil {
+		return r, err
 	}
-	var raw map[string]json.RawMessage
-	if len(r.Raw) > 64<<10 || json.Unmarshal(r.Raw, &raw) != nil || raw == nil {
-		return r, ErrInvalid
+	if err := validateResultRaw(&r); err != nil {
+		return r, err
 	}
 	if err := r.validateDetails(fields); err != nil {
 		return r, err
@@ -255,6 +229,79 @@ func ParseResult(data []byte) (Result, error) {
 	}
 	r.ID = strings.ToLower(r.ID)
 	return r, nil
+}
+
+func decodeResultFields(data []byte, result *Result) (map[string]json.RawMessage, error) {
+	fields, err := decodeFields(data, result, "id", "ts", "status", "down", "up", "ping", "jitter", "dLat", "uLat", "loss", "serverId", "ip", "threads", "bytesDown", "bytesUp", "duration", "error", "manual")
+	if err != nil || !nonNullFields(fields, "id", "ts", "status", "threads", "bytesDown", "bytesUp", "duration", "manual", "raw", "warnings") {
+		return nil, ErrInvalid
+	}
+	return fields, nil
+}
+
+func validateDecodedResult(result *Result, fields map[string]json.RawMessage) error {
+	if err := validateFailureClassPresence(result, fields); err != nil {
+		return err
+	}
+	if result.Engine == "" {
+		result.Engine = "ookla"
+	}
+	if result.Engine != "ookla" && result.Engine != "librespeed" {
+		return ErrInvalid
+	}
+	if err := validateResultValues(*result); err != nil {
+		return err
+	}
+	return result.validateStatus()
+}
+
+func validateFailureClassPresence(result *Result, fields map[string]json.RawMessage) error {
+	_, present := fields["failureClass"]
+	result.classOmitted = !present
+	if present && (!nonNullFields(fields, "failureClass") || result.FailureClass == "") {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func validateResultValues(result Result) error {
+	if !validResultCore(result) || !validResultMetrics(result) || !validResultOptionalLimits(result) {
+		return ErrInvalid
+	}
+	return nil
+}
+
+func validResultCore(result Result) bool {
+	return UUID(result.ID) && timestamp(result.TS) &&
+		(result.IP == nil || address(*result.IP)) &&
+		result.Threads >= 1 && result.Threads <= 64 && result.BytesDown >= 0 && result.BytesUp >= 0 &&
+		number(&result.Duration) && text(result.Error, 2000)
+}
+
+func validResultMetrics(result Result) bool {
+	for _, metric := range []*float64{result.Down, result.Up, result.Ping, result.Jitter, result.DLat, result.ULat, result.Loss} {
+		if !number(metric) {
+			return false
+		}
+	}
+	return true
+}
+
+func validResultOptionalLimits(result Result) bool {
+	return (result.Loss == nil || *result.Loss <= 100) &&
+		(result.ServerID == nil || *result.ServerID >= 1) &&
+		(result.PinnedServerID == nil || (*result.PinnedServerID >= 1 && *result.PinnedServerID <= math.MaxInt32 && result.ServerSelectionKnown))
+}
+
+func validateResultRaw(result *Result) error {
+	if result.Raw == nil {
+		result.Raw = json.RawMessage(`{}`)
+	}
+	var raw map[string]json.RawMessage
+	if len(result.Raw) > 64<<10 || json.Unmarshal(result.Raw, &raw) != nil || raw == nil {
+		return ErrInvalid
+	}
+	return nil
 }
 
 // validateStatus applies the rules that depend on the result status and fills the default failure class.
