@@ -176,75 +176,105 @@ type authEnvelope struct {
 
 func TestAuthHTTPBootstrapLoginLogoutAndRevocation(t *testing.T) {
 	handler := newAuthHandler(t, 5)
+	bootstrapResponse, anonymousCookie := bootstrapAuthSession(t, handler)
+	loginResponse, authenticatedCookie := loginAuthSession(t, handler, anonymousCookie, bootstrapResponse.Data.CSRFToken)
+	assertAuthenticatedAuthSession(t, handler, authenticatedCookie)
+	logoutAndAssertAuthRevoked(t, handler, authenticatedCookie, loginResponse.Data.CSRFToken)
+}
+
+func bootstrapAuthSession(t *testing.T, handler http.Handler) (authEnvelope, *http.Cookie) {
+	t.Helper()
 	bootstrap := httptest.NewRecorder()
 	handler.ServeHTTP(bootstrap, httptest.NewRequest(http.MethodGet, "http://speedtest.local/api/auth/me", nil))
+	response := assertBootstrapResponse(t, bootstrap)
+	cookie := assertBootstrapCookie(t, bootstrap)
+	return response, cookie
+}
+
+func assertBootstrapResponse(t *testing.T, bootstrap *httptest.ResponseRecorder) authEnvelope {
+	t.Helper()
 	if bootstrap.Code != http.StatusOK {
 		t.Fatalf("GET /me status = %d, want 200: %s", bootstrap.Code, bootstrap.Body.String())
 	}
-	var bootstrapResponse authEnvelope
-	if err := json.Unmarshal(bootstrap.Body.Bytes(), &bootstrapResponse); err != nil {
+	var response authEnvelope
+	if err := json.Unmarshal(bootstrap.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if bootstrapResponse.Data.User != nil || bootstrapResponse.Data.CSRFToken == "" || bootstrapResponse.Data.ExpiresAt.IsZero() {
-		t.Fatalf("bootstrap response = %+v", bootstrapResponse.Data)
+	if response.Data.User != nil || response.Data.CSRFToken == "" || response.Data.ExpiresAt.IsZero() {
+		t.Fatalf("bootstrap response = %+v", response.Data)
 	}
 	if bootstrap.Header().Get("X-Request-ID") == "" || bootstrap.Header().Get("Cache-Control") != "no-store" {
 		t.Fatal("bootstrap response is missing request ID or no-store cache policy")
 	}
-	anonymousCookie := bootstrap.Result().Cookies()[0]
-	if anonymousCookie.Name != sessionCookieName || !anonymousCookie.HttpOnly || anonymousCookie.SameSite != http.SameSiteLaxMode || anonymousCookie.Path != "/" || anonymousCookie.Secure {
-		t.Fatalf("HTTP session cookie attributes = %+v", anonymousCookie)
-	}
+	return response
+}
 
+func assertBootstrapCookie(t *testing.T, bootstrap *httptest.ResponseRecorder) *http.Cookie {
+	t.Helper()
+	cookie := bootstrap.Result().Cookies()[0]
+	if cookie.Name != sessionCookieName || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode || cookie.Path != "/" || cookie.Secure {
+		t.Fatalf("HTTP session cookie attributes = %+v", cookie)
+	}
+	return cookie
+}
+
+func loginAuthSession(t *testing.T, handler http.Handler, anonymousCookie *http.Cookie, csrfToken string) (authEnvelope, *http.Cookie) {
+	t.Helper()
 	login := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodPost, "http://speedtest.local/api/auth/login", strings.NewReader(`{"email":"OWNER@example.com","password":"the owner password"}`))
 	request.AddCookie(anonymousCookie)
 	request.Header.Set("Origin", "http://speedtest.local")
-	request.Header.Set("X-CSRF-Token", bootstrapResponse.Data.CSRFToken)
+	request.Header.Set("X-CSRF-Token", csrfToken)
 	handler.ServeHTTP(login, request)
 	if login.Code != http.StatusOK {
 		t.Fatalf("POST /login status = %d: %s", login.Code, login.Body.String())
 	}
-	var loginResponse authEnvelope
-	if err := json.Unmarshal(login.Body.Bytes(), &loginResponse); err != nil {
+	var response authEnvelope
+	if err := json.Unmarshal(login.Body.Bytes(), &response); err != nil {
 		t.Fatal(err)
 	}
-	if loginResponse.Data.User == nil || loginResponse.Data.User.ID != "user-id" || loginResponse.Data.User.Email != "owner@example.com" {
-		t.Fatalf("login user = %+v", loginResponse.Data.User)
+	if response.Data.User == nil || response.Data.User.ID != "user-id" || response.Data.User.Email != "owner@example.com" {
+		t.Fatalf("login user = %+v", response.Data.User)
 	}
-	authenticatedCookie := login.Result().Cookies()[0]
-	if authenticatedCookie.Value == anonymousCookie.Value || !authenticatedCookie.HttpOnly || authenticatedCookie.SameSite != http.SameSiteLaxMode {
+	cookie := login.Result().Cookies()[0]
+	if cookie.Value == anonymousCookie.Value || !cookie.HttpOnly || cookie.SameSite != http.SameSiteLaxMode {
 		t.Fatal("login did not rotate the session cookie or preserve secure cookie attributes")
 	}
+	return response, cookie
+}
 
+func assertAuthenticatedAuthSession(t *testing.T, handler http.Handler, cookie *http.Cookie) {
+	t.Helper()
 	me := httptest.NewRecorder()
-	meRequest := httptest.NewRequest(http.MethodGet, "http://speedtest.local/api/auth/me", nil)
-	meRequest.AddCookie(authenticatedCookie)
-	handler.ServeHTTP(me, meRequest)
+	request := httptest.NewRequest(http.MethodGet, "http://speedtest.local/api/auth/me", nil)
+	request.AddCookie(cookie)
+	handler.ServeHTTP(me, request)
 	if me.Code != http.StatusOK {
 		t.Fatalf("authenticated GET /me status = %d: %s", me.Code, me.Body.String())
 	}
-	var meResponse authEnvelope
-	if err := json.Unmarshal(me.Body.Bytes(), &meResponse); err != nil || meResponse.Data.User == nil || meResponse.Data.User.ID != "user-id" {
-		t.Fatalf("authenticated GET /me response = %+v, error %v", meResponse.Data, err)
+	var response authEnvelope
+	if err := json.Unmarshal(me.Body.Bytes(), &response); err != nil || response.Data.User == nil || response.Data.User.ID != "user-id" {
+		t.Fatalf("authenticated GET /me response = %+v, error %v", response.Data, err)
 	}
+}
 
+func logoutAndAssertAuthRevoked(t *testing.T, handler http.Handler, cookie *http.Cookie, csrfToken string) {
+	t.Helper()
 	logout := httptest.NewRecorder()
-	logoutRequest := httptest.NewRequest(http.MethodPost, "http://speedtest.local/api/auth/logout", nil)
-	logoutRequest.AddCookie(authenticatedCookie)
-	logoutRequest.Header.Set("Origin", "http://speedtest.local")
-	logoutRequest.Header.Set("X-CSRF-Token", loginResponse.Data.CSRFToken)
-	handler.ServeHTTP(logout, logoutRequest)
+	request := httptest.NewRequest(http.MethodPost, "http://speedtest.local/api/auth/logout", nil)
+	request.AddCookie(cookie)
+	request.Header.Set("Origin", "http://speedtest.local")
+	request.Header.Set("X-CSRF-Token", csrfToken)
+	handler.ServeHTTP(logout, request)
 	if logout.Code != http.StatusNoContent || len(logout.Body.Bytes()) != 0 {
 		t.Fatalf("POST /logout status/body = %d/%q", logout.Code, logout.Body.String())
 	}
 	if expired := logout.Result().Cookies()[0]; expired.MaxAge >= 0 || !expired.HttpOnly || expired.SameSite != http.SameSiteLaxMode {
 		t.Fatalf("logout cookie was not expired safely: %+v", expired)
 	}
-
 	revoked := httptest.NewRecorder()
 	revokedRequest := httptest.NewRequest(http.MethodGet, "http://speedtest.local/api/auth/me", nil)
-	revokedRequest.AddCookie(authenticatedCookie)
+	revokedRequest.AddCookie(cookie)
 	handler.ServeHTTP(revoked, revokedRequest)
 	if revoked.Code != http.StatusUnauthorized || revoked.Header().Get("WWW-Authenticate") != "Session" || len(revoked.Result().Cookies()) == 0 {
 		t.Fatalf("GET /me with logged-out cookie = %d, want 401 and clear cookie", revoked.Code)

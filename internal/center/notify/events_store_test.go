@@ -214,6 +214,18 @@ func TestEventStoreWithMemoryDB(t *testing.T) {
 	store := &EventStore{DB: db}
 	ctx := context.Background()
 
+	assertEventListAndPatch(t, store, ctx)
+	assertEventTemplateLifecycle(t, store, ctx)
+	assertNodeEventSettings(t, store, ctx)
+	assertMissingTemplateWrites(t, store, ctx)
+	assertTemplateAndNodeFailures(t, store, db, ctx)
+	assertSettingsReadFailureBehavior(t, store, db, ctx)
+	assertMissingRecordsAndValidation(t, store, ctx)
+	assertEventStoreDatabaseFailures(t, store, db, ctx)
+}
+
+func assertEventListAndPatch(t *testing.T, store *EventStore, ctx context.Context) {
+	t.Helper()
 	list, err := store.ListEvents(ctx)
 	if err != nil || len(list) < 30 {
 		t.Fatalf("list %d %v", len(list), err)
@@ -230,6 +242,16 @@ func TestEventStoreWithMemoryDB(t *testing.T) {
 	if _, err := store.UpdateEvent(ctx, "test.success", EventPatch{Channels: []string{"bad"}}); !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("bad channel: %v", err)
 	}
+}
+
+func assertEventTemplateLifecycle(t *testing.T, store *EventStore, ctx context.Context) {
+	assertDefaultAndMissingEventTemplates(t, store, ctx)
+	assertTemplateWrites(t, store, ctx)
+	assertTemplatePreviewAndReset(t, store, ctx)
+}
+
+func assertDefaultAndMissingEventTemplates(t *testing.T, store *EventStore, ctx context.Context) {
+	t.Helper()
 	tpl, err := store.GetTemplate(ctx, "test.success", "telegram")
 	if err != nil || !tpl.IsDefault {
 		t.Fatalf("default tpl %+v %v", tpl, err)
@@ -240,6 +262,10 @@ func TestEventStoreWithMemoryDB(t *testing.T) {
 	if _, err := store.GetTemplate(ctx, "test.success", "nope"); !errors.Is(err, ErrTemplateNotFound) {
 		t.Fatalf("missing channel: %v", err)
 	}
+}
+
+func assertTemplateWrites(t *testing.T, store *EventStore, ctx context.Context) {
+	t.Helper()
 	saved, err := store.PutTemplate(ctx, "test.success", "telegram", "Hi {node}")
 	if err != nil || saved.IsDefault || saved.Body != "Hi {node}" {
 		t.Fatalf("put %+v %v", saved, err)
@@ -247,6 +273,10 @@ func TestEventStoreWithMemoryDB(t *testing.T) {
 	if _, err := store.PutTemplate(ctx, "test.success", "telegram", "x {secret}"); !errors.Is(err, template.ErrUnknownPlaceholder) {
 		t.Fatalf("placeholder: %v", err)
 	}
+}
+
+func assertTemplatePreviewAndReset(t *testing.T, store *EventStore, ctx context.Context) {
+	t.Helper()
 	prev, err := store.PreviewTemplate(ctx, "test.success", "telegram", "")
 	if err != nil || !strings.Contains(prev.Body, "Viettel") {
 		t.Fatalf("preview %+v %v", prev, err)
@@ -255,6 +285,18 @@ func TestEventStoreWithMemoryDB(t *testing.T) {
 	if err != nil || !reset.IsDefault {
 		t.Fatalf("reset %+v %v", reset, err)
 	}
+}
+
+func assertNodeEventSettings(t *testing.T, store *EventStore, ctx context.Context) {
+	assertGlobalEventDisabledForNode(t, store, ctx)
+	assertNodeOverrideDisabled(t, store, ctx)
+	assertNonScopedNodeEventEnabled(t, store, ctx)
+	assertNodeEventScopeGuard(t, store, ctx)
+	assertResolvedNodeEventBody(t, store, ctx)
+}
+
+func assertGlobalEventDisabledForNode(t *testing.T, store *EventStore, ctx context.Context) {
+	t.Helper()
 	on, err := store.NodeEnabled(ctx, "test.success", "n1")
 	if err != nil || on { // globally disabled
 		if err != nil {
@@ -264,6 +306,10 @@ func TestEventStoreWithMemoryDB(t *testing.T) {
 			t.Fatal("expected off")
 		}
 	}
+}
+
+func assertNodeOverrideDisabled(t *testing.T, store *EventStore, ctx context.Context) {
+	t.Helper()
 	en := true
 	if _, err := store.UpdateEvent(ctx, "test.success", EventPatch{Enabled: &en}); err != nil {
 		t.Fatal(err)
@@ -271,27 +317,47 @@ func TestEventStoreWithMemoryDB(t *testing.T) {
 	if err := store.SetNodeEnabled(ctx, "test.success", "n1", false); err != nil {
 		t.Fatal(err)
 	}
-	on, err = store.NodeEnabled(ctx, "test.success", "n1")
+	on, err := store.NodeEnabled(ctx, "test.success", "n1")
 	if err != nil || on {
 		t.Fatalf("node %v %v", on, err)
 	}
-	on, err = store.NodeEnabled(ctx, "node.offline", "n1")
+}
+
+func assertNonScopedNodeEventEnabled(t *testing.T, store *EventStore, ctx context.Context) {
+	t.Helper()
+	on, err := store.NodeEnabled(ctx, "node.offline", "n1")
 	if err != nil || !on {
 		t.Fatalf("non-scoped %v %v", on, err)
 	}
+}
+
+func assertNodeEventScopeGuard(t *testing.T, store *EventStore, ctx context.Context) {
+	t.Helper()
 	if err := store.SetNodeEnabled(ctx, "node.offline", "n1", false); !errors.Is(err, ErrInvalidEvent) {
 		t.Fatalf("scoped guard: %v", err)
 	}
+}
+
+func assertResolvedNodeEventBody(t *testing.T, store *EventStore, ctx context.Context) {
+	t.Helper()
 	body, sev, ch, err := store.ResolveBody(ctx, "quality.download_low", "email")
 	if err != nil || body == "" || sev == "" || len(ch) == 0 {
 		t.Fatalf("resolve %q %q %v %v", body, sev, ch, err)
 	}
+}
+
+func assertMissingTemplateWrites(t *testing.T, store *EventStore, ctx context.Context) {
+	t.Helper()
 	if _, err := store.PutTemplate(ctx, "missing", "email", "Hi {node}"); !errors.Is(err, ErrEventNotFound) {
 		t.Fatalf("put missing event: %v", err)
 	}
 	if _, err := store.PutTemplate(ctx, "test.success", "nope", "Hi {node}"); !errors.Is(err, ErrTemplateNotFound) {
 		t.Fatalf("put missing channel: %v", err)
 	}
+}
+
+func assertTemplateAndNodeFailures(t *testing.T, store *EventStore, db *memEventDB, ctx context.Context) {
+	t.Helper()
 	db.failTemplate = true
 	if _, _, _, err := store.ResolveBody(ctx, "test.success", "telegram"); err == nil {
 		t.Fatal("resolve template failure")
@@ -300,11 +366,20 @@ func TestEventStoreWithMemoryDB(t *testing.T) {
 		t.Fatal("node query failure")
 	}
 	db.failTemplate = false
+}
+
+func assertSettingsReadFailureBehavior(t *testing.T, store *EventStore, db *memEventDB, ctx context.Context) {
+	t.Helper()
 	db.failSettings = true
+	en := true
 	if _, err := store.UpdateEvent(ctx, "test.success", EventPatch{Enabled: &en}); err != nil {
 		t.Fatalf("atomic field patch should not read all settings first: %v", err)
 	}
 	db.failSettings = false
+}
+
+func assertMissingRecordsAndValidation(t *testing.T, store *EventStore, ctx context.Context) {
+	t.Helper()
 	if _, err := store.ResetTemplate(ctx, "missing", "email"); !errors.Is(err, ErrEventNotFound) {
 		t.Fatalf("reset missing event: %v", err)
 	}
@@ -323,7 +398,12 @@ func TestEventStoreWithMemoryDB(t *testing.T) {
 	if _, err := store.NodeEnabled(ctx, "missing", "n1"); !errors.Is(err, ErrEventNotFound) {
 		t.Fatalf("node missing: %v", err)
 	}
+}
+
+func assertEventStoreDatabaseFailures(t *testing.T, store *EventStore, db *memEventDB, ctx context.Context) {
+	t.Helper()
 	db.fail = errors.New("db down")
+	en := true
 	if _, err := store.ListEvents(ctx); err == nil {
 		t.Fatal("expected list failure")
 	}

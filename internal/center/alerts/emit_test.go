@@ -279,30 +279,68 @@ func newEmitFixture() (*Store, *fakeTx, context.Context) {
 
 func TestEmitHelpersAndOutcomes(t *testing.T) {
 	store, tx, ctx := newEmitFixture()
+	testEmitURLAndLimits(t, store, tx, ctx)
+	testEmitChannels(t, store, tx, ctx)
+	testEmitCatalogEnabled(t, store, tx, ctx)
+	testEmitCatalogInserts(t, store, tx, ctx)
+	testEmitTestOutcomes(t, store, tx, ctx)
+	testEmitRecovery(t, store, tx, ctx)
+	testEmitFailures(t, store, tx, ctx)
+}
+
+func testEmitURLAndLimits(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	assertEmitCenterURL(t, store, tx, ctx)
+	assertInitialQualityLimits(t, store, tx, ctx)
+	assertConfiguredQualityLimits(t, store, tx, ctx)
+	assertDefaultQualityLimits(t, store, tx, ctx)
+	assertQualityLimitFailure(t, store, tx, ctx)
+}
+
+func assertEmitCenterURL(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	t.Helper()
 	if got, err := store.centerURL(ctx, tx); err != nil || got != "https://center.example" {
 		t.Fatalf("centerURL %q %v", got, err)
 	}
+}
+
+func assertInitialQualityLimits(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	t.Helper()
 	limits, err := store.qualityLimits(ctx, tx, "n1", "ookla")
 	if err != nil || limits.DownloadPct != 65 || limits.PingMS != 30 || !limits.DownloadSet || !limits.PingSet {
 		t.Fatalf("limits %+v %v", limits, err)
 	}
+}
+
+func assertConfiguredQualityLimits(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	t.Helper()
 	tx.limits = [][2]any{{"down_pct", 72.0}}
-	limits, err = store.qualityLimits(ctx, tx, "n1", "ookla")
+	limits, err := store.qualityLimits(ctx, tx, "n1", "ookla")
 	if err != nil || limits.DownloadPct != 72 || limits.UploadPct != 40 || limits.PingMS != 30 {
 		t.Fatalf("configured and fallback limits %+v %v", limits, err)
 	}
+}
+
+func assertDefaultQualityLimits(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	t.Helper()
 	tx.limits = nil
-	limits, err = store.qualityLimits(ctx, tx, "n1", "ookla")
+	limits, err := store.qualityLimits(ctx, tx, "n1", "ookla")
 	if err != nil || limits.DownloadPct != 65 || limits.UploadPct != 40 || limits.LossPct != 2 {
 		t.Fatalf("default limits %+v %v", limits, err)
 	}
+}
+
+func assertQualityLimitFailure(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	t.Helper()
 	tx.limits = [][2]any{{"down_pct", 65.0}, {"ping", 30.0}, {"up_pct", 40.0}, {"jitter", 10.0}, {"loss", 2.0}}
 	tx.fail = "limits"
 	if _, err := store.qualityLimits(ctx, tx, "n1", "ookla"); err == nil {
 		t.Fatal("expected limits failure")
 	}
 	tx.fail = ""
+}
 
+func testEmitChannels(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	t.Helper()
 	ch, err := store.eventChannels(ctx, tx, "test.success", []string{"email"})
 	if err != nil || len(ch) == 0 || ch[0] != "telegram" {
 		t.Fatalf("channels %v %v", ch, err)
@@ -319,7 +357,10 @@ func TestEmitHelpersAndOutcomes(t *testing.T) {
 	if err != nil || ch[0] != "email" {
 		t.Fatalf("fallback %v %v", ch, err)
 	}
+}
 
+func testEmitCatalogEnabled(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	t.Helper()
 	on, err := store.catalogEnabled(ctx, tx, "test.success", "n1")
 	if err != nil || !on {
 		t.Fatalf("enabled %v %v", on, err)
@@ -334,7 +375,10 @@ func TestEmitHelpersAndOutcomes(t *testing.T) {
 		t.Fatalf("node off %v %v", on, err)
 	}
 	tx.nodes = nil
+}
 
+func testEmitCatalogInserts(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	t.Helper()
 	before := tx.inserted
 	if _, err := store.insertCatalogEvent(ctx, tx, "test.success", "n1", "info", "T", "D", "", nil, map[string]string{"node": "Fiber"}, time.Now().UTC()); err != nil {
 		t.Fatal(err)
@@ -345,10 +389,13 @@ func TestEmitHelpersAndOutcomes(t *testing.T) {
 	if tx.inserted != before+2 {
 		t.Fatalf("insert count %d", tx.inserted)
 	}
+}
 
+func testEmitTestOutcomes(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	t.Helper()
 	down := 200.0
 	result := agentapi.Result{ID: "rid", Status: "ok", Down: &down, TS: "2026-11-08T01:00:00Z"}
-	before = tx.inserted
+	before := tx.inserted
 	if err := store.emitTestOutcome(ctx, tx, "n1", result, time.Now().UTC()); err != nil || tx.inserted != before+1 {
 		t.Fatalf("success %v inserted=%d", err, tx.inserted-before)
 	}
@@ -364,8 +411,11 @@ func TestEmitHelpersAndOutcomes(t *testing.T) {
 		t.Fatal(err)
 	}
 	tx.settings["test.success"] = true
+}
 
-	before = tx.inserted
+func testEmitRecovery(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	t.Helper()
+	before := tx.inserted
 	if err := store.emitRecovery(ctx, tx, Rule{Metric: "failed", Channels: []string{"telegram"}}, "n1", time.Now().Add(-time.Hour), time.Now(), "rid"); err != nil {
 		t.Fatal(err)
 	}
@@ -388,13 +438,28 @@ func TestEmitHelpersAndOutcomes(t *testing.T) {
 	if _, err := loadResult(ctx, tx, "rid"); err != nil {
 		t.Fatal(err)
 	}
+}
 
+func testEmitFailures(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	t.Helper()
+	down := 200.0
+	tx.settings["test.success"] = true
+	tx.settings["test.recovered"] = true
+	tx.settings["node.online"] = true
+	testEmitInsertFailures(t, store, tx, ctx)
+	testEmitOutcomeFailures(t, store, tx, ctx, down)
+	testEmitRecoveryLimitFailures(t, store, tx, ctx)
+	testEmitRecoveryConfigurationFailures(t, store, tx, ctx, down)
+}
+
+func testEmitInsertFailures(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	t.Helper()
 	tx.fail = "insert"
 	if _, err := store.insertCatalogEvent(ctx, tx, "test.success", "n1", "info", "T", "D", "rid", []string{"telegram"}, map[string]string{}, time.Now().UTC()); err == nil {
 		t.Fatal("expected insert failure")
 	}
 	tx.fail = "outbox"
-	before = tx.inserted
+	before := tx.inserted
 	if _, err := store.insertCatalogEvent(ctx, tx, "test.success", "n1", "info", "T", "D", "rid", []string{"telegram"}, map[string]string{}, time.Now().UTC()); err == nil || tx.inserted != before {
 		t.Fatal("expected atomic event/outbox failure")
 	}
@@ -402,13 +467,14 @@ func TestEmitHelpersAndOutcomes(t *testing.T) {
 	if _, err := store.insertCatalogEvent(ctx, tx, "test.success", "n1", "info", "T", "D", "", nil, map[string]string{}, time.Now().UTC()); err == nil {
 		t.Fatal("expected channels failure")
 	}
+}
+
+func testEmitOutcomeFailures(t *testing.T, store *Store, tx *fakeTx, ctx context.Context, down float64) {
+	t.Helper()
 	tx.fail = "node"
 	if err := store.emitTestOutcome(ctx, tx, "n1", agentapi.Result{ID: "rid", Status: "ok", Down: &down}, time.Now().UTC()); err == nil {
 		t.Fatal("expected node failure")
 	}
-	tx.settings["test.success"] = true
-	tx.settings["test.recovered"] = true
-	tx.settings["node.online"] = true
 	tx.fail = "settings-missing"
 	if got, err := store.centerURL(ctx, tx); err != nil || got != "" {
 		t.Fatalf("missing display settings: %q %v", got, err)
@@ -425,6 +491,11 @@ func TestEmitHelpersAndOutcomes(t *testing.T) {
 	if err := store.emitTestOutcome(ctx, tx, "n1", agentapi.Result{ID: "rid", Status: "ok", Down: &down}, time.Now().UTC()); err == nil {
 		t.Fatal("expected limits failure on success")
 	}
+}
+
+func testEmitRecoveryLimitFailures(t *testing.T, store *Store, tx *fakeTx, ctx context.Context) {
+	t.Helper()
+	tx.fail = "limits"
 	if err := store.emitRecovery(ctx, tx, Rule{Metric: "failed", Channels: []string{"telegram"}}, "n1", time.Now(), time.Now(), ""); err == nil {
 		t.Fatal("expected limits failure on recovery")
 	}
@@ -432,6 +503,10 @@ func TestEmitHelpersAndOutcomes(t *testing.T) {
 	if err := store.emitRecovery(ctx, tx, Rule{Metric: "failed", Channels: []string{"telegram"}}, "n1", time.Now(), time.Now(), "rid"); err == nil {
 		t.Fatal("expected results failure on recovery")
 	}
+}
+
+func testEmitRecoveryConfigurationFailures(t *testing.T, store *Store, tx *fakeTx, ctx context.Context, down float64) {
+	t.Helper()
 	tx.fail = "settings"
 	if err := store.emitTestOutcome(ctx, tx, "n1", agentapi.Result{ID: "rid", Status: "ok", Down: &down}, time.Now().UTC()); err == nil {
 		t.Fatal("expected center URL failure on success")
