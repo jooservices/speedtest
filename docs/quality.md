@@ -2,17 +2,40 @@
 
 ## Go function complexity
 
-The project enables `funlen` and `gocyclo` in `.golangci.yml`. The baseline was measured with Go 1.27.3 and golangci-lint v2.15.0 on 2026-11-12, including test files. Integration-tagged test files set the current maxima:
+Two passes check function size. Both read the repository configuration files.
+
+1. **Repository gate (`.golangci.yml`).** `funlen` and `gocyclo` are enabled for every package. `gocyclo` has `min-complexity: 30`, so no function outside the exclusion may exceed complexity 30. `funlen` has the limits of 286 lines and 193 statements.
+2. **New-code gate (`.golangci-new-code.yml`, `make lint-new-code BASE=<ref>`).** Runs `gocyclo` at `min-complexity: 10` with `--new-from-merge-base`. `gocyclo` reports a function at its declaration line, and the merge-base filter keeps only findings on lines changed since `BASE`. So this pass checks a function only when its declaration line is in the diff: a new function, or an existing one whose signature changed. An existing function whose body changed but whose signature did not is not checked here; it is covered by the repository gate at 30 only, so keep changed bodies within 10 in review. Lowering the new-code threshold is a separate change.
+
+### Exclusion
+
+Integration test files are excluded from `gocyclo` only. The rule in `.golangci.yml` matches any file named `integration_test.go` or `*_integration_test.go`, and `funlen` still applies to them. Their long end-to-end flows are the reason for the exclusion; do not use the exclusion for any other file.
+
+### Baseline
+
+The baseline was measured with Go 1.27.3 and golangci-lint v2.15.0. The gated `gocyclo` maximum was re-measured on 2026-11-17 after the JOOST-105 to JOOST-107 refactors, with the issue caps disabled so no finding was hidden.
 
 | Check | `go test` build | Integration build | Configured limit |
 | --- | ---: | ---: | ---: |
+| `gocyclo` complexity, all gated files | 29 | 29 | 30 |
+| `gocyclo` complexity, integration test files (excluded) | not gated | 119 | not gated |
 | `funlen` lines | 177 | 281 | 286 lines |
 | `funlen` statements | 79 | 192 | 193 statements |
-| `gocyclo` complexity | 42 | 119 | 120 |
 
-The integration maxima are `TestNotificationCenterEndToEndIntegration` (270 lines and 187 statements) and `TestOwnerStatisticsHTTPFlowIntegration` (complexity 119). No existing functions were changed to establish these limits. Both standard and integration lint commands include tests, so the limits are one above the measured worst cases. As quality work simplifies existing product and test functions, lower the limits in small steps and keep both lint commands green.
+The gated `gocyclo` maxima are `TestTwoFactorHTTPLifecycle`, `TestFromEngineOK` and `TestBatchOutcomes` (29 each). The excluded integration maxima are `TestOwnerStatisticsHTTPFlowIntegration` (119) and `TestAgentIngestionProtocolIntegration` (83). The integration `funlen` maximum is `TestNotificationCenterEndToEndIntegration` (281 lines and 192 statements, reported by `funlen` at limits of 280 lines and 191 statements). Each `funlen` limit is set above its measured maximum.
 
-CI uses the same project configuration and explicitly enables both linters. Run `golangci-lint run` and `golangci-lint run --build-tags integration` locally.
+### Lowering the ratchet
+
+Lower `gocyclo` `min-complexity` in `.golangci.yml` in small steps, and only after refactoring every function above the new value that the exclusion does not cover. For each step:
+
+1. Run `golangci-lint run --config <temporary config with min-complexity set to the new value>` and fix or split each reported function in the same change.
+2. Set `min-complexity` in `.golangci.yml` to the new value.
+3. Run `golangci-lint run` and `golangci-lint run --build-tags integration`; both must exit zero.
+4. Update the baseline table above with the new measured maxima.
+
+Run `golangci-lint run` and `golangci-lint run --build-tags integration` locally before pushing. `make lint` runs the repository gate and then the new-code gate against `BASE` (default `origin/develop`).
+
+CI (`.github/workflows/lint.yml`) runs the repository gate with `--enable=funlen --enable=gocyclo` on pushes to `develop` and `master` and on every pull request. It runs the new-code gate only for pull requests (`if: github.event_name == 'pull_request'`), so the new-code gate is not run by CI on pushes to `develop` or `master`. CI does not run the integration build.
 
 ## Installer under systemd
 

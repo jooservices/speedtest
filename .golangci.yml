@@ -14,7 +14,13 @@ linters:
       lines: 286
       statements: 193
     gocyclo:
-      min-complexity: 120
+      min-complexity: 30
+  exclusions:
+    rules:
+      # Integration test flows are long by nature; only gocyclo is relaxed for them.
+      - linters:
+          - gocyclo
+        path: (^|[/_])integration_test\.go$
 
 formatters:
   enable:

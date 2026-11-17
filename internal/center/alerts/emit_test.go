@@ -84,10 +84,36 @@ func (f *fakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	if strings.Contains(sql, "FROM alert_state") {
 		f.alertStateReads++
 	}
-	if strings.Contains(sql, "bandwidth_budget_configured") {
-		f.bandwidthConfigReads++
-		return alertRow{vals: []any{false}}
+	if row, ok := f.bandwidthBudgetRow(sql); ok {
+		return row
 	}
+	f.countQueryRow(sql, args)
+	// The groups keep the original first-match order: a query is answered by
+	// the first group whose pattern matches it.
+	for _, group := range []func(string, []any) (pgx.Row, bool){
+		f.queryConfigRow,
+		f.querySettingRow,
+		f.queryNotificationRow,
+		f.queryNodeResultRow,
+	} {
+		if row, ok := group(sql, args); ok {
+			return row
+		}
+	}
+	return alertRow{err: errors.New("unexpected: " + sql)}
+}
+
+// bandwidthBudgetRow answers the bandwidth budget flag read.
+func (f *fakeTx) bandwidthBudgetRow(sql string) (pgx.Row, bool) {
+	if !strings.Contains(sql, "bandwidth_budget_configured") {
+		return nil, false
+	}
+	f.bandwidthConfigReads++
+	return alertRow{vals: []any{false}}, true
+}
+
+// countQueryRow records the reads the tests assert on.
+func (f *fakeTx) countQueryRow(sql string, args []any) {
 	if strings.Contains(sql, "FROM results r JOIN nodes n") {
 		f.bandwidthUsageReads++
 	}
@@ -103,96 +129,121 @@ func (f *fakeTx) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	if strings.Contains(sql, "SELECT enabled,severity,channels,thresholds") && len(args) > 0 && args[0] == "quality.drop_vs_median" {
 		f.medianConfigReads++
 	}
+}
+
+// queryConfigRow answers test outcome configuration and timezone reads.
+func (f *fakeTx) queryConfigRow(sql string, _ []any) (pgx.Row, bool) {
 	switch {
 	case strings.Contains(sql, "test_outcome_config"):
 		if f.fail == "node" || f.fail == "settings" {
-			return alertRow{err: errors.New(f.fail)}
+			return alertRow{err: errors.New(f.fail)}, true
 		}
 		centerURL := "https://center.example"
 		if f.fail == "settings-missing" {
 			centerURL = ""
 		}
-		return alertRow{vals: []any{f.nodeName, 300.0, 100.0, centerURL}}
+		return alertRow{vals: []any{f.nodeName, 300.0, 100.0, centerURL}}, true
 	case strings.Contains(sql, "SELECT COALESCE(value #>> '{}' ,'UTC')"):
 		if f.fail == "timezone" {
-			return alertRow{err: errors.New("timezone")}
+			return alertRow{err: errors.New("timezone")}, true
 		}
-		return alertRow{vals: []any{"UTC"}}
+		return alertRow{vals: []any{"UTC"}}, true
 	case strings.Contains(sql, "SELECT COALESCE(value #>> '{}','UTC')"):
 		if f.fail == "timezone" {
-			return alertRow{err: errors.New("timezone")}
+			return alertRow{err: errors.New("timezone")}, true
 		}
-		return alertRow{vals: []any{"UTC"}}
+		return alertRow{vals: []any{"UTC"}}, true
+	}
+	return nil, false
+}
+
+// querySettingRow answers event settings, quiet-hours timezone and center settings reads.
+func (f *fakeTx) querySettingRow(sql string, args []any) (pgx.Row, bool) {
+	switch {
 	case strings.Contains(sql, "SELECT enabled,severity,channels,thresholds"):
 		if f.fail == "enabled" || f.fail == "channels" {
-			return alertRow{err: errors.New(f.fail)}
+			return alertRow{err: errors.New(f.fail)}, true
 		}
 		key := args[0].(string)
 		if _, ok := f.settings[key]; !ok {
-			return alertRow{err: pgx.ErrNoRows}
+			return alertRow{err: pgx.ErrNoRows}, true
 		}
 		severity := "warn"
 		channels := f.channels[key]
-		return alertRow{vals: []any{f.settings[key], severity, channels, []byte(`{}`), 0, 0, "", "", "UTC", []string{}}}
+		return alertRow{vals: []any{f.settings[key], severity, channels, []byte(`{}`), 0, 0, "", "", "UTC", []string{}}}, true
 	case strings.Contains(sql, "notifyQuietTimezone"):
 		if f.fail == "timezone" {
-			return alertRow{err: errors.New("timezone")}
+			return alertRow{err: errors.New("timezone")}, true
 		}
-		return alertRow{vals: []any{"Asia/Bangkok"}}
+		return alertRow{vals: []any{"Asia/Bangkok"}}, true
 	case strings.Contains(sql, "FROM settings"):
 		if f.fail == "settings-missing" {
-			return alertRow{err: pgx.ErrNoRows}
+			return alertRow{err: pgx.ErrNoRows}, true
 		}
 		if f.fail == "settings" {
-			return alertRow{err: errors.New("settings")}
+			return alertRow{err: errors.New("settings")}, true
 		}
 		raw, _ := json.Marshal(map[string]string{"centerUrl": "https://center.example"})
-		return alertRow{vals: []any{raw}}
+		return alertRow{vals: []any{raw}}, true
+	}
+	return nil, false
+}
+
+// queryNotificationRow answers notification event and node toggle reads.
+func (f *fakeTx) queryNotificationRow(sql string, args []any) (pgx.Row, bool) {
+	switch {
 	case strings.Contains(sql, "notification_event_settings") && strings.Contains(sql, "channels"):
 		if f.fail == "channels" {
-			return alertRow{err: errors.New("channels")}
+			return alertRow{err: errors.New("channels")}, true
 		}
 		ch, ok := f.channels[args[0].(string)]
 		if !ok {
-			return alertRow{err: pgx.ErrNoRows}
+			return alertRow{err: pgx.ErrNoRows}, true
 		}
-		return alertRow{vals: []any{ch}}
+		return alertRow{vals: []any{ch}}, true
 	case strings.Contains(sql, "notification_event_settings"):
 		if f.fail == "enabled" {
-			return alertRow{err: errors.New("enabled")}
+			return alertRow{err: errors.New("enabled")}, true
 		}
 		v, ok := f.settings[args[0].(string)]
 		if !ok {
-			return alertRow{err: pgx.ErrNoRows}
+			return alertRow{err: pgx.ErrNoRows}, true
 		}
-		return alertRow{vals: []any{v}}
+		return alertRow{vals: []any{v}}, true
 	case strings.Contains(sql, "notification_event_node_settings"):
 		v, ok := f.nodes[args[0].(string)+"|"+args[1].(string)]
 		if !ok {
-			return alertRow{err: pgx.ErrNoRows}
+			return alertRow{err: pgx.ErrNoRows}, true
 		}
-		return alertRow{vals: []any{v}}
+		return alertRow{vals: []any{v}}, true
+	}
+	return nil, false
+}
+
+// queryNodeResultRow answers node metadata and latest result reads.
+func (f *fakeTx) queryNodeResultRow(sql string, args []any) (pgx.Row, bool) {
+	switch {
 	case strings.Contains(sql, "FROM nodes") && strings.Contains(sql, "expected_down"):
 		if f.fail == "node" {
-			return alertRow{err: errors.New("node")}
+			return alertRow{err: errors.New("node")}, true
 		}
-		return alertRow{vals: []any{f.nodeName, 300.0, 100.0}}
+		return alertRow{vals: []any{f.nodeName, 300.0, 100.0}}, true
 	case strings.Contains(sql, "SELECT server_id FROM nodes"):
 		pinned := 7
-		return alertRow{vals: []any{&pinned}}
+		return alertRow{vals: []any{&pinned}}, true
 	case strings.Contains(sql, "FROM nodes"):
 		if f.fail == "node" {
-			return alertRow{err: errors.New("node")}
+			return alertRow{err: errors.New("node")}, true
 		}
-		return alertRow{vals: []any{f.nodeName}}
+		return alertRow{vals: []any{f.nodeName}}, true
 	case strings.Contains(sql, "FROM results"):
 		if f.fail == "results" {
-			return alertRow{err: errors.New("results")}
+			return alertRow{err: errors.New("results")}, true
 		}
 		down, up, ping := 200.0, 80.0, 10.0
-		return alertRow{vals: []any{"rid", "2026-11-08T01:00:00Z", "ok", &down, &up, &ping, (*float64)(nil), (*float64)(nil), (*string)(nil), false, []byte(`{"name":"HCMC-1"}`), (*string)(nil), (*string)(nil), "other", "ookla"}}
+		return alertRow{vals: []any{"rid", "2026-11-08T01:00:00Z", "ok", &down, &up, &ping, (*float64)(nil), (*float64)(nil), (*string)(nil), false, []byte(`{"name":"HCMC-1"}`), (*string)(nil), (*string)(nil), "other", "ookla"}}, true
 	}
-	return alertRow{err: errors.New("unexpected: " + sql)}
+	return nil, false
 }
 
 type alertRow struct {
