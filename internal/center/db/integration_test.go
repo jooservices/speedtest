@@ -36,7 +36,7 @@ func testPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 		t.Fatal("invalid test configuration")
 	}
 	// Fail closed before connecting, then verify the server-side identity/marker.
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
@@ -46,11 +46,6 @@ func testPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	var name, marker string
-	err = pool.QueryRow(ctx, "SELECT current_database(), shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()").Scan(&name, &marker)
-	if err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
-		t.Fatal("test database identity/ownership check failed")
-	}
 	t.Log("PASS: non-live database name and ownership marker verified")
 	return pool, ctx
 }

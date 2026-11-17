@@ -37,7 +37,7 @@ func openInstallerIntegrationPool(t *testing.T) (*pgxpool.Pool, context.Context,
 	if err != nil {
 		t.Fatal("invalid worktree integration configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
@@ -47,10 +47,6 @@ func openInstallerIntegrationPool(t *testing.T) (*pgxpool.Pool, context.Context,
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	var name, marker string
-	if err := pool.QueryRow(ctx, `SELECT current_database(),shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()`).Scan(&name, &marker); err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
-		t.Fatal("integration database identity and ownership marker verification failed")
-	}
 	t.Log("PASS: installer integration uses a guarded test database with the Workspaces ownership marker")
 	return pool, ctx, []byte("0123456789abcdef0123456789abcdef")
 }

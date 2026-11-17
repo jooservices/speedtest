@@ -128,7 +128,7 @@ func LoadCenter() (CenterConfig, error) {
 
 	cfg := CenterConfig{
 		HTTPAddr:                  getString("SPEEDTEST_HTTP_ADDR", "127.0.0.1:8080"),
-		AppEnv:                    strings.ToLower(strings.TrimSpace(getString("APP_ENV", "local"))),
+		AppEnv:                    AppEnv(),
 		UIDir:                     getString("SPEEDTEST_UI_DIR", ""),
 		SessionTTL:                sessionTTL,
 		LoginMaxAttempts:          loginMaxAttempts,
@@ -271,4 +271,10 @@ func centerDatabase(port, maxConns int) DatabaseConfig {
 		SSLMode:  getString("SPEEDTEST_DB_SSLMODE", "disable"),
 		MaxConns: maxConns,
 	}
+}
+
+// AppEnv is the one fact the program knows about where it runs: local, test, staging or production.
+// Everything else (hosts, names, credentials) comes from the environment and is used as given.
+func AppEnv() string {
+	return strings.ToLower(strings.TrimSpace(getString("APP_ENV", "local")))
 }

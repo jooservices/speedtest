@@ -31,7 +31,7 @@ func openISPStore(t *testing.T) (*pgxpool.Pool, context.Context, *isp.Store) {
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)

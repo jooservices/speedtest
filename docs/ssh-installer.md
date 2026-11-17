@@ -101,8 +101,7 @@ go test -p 1 -parallel 1 -tags integration -race ./internal/center/server \
 govulncheck ./...
 ```
 
-Database fixtures verify `db.CheckTestDatabase`, the actual database name and its
-Workspaces ownership marker before destructive setup. Never run these suites
+Database fixtures call `db.CheckDestructiveAllowed` (`APP_ENV` must be `local` or `test`) before destructive setup. Never run these suites
 concurrently on the same database.
 
 `TestRemoteScriptLifecycle` executes the real shell scripts on a disposable

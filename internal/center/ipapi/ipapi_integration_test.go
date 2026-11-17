@@ -27,7 +27,7 @@ func ipapiIntegrationPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	}
 	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
-	if err != nil || centerdb.CheckTestDatabase(cfg.Database.Name) != nil {
+	if err != nil || centerdb.CheckDestructiveAllowed(cfg.AppEnv) != nil {
 		t.Fatal("invalid test database configuration")
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -37,10 +37,6 @@ func ipapiIntegrationPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 		t.Fatal("could not open the worktree test database")
 	}
 	t.Cleanup(pool.Close)
-	var name, marker string
-	if err := pool.QueryRow(ctx, "SELECT current_database(),shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()").Scan(&name, &marker); err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
-		t.Fatal("test database identity/ownership verification failed")
-	}
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	dbtest.MigrateUp(t, pool)

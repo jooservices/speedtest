@@ -27,7 +27,7 @@ func TestMigratedDatabaseCatalogDrift(t *testing.T) {
 	if err != nil {
 		t.Fatal("invalid database configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Minute)

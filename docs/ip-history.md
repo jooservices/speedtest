@@ -118,7 +118,7 @@ rollback behavior, described in [the migration runbook](../migrations/README.md)
 ```bash
 python3 scripts/geo-test-fixtures.py
 go test -race ./internal/center/ipwatch ./internal/center/agentapi -cover
-# Verify the configured, non-live worktree database and its ownership marker.
+# Uses the non-live database named by SPEEDTEST_DB_* (APP_ENV must be local or test).
 go test -race -p 1 -tags integration ./... -count=1 -coverprofile=.tmp/coverage-all.out
 ```
 

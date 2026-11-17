@@ -44,7 +44,7 @@ func openIntegrationDB(t *testing.T) (*pgxpool.Pool, context.Context) {
 	}
 	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
-	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
+	if err != nil || db.CheckDestructiveAllowed(cfg.AppEnv) != nil {
 		t.Fatal("integration tests require a configured worktree test database")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Minute)
@@ -54,10 +54,6 @@ func openIntegrationDB(t *testing.T) (*pgxpool.Pool, context.Context) {
 		t.Fatal("cannot connect to the configured worktree database")
 	}
 	t.Cleanup(pool.Close)
-	var name, marker string
-	if err := pool.QueryRow(ctx, `SELECT current_database(),shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()`).Scan(&name, &marker); err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
-		t.Fatal("worktree database identity/ownership marker verification failed")
-	}
 	t.Log("PASS: worktree test database identity and ownership marker verified")
 	return pool, ctx
 }

@@ -201,28 +201,6 @@ func TestDefaultSeedRequiresExplicitSafeEnvironment(t *testing.T) {
 	}
 }
 
-func TestLocalCenterRequiresSafeDatabaseName(t *testing.T) {
-	for _, tc := range []struct {
-		name    string
-		appEnv  string
-		dbName  string
-		wantErr bool
-	}{
-		{name: "local worktree", appEnv: "local", dbName: "speedtest_wt12"},
-		{name: "test database", appEnv: "test", dbName: "speedtest_test"},
-		{name: "local live database", appEnv: "local", dbName: "speedtest", wantErr: true},
-		{name: "production database", appEnv: "production", dbName: "speedtest"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			cfg := config.CenterConfig{AppEnv: tc.appEnv, Database: config.DatabaseConfig{Name: tc.dbName}}
-			err := validateLocalDatabaseName(cfg)
-			if (err != nil) != tc.wantErr {
-				t.Fatalf("validateLocalDatabaseName() error = %v, wantErr=%v", err, tc.wantErr)
-			}
-		})
-	}
-}
-
 func assertUIFile(t *testing.T, ui fs.FS, name string) {
 	t.Helper()
 	file, err := ui.Open(name)

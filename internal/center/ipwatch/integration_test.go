@@ -59,7 +59,7 @@ func setup(t *testing.T) (*pgxpool.Pool, *agentapi.Postgres, *locator) {
 	}
 	testenv.Apply(t, values)
 	cfg, err := config.LoadCenter()
-	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
+	if err != nil || db.CheckDestructiveAllowed(cfg.AppEnv) != nil {
 		t.Fatal("configured Speedtest worktree/test database required")
 	}
 	p, err := db.Open(t.Context(), cfg.Database)

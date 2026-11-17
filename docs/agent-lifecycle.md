@@ -72,7 +72,7 @@ govulncheck ./...
 ```
 
 Database integration is separate and serial: verify this worktree's `.env`
-points at its own non-live database and has the project ownership marker, then
+points at its own non-live database and sets `APP_ENV=test`, then
 run `go test -race -p 1 -tags integration ./... -count=1`. See the migration
 runbook for the authorized manual guard on the Dev Workspaces VM. No UI or browser
 flow changes in this ticket. Offline doubles do not certify staging or real-agent
