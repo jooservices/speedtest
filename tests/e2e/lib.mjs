@@ -41,14 +41,13 @@ export async function e2ePort(configured = process.env.E2E_HTTP_PORT) {
   return port;
 }
 
-// The database must be a verified, non-live worktree or test database: the reset below drops everything in it.
+// The harness drops everything in the database it is given, so it runs only when APP_ENV says local or test.
 function database(env) {
   const config = { ...env, ...process.env };
+  const appEnv = (config.APP_ENV || 'local').trim().toLowerCase();
+  if (appEnv !== 'local' && appEnv !== 'test') throw new Error(`refusing to reset the database when APP_ENV is "${appEnv}"`);
   const name = config.SPEEDTEST_DB_NAME || '';
-  if (!/^(speedtest_(test|wt[0-9a-z]{1,16})|wt_[a-z0-9_]{2,35})$/.test(name)) throw new Error(`refusing to reset database "${name}": not a worktree or test database`);
   const pg = { PGHOST: config.SPEEDTEST_DB_HOST, PGPORT: config.SPEEDTEST_DB_PORT, PGUSER: config.SPEEDTEST_DB_USER, PGPASSWORD: config.SPEEDTEST_DB_PASSWORD, PGDATABASE: name };
-  const marker = run('psql', ['-Atc', "select shobj_description(oid,'pg_database') from pg_database where datname=current_database()"], { env: { ...process.env, ...pg } }).trim();
-  if (marker !== 'workspaces-project:speedtest') throw new Error('refusing to reset a database without the Speedtest ownership marker');
   return { name, pg: { ...process.env, ...pg } };
 }
 

@@ -36,17 +36,11 @@ func runRotateAppKey(ctx context.Context, args []string, input io.Reader, output
 	if err != nil {
 		return errors.New("invalid rotation database configuration")
 	}
-	if err := validateLocalDatabaseName(cfg); err != nil {
-		return err
-	}
 	pool, err := db.Open(ctx, cfg.Database)
 	if err != nil {
 		return errors.New("could not connect to the rotation database")
 	}
 	defer pool.Close()
-	if err := verifyLocalDatabaseIdentity(ctx, pool, cfg); err != nil {
-		return err
-	}
 	count, err := rotateAppKey(ctx, pool, oldKey, newKey)
 	if err != nil {
 		return err

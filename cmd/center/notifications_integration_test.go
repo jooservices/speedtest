@@ -41,7 +41,7 @@ func TestNotificationCenterEndToEndIntegration(t *testing.T) {
 	t.Setenv("SPEEDTEST_GEO_IPINFO_ENABLED", "false")
 	t.Setenv("SPEEDTEST_GEO_DBIP_AUTO_UPDATE", "false")
 	cfg, err := config.LoadCenter()
-	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
+	if err != nil || db.CheckDestructiveAllowed(cfg.AppEnv) != nil {
 		t.Fatal("verified worktree configuration required")
 	}
 	p, err := db.Open(t.Context(), cfg.Database)

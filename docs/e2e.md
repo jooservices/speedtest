@@ -5,8 +5,8 @@ PostgreSQL database. Nothing in the data path is faked except the speed test its
 
 ## What it needs
 
-- A worktree `.env` pointing at a disposable `speedtest_test`, `speedtest_wt<id>` or `wt_<ticket>` database that carries the Workspaces ownership
-  marker. The harness refuses any other database name and refuses a database without the marker, then drops and recreates its schema.
+- A worktree `.env` pointing at a disposable database through `SPEEDTEST_DB_*`, with `APP_ENV` set to `local` or `test`.
+  The harness refuses any other `APP_ENV`, then drops and recreates the schema of that database.
 - `psql`, Go and Node 22 with `npm ci` done.
 - A Chromium: set `PLAYWRIGHT_CHROMIUM_EXECUTABLE` to a local binary, or `PW_TEST_CONNECT_WS_ENDPOINT` to a remote browser server.
   The browser never needs to reach anything but the center started on a loopback port.

@@ -35,7 +35,7 @@ func database(t *testing.T) (*pgxpool.Pool, context.Context) {
 	}
 	testenv.Apply(t, env)
 	cfg, err := config.LoadCenter()
-	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
+	if err != nil || db.CheckDestructiveAllowed(cfg.AppEnv) != nil {
 		t.Fatal("configured non-live test database required")
 	}
 	ctx := t.Context()

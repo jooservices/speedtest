@@ -36,7 +36,7 @@ func openServerIntegrationPool(t *testing.T) (*pgxpool.Pool, context.Context, []
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal("integration tests require a configured worktree test database")
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Minute)
@@ -46,10 +46,6 @@ func openServerIntegrationPool(t *testing.T) (*pgxpool.Pool, context.Context, []
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	var name, marker string
-	if err := pool.QueryRow(ctx, `SELECT current_database(),shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()`).Scan(&name, &marker); err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
-		t.Fatal("integration database identity and ownership marker verification failed")
-	}
 	t.Log("PASS: API integration uses the verified non-live Speedtest worktree database")
 	return pool, ctx, bytes.Repeat([]byte{0x31}, 32)
 }

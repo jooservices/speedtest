@@ -126,9 +126,9 @@ from the staging dashboard benchmark above.
 
 ### Reproduce the failure rehearsals
 
-Use only a configured, ownership-verified test/worktree database from `.env`,
-never the live database. Do not run database suites concurrently. These tests
-verify `db.CheckTestDatabase` and the Workspaces ownership marker before reset.
+Use only a configured disposable database from `.env`, never the live database.
+Do not run database suites concurrently. These tests call `db.CheckDestructiveAllowed`
+(`APP_ENV` must be `local` or `test`) before reset.
 
 ```bash
 python3 scripts/geo-test-fixtures.py
@@ -218,7 +218,7 @@ restore the pre-rotation dump **together with OLD**; retain the corresponding ke
 for older backups even after successful rotation. Never restore a dump with a
 mismatched key.
 
-Reproduce automated coverage on an ownership-verified disposable worktree DB:
+Reproduce automated coverage on a disposable worktree DB:
 
 ```bash
 go test -race -p 1 -tags integration ./cmd/center -run 'TestRotateAppKey' -count=1 -v
@@ -259,7 +259,7 @@ use `sg docker -c "docker logs speedtest-staging"` and `deploy/docker/stg.sh sta
 ### center-down
 The probe cannot reach `/readyz`. 1) `systemctl --user status speedtest-center` and `journalctl --user -u speedtest-center -n 100`. 2) Is
 the process listening (`ss -ltnp | grep 8080`) and does `curl -sS http://127.0.0.1:8080/healthz` answer? 3) A crash loop with
-`invalid configuration` means a bad `.env` edit; `database identity` errors mean the wrong database name. 4) Restart with
+`invalid configuration` means a bad `.env` edit; a database error means the wrong `SPEEDTEST_DB_*` values. 4) Restart with
 `systemctl --user restart speedtest-center`. Agents keep their results and deliver them after the center is back (nothing is lost).
 
 ### readyz-failing
