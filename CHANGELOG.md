@@ -33,6 +33,9 @@ All notable changes to Speedtest are recorded here. The format follows
 - JOOST-89: Docker staging nodes (entrypoint, node entrypoint and nodes.sh) default to a 60-minute interval, the staging default offsets spread across it, and the staging interval is written to both schedule tables.
 - Results and Alerts ISP filters stay page-scoped; rolling ISP trends use in-range hourly samples, and plan edits preserve explicitly chosen expected speeds.
 
+### Deprecated
+- JOOST-108: the released `/api` paths are deprecated aliases of `/api/v1`. Their responses carry `Deprecation` and `Sunset` headers; the Sunset date is still a placeholder.
+
 ### Fixed
 - Installation event streams revalidate the bearer token that opened them, so expiry and revocation stop the stream at its next 10-second check.
 - Statistics trend markers render numeric demo timestamps; IP transitions are scoped to known results for the selected engine.

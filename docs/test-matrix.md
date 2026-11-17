@@ -17,15 +17,15 @@ Operations: 103. Without a test: 0.
 | listAccessTokens | GET | `/api/access-tokens` | `internal/center/apicontract/contract_test.go`<br>`internal/center/server/access_tokens_integration_test.go`<br>`internal/center/server/access_tokens_test.go`<br>`internal/center/server/audit_test.go`<br>+3 more |
 | createAccessToken | POST | `/api/access-tokens` | `internal/center/server/access_tokens_integration_test.go`<br>`internal/center/server/access_tokens_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/routes_test.go`<br>+2 more |
 | revokeAccessToken | DELETE | `/api/access-tokens/{id}` | `internal/center/server/access_tokens_integration_test.go`<br>`internal/center/server/access_tokens_test.go` |
-| listNodes | GET | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/mcpserver/server_test.go`<br>`internal/center/server/access_token_auth_test.go`<br>`internal/center/server/access_tokens_integration_test.go`<br>+18 more |
+| listNodes | GET | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/mcpserver/server_test.go`<br>`internal/center/server/access_token_auth_test.go`<br>`internal/center/server/access_tokens_integration_test.go`<br>+19 more |
 | createNode | POST | `/api/nodes` | `internal/center/audit/audit_test.go`<br>`internal/center/mcpserver/server_test.go`<br>`internal/center/server/access_token_auth_test.go`<br>`internal/center/server/access_tokens_integration_test.go`<br>+13 more |
 | createEnrollmentToken | POST | `/api/agent/tokens` | `internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go` |
 | enroll | POST | `/api/agent/enroll` | `cmd/center/main_integration_test.go`<br>`internal/agent/enroll/enroll_test.go`<br>`internal/agent/testutil/center_test.go`<br>`internal/center/server/installer_integration_test.go`<br>+3 more |
-| getNode | GET | `/api/nodes/{id}` | `internal/center/apicontract/contract_test.go`<br>`internal/center/audit/audit_test.go`<br>`internal/center/mcpserver/server_test.go`<br>`internal/center/server/access_token_auth_test.go`<br>+13 more |
+| getNode | GET | `/api/nodes/{id}` | `internal/center/apicontract/contract_test.go`<br>`internal/center/audit/audit_test.go`<br>`internal/center/mcpserver/server_test.go`<br>`internal/center/server/access_token_auth_test.go`<br>+14 more |
 | updateNode | PATCH | `/api/nodes/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/audit_test.go`<br>`internal/center/server/nodes_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>+2 more |
 | deleteNode | DELETE | `/api/nodes/{id}` | `internal/center/audit/audit_test.go`<br>`internal/center/server/installer_test.go`<br>`internal/center/server/nodes_integration_test.go`<br>`internal/center/server/nodes_test.go`<br>+2 more |
 | runNode | POST | `/api/nodes/{id}/run` | `internal/center/audit/audit_test.go`<br>`internal/center/server/access_token_auth_test.go`<br>`internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>+3 more |
-| getNodeServerCatalog | GET | `/api/nodes/{id}/servers` | `internal/center/server/httpx_test.go`<br>`internal/center/server/ownerservers_test.go` |
+| getNodeServerCatalog | GET | `/api/nodes/{id}/servers` | `internal/center/server/api_versioning_test.go`<br>`internal/center/server/httpx_test.go`<br>`internal/center/server/ownerservers_test.go` |
 | refreshNodeServerCatalog | POST | `/api/nodes/{id}/servers` | `internal/center/server/ownerservers_test.go` |
 | setNodeServerSelection | PUT | `/api/nodes/{id}/server-selection` | `internal/center/server/ownerservers_test.go` |
 | createCommand | POST | `/api/nodes/{id}/commands` | `internal/center/server/ownernodes_integration_test.go`<br>`internal/center/server/ownernodes_test.go`<br>`internal/center/server/ownerservers_test.go` |
@@ -70,7 +70,7 @@ Operations: 103. Without a test: 0.
 | replaceSchedule | PUT | `/api/schedules/{node}` | `internal/center/audit/audit_test.go`<br>`internal/center/mcpserver/server_test.go`<br>`internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>+2 more |
 | replaceScheduleRules | PUT | `/api/schedules/rules` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/ui/store.test.mjs`<br>+1 more |
 | staggerSchedules | POST | `/api/schedules/stagger` | `internal/center/audit/audit_test.go`<br>`internal/center/server/ownerschedules_integration_test.go`<br>`internal/center/server/ownerschedules_test.go`<br>`tests/ui/store.test.mjs`<br>+1 more |
-| listRules | GET | `/api/alerts/rules` | `internal/center/server/owneralerts_integration_test.go`<br>`internal/center/server/owneralerts_test.go`<br>`tests/ui/contract.test.mjs`<br>`tests/ui-fixtures/server.mjs` |
+| listRules | GET | `/api/alerts/rules` | `internal/center/server/api_versioning_test.go`<br>`internal/center/server/owneralerts_integration_test.go`<br>`internal/center/server/owneralerts_test.go`<br>`tests/ui/contract.test.mjs`<br>+1 more |
 | createRule | POST | `/api/alerts/rules` | `internal/center/server/owneralerts_integration_test.go`<br>`internal/center/server/owneralerts_test.go`<br>`tests/ui-fixtures/server.mjs` |
 | getRule | GET | `/api/alerts/rules/{id}` | `internal/center/server/owneralerts_test.go` |
 | replaceRule | PUT | `/api/alerts/rules/{id}` | `internal/center/server/owneralerts_test.go` |
@@ -108,4 +108,4 @@ Operations: 103. Without a test: 0.
 | getInstallation | GET | `/api/installations/{id}` | `internal/center/server/access_tokens_integration_test.go`<br>`internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`tests/e2e/suites/settings.mjs`<br>+2 more |
 | streamInstallEvents | GET | `/api/installations/{id}/events` | `internal/center/server/access_tokens_integration_test.go`<br>`internal/center/server/installer_integration_test.go`<br>`internal/center/server/installer_test.go`<br>`tests/e2e/suites/settings.mjs`<br>+2 more |
 | uninstallAgent | POST | `/api/nodes/{id}/uninstallations` | `internal/center/server/installer_test.go` |
-| getInstallScript | GET | `/install.sh` | `internal/center/install/install_test.go`<br>`internal/center/server/server_test.go` |
+| getInstallScript | GET | `/install.sh` | `internal/center/install/install_test.go`<br>`internal/center/server/api_versioning_test.go`<br>`internal/center/server/server_test.go` |
