@@ -12,7 +12,7 @@ export function runtime(origin, options = {}) {
     localStorage: { getItem: key => storage.get(key), setItem: (key, value) => storage.set(key, value), removeItem: key => storage.delete(key) },
     fetch: (path, init) => (options.fetch || fetch)(new URL(path, origin), init) });
   context.window = context;
-  for (const file of ['seed', 'api', ...(options.apiOnly ? [] : ['store'])]) {
+  for (const file of ['seed', 'api', 'i18n', ...(options.apiOnly ? [] : ['store'])]) {
     vm.runInContext(readFileSync(`ui/assets/js/${file}.js`, 'utf8'), context, { filename: resolve(`ui/assets/js/${file}.js`) }); // NOSONAR: loads the repository's own UI scripts into a test sandbox
   }
   return { ST: context.ST, context, storage };

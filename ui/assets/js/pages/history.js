@@ -83,10 +83,10 @@
       pageSize.setAttribute('aria-label', 'Rows per page');
       var pager = h('div', { class: 'pager' },
         h('span', { class: 'row' }, 'Rows per page', pageSize),
-        h('span', { class: 'muted tabnum' }, rows.length ? ((q.page - 1) * q.size + 1) + '–' + Math.min(rows.length, q.page * q.size) + ' of ' + F.num(rows.length) : '0 of 0'),
+        h('span', { class: 'muted tabnum' }, rows.length ? F.count((q.page - 1) * q.size + 1) + '–' + F.count(Math.min(rows.length, q.page * q.size)) + ' of ' + F.num(rows.length) : '0 of 0'),
         h('span', { class: 'row' },
           U.btn('', { icon: 'chevron', size: 'sm', title: 'Previous page', disabled: q.page <= 1, onClick: function () { q.page--; draw(); } }),
-          h('span', { class: 'tabnum' }, 'Page ' + q.page + ' of ' + pages),
+          h('span', { class: 'tabnum' }, 'Page ' + F.count(q.page) + ' of ' + F.count(pages)),
           U.btn('', { icon: 'chevron', size: 'sm', title: 'Next page', disabled: q.page >= pages, onClick: function () { q.page++; draw(); } })));
       pager.querySelectorAll('button')[0].firstChild.style.transform = 'rotate(180deg)';
       listHost.appendChild(pager);

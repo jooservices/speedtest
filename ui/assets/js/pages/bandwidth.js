@@ -20,6 +20,10 @@
   }
   function utcBucketLabel(ts, group) {
     var d = new Date(ts), year = String(d.getUTCFullYear()), month = String(d.getUTCMonth() + 1).padStart(2, '0');
+    if (ST.i18n.lang() === 'vi') {
+      var kind = group === 'month' ? 'yearMonth' : 'calendarDate';
+      return ST.i18n.localize(ts, { type: 'date', kind: kind, timeZone: 'UTC' }) + ' UTC';
+    }
     return group === 'month' ? year + '-' + month + ' UTC' : year + '-' + month + '-' + String(d.getUTCDate()).padStart(2, '0') + ' UTC';
   }
   function ispName(id) {

@@ -148,6 +148,7 @@ var uiRoutes = map[string]bool{
 	"/assets/js/app.js":                                true,
 	"/assets/js/theme.js":                              true,
 	"/assets/js/api.js":                                true,
+	"/assets/js/i18n.js":                               true,
 	"/assets/js/seed.js":                               true,
 	"/assets/css/app.css":                              true,
 	"/assets/js/pages/login.js":                        true,
