@@ -428,59 +428,104 @@ func cloneThresholds(in map[string]float64) map[string]float64 {
 }
 
 func validateRuntimePatch(event catalog.Event, patch EventPatch) error {
-	if patch.Thresholds != nil {
-		for key, value := range patch.Thresholds {
-			if !allowedThreshold(event, key) || math.IsNaN(value) || math.IsInf(value, 0) || value < 0 ||
-				(strings.HasSuffix(key, "_pct") && value > 100) ||
-				((key == "for_tests" || key == "attempts") && (value < 1 || value > 100 || math.Trunc(value) != value)) {
-				return ErrInvalidEvent
-			}
-		}
+	if err := validateRuntimeThresholds(event, patch.Thresholds); err != nil {
+		return err
 	}
-	if patch.CooldownSeconds != nil && (*patch.CooldownSeconds < 0 || *patch.CooldownSeconds > 604800) {
+	if !validRuntimeSeconds(patch.CooldownSeconds) {
 		return ErrInvalidEvent
 	}
-	if patch.RepeatSeconds != nil && (*patch.RepeatSeconds < 0 || *patch.RepeatSeconds > 604800) {
+	if !validRuntimeSeconds(patch.RepeatSeconds) {
 		return ErrInvalidEvent
 	}
-	if (patch.MaintenanceStart == nil) != (patch.MaintenanceEnd == nil) {
-		return ErrInvalidEvent
+	if err := validateMaintenanceHours(patch.MaintenanceStart, patch.MaintenanceEnd); err != nil {
+		return err
 	}
-	if patch.MaintenanceStart != nil {
-		start, end := strings.TrimSpace(*patch.MaintenanceStart), strings.TrimSpace(*patch.MaintenanceEnd)
-		if (start == "") != (end == "") {
-			return ErrInvalidEvent
-		}
-		if start != "" {
-			if _, err := time.Parse("15:04", start); err != nil {
-				return ErrInvalidEvent
-			}
-			if _, err := time.Parse("15:04", end); err != nil {
-				return ErrInvalidEvent
-			}
-		}
+	if err := validateMaintenanceTimezone(patch.MaintenanceTimezone); err != nil {
+		return err
 	}
-	zone := ""
-	if patch.MaintenanceTimezone != nil {
-		zone = strings.TrimSpace(*patch.MaintenanceTimezone)
-	}
-	if zone != "" {
-		if _, err := time.LoadLocation(zone); err != nil {
+	return validateISPScope(patch.ISPScope)
+}
+
+func validateRuntimeThresholds(event catalog.Event, thresholds map[string]float64) error {
+	for key, value := range thresholds {
+		if !validRuntimeThreshold(event, key, value) {
 			return ErrInvalidEvent
 		}
 	}
-	if patch.ISPScope != nil {
-		if len(patch.ISPScope) > 100 {
+	return nil
+}
+
+func validRuntimeThreshold(event catalog.Event, key string, value float64) bool {
+	return allowedThreshold(event, key) && validThresholdNumber(value) &&
+		(!strings.HasSuffix(key, "_pct") || value <= 100) && validIntegerCountThreshold(key, value)
+}
+
+func validThresholdNumber(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0) && value >= 0
+}
+
+func validIntegerCountThreshold(key string, value float64) bool {
+	if key != "for_tests" && key != "attempts" {
+		return true
+	}
+	return value >= 1 && value <= 100 && math.Trunc(value) == value
+}
+
+func validRuntimeSeconds(value *int) bool {
+	return value == nil || (*value >= 0 && *value <= 604800)
+}
+
+func validateMaintenanceHours(startValue, endValue *string) error {
+	if (startValue == nil) != (endValue == nil) {
+		return ErrInvalidEvent
+	}
+	if startValue == nil {
+		return nil
+	}
+	start, end := strings.TrimSpace(*startValue), strings.TrimSpace(*endValue)
+	if (start == "") != (end == "") {
+		return ErrInvalidEvent
+	}
+	if start == "" {
+		return nil
+	}
+	if _, err := time.Parse("15:04", start); err != nil {
+		return ErrInvalidEvent
+	}
+	if _, err := time.Parse("15:04", end); err != nil {
+		return ErrInvalidEvent
+	}
+	return nil
+}
+
+func validateMaintenanceTimezone(timezone *string) error {
+	if timezone == nil {
+		return nil
+	}
+	zone := strings.TrimSpace(*timezone)
+	if zone == "" {
+		return nil
+	}
+	if _, err := time.LoadLocation(zone); err != nil {
+		return ErrInvalidEvent
+	}
+	return nil
+}
+
+func validateISPScope(scope []string) error {
+	if scope == nil {
+		return nil
+	}
+	if len(scope) > 100 {
+		return ErrInvalidEvent
+	}
+	seen := map[string]bool{}
+	for _, value := range scope {
+		value = strings.TrimSpace(value)
+		if value == "" || len(value) > 120 || seen[strings.ToLower(value)] {
 			return ErrInvalidEvent
 		}
-		seen := map[string]bool{}
-		for _, value := range patch.ISPScope {
-			value = strings.TrimSpace(value)
-			if value == "" || len(value) > 120 || seen[strings.ToLower(value)] {
-				return ErrInvalidEvent
-			}
-			seen[strings.ToLower(value)] = true
-		}
+		seen[strings.ToLower(value)] = true
 	}
 	return nil
 }

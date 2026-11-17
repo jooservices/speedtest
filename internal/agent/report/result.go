@@ -186,6 +186,19 @@ func (r Result) MarshalJSON() ([]byte, error) {
 }
 
 func (r Result) validateDetails() error {
+	if err := r.validateTextDetails(); err != nil {
+		return err
+	}
+	if err := r.validateLoadedLatencies(); err != nil {
+		return err
+	}
+	if err := r.validateServerDetails(); err != nil {
+		return err
+	}
+	return r.validateEngineDetails()
+}
+
+func (r Result) validateTextDetails() error {
 	if r.Error != nil && len([]rune(*r.Error)) > 2000 {
 		return errors.New("result error exceeds 2000 characters")
 	}
@@ -203,6 +216,10 @@ func (r Result) validateDetails() error {
 			return errors.New("result warning too long")
 		}
 	}
+	return nil
+}
+
+func (r Result) validateLoadedLatencies() error {
 	for _, l := range []*LoadedLatency{r.LoadedDown, r.LoadedUp} {
 		if l != nil {
 			for _, v := range []*float64{l.Low, l.IQM, l.High} {
@@ -212,15 +229,37 @@ func (r Result) validateDetails() error {
 			}
 		}
 	}
+	return nil
+}
+
+func (r Result) validateServerDetails() error {
+	if err := r.validateServerIDs(); err != nil {
+		return err
+	}
+	return r.validateServerIdentity()
+}
+
+func (r Result) validateServerIDs() error {
 	if r.ServerID != nil && *r.ServerID <= 0 {
 		return errors.New("serverId must be positive")
 	}
 	if r.PinnedServerID != nil && (*r.PinnedServerID <= 0 || *r.PinnedServerID > math.MaxInt32 || !r.ServerSelectionKnown) {
 		return errors.New("pinnedServerId must be a known positive server ID")
 	}
-	if r.Server != nil && (r.Server.ID < 0 || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || len([]rune(r.Server.Host)) > 255 || !validServerEndpoint(r.Server.Endpoint)) {
+	return nil
+}
+
+func (r Result) validateServerIdentity() error {
+	if r.Server == nil {
+		return nil
+	}
+	if r.Server.ID < 0 || (strings.TrimSpace(r.Server.Name) == "" && strings.TrimSpace(r.Server.Host) == "") || len([]rune(r.Server.Host)) > 255 || !validServerEndpoint(r.Server.Endpoint) {
 		return errors.New("invalid server identity")
 	}
+	return nil
+}
+
+func (r Result) validateEngineDetails() error {
 	if r.EngineIP != "" {
 		if _, err := netip.ParseAddr(r.EngineIP); err != nil {
 			return errors.New("engineIp must be an IP literal")

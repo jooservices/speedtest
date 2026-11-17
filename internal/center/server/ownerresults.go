@@ -267,74 +267,106 @@ func (h *ownerResults) filter(w http.ResponseWriter, r *http.Request) (ownerapi.
 	if f.Engine, valid = parseEngine(w, r); !valid {
 		return f, false
 	}
-	if _, present := q["nodes"]; present {
-		f.NodesSet = true
-		seen := map[string]bool{}
-		for _, id := range strings.Split(q.Get("nodes"), ",") {
-			id = strings.ToLower(strings.TrimSpace(id))
-			if id == "" || seen[id] {
-				continue
-			}
-			if !uuidPattern.MatchString(id) {
-				return f, invalid(w, r, "nodes must be comma-separated node IDs.")
-			}
-			seen[id] = true
-			f.Nodes = append(f.Nodes, id)
-		}
-		if len(f.Nodes) > 100 {
-			return f, invalid(w, r, "nodes accepts at most 100 IDs.")
-		}
+	if f.Nodes, f.NodesSet, valid = parseResultIDFilter(w, r, q, "nodes", "node"); !valid {
+		return f, false
 	}
-	if _, present := q["isps"]; present {
-		f.ISPsSet = true
-		seen := map[string]bool{}
-		for _, id := range strings.Split(q.Get("isps"), ",") {
-			id = strings.ToLower(strings.TrimSpace(id))
-			if id == "" || seen[id] {
-				continue
-			}
-			if !uuidPattern.MatchString(id) {
-				return f, invalid(w, r, "isps must be comma-separated ISP IDs.")
-			}
-			seen[id] = true
-			f.ISPs = append(f.ISPs, id)
-		}
-		if len(f.ISPs) > 100 {
-			return f, invalid(w, r, "isps accepts at most 100 IDs.")
-		}
+	if f.ISPs, f.ISPsSet, valid = parseResultIDFilter(w, r, q, "isps", "ISP"); !valid {
+		return f, false
 	}
 	if !h.timeRange(w, r, q, &f) {
 		return f, false
 	}
+	if !parseResultStatusFilter(w, r, q, &f) {
+		return f, false
+	}
+	if !parseResultQueryFilter(w, r, q, &f) {
+		return f, false
+	}
+	if !parseResultDownloadFilter(w, r, q, &f) {
+		return f, false
+	}
+	if !parseResultOrderFilter(w, r, q, &f) {
+		return f, false
+	}
+	return f, true
+}
+
+func parseResultIDFilter(w http.ResponseWriter, r *http.Request, q url.Values, key, kind string) ([]string, bool, bool) {
+	if _, present := q[key]; !present {
+		return nil, false, true
+	}
+	var ids []string
+	seen := map[string]bool{}
+	for _, id := range strings.Split(q.Get(key), ",") {
+		id = strings.ToLower(strings.TrimSpace(id))
+		if id == "" || seen[id] {
+			continue
+		}
+		if !uuidPattern.MatchString(id) {
+			return ids, true, invalid(w, r, key+" must be comma-separated "+kind+" IDs.")
+		}
+		seen[id] = true
+		ids = append(ids, id)
+	}
+	if len(ids) > 100 {
+		return ids, true, invalid(w, r, key+" accepts at most 100 IDs.")
+	}
+	return ids, true, true
+}
+
+func parseResultStatusFilter(w http.ResponseWriter, r *http.Request, q url.Values, filter *ownerapi.ResultFilter) bool {
 	switch status := q.Get("status"); status {
 	case "", "all":
 	case "ok", "degraded", "failed":
-		f.Status = status
+		filter.Status = status
 	default:
-		return f, invalid(w, r, "status must be all, ok, degraded or failed.")
+		return invalid(w, r, "status must be all, ok, degraded or failed.")
 	}
-	if f.Query = strings.TrimSpace(q.Get("q")); len([]rune(f.Query)) > 200 {
-		return f, invalid(w, r, "q must be at most 200 characters.")
+	return true
+}
+
+func parseResultQueryFilter(w http.ResponseWriter, r *http.Request, q url.Values, filter *ownerapi.ResultFilter) bool {
+	filter.Query = strings.TrimSpace(q.Get("q"))
+	if len([]rune(filter.Query)) > 200 {
+		return invalid(w, r, "q must be at most 200 characters.")
 	}
-	for key, dest := range map[string]**float64{"minDown": &f.MinDown, "maxDown": &f.MaxDown} {
-		if raw := q.Get(key); raw != "" {
-			v, err := strconv.ParseFloat(raw, 64)
-			if err != nil || v < 0 || math.IsInf(v, 0) || math.IsNaN(v) {
-				return f, invalid(w, r, key+" must be a non-negative number.")
-			}
-			*dest = &v
+	return true
+}
+
+func parseResultDownloadFilter(w http.ResponseWriter, r *http.Request, q url.Values, filter *ownerapi.ResultFilter) bool {
+	for key, destination := range map[string]**float64{"minDown": &filter.MinDown, "maxDown": &filter.MaxDown} {
+		raw := q.Get(key)
+		if raw == "" {
+			continue
 		}
+		value, valid := parseNonNegativeResultBound(raw)
+		if !valid {
+			return invalid(w, r, key+" must be a non-negative number.")
+		}
+		*destination = &value
 	}
-	if f.MinDown != nil && f.MaxDown != nil && *f.MaxDown < *f.MinDown {
-		return f, invalid(w, r, "maxDown must not be below minDown.")
+	if filter.MinDown != nil && filter.MaxDown != nil && *filter.MaxDown < *filter.MinDown {
+		return invalid(w, r, "maxDown must not be below minDown.")
 	}
-	if f.Sort = q.Get("sort"); f.Sort != "" && !ownerapi.ValidResultSort(f.Sort) {
-		return f, invalid(w, r, "sort is not an allowed key.")
+	return true
+}
+
+func parseNonNegativeResultBound(raw string) (float64, bool) {
+	value, err := strconv.ParseFloat(raw, 64)
+	if err != nil || value < 0 || math.IsInf(value, 0) || math.IsNaN(value) {
+		return 0, false
 	}
-	if f.Dir = q.Get("dir"); f.Dir != "" && f.Dir != "asc" && f.Dir != "desc" {
-		return f, invalid(w, r, "dir must be asc or desc.")
+	return value, true
+}
+
+func parseResultOrderFilter(w http.ResponseWriter, r *http.Request, q url.Values, filter *ownerapi.ResultFilter) bool {
+	if filter.Sort = q.Get("sort"); filter.Sort != "" && !ownerapi.ValidResultSort(filter.Sort) {
+		return invalid(w, r, "sort is not an allowed key.")
 	}
-	return f, true
+	if filter.Dir = q.Get("dir"); filter.Dir != "" && filter.Dir != "asc" && filter.Dir != "desc" {
+		return invalid(w, r, "dir must be asc or desc.")
+	}
+	return true
 }
 
 func (h *ownerResults) timeRange(w http.ResponseWriter, r *http.Request, q url.Values, f *ownerapi.ResultFilter) bool {
