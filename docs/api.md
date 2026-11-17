@@ -149,6 +149,7 @@ See the [SSH installer runbook](ssh-installer.md) for operations, repair and rol
   only while their store is configured. Other owner routes whose dispatchers also trim slashes (schedules, usage, jobs,
   results, installer, ISP) are not covered yet. An empty segment is never rewritten.
 - The `Sunset` date is a placeholder until it is chosen; changing it is a one-line edit of that constant.
+- The REST rules of the whole API, including this versioning and alias policy, are in [api-standard.md](api-standard.md).
 
 ## Shared wire rules
 

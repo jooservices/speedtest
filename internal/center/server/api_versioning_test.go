@@ -9,8 +9,49 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/docs"
 	"github.com/jooservices/speedtest/internal/center/apicontract"
+	"gopkg.in/yaml.v3"
 )
+
+// specMethods are the HTTP method keys of a path item in docs/openapi.yaml.
+var specMethods = map[string]bool{"get": true, "post": true, "put": true, "patch": true, "delete": true, "head": true, "options": true}
+
+// specCanonicalPaths reads docs/openapi.yaml and returns, keyed by "METHOD /api/...", the x-canonical-path of every
+// /api operation. It fails the test for an /api operation that is not deprecated or whose x-canonical-path is not the
+// /api/v1 form of its path.
+func specCanonicalPaths(t *testing.T) map[string]string {
+	t.Helper()
+	var spec struct {
+		Paths map[string]map[string]any `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal(docs.OpenAPI, &spec); err != nil {
+		t.Fatalf("parse docs/openapi.yaml: %v", err)
+	}
+	canonical := make(map[string]string)
+	for path, item := range spec.Paths {
+		if !strings.HasPrefix(path, apiLegacyPrefix+"/") {
+			continue
+		}
+		for method, raw := range item {
+			if !specMethods[method] {
+				continue
+			}
+			key := strings.ToUpper(method) + " " + path
+			op, _ := raw.(map[string]any)
+			if deprecated, _ := op["deprecated"].(bool); !deprecated {
+				t.Errorf("%s: deprecated is not true", key)
+			}
+			want := apiVersionPrefix + strings.TrimPrefix(path, apiLegacyPrefix)
+			got, _ := op["x-canonical-path"].(string)
+			if got != want {
+				t.Errorf("%s: x-canonical-path = %q, want %q", key, got, want)
+			}
+			canonical[key] = got
+		}
+	}
+	return canonical
+}
 
 const parityRequestID = "parity-req-0001"
 
@@ -75,25 +116,31 @@ func TestEveryOperationServedUnderAPIv1(t *testing.T) {
 		{name: "anonymous", handler: NewHandler(Options{})},
 		{name: "owner", handler: newNodeHandler(Options{OwnerServers: &fakeOwnerServers{}}), owner: true},
 	}
+	canonical := specCanonicalPaths(t)
 	for _, variant := range variants {
 		for _, operation := range operations {
 			if !strings.HasPrefix(operation.Path, apiLegacyPrefix+"/") {
 				// Only /api operations have a /api/v1 form; /install.sh and the download paths do not.
 				continue
 			}
+			versioned := canonical[operation.Method+" "+operation.Path]
+			if versioned == "" {
+				t.Errorf("%s %s has no x-canonical-path in docs/openapi.yaml", operation.Method, operation.Path)
+				continue
+			}
 			t.Run(variant.name+" "+operation.Method+" "+operation.Path, func(t *testing.T) {
-				checkOperationParity(t, variant.handler, operation, variant.owner)
+				checkOperationParity(t, variant.handler, operation, versioned, variant.owner)
 			})
 		}
 	}
 }
 
-// checkOperationParity compares one operation on /api/v1 with its /api alias: status, body and headers, with the
-// alias headers checked on the original responses before the other headers are compared.
-func checkOperationParity(t *testing.T, handler http.Handler, operation apicontract.Operation, owner bool) {
+// checkOperationParity compares one operation on its x-canonical-path (versioned) with its /api alias: status, body
+// and headers, with the alias headers checked on the original responses before the other headers are compared.
+func checkOperationParity(t *testing.T, handler http.Handler, operation apicontract.Operation, versioned string, owner bool) {
 	t.Helper()
 	legacy := concretePath(operation.Path)
-	versioned := apiVersionPrefix + strings.TrimPrefix(legacy, apiLegacyPrefix)
+	versioned = concretePath(versioned)
 	onV1 := serveSameRequest(handler, operation.Method, versioned, owner)
 	onAlias := serveSameRequest(handler, operation.Method, legacy, owner)
 	if onV1.Code != onAlias.Code {

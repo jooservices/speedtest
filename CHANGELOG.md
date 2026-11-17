@@ -34,6 +34,7 @@ All notable changes to Speedtest are recorded here. The format follows
 - Results and Alerts ISP filters stay page-scoped; rolling ISP trends use in-range hourly samples, and plan edits preserve explicitly chosen expected speeds.
 
 ### Deprecated
+- JOOST-109: the spec marks every `/api` operation `deprecated: true` and names its `/api/v1` form in `x-canonical-path`; `docs/api-standard.md` states the REST API rules.
 - JOOST-108: the released `/api` paths are deprecated aliases of `/api/v1`. Their responses carry `Deprecation` and `Sunset` headers; the Sunset date is still a placeholder.
 
 ### Fixed
