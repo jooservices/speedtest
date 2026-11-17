@@ -573,61 +573,94 @@ func TestApplyCreatePlanDefaultsFailures(t *testing.T) {
 
 func ptr[T any](value T) *T { return &value }
 
+const (
+	enrollmentCredentialID = "00000000-0000-4000-8000-000000000011"
+	enrollmentNodeID       = "00000000-0000-4000-8000-000000000012"
+)
+
 func TestEnrollTransactionSuccessAndNodeBoundaries(t *testing.T) {
-	const credentialID = "00000000-0000-4000-8000-000000000011"
-	const nodeID = "00000000-0000-4000-8000-000000000012"
-	makeDatabase := func(fail string) *scriptedDatabase {
-		tx := &scriptedTx{}
-		tx.queryRow = func(query string, _ ...any) pgx.Row {
-			switch {
-			case strings.Contains(query, "token_hash=$1 AND kind='enrollment'"):
-				if fail == "token-query" {
-					return scriptedRow{err: errors.New("token query failed")}
-				}
-				if fail == "bad-hash" {
-					return scriptedRow{values: []any{credentialID, nodeID, "not-a-hash"}}
-				}
-				return scriptedRow{values: []any{credentialID, nodeID, hashSecret("enr_token")}}
-			case strings.Contains(query, "FROM nodes n JOIN schedules"):
-				if fail == "missing-node" {
-					return scriptedRow{err: pgx.ErrNoRows}
-				}
-				if fail == "lock-error" {
-					return scriptedRow{err: errors.New("node lock failed")}
-				}
-				return scriptedRow{values: []any{nodeID, "edge", "", "", "", float64(300), float64(100), 4, pgtype.Int4{}, 1, true, false, "", pgtype.Text{}, "", int64(1), 30, 0, true, "", "", testTime()}}
-			case strings.Contains(query, "SELECT expires_at,consumed_at,revoked_at"):
-				if fail == "expiry-query" {
-					return scriptedRow{err: errors.New("expiry query failed")}
-				}
-				return scriptedRow{values: []any{time.Now().Add(time.Hour), pgtype.Timestamptz{}, pgtype.Timestamptz{}}}
-			default:
-				return scriptedRow{err: fmt.Errorf("unexpected enrollment query: %s", query)}
-			}
+	testEnrollmentSuccess(t)
+	testEnrollmentFailures(t)
+	testEnrollmentRandomFailures(t)
+	testEnrollmentTokenBoundaries(t)
+	testEnrollmentEmptyToken(t)
+}
+
+func enrollmentTestDatabase(fail string) *scriptedDatabase {
+	tx := &scriptedTx{}
+	tx.queryRow = func(query string, _ ...any) pgx.Row {
+		switch {
+		case strings.Contains(query, "token_hash=$1 AND kind='enrollment'"):
+			return enrollmentTokenRow(fail)
+		case strings.Contains(query, "FROM nodes n JOIN schedules"):
+			return enrollmentNodeRow(fail)
+		case strings.Contains(query, "SELECT expires_at,consumed_at,revoked_at"):
+			return enrollmentExpiryRow(fail)
+		default:
+			return scriptedRow{err: fmt.Errorf("unexpected enrollment query: %s", query)}
 		}
-		tx.exec = func(query string, _ ...any) error {
-			for _, part := range []string{"consumed_at=now()", "kind='bearer'", "VALUES ($1,$2,'bearer',$3)", "UPDATE nodes SET host="} {
-				if fail == part && strings.Contains(query, part) {
-					return errors.New(part + " failed")
-				}
-			}
-			return nil
-		}
-		if fail == "commit" {
-			tx.commitErr = errors.New("commit failed")
-		}
-		return &scriptedDatabase{tx: tx}
 	}
+	tx.exec = func(query string, _ ...any) error {
+		return enrollmentTestExec(fail, query)
+	}
+	if fail == "commit" {
+		tx.commitErr = errors.New("commit failed")
+	}
+	return &scriptedDatabase{tx: tx}
+}
+
+func enrollmentTokenRow(fail string) pgx.Row {
+	if fail == "token-query" {
+		return scriptedRow{err: errors.New("token query failed")}
+	}
+	if fail == "bad-hash" {
+		return scriptedRow{values: []any{enrollmentCredentialID, enrollmentNodeID, "not-a-hash"}}
+	}
+	return scriptedRow{values: []any{enrollmentCredentialID, enrollmentNodeID, hashSecret("enr_token")}}
+}
+
+func enrollmentNodeRow(fail string) pgx.Row {
+	if fail == "missing-node" {
+		return scriptedRow{err: pgx.ErrNoRows}
+	}
+	if fail == "lock-error" {
+		return scriptedRow{err: errors.New("node lock failed")}
+	}
+	return scriptedRow{values: []any{enrollmentNodeID, "edge", "", "", "", float64(300), float64(100), 4, pgtype.Int4{}, 1, true, false, "", pgtype.Text{}, "", int64(1), 30, 0, true, "", "", testTime()}}
+}
+
+func enrollmentExpiryRow(fail string) pgx.Row {
+	if fail == "expiry-query" {
+		return scriptedRow{err: errors.New("expiry query failed")}
+	}
+	return scriptedRow{values: []any{time.Now().Add(time.Hour), pgtype.Timestamptz{}, pgtype.Timestamptz{}}}
+}
+
+func enrollmentTestExec(fail, query string) error {
+	for _, part := range []string{"consumed_at=now()", "kind='bearer'", "VALUES ($1,$2,'bearer',$3)", "UPDATE nodes SET host="} {
+		if fail == part && strings.Contains(query, part) {
+			return errors.New(part + " failed")
+		}
+	}
+	return nil
+}
+
+func testEnrollmentSuccess(t *testing.T) {
+	t.Helper()
 	t.Run("consumes token and issues bearer", func(t *testing.T) {
-		service := NewService(makeDatabase(""), nil)
+		service := NewService(enrollmentTestDatabase(""), nil)
 		result, err := service.Enroll(t.Context(), "enr_token", "edge", "host", "agent")
 		if err != nil {
 			t.Fatalf("Enroll() error = %v", err)
 		}
-		if result["nodeId"] != nodeID || !strings.HasPrefix(result["credential"].(string), "sp_") {
+		if result["nodeId"] != enrollmentNodeID || !strings.HasPrefix(result["credential"].(string), "sp_") {
 			t.Fatalf("Enroll() result = %#v", result)
 		}
 	})
+}
+
+func testEnrollmentFailures(t *testing.T) {
+	t.Helper()
 	for _, test := range []struct {
 		name string
 		want error
@@ -644,13 +677,14 @@ func TestEnrollTransactionSuccessAndNodeBoundaries(t *testing.T) {
 		{"commit failure", errors.New("commit failed")},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			service := NewService(makeDatabase(map[string]string{
+			failures := map[string]string{
 				"token query": "token-query", "bad hash": "bad-hash", "missing node": "missing-node",
 				"lock error": "lock-error", "expiry query": "expiry-query",
 				"consume failure": "consumed_at=now()", "revoke failure": "kind='bearer'",
 				"bearer insert failure": "VALUES ($1,$2,'bearer',$3)",
 				"node update failure":   "UPDATE nodes SET host=", "commit failure": "commit",
-			}[test.name]), nil)
+			}
+			service := NewService(enrollmentTestDatabase(failures[test.name]), nil)
 			_, err := service.Enroll(t.Context(), "enr_token", "edge", "host", "agent")
 			if test.want == ErrInvalidToken {
 				if !errors.Is(err, test.want) {
@@ -661,15 +695,23 @@ func TestEnrollTransactionSuccessAndNodeBoundaries(t *testing.T) {
 			}
 		})
 	}
+}
+
+func testEnrollmentRandomFailures(t *testing.T) {
+	t.Helper()
 	for _, failAt := range []int{1, 2} {
 		t.Run(fmt.Sprintf("random generation %d", failAt), func(t *testing.T) {
-			service := NewService(makeDatabase(""), nil)
+			service := NewService(enrollmentTestDatabase(""), nil)
 			service.random = &testRandomReader{failAt: failAt}
 			if _, err := service.Enroll(t.Context(), "enr_token", "edge", "", "agent"); err == nil || !strings.Contains(err.Error(), "random source failed") {
 				t.Fatalf("Enroll() random failure = %v", err)
 			}
 		})
 	}
+}
+
+func testEnrollmentTokenBoundaries(t *testing.T) {
+	t.Helper()
 	for _, test := range []struct {
 		name, nameOnNode  string
 		expiresAt         time.Time
@@ -681,12 +723,12 @@ func TestEnrollTransactionSuccessAndNodeBoundaries(t *testing.T) {
 		{name: "revoked", nameOnNode: "edge", expiresAt: time.Now().Add(time.Hour), revoked: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			database := makeDatabase("")
+			database := enrollmentTestDatabase("")
 			tx := database.tx
 			original := tx.queryRow
 			tx.queryRow = func(query string, args ...any) pgx.Row {
 				if strings.Contains(query, "FROM nodes n JOIN schedules") {
-					values := []any{nodeID, test.nameOnNode, "", "", "", float64(300), float64(100), 4, pgtype.Int4{}, 1, true, false, "", pgtype.Text{}, "", int64(1), 30, 0, true, "", "", testTime()}
+					values := []any{enrollmentNodeID, test.nameOnNode, "", "", "", float64(300), float64(100), 4, pgtype.Int4{}, 1, true, false, "", pgtype.Text{}, "", int64(1), 30, 0, true, "", "", testTime()}
 					return scriptedRow{values: values}
 				}
 				if strings.Contains(query, "SELECT expires_at,consumed_at,revoked_at") {
@@ -708,25 +750,38 @@ func TestEnrollTransactionSuccessAndNodeBoundaries(t *testing.T) {
 			}
 		})
 	}
-	if _, err := NewService(makeDatabase(""), nil).Enroll(t.Context(), "", "edge", "", "agent"); !errors.Is(err, ErrInvalidInput) {
+}
+
+func testEnrollmentEmptyToken(t *testing.T) {
+	t.Helper()
+	if _, err := NewService(enrollmentTestDatabase(""), nil).Enroll(t.Context(), "", "edge", "", "agent"); !errors.Is(err, ErrInvalidInput) {
 		t.Fatalf("empty token error = %v", err)
 	}
 }
 
 func TestCredentialRotationAndRevocationTransactionPaths(t *testing.T) {
-	const nodeID = "00000000-0000-4000-8000-000000000012"
-	makeNodeRow := func() pgx.Row {
-		return scriptedRow{values: []any{nodeID, "edge", "", "", "", float64(300), float64(100), 4, pgtype.Int4{}, 1, true, false, "", pgtype.Text{}, "", int64(1), 30, 0, true, "", "", testTime()}}
-	}
+	testCredentialRotationSuccess(t)
+	testCredentialRotationMissingNode(t)
+	testCredentialRotationFailures(t)
+	testEnrollmentKeyRotationErrors(t)
+	testCredentialRevocationPaths(t)
+}
+
+func scriptedNodeRow() pgx.Row {
+	return scriptedRow{values: []any{enrollmentNodeID, "edge", "", "", "", float64(300), float64(100), 4, pgtype.Int4{}, 1, true, false, "", pgtype.Text{}, "", int64(1), 30, 0, true, "", "", testTime()}}
+}
+
+func testCredentialRotationSuccess(t *testing.T) {
+	t.Helper()
 	t.Run("rotation issues replacement", func(t *testing.T) {
 		tx := &scriptedTx{queryRow: func(query string, _ ...any) pgx.Row {
 			if strings.Contains(query, "api_idempotency") {
 				return scriptedRow{err: pgx.ErrNoRows}
 			}
-			return makeNodeRow()
+			return scriptedNodeRow()
 		}}
 		service := NewService(&scriptedDatabase{tx: tx}, bytes.Repeat([]byte{0x7a}, 32))
-		response, replay, err := service.RotateCredential(t.Context(), nodeID, "owner", "rotate-key")
+		response, replay, err := service.RotateCredential(t.Context(), enrollmentNodeID, "owner", "rotate-key")
 		if err != nil || replay {
 			t.Fatalf("RotateCredential() = %s, %t, %v", response, replay, err)
 		}
@@ -734,6 +789,10 @@ func TestCredentialRotationAndRevocationTransactionPaths(t *testing.T) {
 			t.Fatalf("rotation response = %s", response)
 		}
 	})
+}
+
+func testCredentialRotationMissingNode(t *testing.T) {
+	t.Helper()
 	t.Run("rotation missing node", func(t *testing.T) {
 		tx := &scriptedTx{queryRow: func(query string, _ ...any) pgx.Row {
 			if strings.Contains(query, "api_idempotency") {
@@ -742,17 +801,23 @@ func TestCredentialRotationAndRevocationTransactionPaths(t *testing.T) {
 			return scriptedRow{err: pgx.ErrNoRows}
 		}}
 		service := NewService(&scriptedDatabase{tx: tx}, bytes.Repeat([]byte{0x7a}, 32))
-		if _, _, err := service.RotateCredential(t.Context(), nodeID, "owner", "rotate-key"); !errors.Is(err, ErrNotFound) {
+		if _, _, err := service.RotateCredential(t.Context(), enrollmentNodeID, "owner", "rotate-key"); !errors.Is(err, ErrNotFound) {
 			t.Fatalf("RotateCredential() error = %v", err)
 		}
 	})
-	for _, test := range []struct {
-		name       string
-		queryError error
-		execMatch  string
-		execError  error
-		failAt     int
-	}{
+}
+
+type credentialRotationFailure struct {
+	name       string
+	queryError error
+	execMatch  string
+	execError  error
+	failAt     int
+}
+
+func testCredentialRotationFailures(t *testing.T) {
+	t.Helper()
+	for _, test := range []credentialRotationFailure{
 		{name: "lock error", queryError: errors.New("lock failed")},
 		{name: "update error", execMatch: "UPDATE node_credentials", execError: errors.New("update failed")},
 		{name: "insert error", execMatch: "INSERT INTO node_credentials", execError: errors.New("insert failed")},
@@ -760,37 +825,55 @@ func TestCredentialRotationAndRevocationTransactionPaths(t *testing.T) {
 		{name: "identifier generation", failAt: 2},
 	} {
 		t.Run("rotation/"+test.name, func(t *testing.T) {
-			tx := &scriptedTx{
-				queryRow: func(query string, _ ...any) pgx.Row {
-					if strings.Contains(query, "api_idempotency") {
-						return scriptedRow{err: pgx.ErrNoRows}
-					}
-					if test.queryError != nil {
-						return scriptedRow{err: test.queryError}
-					}
-					return makeNodeRow()
-				},
-				exec: func(query string, _ ...any) error {
-					if test.execMatch != "" && strings.Contains(query, test.execMatch) {
-						return test.execError
-					}
-					return nil
-				},
-			}
-			service := NewService(&scriptedDatabase{tx: tx}, bytes.Repeat([]byte{0x7a}, 32))
-			if test.failAt != 0 {
-				service.random = &testRandomReader{failAt: test.failAt}
-			}
-			_, _, err := service.RotateCredential(t.Context(), nodeID, "owner", "rotate-key")
-			want := test.execError
-			if test.queryError != nil {
-				want = test.queryError
-			}
-			if err == nil || (want != nil && err.Error() != want.Error()) || (want == nil && !strings.Contains(err.Error(), "random source failed")) {
-				t.Fatalf("RotateCredential() error = %v, want %v", err, want)
-			}
+			assertCredentialRotationFailure(t, test)
 		})
 	}
+}
+
+func assertCredentialRotationFailure(t *testing.T, test credentialRotationFailure) {
+	t.Helper()
+	tx := credentialRotationFailureTx(test)
+	service := NewService(&scriptedDatabase{tx: tx}, bytes.Repeat([]byte{0x7a}, 32))
+	if test.failAt != 0 {
+		service.random = &testRandomReader{failAt: test.failAt}
+	}
+	_, _, err := service.RotateCredential(t.Context(), enrollmentNodeID, "owner", "rotate-key")
+	want := test.execError
+	if test.queryError != nil {
+		want = test.queryError
+	}
+	assertCredentialRotationError(t, err, want)
+}
+
+func credentialRotationFailureTx(test credentialRotationFailure) *scriptedTx {
+	return &scriptedTx{
+		queryRow: func(query string, _ ...any) pgx.Row {
+			if strings.Contains(query, "api_idempotency") {
+				return scriptedRow{err: pgx.ErrNoRows}
+			}
+			if test.queryError != nil {
+				return scriptedRow{err: test.queryError}
+			}
+			return scriptedNodeRow()
+		},
+		exec: func(query string, _ ...any) error {
+			if test.execMatch != "" && strings.Contains(query, test.execMatch) {
+				return test.execError
+			}
+			return nil
+		},
+	}
+}
+
+func assertCredentialRotationError(t *testing.T, err, want error) {
+	t.Helper()
+	if err == nil || (want != nil && err.Error() != want.Error()) || (want == nil && !strings.Contains(err.Error(), "random source failed")) {
+		t.Fatalf("RotateCredential() error = %v, want %v", err, want)
+	}
+}
+
+func testEnrollmentKeyRotationErrors(t *testing.T) {
+	t.Helper()
 	t.Run("enrollment key database and entropy errors", func(t *testing.T) {
 		newDB := func() *scriptedDatabase {
 			return &scriptedDatabase{tx: &scriptedTx{
@@ -813,6 +896,10 @@ func TestCredentialRotationAndRevocationTransactionPaths(t *testing.T) {
 			t.Fatalf("RotateEnrollmentKey() random error = %v", err)
 		}
 	})
+}
+
+func testCredentialRevocationPaths(t *testing.T) {
+	t.Helper()
 	for _, test := range []struct {
 		name      string
 		queryErr  error
@@ -832,13 +919,13 @@ func TestCredentialRotationAndRevocationTransactionPaths(t *testing.T) {
 					if test.queryErr != nil {
 						return scriptedRow{err: test.queryErr}
 					}
-					return makeNodeRow()
+					return scriptedNodeRow()
 				},
 				exec:      func(string, ...any) error { return test.execErr },
 				commitErr: test.commitErr,
 			}
 			service := NewService(&scriptedDatabase{tx: tx}, nil)
-			err := service.RevokeCredential(t.Context(), nodeID)
+			err := service.RevokeCredential(t.Context(), enrollmentNodeID)
 			switch test.want {
 			case nil:
 				if err != nil {

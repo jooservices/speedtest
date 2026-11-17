@@ -222,45 +222,74 @@ func TestSecretEncryption(t *testing.T) {
 func TestTwoFactorLifecycleAndSignIn(t *testing.T) {
 	service, store, now, session := tfSetup(t, 100)
 	ctx := context.Background()
-	if st, err := service.TwoFactorStatus(ctx, session.Token); err != nil || !st.Available || st.Enabled {
+	assertTwoFactorStartsDisabled(t, service, ctx, session.Token)
+	secret, codes := completeTwoFactorSetup(t, service, store, now, session.Token)
+	signIn := twoFactorSignIn(service, ctx)
+	assertTwoFactorSignIn(t, service, now, session.Token, secret, codes, signIn)
+	assertTwoFactorDisable(t, service, session.Token, codes, signIn)
+}
+
+func assertTwoFactorStartsDisabled(t *testing.T, service *Service, ctx context.Context, token string) {
+	t.Helper()
+	if st, err := service.TwoFactorStatus(ctx, token); err != nil || !st.Available || st.Enabled {
 		t.Fatalf("initial status = %+v, %v", st, err)
 	}
-	if _, err := service.EnableTwoFactor(ctx, session.Token, "123456"); !errors.Is(err, ErrTwoFactorNotPending) {
+	if _, err := service.EnableTwoFactor(ctx, token, "123456"); !errors.Is(err, ErrTwoFactorNotPending) {
 		t.Fatalf("enable before setup = %v", err)
 	}
-	if _, err := service.BeginTwoFactor(ctx, session.Token, "wrong password"); !errors.Is(err, ErrInvalidCurrentPass) {
+	if _, err := service.BeginTwoFactor(ctx, token, "wrong password"); !errors.Is(err, ErrInvalidCurrentPass) {
 		t.Fatalf("setup with a wrong password = %v", err)
 	}
-	setup, err := service.BeginTwoFactor(ctx, session.Token, tfPassword)
+}
+
+func completeTwoFactorSetup(t *testing.T, service *Service, store *memoryStore, now *time.Time, token string) (string, []string) {
+	testTwoFactorSetupSecret(t, service, store, token)
+	return enableTwoFactorAndCheckState(t, service, now, token)
+}
+
+func testTwoFactorSetupSecret(t *testing.T, service *Service, store *memoryStore, token string) {
+	t.Helper()
+	setup, err := service.BeginTwoFactor(context.Background(), token, tfPassword)
 	if err != nil || setup.Secret == "" || setup.URI == "" || !strings.HasPrefix(setup.QR, "data:image/png") {
 		t.Fatalf("setup = %+v, %v", setup, err)
 	}
 	if strings.Contains(string(store.tf["user-id"].SecretEnc), setup.Secret) {
 		t.Fatal("the secret is stored in clear")
 	}
-	if _, err := service.EnableTwoFactor(ctx, session.Token, "000000"); !errors.Is(err, ErrInvalidTwoFactorCode) {
+}
+
+func enableTwoFactorAndCheckState(t *testing.T, service *Service, now *time.Time, token string) (string, []string) {
+	t.Helper()
+	if _, err := service.EnableTwoFactor(context.Background(), token, "000000"); !errors.Is(err, ErrInvalidTwoFactorCode) {
 		t.Fatalf("enable with a wrong code = %v", err)
 	}
-	secret, codes := enableTwoFactor(t, service, now, session.Token)
+	secret, codes := enableTwoFactor(t, service, now, token)
 	if len(codes) != 10 {
 		t.Fatalf("%d recovery codes", len(codes))
 	}
-	if st, _ := service.TwoFactorStatus(ctx, session.Token); !st.Enabled || st.RecoveryRemaining != 10 {
+	if st, _ := service.TwoFactorStatus(context.Background(), token); !st.Enabled || st.RecoveryRemaining != 10 {
 		t.Fatalf("status after enable = %+v", st)
 	}
-	if _, err := service.BeginTwoFactor(ctx, session.Token, tfPassword); !errors.Is(err, ErrTwoFactorEnabled) {
+	if _, err := service.BeginTwoFactor(context.Background(), token, tfPassword); !errors.Is(err, ErrTwoFactorEnabled) {
 		t.Fatalf("setup while enabled = %v", err)
 	}
-	if _, err := service.EnableTwoFactor(ctx, session.Token, "123456"); !errors.Is(err, ErrTwoFactorEnabled) {
+	if _, err := service.EnableTwoFactor(context.Background(), token, "123456"); !errors.Is(err, ErrTwoFactorEnabled) {
 		t.Fatalf("enable twice = %v", err)
 	}
+	return secret, codes
+}
 
-	raw, _ := secretEncoding.DecodeString(secret)
-	signIn := func(code string) error {
+func twoFactorSignIn(service *Service, ctx context.Context) func(string) error {
+	return func(code string) error {
 		anonymous, _ := service.Bootstrap(ctx)
 		_, err := service.LoginWithCode(ctx, anonymous.Token, "owner@example.com", tfPassword, code, "192.0.2.9")
 		return err
 	}
+}
+
+func assertTwoFactorSignIn(t *testing.T, service *Service, now *time.Time, token, secret string, codes []string, signIn func(string) error) {
+	t.Helper()
+	raw, _ := secretEncoding.DecodeString(secret)
 	if err := signIn(""); !errors.Is(err, ErrTwoFactorRequired) {
 		t.Fatalf("no code = %v", err)
 	}
@@ -289,21 +318,23 @@ func TestTwoFactorLifecycleAndSignIn(t *testing.T) {
 	if err := signIn("not-a-code-at-all"); !errors.Is(err, ErrInvalidTwoFactorCode) {
 		t.Fatalf("garbage code = %v", err)
 	}
-	if st, _ := service.TwoFactorStatus(ctx, session.Token); st.RecoveryRemaining != 9 {
+	if st, _ := service.TwoFactorStatus(context.Background(), token); st.RecoveryRemaining != 9 {
 		t.Fatalf("recovery codes left = %d", st.RecoveryRemaining)
 	}
+}
 
-	// Disabling needs the password and a code.
-	if err := service.DisableTwoFactor(ctx, session.Token, "wrong password", codes[1]); !errors.Is(err, ErrInvalidCurrentPass) {
+func assertTwoFactorDisable(t *testing.T, service *Service, token string, codes []string, signIn func(string) error) {
+	t.Helper()
+	if err := service.DisableTwoFactor(context.Background(), token, "wrong password", codes[1]); !errors.Is(err, ErrInvalidCurrentPass) {
 		t.Fatalf("disable with a wrong password = %v", err)
 	}
-	if err := service.DisableTwoFactor(ctx, session.Token, tfPassword, ""); !errors.Is(err, ErrInvalidTwoFactorCode) {
+	if err := service.DisableTwoFactor(context.Background(), token, tfPassword, ""); !errors.Is(err, ErrInvalidTwoFactorCode) {
 		t.Fatalf("disable without a code = %v", err)
 	}
-	if err := service.DisableTwoFactor(ctx, session.Token, tfPassword, codes[1]); err != nil {
+	if err := service.DisableTwoFactor(context.Background(), token, tfPassword, codes[1]); err != nil {
 		t.Fatalf("disable = %v", err)
 	}
-	if err := service.DisableTwoFactor(ctx, session.Token, tfPassword, codes[2]); !errors.Is(err, ErrTwoFactorNotEnabled) {
+	if err := service.DisableTwoFactor(context.Background(), token, tfPassword, codes[2]); !errors.Is(err, ErrTwoFactorNotEnabled) {
 		t.Fatalf("disable twice = %v", err)
 	}
 	if err := signIn(""); err != nil {

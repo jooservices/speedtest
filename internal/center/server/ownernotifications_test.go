@@ -77,6 +77,20 @@ func (f *notificationStub) TestNotificationEvent(_ context.Context, _, channel s
 func TestNotificationAPI(t *testing.T) {
 	f := &notificationStub{}
 	h := newNodeHandler(Options{OwnerNotifications: f})
+	assertNotificationDeliveryAccess(t, h, f)
+	assertNotificationDeliveryValidation(t, h, f)
+	assertNotificationEventSettings(t, h, f)
+	assertNotificationTemplates(t, h)
+}
+
+func assertNotificationDeliveryAccess(t *testing.T, h http.Handler, f *notificationStub) {
+	assertNotificationDeliveryReadAccess(t, h)
+	assertNotificationTestDeliveryAccess(t, h)
+	assertNotificationDeliveryPaging(t, h, f)
+}
+
+func assertNotificationDeliveryReadAccess(t *testing.T, h http.Handler) {
+	t.Helper()
 	for _, path := range []string{"/api/notifications/deliveries", "/api/notifications/deliveries/" + nodeID} {
 		if rec := do(h, "GET", path, "", nil); rec.Code != 401 {
 			t.Fatal("session required", rec.Code)
@@ -85,6 +99,10 @@ func TestNotificationAPI(t *testing.T) {
 			t.Fatal("GET", rec.Code)
 		}
 	}
+}
+
+func assertNotificationTestDeliveryAccess(t *testing.T, h http.Handler) {
+	t.Helper()
 	path := "/api/notifications/test/webhook"
 	if rec := do(h, "POST", path, "", ownerRead); rec.Code != 403 {
 		t.Fatal("CSRF required", rec.Code)
@@ -93,10 +111,26 @@ func TestNotificationAPI(t *testing.T) {
 	if rec.Code != 202 || rec.Header().Get("Location") != "/api/notifications/deliveries/"+nodeID || !strings.Contains(rec.Body.String(), `"meta":{}`) {
 		t.Fatal("test POST", rec.Code, rec.Body.String())
 	}
+}
+
+func assertNotificationDeliveryPaging(t *testing.T, h http.Handler, f *notificationStub) {
+	t.Helper()
 	if rec := do(h, "GET", "/api/notifications/deliveries?event="+nodeID+"&page=2&size=10", "", ownerRead); rec.Code != 200 || f.event != nodeID || f.page != 2 || f.size != 10 || !strings.Contains(rec.Body.String(), `"last_page":6`) {
 		t.Fatal("paging")
 	}
-	for path, code := range map[string]int{"/api/notifications/test/nope": 404, "/api/notifications/deliveries/nope": 404, "/api/notifications/nope": 404, "/api/notifications/deliveries?event=nope": 422, "/api/notifications/deliveries?event=" + nodeID + "&event=" + nodeID: 422, "/api/notifications/deliveries?size=101": 422, "/api/notifications/deliveries?page=1000001": 422} {
+}
+
+func assertNotificationDeliveryValidation(t *testing.T, h http.Handler, f *notificationStub) {
+	t.Helper()
+	for path, code := range map[string]int{
+		"/api/notifications/test/nope":                                       404,
+		"/api/notifications/deliveries/nope":                                 404,
+		"/api/notifications/nope":                                            404,
+		"/api/notifications/deliveries?event=nope":                           422,
+		"/api/notifications/deliveries?event=" + nodeID + "&event=" + nodeID: 422,
+		"/api/notifications/deliveries?size=101":                             422,
+		"/api/notifications/deliveries?page=1000001":                         422,
+	} {
 		method := "GET"
 		auth := ownerRead
 		if strings.Contains(path, "/test/") {
@@ -126,34 +160,70 @@ func TestNotificationAPI(t *testing.T) {
 		}
 	}
 	f.err = nil
+}
+
+func assertNotificationEventSettings(t *testing.T, h http.Handler, f *notificationStub) {
+	assertNotificationEventListAndPatch(t, h)
+	assertNotificationEventThresholds(t, h, f)
+	assertNotificationNodeSettings(t, h, f)
+}
+
+func assertNotificationEventListAndPatch(t *testing.T, h http.Handler) {
+	t.Helper()
 	if rec := do(h, "GET", "/api/notifications/events", "", ownerRead); rec.Code != 200 || !strings.Contains(rec.Body.String(), "test.success") {
 		t.Fatal("list events", rec.Code, rec.Body.String())
 	}
 	if rec := do(h, "PATCH", "/api/notifications/events/test.success", `{"enabled":false}`, ownerWriteWith(nil)); rec.Code != 200 {
 		t.Fatal("patch event", rec.Code, rec.Body.String())
 	}
+}
+
+func assertNotificationEventThresholds(t *testing.T, h http.Handler, f *notificationStub) {
+	t.Helper()
 	if rec := do(h, "PATCH", "/api/notifications/events/quality.ping_high", `{"thresholds":{"for_tests":3}}`, ownerWriteWith(nil)); rec.Code != 200 || f.thresholds["for_tests"] != 3 {
 		t.Fatal("quality streak threshold patch", rec.Code, rec.Body.String())
 	}
 	if rec := do(h, "PATCH", "/api/notifications/events/quality.ping_high", `{"thresholds":{"for_tests":2.5}}`, ownerWriteWith(nil)); rec.Code != 422 {
 		t.Fatal("fractional quality streak threshold", rec.Code, rec.Body.String())
 	}
+}
+
+func assertNotificationNodeSettings(t *testing.T, h http.Handler, f *notificationStub) {
 	nodeSetting := "/api/notifications/events/test.success/nodes/" + nodeID
 	f.nodeOn = true
-	if rec := do(h, "GET", nodeSetting, "", ownerRead); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"enabled":true`) || f.nodeEvent != "test.success" || f.nodeID != nodeID {
+	assertNotificationNodeSettingRead(t, h, f, nodeSetting)
+	assertNotificationNodeSettingWrite(t, h, f, nodeSetting)
+	assertNotificationInvalidNodePaths(t, h)
+}
+
+func assertNotificationNodeSettingRead(t *testing.T, h http.Handler, f *notificationStub, path string) {
+	t.Helper()
+	if rec := do(h, "GET", path, "", ownerRead); rec.Code != 200 || !strings.Contains(rec.Body.String(), `"enabled":true`) || f.nodeEvent != "test.success" || f.nodeID != nodeID {
 		t.Fatal("get node event setting", rec.Code, rec.Body.String())
 	}
-	if rec := do(h, "PUT", nodeSetting, `{"enabled":false}`, ownerRead); rec.Code != 403 {
+}
+
+func assertNotificationNodeSettingWrite(t *testing.T, h http.Handler, f *notificationStub, path string) {
+	t.Helper()
+	if rec := do(h, "PUT", path, `{"enabled":false}`, ownerRead); rec.Code != 403 {
 		t.Fatal("node setting CSRF required", rec.Code)
 	}
-	if rec := do(h, "PUT", nodeSetting, `{"enabled":false}`, ownerWriteWith(nil)); rec.Code != 200 || f.nodeOn || !strings.Contains(rec.Body.String(), `"enabled":false`) {
+	if rec := do(h, "PUT", path, `{"enabled":false}`, ownerWriteWith(nil)); rec.Code != 200 || f.nodeOn || !strings.Contains(rec.Body.String(), `"enabled":false`) {
 		t.Fatal("put node event setting", rec.Code, rec.Body.String())
 	}
+}
+
+func assertNotificationInvalidNodePaths(t *testing.T, h http.Handler) {
+	t.Helper()
 	for _, path := range []string{"/api/notifications/events/missing/nodes/" + nodeID, "/api/notifications/events/test.success/nodes/not-a-uuid"} {
 		if rec := do(h, "GET", path, "", ownerRead); rec.Code != 404 {
 			t.Errorf("invalid node event path %s = %d", path, rec.Code)
 		}
 	}
+}
+
+func assertNotificationTemplates(t *testing.T, h http.Handler) {
+	t.Helper()
 	if rec := do(h, "GET", "/api/notifications/templates/test.success/telegram", "", ownerRead); rec.Code != 200 {
 		t.Fatal("get template", rec.Code)
 	}

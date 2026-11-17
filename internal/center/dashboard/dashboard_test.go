@@ -133,25 +133,65 @@ func TestSnapshotFleetFollowsThePreviewFormulas(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Unweighted mean of the nodes that have a percentage; success is non-failed over all tests.
-	if *snap.Current.Down != 80 || *snap.Current.Up != 80 || *snap.Current.Success != 60 || snap.Current.Count != 20 || snap.Current.IPs != 3 || *snap.Current.Ping != 12.5 {
-		t.Fatalf("current = %+v", snap.Current)
+	assertSnapshotAggregates(t, snap)
+	assertSnapshotFleetQuery(t, db)
+	assertSnapshotNodes(t, snap)
+	assertSnapshotSparklineQuery(t, f)
+	assertSnapshotResultsQuery(t, results)
+	assertSnapshotAlertsQuery(t, al, snap)
+}
+
+func assertSnapshotAggregates(t *testing.T, snap Snapshot) {
+	t.Helper()
+	assertCurrentSnapshotAggregates(t, snap.Current)
+	assertPreviousSnapshotAggregates(t, snap.Previous)
+}
+
+func assertCurrentSnapshotAggregates(t *testing.T, summary Fleet) {
+	t.Helper()
+	// Unweighted mean of nodes with a percentage; success is non-failed over all tests.
+	if *summary.Down != 80 || *summary.Up != 80 || *summary.Success != 60 || summary.Count != 20 || summary.IPs != 3 || *summary.Ping != 12.5 {
+		t.Fatalf("current = %+v", summary)
 	}
-	if *snap.Previous.Down != 50 || snap.Previous.Up != nil || *snap.Previous.Success != 25 || snap.Previous.Count != 4 {
-		t.Fatalf("previous = %+v", snap.Previous)
+}
+
+func assertPreviousSnapshotAggregates(t *testing.T, summary Fleet) {
+	t.Helper()
+	if *summary.Down != 50 || summary.Up != nil || *summary.Success != 25 || summary.Count != 4 {
+		t.Fatalf("previous = %+v", summary)
 	}
+}
+
+func assertSnapshotFleetQuery(t *testing.T, db *fakeDB) {
+	t.Helper()
 	if len(db.args) != 2 || db.args[0][0].(time.Time).After(db.args[0][1].(time.Time)) {
 		t.Fatalf("fleet queries = %v", db.args)
 	}
+}
+
+func assertSnapshotNodes(t *testing.T, snap Snapshot) {
+	t.Helper()
 	if len(snap.Nodes) != 2 || snap.Nodes[0].Summary.Count != 10 || len(snap.Nodes[0].Sparkline) != 1 || snap.Nodes[1].Sparkline == nil || len(snap.Nodes[1].Sparkline) != 0 {
 		t.Fatalf("nodes = %+v", snap.Nodes)
 	}
+}
+
+func assertSnapshotSparklineQuery(t *testing.T, f *fakeStats) {
+	t.Helper()
 	if f.maxPoints != SparkPoints || f.percent || f.query.Metric != stats.Download || f.query.To.Sub(f.query.From) < SparkHours*time.Hour {
 		t.Fatalf("sparkline query = %+v max %d percent %v", f.query, f.maxPoints, f.percent)
 	}
+}
+
+func assertSnapshotResultsQuery(t *testing.T, results *fakeResults) {
+	t.Helper()
 	if results.size != RecentResults || results.filter.Sort != "ts" || results.filter.Dir != "desc" || !results.filter.From.IsZero() {
 		t.Fatalf("latest results query = %+v size %d", results.filter, results.size)
 	}
+}
+
+func assertSnapshotAlertsQuery(t *testing.T, al *fakeAlerts, snap Snapshot) {
+	t.Helper()
 	if al.size != OpenAlerts || al.filter.State != "open" || len(snap.OpenAlerts) != 1 || snap.OpenAlertCount != 17 {
 		t.Fatalf("alerts = %+v count %d", snap.OpenAlerts, snap.OpenAlertCount)
 	}
