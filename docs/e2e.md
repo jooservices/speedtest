@@ -1,5 +1,11 @@
 # Browser end-to-end tests
 
+Run the Workspace gates from an isolated worktree with `/home/joos/Workspaces/scripts/dev/check run e2e --all` or
+`/home/joos/Workspaces/scripts/dev/check run ui-coverage --all`. The project profile declares the application port for both stages;
+the Workspace runner uses the machine's browser setting and `AIFLOW_E2E_HOST` to select the browser host and set up the reverse tunnel.
+On dev-workspaces this puts Playwright on vm-tools. Check the worktree database guard before either gate.
+Direct `make e2e` and `make ui-coverage` invoke the harness without that routing layer and can launch Chromium locally.
+
 `make e2e` (`node tests/e2e/main.mjs`) runs real browser scenarios against a **real command center**, **real agents** and a seeded
 PostgreSQL database. Nothing in the data path is faked except the speed test itself (`internal/agent/testdata/fake-speedtest`).
 
