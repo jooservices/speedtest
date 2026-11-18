@@ -1,7 +1,7 @@
 GO ?= go
 BASE ?= origin/develop
 
-.PHONY: build test vet lint lint-new-code ci run-center run-agent release test-install test-docker-staging shellcheck typecheck test-timing python-tests
+.PHONY: build test vet lint lint-new-code ci run-center run-agent release test-install test-docker-staging test-staging-deploy shellcheck typecheck test-timing python-tests
 
 ## build compiles every package.
 build:
@@ -34,7 +34,7 @@ lint-new-code:
 	golangci-lint run --config .golangci-new-code.yml --new-from-merge-base "$(BASE)"
 
 ## ci runs the same checks as CI: vet, test, build and lint.
-ci: vet test build lint test-install test-docker-staging test-matrix typecheck python-tests
+ci: vet test build lint test-install test-docker-staging test-staging-deploy test-matrix typecheck python-tests
 
 ## run-center starts the command center from the current .env.
 run-center:
@@ -60,7 +60,7 @@ test-db:
 
 ## shellcheck lints the shell scripts shipped or used by the project.
 shellcheck:
-	shellcheck internal/center/install/install.sh scripts/test-install.sh tests/install-systemd/run.sh tests/install-systemd/in-container.sh internal/center/installer/*_remote.sh deploy/prod/prod.sh deploy/prod/entrypoint.sh deploy/observability/observe.sh deploy/observability/probe.sh deploy/docker/entrypoint.sh deploy/docker/node-entrypoint.sh deploy/docker/nodes.sh scripts/test-docker-staging.sh
+	shellcheck internal/center/install/install.sh scripts/test-install.sh tests/install-systemd/run.sh tests/install-systemd/in-container.sh internal/center/installer/*_remote.sh deploy/prod/prod.sh deploy/prod/entrypoint.sh deploy/observability/observe.sh deploy/observability/probe.sh deploy/docker/entrypoint.sh deploy/docker/node-entrypoint.sh deploy/docker/nodes.sh scripts/test-docker-staging.sh deploy/docker/stg-deploy.sh scripts/test-staging-deploy.sh
 
 ## test-install runs ShellCheck and the installer test against a fake download server.
 test-install: shellcheck
@@ -68,7 +68,11 @@ test-install: shellcheck
 
 ## test-docker-staging checks the staging interval defaults with fake psql, curl, docker and speedtest binaries.
 test-docker-staging:
-	bash scripts/test-docker-staging.sh
+	bash scripts/test-docker-staging.sh deploy/docker/stg-deploy.sh scripts/test-staging-deploy.sh
+
+## test-staging-deploy checks the staging deploy script with fake docker, curl, node and cloudflared.
+test-staging-deploy:
+	bash scripts/test-staging-deploy.sh
 
 ## test-install-systemd runs the installer and uninstall path under real systemd in Docker.
 test-install-systemd:
