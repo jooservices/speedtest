@@ -250,3 +250,21 @@ func TestAC1NewPeriodRejectsInvalidInput(t *testing.T) {
 		})
 	}
 }
+
+func TestAC1StaleZoneBoundFallbackStopsAtRealOffsetChange(t *testing.T) {
+	location, err := time.LoadLocation("America/New_York")
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := time.Date(2026, 3, 8, 6, 59, 58, 0, time.UTC)
+	transition := time.Date(2026, 3, 8, 7, 0, 0, 0, time.UTC)
+	end := transition.Add(3 * time.Second)
+	_, oldOffset := before.In(location).Zone()
+	if got := nextOffsetChange(before, end, location, oldOffset); !got.Equal(transition) {
+		t.Fatalf("fallback offset boundary = %s, want %s", got, transition)
+	}
+	_, newOffset := transition.In(location).Zone()
+	if got := nextOffsetChange(transition, end, location, newOffset); !got.Equal(end) {
+		t.Fatalf("fallback without another offset change = %s, want %s", got, end)
+	}
+}
