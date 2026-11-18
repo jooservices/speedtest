@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/jooservices/speedtest/internal/center/audit"
@@ -175,6 +176,11 @@ func (h *ownerNotifications) queueTest(w http.ResponseWriter, r *http.Request, c
 
 // listDeliveries pages the delivery attempts, optionally for one alert event or one status/channel pair.
 func (h *ownerNotifications) listDeliveries(w http.ResponseWriter, r *http.Request) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		invalid(w, r, "query parameters must be valid URL encoding.")
+		return
+	}
 	page, size, ok := paging(w, r)
 	if !ok {
 		return
@@ -183,7 +189,7 @@ func (h *ownerNotifications) listDeliveries(w http.ResponseWriter, r *http.Reque
 		invalid(w, r, "page must be at most 1000000.")
 		return
 	}
-	filter, ok := deliveryFilter(w, r)
+	filter, ok := deliveryFilter(w, r, query)
 	if !ok {
 		return
 	}
@@ -196,25 +202,25 @@ func (h *ownerNotifications) listDeliveries(w http.ResponseWriter, r *http.Reque
 }
 
 // deliveryFilter reads the optional event, status and channel filters, rejecting unknown enum values.
-func deliveryFilter(w http.ResponseWriter, r *http.Request) (notify.DeliveryFilter, bool) {
+func deliveryFilter(w http.ResponseWriter, r *http.Request, query url.Values) (notify.DeliveryFilter, bool) {
 	var filter notify.DeliveryFilter
 	var present bool
 	var ok bool
-	if filter.Event, present, ok = notificationFilterValue(w, r, "event", "event must be an alert event ID."); !ok {
+	if filter.Event, present, ok = notificationFilterValue(w, r, query, "event", "event must be an alert event ID."); !ok {
 		return filter, false
 	}
 	if present && !uuidPattern.MatchString(filter.Event) {
 		invalid(w, r, "event must be an alert event ID.")
 		return filter, false
 	}
-	if filter.Status, present, ok = notificationFilterValue(w, r, "status", "status must be pending, sent or failed."); !ok {
+	if filter.Status, present, ok = notificationFilterValue(w, r, query, "status", "status must be pending, sent or failed."); !ok {
 		return filter, false
 	}
 	if present && !notify.ValidDeliveryStatus(filter.Status) {
 		invalid(w, r, "status must be pending, sent or failed.")
 		return filter, false
 	}
-	if filter.Channel, present, ok = notificationFilterValue(w, r, "channel", "channel must be email, telegram, slack or webhook."); !ok {
+	if filter.Channel, present, ok = notificationFilterValue(w, r, query, "channel", "channel must be email, telegram, slack or webhook."); !ok {
 		return filter, false
 	}
 	if present {
@@ -227,8 +233,8 @@ func deliveryFilter(w http.ResponseWriter, r *http.Request) (notify.DeliveryFilt
 }
 
 // notificationFilterValue returns one optional query value and rejects a repeated parameter.
-func notificationFilterValue(w http.ResponseWriter, r *http.Request, name, detail string) (string, bool, bool) {
-	values, present := r.URL.Query()[name]
+func notificationFilterValue(w http.ResponseWriter, r *http.Request, query url.Values, name, detail string) (string, bool, bool) {
+	values, present := query[name]
 	if !present {
 		return "", false, true
 	}

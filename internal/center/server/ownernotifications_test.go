@@ -13,13 +13,14 @@ import (
 )
 
 type notificationStub struct {
-	err        error
-	filter     notify.DeliveryFilter
-	nodeEvent  string
-	nodeID     string
-	nodeOn     bool
-	page, size int
-	thresholds map[string]float64
+	err             error
+	filter          notify.DeliveryFilter
+	nodeEvent       string
+	nodeID          string
+	nodeOn          bool
+	page, size      int
+	deliveriesCalls int
+	thresholds      map[string]float64
 }
 
 func (f *notificationStub) Test(context.Context, string) (notify.Delivery, error) {
@@ -30,6 +31,7 @@ func (f *notificationStub) Delivery(context.Context, string) (notify.Delivery, e
 }
 func (f *notificationStub) Deliveries(_ context.Context, filter notify.DeliveryFilter, page, size int) ([]notify.Delivery, int, error) {
 	f.filter, f.page, f.size = filter, page, size
+	f.deliveriesCalls++
 	return []notify.Delivery{}, 51, f.err
 }
 func (f *notificationStub) ListNotificationEvents(context.Context) ([]notify.EventView, error) {
@@ -148,12 +150,35 @@ func TestNotificationDeliveryFilterValidationAC2(t *testing.T) {
 		"event=not-a-uuid",
 		"event=" + nodeID + "&event=" + nodeID,
 	} {
-		if rec := do(h, "GET", "/api/notifications/deliveries?"+query, "", ownerRead); rec.Code != 422 {
-			t.Errorf("%s = %d", query, rec.Code)
-		}
-		if rec := do(h, "GET", "/api/notifications/deliveries?"+query, "", nil); rec.Code != 401 {
-			t.Errorf("unauthenticated %s = %d", query, rec.Code)
-		}
+		assertNotificationFilterRejectedAC2(t, h, f, query, 422)
+	}
+	for _, query := range []string{
+		"status=%ZZ",
+		"channel=%ZZ",
+		"event=%ZZ",
+		"status=sent&status=%ZZ",
+		"channel=email&channel=%ZZ",
+		"page=%ZZ",
+	} {
+		assertNotificationFilterRejectedAC2(t, h, f, query, 422)
+	}
+}
+
+func assertNotificationFilterRejectedAC2(t *testing.T, h http.Handler, f *notificationStub, query string, want int) {
+	t.Helper()
+	f.deliveriesCalls = 0
+	if rec := do(h, "GET", "/api/notifications/deliveries?"+query, "", ownerRead); rec.Code != want {
+		t.Errorf("%s = %d", query, rec.Code)
+	}
+	if f.deliveriesCalls != 0 {
+		t.Errorf("%s reached the store", query)
+	}
+	f.deliveriesCalls = 0
+	if rec := do(h, "GET", "/api/notifications/deliveries?"+query, "", nil); rec.Code != 401 {
+		t.Errorf("unauthenticated %s = %d", query, rec.Code)
+	}
+	if f.deliveriesCalls != 0 {
+		t.Errorf("unauthenticated %s reached the store", query)
 	}
 }
 
