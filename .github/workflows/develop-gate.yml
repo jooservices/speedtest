@@ -82,9 +82,30 @@ jobs:
     name: UI coverage
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The end to end run behind make ui-coverage starts the Go center: it needs Go, psql, the worktree .env and a Postgres whose database carries the ownership marker.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: speedtest
+          POSTGRES_DB: speedtest_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U speedtest -d speedtest_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
     steps:
       - name: Checkout
         uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Set up Node
         uses: actions/setup-node@v6
@@ -103,6 +124,11 @@ jobs:
 
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
+
+      - name: Test environment
+        run: |
+          cp .env.example .env
+          psql -h 127.0.0.1 -U speedtest -d speedtest_test -c "COMMENT ON DATABASE speedtest_test IS 'workspaces-project:speedtest'"
 
       - name: UI coverage
         run: make ui-coverage
