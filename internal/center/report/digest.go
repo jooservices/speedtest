@@ -174,13 +174,7 @@ func collectDigestFailureCodes(err error, period string, codes *[]string) {
 		return
 	}
 	if failure, ok := err.(*digestError); ok {
-		before := len(*codes)
-		collectDigestFailureCodes(failure.cause, period, codes)
-		if len(*codes) == before {
-			*codes = append(*codes, period+failure.code)
-		} else if len(*codes) == before+1 && (*codes)[before] == period+"run_failed" {
-			(*codes)[before] = period + failure.code
-		}
+		collectDigestErrorCode(failure, period, codes)
 		return
 	}
 	if unwrapped, ok := err.(interface{ Unwrap() error }); ok && unwrapped.Unwrap() != nil {
@@ -188,6 +182,16 @@ func collectDigestFailureCodes(err error, period string, codes *[]string) {
 		return
 	}
 	*codes = append(*codes, period+"run_failed")
+}
+
+func collectDigestErrorCode(failure *digestError, period string, codes *[]string) {
+	before := len(*codes)
+	collectDigestFailureCodes(failure.cause, period, codes)
+	if len(*codes) == before {
+		*codes = append(*codes, period+failure.code)
+	} else if len(*codes) == before+1 && (*codes)[before] == period+"run_failed" {
+		(*codes)[before] = period + failure.code
+	}
 }
 
 func (s *DigestScheduler) now() time.Time {
@@ -596,15 +600,20 @@ func (s *DigestScheduler) loopWait(ctx context.Context, runErr error) time.Durat
 		}
 		wait = minDigestWait(wait, eligibilityWait)
 	}
-	if location != nil {
-		backlog, backlogErr := s.hasScheduleBacklog(ctx, now, zone, location)
-		if backlogErr != nil {
-			s.logger().Warn("digest schedule watermark is not readable; it will be retried", "code", "schedule_state_read")
-			wait = minDigestWait(wait, s.retry())
-		}
-		if backlog {
-			wait = minDigestWait(wait, s.retry())
-		}
+	return s.backlogWait(ctx, now, zone, location, wait)
+}
+
+func (s *DigestScheduler) backlogWait(ctx context.Context, now time.Time, zone string, location *time.Location, wait time.Duration) time.Duration {
+	if location == nil {
+		return wait
+	}
+	backlog, err := s.hasScheduleBacklog(ctx, now, zone, location)
+	if err != nil {
+		s.logger().Warn("digest schedule watermark is not readable; it will be retried", "code", "schedule_state_read")
+		wait = minDigestWait(wait, s.retry())
+	}
+	if backlog {
+		wait = minDigestWait(wait, s.retry())
 	}
 	return wait
 }
