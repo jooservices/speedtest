@@ -47,9 +47,20 @@ export function deliveryHistorySteps(T) {
     async activePaginationName() {
       return page.evaluate(() => document.activeElement.getAttribute('aria-label'));
     },
-    async waitForPaginationFocus(name) {
-      await page.waitForFunction(expected => document.activeElement?.getAttribute('aria-label') === expected,
-        name, { timeout: 5000 });
+    async waitForPaginationFocus(name, step = 'unknown') {
+      try {
+        await page.waitForFunction(expected => document.activeElement?.getAttribute('aria-label') === expected,
+          name, { timeout: 5000 });
+      } catch (error) {
+        const snapshot = await page.evaluate(() => ({
+          activeTag: document.activeElement?.tagName || null,
+          activeLabel: document.activeElement?.getAttribute('aria-label') || null,
+          page: document.querySelector('[aria-label="Delivery history pagination"] [role="status"]')?.textContent || null,
+          previousDisabled: document.querySelector('[aria-label="Previous delivery history page"]')?.disabled ?? null,
+          nextDisabled: document.querySelector('[aria-label="Next delivery history page"]')?.disabled ?? null
+        }));
+        throw new Error(`SC-SET-12 focus ${step}: expected ${name}; ${JSON.stringify(snapshot)}`, { cause: error });
+      }
     },
     async retryFocused() {
       return page.getByRole('button', { name: 'Retry' }).evaluate(element => element === document.activeElement);

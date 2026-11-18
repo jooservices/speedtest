@@ -598,15 +598,34 @@ export function settingsSuite(T, ctx) {
         assert.equal(await deliveryHistory.activeName(), 'Next delivery history page', 'Tab reaches pagination');
         await deliveryHistory.enterKey();
         await deliveryHistory.waitForPage(2);
-        await deliveryHistory.waitForPaginationFocus('Previous delivery history page');
-        assert.equal(await deliveryHistory.activePaginationName(), 'Previous delivery history page', 'SC-SET-12 keyboard Next restores focus to the available direction at the last page');
+        const nextPage = page.getByRole('button', { name: 'Next delivery history page' });
+        const afterNext = await nextPage.isDisabled() ? 'Previous delivery history page' : 'Next delivery history page';
+        await deliveryHistory.waitForPaginationFocus(afterNext, 'keyboard Next');
+        assert.equal(await deliveryHistory.activePaginationName(), afterNext, 'SC-SET-12 keyboard Next keeps focus on an available pagination direction');
         assert.ok(await deliveryHistory.rows().count() >= 3, 'page two contains the remaining fixtures and its header');
         assert.match(await deliveryHistory.rows().nth(1).innerText(), /Telegram/, 'older page starts with its newest remaining delivery');
         assert.match(await deliveryHistory.rows().nth(2).innerText(), /Slack/);
 
+        let lastPage = 2;
+        while (!(await nextPage.isDisabled())) {
+          assert.ok(lastPage < 20, 'SC-SET-12 pagination reaches a bounded last page');
+          await deliveryHistory.focusNext();
+          await deliveryHistory.enterKey();
+          lastPage += 1;
+          await deliveryHistory.waitForPage(lastPage);
+          await deliveryHistory.waitForPaginationFocus(await nextPage.isDisabled() ? 'Previous delivery history page' : 'Next delivery history page', 'advance to last page');
+        }
+        await deliveryHistory.waitForPaginationFocus('Previous delivery history page', 'last page');
+        assert.equal(await deliveryHistory.activePaginationName(), 'Previous delivery history page', 'SC-SET-12 last-page keyboard Next moves focus to Previous');
+        while (lastPage > 2) {
+          await deliveryHistory.previous();
+          lastPage -= 1;
+          await deliveryHistory.waitForPage(lastPage);
+        }
+        await page.getByRole('button', { name: 'Previous delivery history page' }).focus();
         await deliveryHistory.enterKey();
         await deliveryHistory.waitForPage(1);
-        await deliveryHistory.waitForPaginationFocus('Next delivery history page');
+        await deliveryHistory.waitForPaginationFocus('Next delivery history page', 'keyboard Previous');
         assert.equal(await deliveryHistory.activePaginationName(), 'Next delivery history page', 'SC-SET-12 keyboard Previous restores focus to the available direction at the first page');
 
         await deliveryHistory.focusNext();
@@ -699,8 +718,9 @@ export function settingsSuite(T, ctx) {
         await deliveryHistory.waitForPage(2);
         assert.equal(failedPageRequests.at(-1).searchParams.get('page'), '2', 'SC-SET-12 failed page request used page two');
         assert.equal(retryURL.searchParams.get('page'), '2', 'SC-SET-12 Retry requests the selected page');
-        await deliveryHistory.waitForPaginationFocus('Previous delivery history page');
-        assert.equal(await deliveryHistory.activePaginationName(), 'Previous delivery history page', 'SC-SET-12 Retry restores focus to an enabled pagination control');
+        const afterRetry = await nextPage.isDisabled() ? 'Previous delivery history page' : 'Next delivery history page';
+        await deliveryHistory.waitForPaginationFocus(afterRetry, 'Retry after page failure');
+        assert.equal(await deliveryHistory.activePaginationName(), afterRetry, 'SC-SET-12 Retry restores focus to an enabled pagination control');
         assert.ok(await deliveryHistory.rows().count() >= 3, 'SC-SET-12 retry restores data for the selected page');
         await deliveryHistory.previous();
         await deliveryHistory.waitForPage(1);
