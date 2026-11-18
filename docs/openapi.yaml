@@ -3460,8 +3460,10 @@ paths:
       tags:
         - Notifications
       summary: Read notification delivery log
-      description: Newest createdAt,id first. Secret-free attempt/error metadata; retries preserve one
-        logical delivery per event/channel. Notification page is limited to 1000000.
+      description: Newest createdAt,id first. Optional event, status and channel filters combine.
+        Malformed query encoding is rejected with 422 before the list is read.
+        Secret-free attempt/error metadata; retries preserve one logical delivery per event/channel.
+        Notification page is limited to 1000000.
       security:
         - SessionCookie: []
         - OwnerBearer: []
@@ -3493,6 +3495,18 @@ paths:
           description: Optional alert event filter.
           schema:
             $ref: "#/components/schemas/ID"
+        - name: status
+          in: query
+          required: false
+          description: Optional delivery outcome filter.
+          schema:
+            $ref: "#/components/schemas/DeliveryStatus"
+        - name: channel
+          in: query
+          required: false
+          description: Optional delivery channel filter.
+          schema:
+            $ref: "#/components/schemas/Channel"
   /api/notifications/deliveries/{id}:
     get:
       operationId: getDelivery
@@ -5161,6 +5175,12 @@ components:
         - telegram
         - slack
         - webhook
+    DeliveryStatus:
+      type: string
+      enum:
+        - pending
+        - sent
+        - failed
     Severity:
       type: string
       enum:

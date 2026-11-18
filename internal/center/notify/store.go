@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,20 @@ type Preferences interface {
 	NotificationConfig(context.Context, pgx.Tx, string) (settings.Settings, string, error)
 }
 
+// DeliveryFilter narrows the delivery list. Empty fields match every delivery.
+type DeliveryFilter struct {
+	Event   string
+	Status  string
+	Channel string
+}
+
+var deliveryStatuses = []string{"pending", "sent", "failed"}
+
+// ValidDeliveryStatus reports whether status is a supported delivery outcome.
+func ValidDeliveryStatus(status string) bool {
+	return slices.Contains(deliveryStatuses, status)
+}
+
 // Delivery is safe metadata. Payloads, destinations and credentials are absent.
 type Delivery struct {
 	ID          string     `json:"id"`
@@ -38,7 +53,12 @@ type Delivery struct {
 	Error       *string    `json:"error"`
 }
 
-const columns = `id::text,event_id::text,channel,status,attempts,created_at,last_attempt,error`
+const (
+	columns             = `id::text,event_id::text,channel,status,attempts,created_at,last_attempt,error`
+	deliveryFilterWhere = `($1='' OR event_id=NULLIF($1,'')::uuid) AND ($2='' OR status=$2) AND ($3='' OR channel=$3)`
+	deliveryCountSQL    = `SELECT count(*) FROM notification_deliveries WHERE ` + deliveryFilterWhere
+	deliveryPageSQL     = `SELECT ` + columns + ` FROM notification_deliveries WHERE ` + deliveryFilterWhere + ` ORDER BY created_at DESC,id DESC LIMIT $4 OFFSET $5`
+)
 
 // Store owns durable delivery creation and dispatch. Now is injectable for retry tests.
 type Store struct {
@@ -123,16 +143,16 @@ func (s *Store) Delivery(ctx context.Context, id string) (Delivery, error) {
 	}
 	return d, err
 }
-func (s *Store) Deliveries(ctx context.Context, event string, page, size int) ([]Delivery, int, error) {
+func (s *Store) Deliveries(ctx context.Context, filter DeliveryFilter, page, size int) ([]Delivery, int, error) {
 	// Keep callers outside the HTTP layer from issuing an unbounded query.
 	if page < 1 || size < 1 || size > 100 || page > 1000000 {
 		return nil, 0, errors.New("invalid pagination")
 	}
 	var total int
-	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE ($1='' OR event_id=NULLIF($1,'')::uuid)`, event).Scan(&total); err != nil {
+	if err := s.DB.QueryRow(ctx, deliveryCountSQL, filter.Event, filter.Status, filter.Channel).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.DB.Query(ctx, `SELECT `+columns+` FROM notification_deliveries WHERE ($1='' OR event_id=NULLIF($1,'')::uuid) ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3`, event, size, (page-1)*size)
+	rows, err := s.DB.Query(ctx, deliveryPageSQL, filter.Event, filter.Status, filter.Channel, size, (page-1)*size)
 	if err != nil {
 		return nil, 0, err
 	}

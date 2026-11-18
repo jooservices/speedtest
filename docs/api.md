@@ -734,8 +734,9 @@ Retention, default engine, quiet hours, the stagger flag and the concurrency lim
 The test-channel POST and delivery list/detail GETs are implemented, with session
 protection and CSRF/Origin checks for POST. Tests return 202 with a delivery
 Location, or 422 for an unconfigured/disabled channel. Delivery lists accept
-page/size and optional event UUID, newest first. No delivery response exposes a
-destination, payload, URL or credential. Notification pages are limited to
+page/size and optional event UUID, status and channel filters, newest first;
+malformed query encoding and invalid filter values return 422. No delivery
+response exposes a destination, payload, URL or credential. Notification pages are limited to
 1,000,000. See [notification delivery](notifications.md) for transport Settings,
 retry/expiry behavior, the exactly-once transaction boundary and verification.
 

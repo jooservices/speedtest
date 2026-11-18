@@ -381,3 +381,42 @@ INSERT INTO alert_rules(id,name,metric,op,value,for_tests,node_ids,severity,chan
 		t.Fatalf("both download rules keep their own threshold and streak: %q %v", values, err)
 	}
 }
+
+func TestDeliveryFilterIndexMigrationRollbackIntegration(t *testing.T) {
+	pool, ctx := testPool(t)
+	dbtest.Reset(t, pool)
+	t.Cleanup(func() { dbtest.Reset(t, pool) })
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps)
+      VALUES('10000000-0000-4000-8000-000000000124','filter-rollback',100,50)`)
+	exec(t, ctx, pool, `INSERT INTO alert_events(id,node_id,severity,ts,title)
+      VALUES('a0000000-0000-4000-8000-000000000124','10000000-0000-4000-8000-000000000124','warn',now(),'Filter rollback')`)
+	exec(t, ctx, pool, `INSERT INTO notification_deliveries(id,event_id,channel,status)
+      VALUES('f0000000-0000-4000-8000-000000000124','a0000000-0000-4000-8000-000000000124','email','sent')`)
+	assertDeliveryFilterMigrationState(t, ctx, pool, 36, 3)
+	if err := db.MigrateDownTo(ctx, pool, 35); err != nil {
+		t.Fatal(err)
+	}
+	assertDeliveryFilterMigrationState(t, ctx, pool, 35, 0)
+	if err := db.Migrate(ctx, pool, "up"); err != nil {
+		t.Fatal(err)
+	}
+	assertDeliveryFilterMigrationState(t, ctx, pool, 36, 3)
+}
+
+func assertDeliveryFilterMigrationState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, version int64, indexes int) {
+	t.Helper()
+	if got := currentMigrationVersion(t, ctx, pool); got != version {
+		t.Fatalf("migration version = %d, want %d", got, version)
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE status='sent' AND channel='email'`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("delivery rows after migration = %d, error=%v", count, err)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_indexes WHERE schemaname='public' AND tablename='notification_deliveries'
+      AND indexname = ANY(ARRAY['notification_deliveries_status_created_idx','notification_deliveries_channel_created_idx','notification_deliveries_status_channel_created_idx'])`).Scan(&count); err != nil || count != indexes {
+		t.Fatalf("delivery filter indexes = %d, want %d, error=%v", count, indexes, err)
+	}
+}

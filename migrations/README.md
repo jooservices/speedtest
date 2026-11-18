@@ -81,6 +81,10 @@ adds the persisted next-request time used to enforce ip-api's 15-per-minute batc
 limit across minute boundaries; its down migration drops only that column.
 otherwise intact. Usage down preserves the 60-minute schedule default from
 00015 and restores overrides without changing rows that were not overridden.
+`00036_notification_delivery_filter_indexes.sql` adds ordered status, channel and
+status/channel indexes for the owner delivery-history filters, so each filtered
+count and newest-first page uses an index instead of scanning the table; its down
+migration drops only those indexes.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file
