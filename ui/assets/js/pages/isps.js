@@ -229,12 +229,16 @@
     root.appendChild(U.pageHead('ISPs', 'Providers inferred from ASN data, with speed and reliability in the selected range.'));
     root.appendChild(h('div', { class: 'muted' }, 'Loading ISPs…'));
     var listPath = '/api/isps?range=' + encodeURIComponent(ST.settings().range) + ST.engineQuery();
-    ST.api.request(listPath).then(function (res) {
+    var controller = new AbortController(), active = true;
+    ST.api.request(listPath, { signal: controller.signal }).then(function (res) {
+      if (!active) return;
       render(root, res.data || []);
     }).catch(function (err) {
+      if (!active || err.name === 'AbortError') return;
       U.clear(root);
       root.appendChild(U.pageHead('ISPs', 'Providers inferred from ASN data, with speed and reliability in the selected range.'));
       root.appendChild(U.empty('Could not load ISPs', err.message || 'Retry from the menu.', U.btn('Retry', { onClick: function () { ST.refresh(); } })));
     });
+    return function () { active = false; controller.abort(); };
   };
 })();

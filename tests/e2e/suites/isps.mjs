@@ -6,6 +6,38 @@ const E2E_PLAN = '23000000-0000-4000-8000-000000000001';
 export function ispsSuite(T) {
   const { page, assert } = T;
   return {
+    async lateListResponseCannotReplaceNewPage() {
+      for (const status of [200, 503]) {
+        await T.open('#/nodes', 'Nodes');
+        let release;
+        const held = new Promise(resolve => { release = resolve; });
+        const intercept = async route => {
+          await held;
+          const body = status === 200 ? { success: true, code: 200, message: 'ISPs loaded', data: [], meta: {}, errors: null } : { type: 'about:blank', title: 'Temporary failure', status, detail: 'Retry later.' };
+          try {
+            await route.fulfill({ status, contentType: status === 200 ? 'application/json' : 'application/problem+json', body: JSON.stringify(body) });
+          } catch (error) {
+            if (!route.request().failure()) throw error;
+          }
+        };
+        await page.route('**/api/isps?*', intercept);
+        try {
+          const requestSeen = page.waitForRequest('**/api/isps?*', { timeout: 10000 });
+          await page.goto(T.url('#/isps'));
+          await requestSeen;
+          await page.locator('#sidebar a[href="#/nodes"]').click();
+          await T.heading('Nodes').waitFor();
+          release();
+          await T.settled();
+          assert.equal(await T.heading('Nodes').count(), 1, `late ISP ${status} response cannot replace Nodes`);
+          assert.equal(await T.heading('ISPs').count(), 0, `late ISP ${status} response cannot restore ISPs`);
+          if (status === 503) T.expectRefusal(status);
+        } finally {
+          release();
+          await page.unroute('**/api/isps?*', intercept);
+        }
+      }
+    },
     async listAndCompare() {
       await T.open('#/isps', 'ISPs');
       await T.see('Providers inferred from ASN');
