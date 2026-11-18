@@ -86,9 +86,15 @@ func TestNotificationDeliveryFiltersIntegrationAC1AC2(t *testing.T) {
 	assertDeliveryFilterPage(t, get, "?status=sent&channel=email", []string{"f0000000-0000-4000-8000-000000000007", "f0000000-0000-4000-8000-000000000001"}, 1, 2, 1)
 	assertDeliveryFilterPage(t, get, "?event="+deliveryFilterEvent1+"&size=2&page=1", []string{"f0000000-0000-4000-8000-000000000004", "f0000000-0000-4000-8000-000000000003"}, 1, 4, 2)
 	assertDeliveryFilterPage(t, get, "?event="+deliveryFilterEvent1+"&size=2&page=2", []string{"f0000000-0000-4000-8000-000000000002", "f0000000-0000-4000-8000-000000000001"}, 2, 4, 2)
+	assertDeliveryFilterPage(t, get, "?status=sent&size=2&page=1", []string{"f0000000-0000-4000-8000-000000000009", "f0000000-0000-4000-8000-000000000007"}, 1, 4, 2)
+	assertDeliveryFilterPage(t, get, "?status=sent&size=2&page=2", []string{"f0000000-0000-4000-8000-000000000002", "f0000000-0000-4000-8000-000000000001"}, 2, 4, 2)
+	assertDeliveryFilterPage(t, get, "?channel=telegram&size=1&page=1", []string{"f0000000-0000-4000-8000-000000000008"}, 1, 2, 2)
+	assertDeliveryFilterPage(t, get, "?channel=telegram&size=1&page=2", []string{"f0000000-0000-4000-8000-000000000002"}, 2, 2, 2)
 	assertDeliveryFilterPage(t, get, "?channel=telegram", []string{"f0000000-0000-4000-8000-000000000008", "f0000000-0000-4000-8000-000000000002"}, 1, 2, 1)
 	assertDeliveryFilterPage(t, get, "?status=failed", []string{"f0000000-0000-4000-8000-000000000008", "f0000000-0000-4000-8000-000000000004", "f0000000-0000-4000-8000-000000000005"}, 1, 3, 1)
 	assertDeliveryFilterPage(t, get, "?event="+deliveryFilterEvent2+"&status=failed", []string{"f0000000-0000-4000-8000-000000000005"}, 1, 1, 1)
+	assertDeliveryFilterPage(t, get, "?event="+deliveryFilterEvent1+"&status=sent&channel=telegram&size=1&page=1", []string{"f0000000-0000-4000-8000-000000000002"}, 1, 1, 1)
+	assertDeliveryFilterPage(t, get, "?event="+deliveryFilterEvent1+"&status=sent&channel=telegram&size=1&page=2", nil, 2, 1, 1)
 
 	if response, _ := get("?status=sent&channel=email", false); response.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthenticated delivery filter = %d", response.Code)
@@ -103,6 +109,12 @@ func TestNotificationDeliveryFiltersIntegrationAC1AC2(t *testing.T) {
 		"?event=",
 		"?event=not-a-uuid",
 		"?event=" + deliveryFilterEvent1 + "&event=" + deliveryFilterEvent1,
+		"?status=%ZZ",
+		"?channel=%ZZ",
+		"?event=%ZZ",
+		"?status=sent&status=%ZZ",
+		"?channel=email&channel=%ZZ",
+		"?page=%ZZ",
 	} {
 		if response, _ := get(query, true); response.Code != http.StatusUnprocessableEntity {
 			t.Errorf("invalid filter %s = %d", query, response.Code)
