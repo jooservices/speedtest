@@ -95,19 +95,51 @@ func TestAC1NewPeriodBuildsOwnerLocalDayAndWeekBounds(t *testing.T) {
 			if err != nil {
 				t.Fatalf("NewPeriod() error = %v", err)
 			}
-			if !period.From().Equal(tc.from) || !period.To().Equal(tc.to) {
-				t.Fatalf("bounds = [%s, %s), want [%s, %s)", period.From(), period.To(), tc.from, tc.to)
-			}
-			if got := period.To().Sub(period.From()); got != tc.wantSpan {
-				t.Fatalf("period duration = %s, want %s", got, tc.wantSpan)
-			}
-			if period.From().Location() != time.UTC || period.To().Location() != time.UTC {
-				t.Fatalf("period bounds are not UTC: %s %s", period.From().Location(), period.To().Location())
-			}
-			if period.Kind() != tc.kind || period.LocalDate() != tc.date || period.Timezone() != tc.zone {
-				t.Fatalf("period identity = %q %q %q", period.Kind(), period.LocalDate(), period.Timezone())
-			}
+			assertPeriodBounds(t, period, tc.from, tc.to)
+			assertPeriodDuration(t, period, tc.wantSpan)
+			assertPeriodUTC(t, period)
+			assertPeriodIdentity(t, period, tc.kind, tc.date, tc.zone)
 		})
+	}
+}
+
+func assertPeriodBounds(t *testing.T, got Period, from, to time.Time) {
+	t.Helper()
+	if !got.From().Equal(from) {
+		t.Errorf("inclusive UTC start = %s, want %s", got.From(), from)
+	}
+	if !got.To().Equal(to) {
+		t.Errorf("exclusive UTC end = %s, want %s", got.To(), to)
+	}
+}
+
+func assertPeriodDuration(t *testing.T, got Period, want time.Duration) {
+	t.Helper()
+	if duration := got.To().Sub(got.From()); duration != want {
+		t.Errorf("period duration = %s, want %s", duration, want)
+	}
+}
+
+func assertPeriodUTC(t *testing.T, got Period) {
+	t.Helper()
+	if got.From().Location() != time.UTC {
+		t.Errorf("period start location = %s, want UTC", got.From().Location())
+	}
+	if got.To().Location() != time.UTC {
+		t.Errorf("period end location = %s, want UTC", got.To().Location())
+	}
+}
+
+func assertPeriodIdentity(t *testing.T, got Period, kind PeriodKind, date, timezone string) {
+	t.Helper()
+	if got.Kind() != kind {
+		t.Errorf("period kind = %q, want %q", got.Kind(), kind)
+	}
+	if got.LocalDate() != date {
+		t.Errorf("period local date = %q, want %q", got.LocalDate(), date)
+	}
+	if got.Timezone() != timezone {
+		t.Errorf("period time zone = %q, want %q", got.Timezone(), timezone)
 	}
 }
 

@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -41,26 +42,74 @@ func TestAC1AC2SummarizeMapsPrimaryEngineNodeAggregates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Summarize() error = %v", err)
 	}
-	if got.Kind != DailyPeriod || got.LocalDate != "2026-03-08" || got.Timezone != "America/New_York" ||
-		!got.From.Equal(period.From()) || !got.To.Equal(period.To()) || len(got.Nodes) != 2 {
-		t.Fatalf("summary period or node count = %+v", got)
+	want := PeriodSummary{
+		Kind: DailyPeriod, LocalDate: "2026-03-08", Timezone: "America/New_York",
+		From: period.From(), To: period.To(),
+		Nodes: []NodeSummary{
+			{NodeID: "node-1", Node: "alpha", Engine: "ookla", Successes: 2, Failures: 1, AvgDown: floatPointer(200), AvgUp: floatPointer(40)},
+			{NodeID: "node-2", Node: "beta", Engine: "librespeed", Successes: 0, Failures: 1},
+		},
 	}
-	first, second := got.Nodes[0], got.Nodes[1]
-	if first.NodeID != "node-1" || first.Node != "alpha" || first.Engine != "ookla" || first.Successes != 2 || first.Failures != 1 ||
-		first.AvgDown == nil || *first.AvgDown != 200 || first.AvgUp == nil || *first.AvgUp != 40 {
-		t.Fatalf("first node summary = %+v", first)
+	if len(got.Nodes) != len(want.Nodes) {
+		t.Fatalf("node count: got %d, want %d", len(got.Nodes), len(want.Nodes))
 	}
-	if second.NodeID != "node-2" || second.Node != "beta" || second.Engine != "librespeed" || second.Successes != 0 || second.Failures != 1 ||
-		second.AvgDown != nil || second.AvgUp != nil {
-		t.Fatalf("failure-only node summary = %+v", second)
-	}
-	if pool.queries != 1 || len(pool.args) != 2 || pool.args[0] != period.From() || pool.args[1] != period.To() {
-		t.Fatalf("query count or bounds = %d, %v", pool.queries, pool.args)
-	}
-	if !strings.Contains(pool.query, "r.engine = n.primary_engine") || !strings.Contains(pool.query, "r.ts >= $1") || !strings.Contains(pool.query, "r.ts < $2") {
-		t.Fatalf("summary query is missing its primary-engine or half-open period filter: %s", pool.query)
+	t.Run("period metadata", func(t *testing.T) { assertPeriodSummary(t, got, want) })
+	t.Run("mixed-result primary-engine aggregate", func(t *testing.T) {
+		assertNodeSummary(t, "mixed-result primary-engine aggregate", got.Nodes[0], want.Nodes[0])
+	})
+	t.Run("failure-only primary-engine aggregate", func(t *testing.T) {
+		assertNodeSummary(t, "failure-only primary-engine aggregate", got.Nodes[1], want.Nodes[1])
+	})
+	t.Run("single bounded query", func(t *testing.T) {
+		assertEqual(t, "query count", pool.queries, 1)
+		if len(pool.args) != 2 {
+			t.Fatalf("query arguments: got %d, want 2: %v", len(pool.args), pool.args)
+			return
+		}
+		assertEqual(t, "inclusive UTC start argument", pool.args[0], period.From())
+		assertEqual(t, "exclusive UTC end argument", pool.args[1], period.To())
+	})
+	for _, check := range []struct{ behavior, clause string }{
+		{behavior: "primary engine filter", clause: "r.engine = n.primary_engine"},
+		{behavior: "inclusive period start filter", clause: "r.ts >= $1"},
+		{behavior: "exclusive period end filter", clause: "r.ts < $2"},
+	} {
+		t.Run(check.behavior, func(t *testing.T) {
+			if !strings.Contains(pool.query, check.clause) {
+				t.Fatalf("summary query missing %s (%q): %s", check.behavior, check.clause, pool.query)
+			}
+		})
 	}
 }
+
+func assertPeriodSummary(t *testing.T, got, want PeriodSummary) {
+	t.Helper()
+	assertEqual(t, "period kind", got.Kind, want.Kind)
+	assertEqual(t, "owner-local start date", got.LocalDate, want.LocalDate)
+	assertEqual(t, "IANA time zone", got.Timezone, want.Timezone)
+	assertEqual(t, "inclusive UTC start", got.From, want.From)
+	assertEqual(t, "exclusive UTC end", got.To, want.To)
+}
+
+func assertNodeSummary(t *testing.T, behavior string, got, want NodeSummary) {
+	t.Helper()
+	assertEqual(t, behavior+" node ID", got.NodeID, want.NodeID)
+	assertEqual(t, behavior+" node name", got.Node, want.Node)
+	assertEqual(t, behavior+" primary engine", got.Engine, want.Engine)
+	assertEqual(t, behavior+" success count", got.Successes, want.Successes)
+	assertEqual(t, behavior+" failure count", got.Failures, want.Failures)
+	assertEqual(t, behavior+" average download", got.AvgDown, want.AvgDown)
+	assertEqual(t, behavior+" average upload", got.AvgUp, want.AvgUp)
+}
+
+func assertEqual(t *testing.T, behavior string, got, want any) {
+	t.Helper()
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("%s: got %#v, want %#v", behavior, got, want)
+	}
+}
+
+func floatPointer(value float64) *float64 { return &value }
 
 func TestAC2SummarizeReturnsExplicitEmptyNodeList(t *testing.T) {
 	period, err := NewPeriod(WeeklyPeriod, "2026-03-02", "UTC")
