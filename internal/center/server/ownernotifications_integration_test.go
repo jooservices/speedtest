@@ -84,6 +84,8 @@ func TestNotificationDeliveryFiltersIntegrationAC1AC2(t *testing.T) {
 
 	assertDeliveryFilterPage(t, get, "?event="+deliveryFilterEvent1+"&status=sent&channel=email", []string{"f0000000-0000-4000-8000-000000000001"}, 1, 1, 1)
 	assertDeliveryFilterPage(t, get, "?status=sent&channel=email", []string{"f0000000-0000-4000-8000-000000000007", "f0000000-0000-4000-8000-000000000001"}, 1, 2, 1)
+	assertDeliveryFilterPage(t, get, "?status=sent&channel=email&size=1&page=1", []string{"f0000000-0000-4000-8000-000000000007"}, 1, 2, 2)
+	assertDeliveryFilterPage(t, get, "?status=sent&channel=email&size=1&page=2", []string{"f0000000-0000-4000-8000-000000000001"}, 2, 2, 2)
 	assertDeliveryFilterPage(t, get, "?event="+deliveryFilterEvent1+"&size=2&page=1", []string{"f0000000-0000-4000-8000-000000000004", "f0000000-0000-4000-8000-000000000003"}, 1, 4, 2)
 	assertDeliveryFilterPage(t, get, "?event="+deliveryFilterEvent1+"&size=2&page=2", []string{"f0000000-0000-4000-8000-000000000002", "f0000000-0000-4000-8000-000000000001"}, 2, 4, 2)
 	assertDeliveryFilterPage(t, get, "?status=sent&size=2&page=1", []string{"f0000000-0000-4000-8000-000000000009", "f0000000-0000-4000-8000-000000000007"}, 1, 4, 2)
@@ -126,7 +128,7 @@ func TestNotificationDeliveryFiltersIntegrationAC1AC2(t *testing.T) {
 
 	response, _ := get("?event="+deliveryFilterEvent1+"&status=sent&channel=email", true)
 	body := response.Body.String()
-	for _, leaked := range []string{deliveryFilterSecret, "next_attempt_at", "payload"} {
+	for _, leaked := range []string{deliveryFilterSecret, "internal-only-marker", "privateEndpoint", "next_attempt_at", "payload"} {
 		if strings.Contains(body, leaked) {
 			t.Fatalf("delivery response exposes %q: %s", leaked, body)
 		}
@@ -179,6 +181,7 @@ func seedNotificationDeliveryFilters(t *testing.T, pool *pgxpool.Pool, ctx conte
 		{"f0000000-0000-4000-8000-000000000008", deliveryFilterEvent3, "telegram", "failed", "2026-11-01T17:00:00Z", "notification attempt failed", 3},
 		{"f0000000-0000-4000-8000-000000000009", deliveryFilterEvent4, "webhook", "sent", "2026-11-01T18:00:00Z", "", 1},
 	}
+	execute(`UPDATE alert_events SET payload=$2::jsonb WHERE id=$1::uuid`, deliveryFilterEvent1, `{"privateEndpoint":"internal-only-marker"}`)
 	for _, d := range deliveries {
 		execute(`INSERT INTO notification_deliveries(id,event_id,channel,status,attempts,created_at,last_attempt,error,next_attempt_at)
 VALUES($1,$2::uuid,$3,$4,$5,$6::timestamptz,CASE WHEN $5>0 THEN $6::timestamptz ELSE NULL END,NULLIF($7,'')::varchar,$6::timestamptz)`,
