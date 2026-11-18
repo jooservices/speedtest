@@ -274,13 +274,13 @@ var events = []Event{
 	},
 	{
 		Key: "digest.daily", Category: "digests", Title: "Daily summary",
-		Description: "Daily digest (default 08:00 owner time zone). Scheduler belongs to JOOST-79.", Enabled: true, Severity: "info",
+		Description: "Daily digest at 08:00 owner-local time for the preceding local day.", Enabled: true, Severity: "info",
 		Channels: []string{"telegram", "email"}, Placeholders: basePlaceholders(),
 		Templates: defaultTemplates("Daily summary", successBody()),
 	},
 	{
 		Key: "digest.weekly", Category: "digests", Title: "Weekly summary",
-		Description: "Weekly digest. Scheduler belongs to JOOST-79.", Enabled: true, Severity: "info",
+		Description: "Weekly digest on Monday at 08:00 owner-local time for the preceding Monday-Sunday week.", Enabled: true, Severity: "info",
 		Channels: []string{"telegram", "email"}, Placeholders: basePlaceholders(),
 		Templates: defaultTemplates("Weekly summary", successBody()),
 	},

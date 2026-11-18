@@ -33,3 +33,6 @@ successful results.
 When no node has a primary-engine result in the period, `nodes` is an empty JSON array, not
 `null`. Nodes are ordered by case-insensitive name and then ID. The summary is
 per-node; it never combines measurements from different nodes.
+
+The durable daily and weekly schedule, its owner-local 08:00 boundaries, claims,
+leases and retry state are described in [digest-schedule.md](digest-schedule.md).
