@@ -138,7 +138,10 @@ delivery to an external SMTP/HTTP provider cannot be guaranteed.
   with a `Location` such as `/api/notifications/deliveries/{id}`.
 - `GET /api/notifications/deliveries` lists recent deliveries. `page` defaults
   to 1; `size` defaults to 25 and accepts 1–100; optional `event` filters by
-  alert-event UUID. Pages are capped at 1,000,000.
+  alert-event UUID, `status` by `pending`, `sent` or `failed`, and `channel` by
+  `email`, `telegram`, `slack` or `webhook`. Filters combine and keep newest-first
+  pages and totals. Unknown values and repeated parameters return 422. Pages are
+  capped at 1,000,000.
 - `GET /api/notifications/deliveries/{id}` reads safe delivery metadata. The
   message body, credentials and internal `next_attempt_at` are not exposed.
 
