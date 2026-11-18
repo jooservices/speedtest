@@ -195,10 +195,10 @@ func assertBoundedTimestampIndexPlan(t *testing.T, plan summaryExplainNode) {
 
 func inspectSummaryPlan(node summaryExplainNode, stats *summaryPlanStats) {
 	if node.IndexName == "results_ts_idx" && node.ActualLoops > 0 &&
-		strings.Contains(node.IndexCond, "ts >=") && strings.Contains(node.IndexCond, "ts <") {
+		strings.Contains(node.IndexCond, "ts >=") && strings.Contains(node.IndexCond, "ts < ") {
 		stats.timestampIndexRead = true
 	}
-	if node.RelationName == "results" {
+	if node.RelationName == "results" || strings.HasPrefix(node.IndexName, "results_") {
 		if node.NodeType == "Seq Scan" {
 			stats.resultsSequentialScan = true
 		}
@@ -227,6 +227,30 @@ func TestSummaryPlanGuardCountsFilteredRowsAndRequiresBothTimestampBounds(t *tes
 	inspectSummaryPlan(wide, &stats)
 	if stats.timestampIndexRead {
 		t.Fatal("timestamp index missing an upper bound was accepted")
+	}
+	wide.IndexCond = "(ts >= lower_bound) AND (ts <= upper_bound)"
+	stats = summaryPlanStats{}
+	inspectSummaryPlan(wide, &stats)
+	if stats.timestampIndexRead {
+		t.Fatal("inclusive upper bound was accepted")
+	}
+	wide = summaryExplainNode{NodeType: "Bitmap Heap Scan", RelationName: "results", ActualRows: 25, ActualLoops: 1,
+		Plans: []summaryExplainNode{{NodeType: "BitmapAnd", Plans: []summaryExplainNode{
+			{NodeType: "Bitmap Index Scan", IndexName: "results_ts_idx", IndexCond: "(ts >= lower_bound) AND (ts < upper_bound)", ActualRows: 100000, ActualLoops: 1},
+			{NodeType: "Bitmap Index Scan", IndexName: "results_other_idx", ActualRows: 25, ActualLoops: 1},
+		}}},
+	}
+	stats = summaryPlanStats{}
+	inspectSummaryPlan(wide, &stats)
+	if stats.resultRowsRead <= summaryPlanReadLimit {
+		t.Fatalf("wide bitmap index scan was counted as %.0f rows", stats.resultRowsRead)
+	}
+	stats = summaryPlanStats{}
+	inspectSummaryPlan(summaryExplainNode{NodeType: "Index Scan", RelationName: "results", IndexName: "results_ts_idx",
+		IndexCond: "(ts >= lower_bound) AND (ts < upper_bound)", ActualRows: 10, ActualLoops: 3,
+		RowsRemovedByIndexRecheck: 20}, &stats)
+	if stats.resultRowsRead != 90 {
+		t.Fatalf("three index-recheck loops counted %.0f rows, want 90", stats.resultRowsRead)
 	}
 }
 
