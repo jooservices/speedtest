@@ -605,19 +605,22 @@ export function settingsSuite(T, ctx) {
         await deliveryHistory.waitForPage(1);
         assert.equal(await deliveryHistory.activePaginationName(), 'Next delivery history page', 'SC-SET-12 keyboard Previous restores focus to the available direction at the first page');
 
-        loadingGate = await deliveryHistory.blockNextList();
         await deliveryHistory.focusNext();
-        const pendingPage = deliveryHistory.enterKey();
-        await loadingGate.started;
+        loadingGate = await deliveryHistory.blockNextList();
+        await Promise.all([deliveryHistory.enterKey(), loadingGate.waitForStart()]);
         await page.getByLabel('Channel', { exact: true }).focus();
         await loadingGate.release();
-        await pendingPage;
         await deliveryHistory.waitForPage(2);
         assert.equal(await deliveryHistory.activeName(), 'Channel', 'SC-SET-12 pagination does not steal focus the owner moved during loading');
         await loadingGate.remove();
         loadingGate = null;
         await deliveryHistory.previous();
         await deliveryHistory.waitForPage(1);
+
+        loadingGate = await deliveryHistory.blockNextList();
+        await assert.rejects(loadingGate.waitForStart(50), /request did not start/i, 'SC-SET-12 a missing pagination request times out and lets the scenario clean up its route');
+        await loadingGate.remove();
+        loadingGate = null;
 
         emptyLaterHandler = async route => {
           const response = await route.fetch();

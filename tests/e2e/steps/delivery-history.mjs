@@ -57,7 +57,6 @@ export function deliveryHistorySteps(T) {
       });
     },
     async blockNextList() {
-      let started;
       let release;
       let begin;
       let unblock;
@@ -73,10 +72,18 @@ export function deliveryHistorySteps(T) {
         await route.fulfill({ response });
       };
       await page.route(routePattern, handler);
-      started = requestStarted;
       release = () => unblock();
       return {
-        started,
+        async waitForStart(timeoutMs = 10000) {
+          let timer;
+          try {
+            await Promise.race([requestStarted, new Promise((_, reject) => {
+              timer = setTimeout(() => reject(new Error('Delivery history request did not start')), timeoutMs);
+            })]);
+          } finally {
+            clearTimeout(timer);
+          }
+        },
         release,
         async remove() { release(); await page.unroute(routePattern, handler); }
       };
