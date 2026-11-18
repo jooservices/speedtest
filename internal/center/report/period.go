@@ -17,14 +17,22 @@ const (
 	WeeklyPeriod PeriodKind = "weekly"
 )
 
-// Period is an owner-local calendar period represented by UTC query bounds [From, To).
+// Period identifies an owner-local calendar period and its exact UTC membership intervals.
 type Period struct {
 	kind      PeriodKind
 	localDate string
 	timezone  string
 	from      time.Time
 	to        time.Time
+	intervals []utcInterval
 }
+
+type utcInterval struct {
+	from time.Time
+	to   time.Time
+}
+
+const timezoneSearchPadding = 36 * time.Hour
 
 // NewPeriod builds a daily period or a Monday-first Monday-to-Sunday week from an ISO local date.
 func NewPeriod(kind PeriodKind, localDate, timezone string) (Period, error) {
@@ -45,41 +53,64 @@ func NewPeriod(kind PeriodKind, localDate, timezone string) (Period, error) {
 	if err != nil {
 		return Period{}, err
 	}
-	from, exists := periodBoundary(date, location)
-	if !exists {
+	intervals := periodIntervals(date, days, location)
+	if len(intervals) == 0 {
 		return Period{}, fmt.Errorf("%w: local date does not exist in time zone", ErrInvalidPeriod)
 	}
-	to, _ := periodBoundary(date.AddDate(0, 0, days), location)
 
 	return Period{
 		kind:      kind,
 		localDate: localDate,
 		timezone:  timezone,
-		from:      from.UTC(),
-		to:        to.UTC(),
+		from:      intervals[0].from,
+		to:        intervals[len(intervals)-1].to,
+		intervals: intervals,
 	}, nil
 }
 
-func periodBoundary(date time.Time, location *time.Location) (time.Time, bool) {
-	year, month, day := date.Date()
-	approximate := time.Date(year, month, day, 0, 0, 0, 0, location)
-	low, high := -48*time.Hour, 48*time.Hour
-	for high-low > time.Nanosecond {
-		middle := low + (high-low)/2
-		candidate := approximate.Add(middle).In(location)
-		if localDate(candidate).Before(date) {
-			low = middle
-		} else {
-			high = middle
+func periodIntervals(date time.Time, days int, location *time.Location) []utcInterval {
+	localEnd := date.AddDate(0, 0, days)
+	searchStart := date.Add(-timezoneSearchPadding)
+	searchEnd := localEnd.Add(timezoneSearchPadding)
+	intervals := make([]utcInterval, 0, 2)
+	for cursor := searchStart; cursor.Before(searchEnd); {
+		localCursor := cursor.In(location)
+		_, offset := localCursor.Zone()
+		_, zoneEnd := localCursor.ZoneBounds()
+		if zoneEnd.IsZero() || zoneEnd.After(searchEnd) {
+			zoneEnd = searchEnd
 		}
+
+		utcStart := later(cursor, date.Add(-time.Duration(offset)*time.Second))
+		utcEnd := earlier(zoneEnd, localEnd.Add(-time.Duration(offset)*time.Second))
+		if utcStart.Before(utcEnd) {
+			intervals = appendUTCInterval(intervals, utcStart, utcEnd)
+		}
+		cursor = zoneEnd
 	}
-	boundary := approximate.Add(high)
-	return boundary, localDate(boundary.In(location)).Equal(date)
+	return intervals
 }
 
-func localDate(value time.Time) time.Time {
-	year, month, day := value.Date()
-	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
+func appendUTCInterval(intervals []utcInterval, from, to time.Time) []utcInterval {
+	if len(intervals) > 0 && intervals[len(intervals)-1].to.Equal(from) {
+		intervals[len(intervals)-1].to = to.UTC()
+		return intervals
+	}
+	return append(intervals, utcInterval{from: from.UTC(), to: to.UTC()})
+}
+
+func later(left, right time.Time) time.Time {
+	if left.After(right) {
+		return left
+	}
+	return right
+}
+
+func earlier(left, right time.Time) time.Time {
+	if left.Before(right) {
+		return left
+	}
+	return right
 }
 
 func periodDays(kind PeriodKind) (int, bool) {
@@ -113,8 +144,8 @@ func (p Period) LocalDate() string { return p.localDate }
 // Timezone returns the IANA time zone used to construct this period.
 func (p Period) Timezone() string { return p.timezone }
 
-// From returns the inclusive UTC start bound.
+// From returns the inclusive start of the UTC envelope containing this period's intervals.
 func (p Period) From() time.Time { return p.from }
 
-// To returns the exclusive UTC end bound.
+// To returns the exclusive end of the UTC envelope containing this period's intervals.
 func (p Period) To() time.Time { return p.to }

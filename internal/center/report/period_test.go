@@ -88,6 +88,33 @@ func TestAC1NewPeriodBuildsOwnerLocalDayAndWeekBounds(t *testing.T) {
 			to:       time.Date(2026, 3, 9, 0, 0, 0, 0, time.UTC),
 			wantSpan: 7 * 24 * time.Hour,
 		},
+		{
+			name:     "November sixth with a repeated local segment",
+			kind:     DailyPeriod,
+			date:     "2010-11-06",
+			zone:     "America/St_Johns",
+			from:     time.Date(2010, 11, 6, 2, 30, 0, 0, time.UTC),
+			to:       time.Date(2010, 11, 7, 3, 30, 0, 0, time.UTC),
+			wantSpan: 25 * time.Hour,
+		},
+		{
+			name:     "November seventh with an early and repeated date segment",
+			kind:     DailyPeriod,
+			date:     "2010-11-07",
+			zone:     "America/St_Johns",
+			from:     time.Date(2010, 11, 7, 2, 30, 0, 0, time.UTC),
+			to:       time.Date(2010, 11, 8, 3, 30, 0, 0, time.UTC),
+			wantSpan: 25 * time.Hour,
+		},
+		{
+			name:     "weekly period spanning a midnight rollback",
+			kind:     WeeklyPeriod,
+			date:     "2010-11-01",
+			zone:     "America/St_Johns",
+			from:     time.Date(2010, 11, 1, 2, 30, 0, 0, time.UTC),
+			to:       time.Date(2010, 11, 8, 3, 30, 0, 0, time.UTC),
+			wantSpan: 169 * time.Hour,
+		},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -99,6 +126,44 @@ func TestAC1NewPeriodBuildsOwnerLocalDayAndWeekBounds(t *testing.T) {
 			assertPeriodDuration(t, period, tc.wantSpan)
 			assertPeriodUTC(t, period)
 			assertPeriodIdentity(t, period, tc.kind, tc.date, tc.zone)
+		})
+	}
+}
+
+func TestAC1NewPeriodRecordsDisjointOwnerLocalDateIntervals(t *testing.T) {
+	tests := []struct {
+		date string
+		want []utcInterval
+	}{
+		{
+			date: "2010-11-06",
+			want: []utcInterval{
+				{from: time.Date(2010, 11, 6, 2, 30, 0, 0, time.UTC), to: time.Date(2010, 11, 7, 2, 30, 0, 0, time.UTC)},
+				{from: time.Date(2010, 11, 7, 2, 31, 0, 0, time.UTC), to: time.Date(2010, 11, 7, 3, 30, 0, 0, time.UTC)},
+			},
+		},
+		{
+			date: "2010-11-07",
+			want: []utcInterval{
+				{from: time.Date(2010, 11, 7, 2, 30, 0, 0, time.UTC), to: time.Date(2010, 11, 7, 2, 31, 0, 0, time.UTC)},
+				{from: time.Date(2010, 11, 7, 3, 30, 0, 0, time.UTC), to: time.Date(2010, 11, 8, 3, 30, 0, 0, time.UTC)},
+			},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.date, func(t *testing.T) {
+			period, err := NewPeriod(DailyPeriod, tc.date, "America/St_Johns")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(period.intervals) != len(tc.want) {
+				t.Fatalf("UTC interval count = %d, want %d: %+v", len(period.intervals), len(tc.want), period.intervals)
+			}
+			for index, want := range tc.want {
+				if !period.intervals[index].from.Equal(want.from) || !period.intervals[index].to.Equal(want.to) {
+					t.Errorf("UTC interval %d = [%s, %s), want [%s, %s)", index, period.intervals[index].from, period.intervals[index].to, want.from, want.to)
+				}
+			}
 		})
 	}
 }
