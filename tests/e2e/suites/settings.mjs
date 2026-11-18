@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import { request as apiRequest } from 'playwright';
 import { join } from 'node:path';
+import { deliveryHistorySteps } from '../steps/delivery-history.mjs';
 
 function localizedBytes(value) {
   const units = ['B', 'KB', 'MB', 'GB'];
@@ -51,6 +52,7 @@ async function checkLocationSettingsLayout(page, assert) {
 export function settingsSuite(T, ctx) {
   const { page, assert } = T;
   const { receiver } = ctx;
+  const deliveryHistory = deliveryHistorySteps(T);
   const setting = title => page.locator('.setting').filter({ hasText: title });
   async function startBearerInstallationStream(raw, tokenID) {
     const jobID = '10000000-0000-4000-8000-000000000087';
@@ -548,6 +550,99 @@ export function settingsSuite(T, ctx) {
       const refused = await T.api('/api/audit?action=' + 'a'.repeat(61));
       assert.equal(refused.status, 422);
       T.expectRefusal(422);
+    },
+
+    // Delivery history reads the authenticated list endpoint and exposes only safe delivery metadata.
+    async deliveryHistory() {
+      deliveryHistory.seed();
+      let loadingGate, removeFailure, injectedMarkup;
+      const originalTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme') || 'dark');
+      try {
+        loadingGate = await deliveryHistory.blockNextList();
+        await deliveryHistory.open();
+        await loadingGate.started;
+        await deliveryHistory.loadingState().waitFor();
+        assert.match(await deliveryHistory.loadingState().innerText(), /Loading delivery history/);
+        assert.equal(await deliveryHistory.statusDisabled(), 'true', 'filters expose their loading state accessibly');
+        await loadingGate.release();
+        await page.getByText('safe failure detail 12', { exact: true }).waitFor();
+        assert.equal(await deliveryHistory.statusDisabled(), 'false', 'filters become available after loading');
+        await deliveryHistory.waitForPage(1);
+        assert.equal(await deliveryHistory.rows().count(), 11, 'page one shows ten deliveries plus its header');
+        assert.match(await deliveryHistory.rows().nth(1).innerText(), /safe failure detail 12/, 'newest delivery appears first');
+        assert.match(await deliveryHistory.rows().nth(2).innerText(), /safe failure detail 11/, 'the next newest delivery follows');
+
+        await deliveryHistory.focusStatus();
+        await deliveryHistory.tabKey();
+        assert.equal(await deliveryHistory.activeName(), 'Channel', 'Tab moves from Status to Channel');
+        await deliveryHistory.tabKey();
+        assert.equal(await deliveryHistory.activeName(), 'Delivery history table', 'Tab reaches the named, scrollable table region');
+        await deliveryHistory.tabKey();
+        assert.equal(await deliveryHistory.activeName(), 'Next delivery history page', 'Tab reaches pagination');
+        await deliveryHistory.enterKey();
+        await deliveryHistory.waitForPage(2);
+        assert.ok(await deliveryHistory.rows().count() >= 3, 'page two contains the remaining fixtures and its header');
+        assert.match(await deliveryHistory.rows().nth(1).innerText(), /Telegram/, 'older page starts with its newest remaining delivery');
+        assert.match(await deliveryHistory.rows().nth(2).innerText(), /Slack/);
+
+        await deliveryHistory.previous();
+        await deliveryHistory.waitForPage(1);
+        await deliveryHistory.status('failed');
+        await page.getByText('safe failure detail 12', { exact: true }).waitFor();
+        assert.equal(await deliveryHistory.rows().count(), 7, 'the failed filter shows all six failures');
+        await deliveryHistory.channel('email');
+        await page.getByText('safe failure detail 11', { exact: true }).waitFor();
+        assert.equal(await deliveryHistory.rows().count(), 3, 'status and channel filters combine');
+        await deliveryHistory.status('pending');
+        await deliveryHistory.channel('email');
+        await page.getByText('No deliveries match these filters', { exact: true }).waitFor();
+        assert.equal(await page.getByTestId('delivery-history-results').getByRole('table').count(), 0, 'an empty filter result has no stale table');
+        await deliveryHistory.clearFilters();
+        await page.getByText('safe failure detail 12', { exact: true }).waitFor();
+
+        removeFailure = await deliveryHistory.failNextList();
+        await deliveryHistory.status('failed');
+        const requestError = await page.getByRole('alert').innerText();
+        assert.match(requestError, /Could not load delivery history/);
+        for (const secret of ['provider response canary', 'message body canary', 'destination-secret-canary']) {
+          assert.ok(!requestError.includes(secret), `the request-error state hides ${secret}`);
+        }
+        T.expectRefusal(500);
+        await removeFailure();
+        removeFailure = null;
+        await deliveryHistory.retry();
+        await deliveryHistory.waitForPage(1);
+        assert.equal(await deliveryHistory.rows().count(), 7, 'retry restores the six failed deliveries');
+
+        injectedMarkup = await deliveryHistory.injectMarkupIntoNextFailure();
+        await deliveryHistory.channel('email');
+        await page.getByText(injectedMarkup.markup, { exact: true }).waitFor();
+        assert.equal(await page.locator('img[data-delivery-injected="true"]').count(), 0, 'failure detail is rendered as text, not markup');
+        await injectedMarkup.remove();
+        injectedMarkup = null;
+        await deliveryHistory.status('');
+        await deliveryHistory.channel('');
+        await page.getByText('safe failure detail 12', { exact: true }).waitFor();
+
+        for (const theme of ['dark', 'light']) {
+          await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
+          for (const width of [390, 768]) {
+            await deliveryHistory.setViewport(width);
+            await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+            const layout = await deliveryHistory.layout();
+            assert.ok(layout.pageOverflow <= 1, `${theme} layout overflows the ${width}px viewport by ${layout.pageOverflow}px`);
+            assert.deepEqual(layout.overflow, [], `${theme} delivery history content overflows at ${width}px`);
+            if (width === 390) assert.equal(layout.tableDisplay, 'block', 'the table becomes stacked cards on a phone');
+          }
+        }
+      } finally {
+        if (loadingGate) await loadingGate.remove();
+        if (removeFailure) await removeFailure();
+        if (injectedMarkup) await injectedMarkup.remove();
+        await deliveryHistory.restoreViewport();
+        await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), originalTheme);
+        deliveryHistory.cleanup();
+      }
     },
 
     // Access: the enrolment key is shown once; the dashboard address is editable.

@@ -14,7 +14,7 @@
     var timestamp = typeof value === 'string' ? Date.parse(value) : NaN;
     return Number.isFinite(timestamp) ? F.date(timestamp, 'full') : '—';
   }
-  function channelName(value) { return CHANNELS[value] || 'Other'; }
+  function channelName(value) { return Object.prototype.hasOwnProperty.call(CHANNELS, value) ? CHANNELS[value] : 'Other'; }
   function attemptCount(value) { return Number.isInteger(value) && value >= 0 ? F.num(value) : '—'; }
   function failureDetail(delivery) {
     if (!delivery || delivery.status !== 'failed') return '—';
@@ -22,7 +22,7 @@
   }
   function rowView(delivery) {
     delivery = delivery || {};
-    var status = STATUSES[delivery.status] || { label: 'Unknown', kind: 'warn' };
+    var status = Object.prototype.hasOwnProperty.call(STATUSES, delivery.status) ? STATUSES[delivery.status] : { label: 'Unknown', kind: 'warn' };
     return {
       when: deliveryTime(delivery.createdAt),
       channel: channelName(delivery.channel),
@@ -35,7 +35,7 @@
 
   function mount(root) {
     var U = ST.ui, h = U.h;
-    var state = { page: 1, status: '', channel: '', rows: [], pagination: { current_page: 1, per_page: PAGE_SIZE, total: 0, last_page: 1 }, loading: false, error: false, reload: false };
+    var state = { page: 1, status: '', channel: '', rows: [], pagination: { current_page: 1, per_page: PAGE_SIZE, total: 0, last_page: 1 }, loading: false, error: false };
     var results = h('div', { id: 'delivery-history-results', 'aria-busy': 'true', 'data-testid': 'delivery-history-results' });
     var pageStatus = h('span', { class: 'hint', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' });
     var previous = U.btn('Previous', { size: 'sm', aria: 'Previous delivery history page', onClick: function () { changePage(state.page - 1); } });
@@ -63,6 +63,8 @@
     function render() {
       U.clear(results);
       results.setAttribute('aria-busy', state.loading ? 'true' : 'false');
+      statusSelect.setAttribute('aria-disabled', state.loading ? 'true' : 'false');
+      channelSelect.setAttribute('aria-disabled', state.loading ? 'true' : 'false');
       previous.disabled = state.loading || state.page <= 1;
       next.disabled = state.loading || state.page >= state.pagination.last_page;
       pageStatus.textContent = state.loading
@@ -105,22 +107,15 @@
       return ST.api.deliveries.list({ page: state.page, size: PAGE_SIZE, status: state.status, channel: state.channel });
     }
     function load() {
-      if (state.loading) { state.reload = true; render(); return Promise.resolve(); }
+      if (state.loading) return Promise.resolve();
       state.loading = true;
       state.error = false;
       render();
       return request().then(function (response) {
-        if (state.reload) return;
         state.rows = response.data;
         state.pagination = response.meta.pagination;
-      }, function () {
-        if (!state.reload) state.error = true;
-      }).then(function () {
+      }, function () { state.error = true; }).then(function () {
         state.loading = false;
-        if (state.reload) {
-          state.reload = false;
-          return load();
-        }
         render();
       });
     }
@@ -130,11 +125,13 @@
       load();
     }
     function changeStatus(value) {
+      if (state.loading) { statusSelect.value = state.status; return; }
       state.status = value;
       state.page = 1;
       load();
     }
     function changeChannel(value) {
+      if (state.loading) { channelSelect.value = state.channel; return; }
       state.channel = value;
       state.page = 1;
       load();

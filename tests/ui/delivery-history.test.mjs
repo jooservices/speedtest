@@ -34,7 +34,7 @@ test('AC1 delivery history row view formats sent and failed metadata without unr
 
 test('AC2 delivery history row view handles unknown or malformed metadata and bounds failure text', () => {
   const rowView = deliveryView();
-  const unknown = rowView({ channel: 'unrecognized', status: 'unexpected', attempts: -1, createdAt: 'invalid', error: 'ignored' });
+  const unknown = rowView({ channel: 'constructor', status: 'toString', attempts: -1, createdAt: 'invalid', error: 'ignored' });
   assert.deepEqual({ when: unknown.when, channel: unknown.channel, statusLabel: unknown.statusLabel, attempts: unknown.attempts, detail: unknown.detail }, {
     when: '—', channel: 'Other', statusLabel: 'Unknown', attempts: '—', detail: '—'
   });
