@@ -47,6 +47,10 @@ export function deliveryHistorySteps(T) {
     async activePaginationName() {
       return page.evaluate(() => document.activeElement.getAttribute('aria-label'));
     },
+    async waitForPaginationFocus(name) {
+      await page.waitForFunction(expected => document.activeElement?.getAttribute('aria-label') === expected,
+        name, { timeout: 5000 });
+    },
     async retryFocused() {
       return page.getByRole('button', { name: 'Retry' }).evaluate(element => element === document.activeElement);
     },
