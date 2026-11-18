@@ -93,6 +93,10 @@
         return;
       }
       if (!state.rows.length) {
+        if (state.page > 1) {
+          results.appendChild(U.empty('No deliveries on this page', 'Choose Previous to see the remaining deliveries.'));
+          return;
+        }
         var filtered = Boolean(state.status || state.channel);
         results.appendChild(U.empty(
           filtered ? 'No deliveries match these filters' : 'No deliveries recorded yet',
@@ -138,8 +142,11 @@
     }
     function changePage(page, activatedButton) {
       if (state.loading || page < 1 || page > state.pagination.last_page) return;
+      var restoreFocus = document.activeElement === activatedButton;
       state.page = page;
       return load().then(function () {
+        if (!restoreFocus || !root.isConnected ||
+            (document.activeElement !== document.body && document.activeElement !== activatedButton)) return;
         if (state.error) {
           results.querySelector('button').focus();
           return;

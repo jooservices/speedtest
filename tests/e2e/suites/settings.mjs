@@ -555,7 +555,7 @@ export function settingsSuite(T, ctx) {
     // Delivery history reads the authenticated list endpoint and exposes only safe delivery metadata.
     async deliveryHistory() {
       deliveryHistory.seed();
-      let loadingGate, removeFailure, injectedMarkup;
+      let loadingGate, removeFailure, injectedMarkup, emptyLaterHandler;
       const originalTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme') || 'dark');
       try {
         removeFailure = await deliveryHistory.failNextList();
@@ -574,8 +574,7 @@ export function settingsSuite(T, ctx) {
         removeFailure = null;
         loadingGate = await deliveryHistory.blockNextList();
         const retryRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/api/notifications/deliveries', { timeout: 10000 });
-        await deliveryHistory.retry();
-        await retryRequest;
+        await Promise.all([deliveryHistory.retry(), retryRequest]);
         await deliveryHistory.loadingState().waitFor();
         assert.match(await deliveryHistory.loadingState().innerText(), /Loading delivery history/);
         assert.equal(await deliveryHistory.statusDisabled(), 'true', 'filters expose their loading state accessibly');
@@ -605,6 +604,37 @@ export function settingsSuite(T, ctx) {
         await deliveryHistory.enterKey();
         await deliveryHistory.waitForPage(1);
         assert.equal(await deliveryHistory.activePaginationName(), 'Next delivery history page', 'SC-SET-12 keyboard Previous restores focus to the available direction at the first page');
+
+        loadingGate = await deliveryHistory.blockNextList();
+        await deliveryHistory.focusNext();
+        const pendingPage = deliveryHistory.enterKey();
+        await loadingGate.started;
+        await page.getByLabel('Channel', { exact: true }).focus();
+        await loadingGate.release();
+        await pendingPage;
+        await deliveryHistory.waitForPage(2);
+        assert.equal(await deliveryHistory.activeName(), 'Channel', 'SC-SET-12 pagination does not steal focus the owner moved during loading');
+        await loadingGate.remove();
+        loadingGate = null;
+        await deliveryHistory.previous();
+        await deliveryHistory.waitForPage(1);
+
+        emptyLaterHandler = async route => {
+          const response = await route.fetch();
+          const body = await response.json();
+          if (new URL(route.request().url()).searchParams.get('page') === '2') body.data = [];
+          await route.fulfill({ response, body: JSON.stringify(body) });
+        };
+        await page.route('**/api/notifications/deliveries**', emptyLaterHandler);
+        await deliveryHistory.focusNext();
+        await deliveryHistory.enterKey();
+        await page.getByText('No deliveries on this page', { exact: true }).waitFor();
+        assert.equal(await page.getByText('No deliveries match these filters', { exact: true }).count(), 0, 'SC-SET-12 a count/row race does not claim that all filtered deliveries disappeared');
+        await deliveryHistory.previous();
+        await deliveryHistory.waitForPage(1);
+        await page.unroute('**/api/notifications/deliveries**', emptyLaterHandler);
+        emptyLaterHandler = null;
+
         await deliveryHistory.status('failed');
         await page.getByText('safe failure detail 12', { exact: true }).waitFor();
         assert.equal(await deliveryHistory.rows().count(), 7, 'the failed filter shows all six failures');
@@ -657,8 +687,8 @@ export function settingsSuite(T, ctx) {
         const failedPageRequests = removeFailure.requests;
         removeFailure = null;
         const pageRetryRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/api/notifications/deliveries', { timeout: 10000 });
-        await deliveryHistory.retry();
-        const retryURL = new URL((await pageRetryRequest).url());
+        const [, retriedRequest] = await Promise.all([deliveryHistory.retry(), pageRetryRequest]);
+        const retryURL = new URL(retriedRequest.url());
         await deliveryHistory.waitForPage(2);
         assert.equal(failedPageRequests.at(-1).searchParams.get('page'), '2', 'SC-SET-12 failed page request used page two');
         assert.equal(retryURL.searchParams.get('page'), '2', 'SC-SET-12 Retry requests the selected page');
@@ -690,7 +720,8 @@ export function settingsSuite(T, ctx) {
         }
         await deliveryHistory.restoreViewport();
         T.db("DELETE FROM notification_deliveries WHERE id::text IN ('d1260000-0000-4000-8000-000000000001', 'd1260000-0000-4000-8000-000000000002', 'd1260000-0000-4000-8000-000000000003', 'd1260000-0000-4000-8000-000000000004')");
-        assert.ok(Number(T.db('SELECT count(*) FROM notification_deliveries')) <= 10, 'the fixture now fits on one page before requesting old page two');
+        const remaining = Number(T.db('SELECT count(*) FROM notification_deliveries'));
+        assert.ok(remaining > 0 && remaining <= 10, 'the fixture now fits on one page before requesting old page two');
         const outOfRangeRequest = page.waitForRequest(request => {
           const url = new URL(request.url());
           return url.pathname === '/api/notifications/deliveries' && url.searchParams.get('page') === '2';
@@ -700,16 +731,15 @@ export function settingsSuite(T, ctx) {
           return url.pathname === '/api/notifications/deliveries' && url.searchParams.get('page') === '1';
         }, { timeout: 10000 });
         await deliveryHistory.focusNext();
-        await deliveryHistory.enterKey();
-        await outOfRangeRequest;
-        await clampedRequest;
+        await Promise.all([deliveryHistory.enterKey(), outOfRangeRequest, clampedRequest]);
         await deliveryHistory.waitForPage(1);
-        assert.equal(await deliveryHistory.rows().count(), 11, 'a page beyond the new last page reloads the valid page');
+        assert.equal(await deliveryHistory.rows().count(), remaining + 1, 'a page beyond the new last page reloads every remaining delivery plus the table header');
         assert.equal(await deliveryHistory.activeName(), 'Status', 'clamping to one page restores focus to an enabled filter');
       } finally {
         if (loadingGate) await loadingGate.remove();
         if (removeFailure) await removeFailure();
         if (injectedMarkup) await injectedMarkup.remove();
+        if (emptyLaterHandler) await page.unroute('**/api/notifications/deliveries**', emptyLaterHandler);
         await deliveryHistory.restoreViewport();
         await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), originalTheme);
         deliveryHistory.cleanup();
