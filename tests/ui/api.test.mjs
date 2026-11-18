@@ -19,6 +19,57 @@ test('JSON, session cookie policy, CSRF, ETag and stable idempotency key', async
   assert.deepEqual(req.body, { name: 'test', expectedDown: 100, expectedUp: 50 });
   assert.equal(control.requests.at(-2).path, '/api/auth/me');
 });
+test('AC1 delivery history client sends status, channel and paging through the same-origin session transport', async () => {
+  const requests = [];
+  const pagination = { current_page: 2, per_page: 5, total: 8, last_page: 2 };
+  const ST = runtime('http://center.test', { apiOnly: true, fetch: async (url, init) => {
+    requests.push({ url: new URL(url), init });
+    return Response.json(envelope([], { pagination }));
+  } }).ST;
+
+  const result = await ST.api.deliveries.list({ page: 2, size: 5, status: 'failed', channel: 'telegram' });
+
+  assert.deepEqual(result.meta.pagination, pagination);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].url.pathname, '/api/notifications/deliveries');
+  assert.deepEqual(Object.fromEntries(requests[0].url.searchParams), {
+    page: '2', size: '5', status: 'failed', channel: 'telegram'
+  });
+  assert.equal(requests[0].init.credentials, 'same-origin');
+  assert.equal(requests[0].init.headers.get('accept'), 'application/json');
+});
+test('AC1 delivery history client defaults paging and rejects invalid filters or pagination', async () => {
+  const requests = [];
+  const ST = runtime('http://center.test', { apiOnly: true, fetch: async (url, init) => {
+    requests.push({ url: new URL(url), init });
+    return Response.json(envelope([], { pagination: { current_page: 1, per_page: 10, total: 0, last_page: 1 } }));
+  } }).ST;
+
+  await ST.api.deliveries.list();
+  assert.deepEqual(Object.fromEntries(requests[0].url.searchParams), { page: '1', size: '10' });
+  for (const filters of [
+    { page: 0 }, { page: 1000001 }, { page: 1.5 }, { size: 0 }, { size: 101 }, { size: 2.5 },
+    { status: 'all' }, { channel: 'sms' }
+  ]) {
+    await assert.rejects(ST.api.deliveries.list(filters), /Invalid delivery history/);
+  }
+  assert.equal(requests.length, 1, 'invalid filters are rejected before a request is sent');
+
+  const invalidPages = [
+    envelope({}, { pagination: { current_page: 1, per_page: 10, total: 0, last_page: 1 } }),
+    envelope([], {}),
+    envelope([], { pagination: { current_page: 2, per_page: 10, total: 1, last_page: 1 } }),
+    envelope([], { pagination: { current_page: 1, per_page: 9, total: 0, last_page: 1 } }),
+    envelope([], { pagination: { current_page: 1, per_page: 10, total: 0.5, last_page: 1 } }),
+    envelope([], { pagination: { current_page: 1, per_page: 10, total: -1, last_page: 1 } }),
+    envelope([], { pagination: { current_page: 1, per_page: 10, total: 0, last_page: 1.5 } }),
+    envelope([], { pagination: { current_page: 1, per_page: 10, total: 0, last_page: 0 } })
+  ];
+  for (const body of invalidPages) {
+    const malformed = runtime('http://center.test', { apiOnly: true, fetch: async () => Response.json(body) }).ST;
+    await assert.rejects(malformed.api.deliveries.list({ page: 1 }), /Invalid delivery history pagination/);
+  }
+});
 test('errors preserve RFC problem status, fields and rate limit without replaying writes', async t => {
   const { ST, control } = await setup(t);
   await ST.api.session();

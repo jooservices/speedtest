@@ -160,6 +160,7 @@ var uiRoutes = map[string]bool{
 	"/assets/js/pages/dashboard.js":                    true,
 	"/assets/js/pages/stats.js":                        true,
 	"/assets/js/pages/settings.js":                     true,
+	"/assets/js/pages/delivery-history.js":             true,
 	"/assets/js/pages/bandwidth.js":                    true,
 	"/assets/js/pages/isps.js":                         true,
 	"/assets/vendor/leaflet/LICENSE":                   true,
