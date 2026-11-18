@@ -90,12 +90,13 @@ func TestAC1DigestAverageFormattingHandlesMissingAndNonFiniteValues(t *testing.T
 			{Node: "missing", AvgDown: nil, AvgUp: &nan},
 			{Node: "infinite", AvgDown: &infinity, AvgUp: &average},
 			{Node: "", AvgDown: &average, AvgUp: &average},
+			{Node: "single", Successes: 1, AvgDown: &average, AvgUp: &average},
 		},
 	}, "https://speedtest.example.test")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"avg down n/a, avg up n/a", "avg down n/a, avg up 0.00 Mbps", "Unnamed node"} {
+	for _, want := range []string{"avg down n/a, avg up n/a", "avg down n/a, avg up 0.00 Mbps", "Unnamed node", "single — 1 test:"} {
 		if !strings.Contains(got.Summary, want) {
 			t.Errorf("summary %q does not contain %q", got.Summary, want)
 		}

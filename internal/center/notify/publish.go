@@ -59,6 +59,10 @@ func (s *Store) PublishEventTx(ctx context.Context, tx pgx.Tx, key, nodeID strin
 }
 
 func (s *Store) publishEventTx(ctx context.Context, tx pgx.Tx, key, nodeID string, payload map[string]string, ts time.Time, exclude string) (bool, error) {
+	return s.publishEventTxWithChannelFilter(ctx, tx, key, nodeID, payload, ts, exclude, nil)
+}
+
+func (s *Store) publishEventTxWithChannelFilter(ctx context.Context, tx pgx.Tx, key, nodeID string, payload map[string]string, ts time.Time, exclude string, allowedChannels []string) (bool, error) {
 	_, ok := catalog.LookupEvent(key)
 	if !ok {
 		return false, ErrEventNotFound
@@ -85,6 +89,12 @@ func (s *Store) publishEventTx(ctx context.Context, tx pgx.Tx, key, nodeID strin
 	data, err := buildEventPayload(ctx, tx, event, nodeID, payload, ts)
 	if err != nil {
 		return false, err
+	}
+	if event.Enabled && allowedChannels != nil {
+		event.Channels, err = configuredChannels(ctx, s, tx, event.Channels, allowedChannels)
+		if err != nil {
+			return false, err
+		}
 	}
 	channels, send, err := s.eventDelivery(ctx, tx, event, key, nodeID, data, ts, exclude)
 	if err != nil {

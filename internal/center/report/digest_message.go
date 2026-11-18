@@ -61,8 +61,12 @@ func formatDigestNode(node NodeSummary) string {
 		name = "Unnamed node"
 	}
 	tests := node.Successes + node.Failures
-	return fmt.Sprintf("%s — %d tests: %d successful, %d failed; avg down %s, avg up %s",
-		name, tests, node.Successes, node.Failures, formatDigestAverage(node.AvgDown), formatDigestAverage(node.AvgUp))
+	countLabel := "tests"
+	if tests == 1 {
+		countLabel = "test"
+	}
+	return fmt.Sprintf("%s — %d %s: %d successful, %d failed; avg down %s, avg up %s",
+		name, tests, countLabel, node.Successes, node.Failures, formatDigestAverage(node.AvgDown), formatDigestAverage(node.AvgUp))
 }
 
 func formatDigestAverage(value *float64) string {
