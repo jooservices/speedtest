@@ -689,14 +689,23 @@ export function settingsSuite(T, ctx) {
           }
         }
         await deliveryHistory.restoreViewport();
+        T.db("DELETE FROM notification_deliveries WHERE id::text IN ('d1260000-0000-4000-8000-000000000001', 'd1260000-0000-4000-8000-000000000002', 'd1260000-0000-4000-8000-000000000003', 'd1260000-0000-4000-8000-000000000004')");
+        assert.ok(Number(T.db('SELECT count(*) FROM notification_deliveries')) <= 10, 'the fixture now fits on one page before requesting old page two');
+        const outOfRangeRequest = page.waitForRequest(request => {
+          const url = new URL(request.url());
+          return url.pathname === '/api/notifications/deliveries' && url.searchParams.get('page') === '2';
+        }, { timeout: 10000 });
+        const clampedRequest = page.waitForRequest(request => {
+          const url = new URL(request.url());
+          return url.pathname === '/api/notifications/deliveries' && url.searchParams.get('page') === '1';
+        }, { timeout: 10000 });
         await deliveryHistory.focusNext();
         await deliveryHistory.enterKey();
-        await deliveryHistory.waitForPage(2);
-        T.db("DELETE FROM notification_deliveries WHERE id::text IN ('d1260000-0000-4000-8000-000000000001', 'd1260000-0000-4000-8000-000000000002')");
-        await T.tab('Notifications');
-        await T.tab('Delivery history');
+        await outOfRangeRequest;
+        await clampedRequest;
         await deliveryHistory.waitForPage(1);
         assert.equal(await deliveryHistory.rows().count(), 11, 'a page beyond the new last page reloads the valid page');
+        assert.equal(await deliveryHistory.activeName(), 'Status', 'clamping to one page restores focus to an enabled filter');
       } finally {
         if (loadingGate) await loadingGate.remove();
         if (removeFailure) await removeFailure();

@@ -147,6 +147,7 @@
         var focusTarget = activatedButton.disabled
           ? (activatedButton === previous ? next : previous)
           : activatedButton;
+        if (focusTarget.disabled) focusTarget = statusSelect;
         focusTarget.focus();
       });
     }
