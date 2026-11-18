@@ -68,22 +68,30 @@ period's digest, not as a second digest for the completed period.
 
 ## Message and delivery
 
-Daily and weekly messages include each node's successful and failed test counts
-and average download and upload speeds. Node names are rendered on one line.
-Populated periods include a dashboard link built from the configured
-`SPEEDTEST_PUBLIC_URL`; only absolute HTTP or HTTPS URLs without credentials,
-query strings or fragments are accepted. The link points to `/#/`, the UI's
-dashboard route.
-Empty periods say that no speed test results were recorded and do not require a
-dashboard link.
+Daily and weekly e-mail messages include each node's successful and failed test
+counts and average download and upload speeds. Node names are rendered on one
+line. Populated periods use the transaction's `Settings.CenterURL` value to
+build the dashboard link. Only absolute HTTP or HTTPS base URLs without
+credentials, query strings or fragments, and with a generated link no longer
+than 512 characters, are accepted. The link points to `/#/`, the UI's dashboard
+route. Empty periods say that no speed test results were recorded and do not
+require a dashboard link.
 
-Digest templates support `{period}`, `{summary}` and `{link}`. Telegram renders
-dynamic values as escaped HTML; e-mail renders plain text. The event's selected
-channels are intersected with enabled, configured Telegram and e-mail
-destinations. Disabled digest events or channels create no delivery. The period
-completion marker and any outbox rows commit together, so a late result cannot
-requeue a completed period. A populated period cannot complete if its dashboard
-URL is missing or invalid; it is retried on the normal five-minute schedule.
+Eligibility is checked before the summary is formatted. Disabled digest events,
+periods without an enabled configured Telegram or e-mail destination, and
+populated periods without a valid dashboard URL complete silently without an
+event or outbox row. This avoids retrying permanent settings errors. Successful
+event/outbox creation and the period completion marker commit together, so a
+late result or later settings change cannot requeue a completed period.
+
+Digest templates support `{period}`, `{summary}` and `{link}`. E-mail receives
+the complete per-node counts and averages. Telegram receives node/test count
+totals and an explicit dashboard continuation; it stays within the Bot API's
+4096-character `sendMessage` limit after rendering. If an owner template would
+exceed the limit, one bounded aggregate/dashboard message is sent instead. A
+single outbox delivery still makes only one Telegram `sendMessage` attempt, so
+partial multi-message success cannot duplicate part of a digest on retry.
+Telegram dynamic values are HTML-escaped; e-mail renders plain text.
 
 Integration coverage checks enabled and disabled destinations, populated and
 empty summaries, outbox dispatch after scheduler restart, and a late result for

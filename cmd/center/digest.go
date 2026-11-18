@@ -36,7 +36,8 @@ func newDigestScheduler(database report.DigestDB, notifications *notify.Store, l
 					return nil, false, err
 				}
 				return map[string]string{
-					"period": message.Period, "summary": message.Summary, "link": message.Link,
+					"period": message.Period, "summary": message.Summary,
+					"telegram_summary": message.TelegramSummary, "link": message.Link,
 				}, true, nil
 			})
 		},

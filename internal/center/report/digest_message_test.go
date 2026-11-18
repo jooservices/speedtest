@@ -2,6 +2,7 @@ package report
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"strings"
 	"testing"
@@ -35,6 +36,42 @@ func TestAC1FormatDailyDigestIncludesNodeCountsAveragesAndDashboardRoute(t *test
 	}
 	if got.Link != "https://speedtest.example.test/#/" {
 		t.Errorf("dashboard link = %q", got.Link)
+	}
+}
+
+func TestAC1FormatDigestRetainsFullEmailDetailAndBuildsTelegramAggregate(t *testing.T) {
+	const nodeCount = 160
+	down, up := 125.25, 22.5
+	nodes := make([]NodeSummary, 0, nodeCount)
+	for i := range nodeCount {
+		nodes = append(nodes, NodeSummary{
+			Node:      fmt.Sprintf("router-%03d-%s", i, strings.Repeat("long&name", 8)),
+			Successes: 2, Failures: 1, AvgDown: &down, AvgUp: &up,
+		})
+	}
+	message, err := FormatDigest(PeriodSummary{
+		Kind: DailyPeriod, LocalDate: "2026-11-17", Timezone: "UTC", Nodes: nodes,
+	}, "https://speedtest.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(message.Summary, nodes[0].Node) || !strings.Contains(message.Summary, nodes[len(nodes)-1].Node) {
+		t.Fatal("full digest summary omitted per-node details")
+	}
+	if !strings.Contains(message.Summary, "avg down 125.25 Mbps, avg up 22.50 Mbps") {
+		t.Fatal("full digest summary omitted per-node averages")
+	}
+	if !strings.Contains(message.TelegramSummary, "160 nodes, 480 tests: 320 successful, 160 failed") {
+		t.Fatalf("Telegram aggregate = %q", message.TelegramSummary)
+	}
+	if !strings.Contains(message.TelegramSummary, "Per-node counts and averages continue in the dashboard") {
+		t.Fatalf("Telegram continuation is missing: %q", message.TelegramSummary)
+	}
+	if strings.Contains(message.TelegramSummary, nodes[0].Node) || strings.Contains(message.TelegramSummary, nodes[len(nodes)-1].Node) {
+		t.Fatal("Telegram aggregate contains user-controlled node names")
+	}
+	if len(message.Summary) <= 4096 {
+		t.Fatalf("test fixture summary has only %d bytes; want a realistic oversized digest", len(message.Summary))
 	}
 }
 
@@ -74,7 +111,10 @@ func TestAC1FormatDigestRejectsInvalidPeriodAndUnsafeDashboardURL(t *testing.T) 
 		{name: "missing host", data: valid, url: "https:///dashboard", want: ErrInvalidDashboardURL},
 		{name: "URL credentials", data: valid, url: "https://owner:secret@speedtest.example.test", want: ErrInvalidDashboardURL},
 		{name: "query string", data: valid, url: "https://speedtest.example.test?next=other", want: ErrInvalidDashboardURL},
+		{name: "empty query", data: valid, url: "https://speedtest.example.test?", want: ErrInvalidDashboardURL},
 		{name: "fragment", data: valid, url: "https://speedtest.example.test/#/alerts", want: ErrInvalidDashboardURL},
+		{name: "empty fragment", data: valid, url: "https://speedtest.example.test/#", want: ErrInvalidDashboardURL},
+		{name: "overlong dashboard URL", data: valid, url: "https://speedtest.example.test/" + strings.Repeat("x", 600), want: ErrInvalidDashboardURL},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := FormatDigest(test.data, test.url); err == nil {
@@ -83,6 +123,26 @@ func TestAC1FormatDigestRejectsInvalidPeriodAndUnsafeDashboardURL(t *testing.T) 
 				t.Fatalf("FormatDigest() error = %v, want %v", err, test.want)
 			}
 		})
+	}
+}
+
+func TestAC1DashboardLinkMustMatchConfiguredCenterURL(t *testing.T) {
+	for _, test := range []struct {
+		baseURL string
+		link    string
+		want    bool
+	}{
+		{baseURL: "https://speedtest.example.test", link: "https://speedtest.example.test/#/", want: true},
+		{baseURL: "http://speedtest.example.test/center/", link: "http://speedtest.example.test/center/#/", want: true},
+		{baseURL: "https://speedtest.example.test", link: "https://speedtest.example.test/#/alerts"},
+		{baseURL: "https://speedtest.example.test", link: "https://owner:secret@speedtest.example.test/#/"},
+		{baseURL: "https://speedtest.example.test", link: "https://attacker.example/#/"},
+		{baseURL: "https://owner:secret@speedtest.example.test", link: "https://owner:secret@speedtest.example.test/#/"},
+		{baseURL: "https://speedtest.example.test?next=other", link: "https://speedtest.example.test?next=other/#/"},
+	} {
+		if got := IsDashboardLinkFor(test.baseURL, test.link); got != test.want {
+			t.Errorf("IsDashboardLinkFor(%q, %q) = %t, want %t", test.baseURL, test.link, got, test.want)
+		}
 	}
 }
 

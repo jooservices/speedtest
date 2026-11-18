@@ -7,7 +7,10 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
+
+const maxDashboardLinkRunes = 512
 
 // ErrInvalidDashboardURL marks permanent configuration input that cannot be
 // repaired by retrying the same claimed digest period.
@@ -15,9 +18,10 @@ var ErrInvalidDashboardURL = errors.New("invalid dashboard URL")
 
 // DigestMessage contains the safe dynamic fields used by daily and weekly notification templates.
 type DigestMessage struct {
-	Period  string
-	Summary string
-	Link    string
+	Period          string
+	Summary         string
+	TelegramSummary string
+	Link            string
 }
 
 // FormatDigest builds an owner-local period label and one line per summarized node.
@@ -30,6 +34,7 @@ func FormatDigest(summary PeriodSummary, dashboardBaseURL string) (DigestMessage
 	message := DigestMessage{Period: period}
 	if len(summary.Nodes) == 0 {
 		message.Summary = "No speed test results were recorded for this period."
+		message.TelegramSummary = message.Summary
 		return message, nil
 	}
 	message.Link, err = safeDashboardLink(dashboardBaseURL)
@@ -41,7 +46,25 @@ func FormatDigest(summary PeriodSummary, dashboardBaseURL string) (DigestMessage
 		lines = append(lines, formatDigestNode(node))
 	}
 	message.Summary = strings.Join(lines, "\n")
+	message.TelegramSummary = formatTelegramDigestSummary(summary.Nodes)
 	return message, nil
+}
+
+func formatTelegramDigestSummary(nodes []NodeSummary) string {
+	var successes, failures int64
+	for _, node := range nodes {
+		successes += int64(node.Successes)
+		failures += int64(node.Failures)
+	}
+	nodeLabel, testLabel := "nodes", "tests"
+	if len(nodes) == 1 {
+		nodeLabel = "node"
+	}
+	if successes+failures == 1 {
+		testLabel = "test"
+	}
+	return fmt.Sprintf("%d %s, %d %s: %d successful, %d failed. Per-node counts and averages continue in the dashboard.",
+		len(nodes), nodeLabel, successes+failures, testLabel, successes, failures)
 }
 
 func digestPeriodLabel(summary PeriodSummary) (string, error) {
@@ -87,10 +110,12 @@ func safeDashboardLink(raw string) (string, error) {
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("%w", ErrInvalidDashboardURL)
+		return "", ErrInvalidDashboardURL
 	}
 	scheme := strings.ToLower(u.Scheme)
-	if (scheme != "https" && scheme != "http") || u.Hostname() == "" || u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" {
+	unsafe := (scheme != "https" && scheme != "http") || u.Hostname() == "" || u.User != nil || u.Opaque != "" ||
+		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#")
+	if unsafe {
 		return "", fmt.Errorf("%w: must be an absolute HTTP(S) base URL without credentials, query, or fragment", ErrInvalidDashboardURL)
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
@@ -101,5 +126,15 @@ func safeDashboardLink(raw string) (string, error) {
 	}
 	u.RawPath = ""
 	u.Fragment = "/"
-	return u.String(), nil
+	link := u.String()
+	if utf8.RuneCountInString(link) > maxDashboardLinkRunes {
+		return "", fmt.Errorf("%w: exceeds the %d-character dashboard link limit", ErrInvalidDashboardURL, maxDashboardLinkRunes)
+	}
+	return link, nil
+}
+
+// IsDashboardLinkFor reports whether link is the generated dashboard route for baseURL.
+func IsDashboardLinkFor(baseURL, link string) bool {
+	expected, err := safeDashboardLink(baseURL)
+	return err == nil && expected == link
 }

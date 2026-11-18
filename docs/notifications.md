@@ -46,15 +46,21 @@ value in Settings to enable each budget calculation; a zero or missing budget
 does not emit a budget event. Usage is derived from successful/degraded result
 byte counts per node and engine in the current calendar month. `bandwidth.interval_widened`
 is emitted when a node schedule interval increases or the schedule is paused.
-Daily and weekly digest events include per-node success and failure counts,
+Daily and weekly digest e-mail includes per-node success and failure counts,
 average download and upload speeds, and a validated dashboard link when the
-period has results. Empty periods receive a clear no-results message. The
-`digest.daily` and `digest.weekly` events use their configured templates and
-event settings, and queue only enabled, configured Telegram and e-mail
-destinations through the transactional notification outbox. Disabled events or
-channels create no delivery. The outbox entries and completed-period marker are
-committed together, preventing late results from queuing another digest. The
-monthly ISP report remains separate.
+period has results. Empty periods receive a clear no-results message. Telegram
+uses aggregate node/test counts with an explicit dashboard continuation, while
+e-mail retains every node's detail. The final rendered Telegram message is
+bounded to the Bot API's 4096-character `sendMessage` limit; an oversized custom
+template falls back to one bounded aggregate message rather than splitting one
+outbox delivery into multiple sends. The `digest.daily` and `digest.weekly`
+events use their configured templates and event settings, and queue only
+enabled, configured Telegram and e-mail destinations through the transactional
+notification outbox. Disabled events, missing destinations, or a populated
+period with an invalid `Settings.CenterURL` complete silently without an event
+or delivery. The outbox entries and completed-period marker are committed
+together, preventing late results or later settings changes from queuing that
+period again. The monthly ISP report remains separate.
 
 For immediate events, cooldown/repeat settings suppress duplicate delivery for
 the configured interval while keeping each event in the event history. Offline

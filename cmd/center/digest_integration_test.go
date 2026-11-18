@@ -74,7 +74,7 @@ func TestAC1AC2DigestNotificationsEnabledPopulatedRestartAndLateResultIntegratio
 	if dispatched := dispatchDigestDeliveries(t, ctx, notifications, 4); dispatched != 4 {
 		t.Fatalf("dispatched digest deliveries = %d, want 4", dispatched)
 	}
-	assertCapturedDigestMessage(t, capture.messages["telegram"], "Node &lt;alpha&gt; forged", "https://speedtest.example.test/#/")
+	assertCapturedDigestMessage(t, capture.messages["telegram"], "1 node, 2 tests: 1 successful, 1 failed", "https://speedtest.example.test/#/")
 	assertCapturedDigestMessage(t, capture.messages["email"], "Node <alpha> forged", "https://speedtest.example.test/#/")
 
 	restarted := newDigestScheduler(pool, notifications, nil)
