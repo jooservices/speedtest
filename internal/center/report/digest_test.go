@@ -1,6 +1,11 @@
 package report
 
 import (
+	"bytes"
+	"context"
+	"errors"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 )
@@ -218,6 +223,68 @@ func TestAC1DigestScheduleRejectsInvalidPeriodDatesAndKinds(t *testing.T) {
 	}
 	if _, err := digestDatesAfter(PeriodKind("monthly"), "2026-03-01", "2026-03-31", 2); err == nil {
 		t.Fatal("unsupported period kind must fail")
+	}
+}
+
+func TestDigestLoopWaitUsesEarliestPositiveWakeup(t *testing.T) {
+	tests := []struct {
+		name  string
+		first time.Duration
+		other time.Duration
+		want  time.Duration
+	}{
+		{name: "earlier first", first: time.Second, other: 2 * time.Second, want: time.Second},
+		{name: "earlier second", first: 2 * time.Second, other: time.Second, want: time.Second},
+		{name: "nonpositive first", first: 0, other: time.Second, want: time.Second},
+		{name: "nonpositive second", first: time.Second, other: 0, want: time.Second},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := minDigestWait(tc.first, tc.other); got != tc.want {
+				t.Errorf("minimum digest wait=%s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDigestLoopLogsSafeFailureCode(t *testing.T) {
+	tests := []struct {
+		name    string
+		failure error
+		zone    func(context.Context) (string, error)
+		code    string
+	}{
+		{
+			name:    "enqueue failure",
+			failure: withDigestCode("enqueue", errors.New("credential=private-value")),
+			code:    "enqueue",
+		},
+		{
+			name: "time zone lookup failure",
+			zone: func(context.Context) (string, error) { return "", errors.New("token=private-value") },
+			code: "timezone_read",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var output bytes.Buffer
+			scheduler := &DigestScheduler{
+				Timezone: tc.zone,
+				Log:      slog.New(slog.NewTextHandler(&output, nil)),
+			}
+			if tc.failure != nil {
+				scheduler.loopWait(context.Background(), tc.failure)
+			} else {
+				scheduler.loopWait(context.Background(), nil)
+			}
+			logged := output.String()
+			if !strings.Contains(logged, "code="+tc.code) {
+				t.Fatalf("log %q does not identify code %q", logged, tc.code)
+			}
+			if strings.Contains(logged, "private-value") {
+				t.Fatalf("log exposed raw error content: %q", logged)
+			}
+		})
 	}
 }
 

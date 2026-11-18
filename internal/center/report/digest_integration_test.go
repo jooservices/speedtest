@@ -586,24 +586,41 @@ func TestAC2DigestSchedulerRetriesFailedEnqueueAfterRestartIntegration(t *testin
 	pool, ctx := openDigestPool(t)
 	setDigestTimezone(t, ctx, pool, "UTC")
 	now := time.Date(2026, 3, 10, 9, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `CREATE TABLE digest_test_enqueues (kind text NOT NULL, local_date date NOT NULL, PRIMARY KEY (kind, local_date))`); err != nil {
+		t.Fatal("cannot create transactional enqueue test table")
+	}
+	t.Cleanup(func() {
+		if _, err := pool.Exec(context.Background(), `DROP TABLE IF EXISTS digest_test_enqueues`); err != nil {
+			t.Error("cannot drop transactional enqueue test table")
+		}
+	})
+	if _, err := pool.Exec(ctx, `INSERT INTO digest_periods (kind, local_date, timezone, completed_at)
+		VALUES ('weekly', '2026-03-02', 'UTC', $1)`, now); err != nil {
+		t.Fatal("cannot seed the unrelated weekly period")
+	}
 	failure := errors.New("enqueue failed")
 	failed := &DigestScheduler{
 		DB:  pool,
 		Now: fixedNow(now),
-		Enqueue: func(context.Context, pgx.Tx, Period) error {
+		Enqueue: func(ctx context.Context, tx pgx.Tx, period Period) error {
+			if _, err := tx.Exec(ctx, `INSERT INTO digest_test_enqueues (kind, local_date) VALUES ($1, $2::date)`, string(period.Kind()), period.LocalDate()); err != nil {
+				return err
+			}
 			return failure
 		},
 	}
 	if err := failed.RunOnce(ctx); !errors.Is(err, failure) {
 		t.Fatalf("failed enqueue error = %v, want the enqueue error", err)
 	}
-	if count := completedDigestPeriods(t, ctx, pool); count != 0 {
-		t.Fatalf("failed enqueue completed %d periods", count)
+	var enqueues int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM digest_test_enqueues`).Scan(&enqueues); err != nil || enqueues != 0 {
+		t.Fatalf("failed enqueue committed %d transactional records, err=%v", enqueues, err)
 	}
-	for _, key := range []digestPeriodKey{{kind: DailyPeriod, localDate: "2026-03-09"}, {kind: WeeklyPeriod, localDate: "2026-03-02"}} {
-		if attempts, completed, _ := digestPeriodState(t, ctx, pool, key.kind, key.localDate); attempts != 1 || completed {
-			t.Fatalf("%s %s after failure attempts=%d completed=%v", key.kind, key.localDate, attempts, completed)
-		}
+	if count := completedDigestPeriods(t, ctx, pool); count != 1 {
+		t.Fatalf("failed enqueue changed %d completed periods, want only the unrelated weekly fixture", count)
+	}
+	if attempts, completed, _ := digestPeriodState(t, ctx, pool, DailyPeriod, "2026-03-09"); attempts != 1 || completed {
+		t.Fatalf("daily period after failure attempts=%d completed=%v", attempts, completed)
 	}
 
 	retryAt := now.Add(10 * time.Minute)
@@ -611,7 +628,10 @@ func TestAC2DigestSchedulerRetriesFailedEnqueueAfterRestartIntegration(t *testin
 	restarted := &DigestScheduler{
 		DB:  pool,
 		Now: fixedNow(retryAt),
-		Enqueue: func(context.Context, pgx.Tx, Period) error {
+		Enqueue: func(ctx context.Context, tx pgx.Tx, period Period) error {
+			if _, err := tx.Exec(ctx, `INSERT INTO digest_test_enqueues (kind, local_date) VALUES ($1, $2::date)`, string(period.Kind()), period.LocalDate()); err != nil {
+				return err
+			}
 			successes.Add(1)
 			return nil
 		},
@@ -619,18 +639,19 @@ func TestAC2DigestSchedulerRetriesFailedEnqueueAfterRestartIntegration(t *testin
 	if err := restarted.RunOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if successes.Load() != 2 || completedDigestPeriods(t, ctx, pool) != 2 {
-		t.Fatalf("restart successes=%d completed=%d, want 2", successes.Load(), completedDigestPeriods(t, ctx, pool))
+	if successes.Load() != 1 || completedDigestPeriods(t, ctx, pool) != 2 {
+		t.Fatalf("restart successes=%d completed=%d, want one new completion", successes.Load(), completedDigestPeriods(t, ctx, pool))
 	}
-	for _, key := range []digestPeriodKey{{kind: DailyPeriod, localDate: "2026-03-09"}, {kind: WeeklyPeriod, localDate: "2026-03-02"}} {
-		if attempts, completed, _ := digestPeriodState(t, ctx, pool, key.kind, key.localDate); attempts != 2 || !completed {
-			t.Fatalf("%s %s after retry attempts=%d completed=%v", key.kind, key.localDate, attempts, completed)
-		}
+	if attempts, completed, _ := digestPeriodState(t, ctx, pool, DailyPeriod, "2026-03-09"); attempts != 2 || !completed {
+		t.Fatalf("daily period after retry attempts=%d completed=%v", attempts, completed)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM digest_test_enqueues`).Scan(&enqueues); err != nil || enqueues != 1 {
+		t.Fatalf("successful retry committed %d enqueue records, err=%v", enqueues, err)
 	}
 	if err := restarted.RunOnce(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if successes.Load() != 2 {
+	if successes.Load() != 1 {
 		t.Fatalf("completed periods were queued again after restart: %d", successes.Load())
 	}
 }
