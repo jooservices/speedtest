@@ -105,4 +105,30 @@
     } while (page <= last);
     return rows;
   };
+  API.deliveries = {
+    list: async function (filters, options) {
+      filters = filters || {};
+      var page = filters.page == null ? 1 : Number(filters.page);
+      var size = filters.size == null ? 10 : Number(filters.size);
+      if (!Number.isInteger(page) || page < 1 || page > 1000000 || !Number.isInteger(size) || size < 1 || size > 100) {
+        throw problem(0, 'Invalid delivery history pagination.');
+      }
+      var query = new URLSearchParams({ page: String(page), size: String(size) });
+      if (filters.status) {
+        if (!['pending', 'sent', 'failed'].includes(filters.status)) throw problem(0, 'Invalid delivery history status filter.');
+        query.set('status', filters.status);
+      }
+      if (filters.channel) {
+        if (!['email', 'telegram', 'slack', 'webhook'].includes(filters.channel)) throw problem(0, 'Invalid delivery history channel filter.');
+        query.set('channel', filters.channel);
+      }
+      var result = await API.request('/api/notifications/deliveries?' + query.toString(), options);
+      var pagination = result.meta && result.meta.pagination;
+      if (!Array.isArray(result.data) || !pagination || pagination.current_page !== page || pagination.per_page !== size ||
+          !Number.isInteger(pagination.total) || pagination.total < 0 || !Number.isInteger(pagination.last_page) || pagination.last_page < 1) {
+        throw problem(0, 'Invalid delivery history pagination returned by the command center. Retry.');
+      }
+      return result;
+    }
+  };
 })();
