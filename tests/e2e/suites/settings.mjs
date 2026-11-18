@@ -586,6 +586,8 @@ export function settingsSuite(T, ctx) {
         assert.equal(await deliveryHistory.rows().count(), 11, 'page one shows ten deliveries plus its header');
         assert.match(await deliveryHistory.rows().nth(1).innerText(), /safe failure detail 12/, 'newest delivery appears first');
         assert.match(await deliveryHistory.rows().nth(2).innerText(), /safe failure detail 11/, 'the next newest delivery follows');
+        await loadingGate.remove();
+        loadingGate = null;
 
         await deliveryHistory.focusStatus();
         await deliveryHistory.tabKey();
