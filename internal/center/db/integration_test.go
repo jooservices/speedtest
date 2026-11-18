@@ -389,13 +389,14 @@ func TestDeliveryFilterIndexMigrationRollbackIntegration(t *testing.T) {
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal(err)
 	}
+	latestVersion := currentMigrationVersion(t, ctx, pool)
 	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps)
       VALUES('10000000-0000-4000-8000-000000000124','filter-rollback',100,50)`)
 	exec(t, ctx, pool, `INSERT INTO alert_events(id,node_id,severity,ts,title)
       VALUES('a0000000-0000-4000-8000-000000000124','10000000-0000-4000-8000-000000000124','warn',now(),'Filter rollback')`)
 	exec(t, ctx, pool, `INSERT INTO notification_deliveries(id,event_id,channel,status)
       VALUES('f0000000-0000-4000-8000-000000000124','a0000000-0000-4000-8000-000000000124','email','sent')`)
-	assertDeliveryFilterMigrationState(t, ctx, pool, 36, 3)
+	assertDeliveryFilterMigrationState(t, ctx, pool, latestVersion, 3)
 	if err := db.MigrateDownTo(ctx, pool, 35); err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +404,7 @@ func TestDeliveryFilterIndexMigrationRollbackIntegration(t *testing.T) {
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal(err)
 	}
-	assertDeliveryFilterMigrationState(t, ctx, pool, 36, 3)
+	assertDeliveryFilterMigrationState(t, ctx, pool, latestVersion, 3)
 }
 
 func assertDeliveryFilterMigrationState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, version int64, indexes int) {
