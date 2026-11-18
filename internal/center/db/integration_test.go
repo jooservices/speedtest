@@ -85,7 +85,7 @@ func TestMigrations(t *testing.T) {
 	}()
 	t.Run("AllRequiredTables", func(t *testing.T) {
 		var got int
-		tables := []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor", "api_access_tokens", "monthly_report_runs"} // every table a migration creates may be listed; the count follows the list
+		tables := []string{"users", "sessions", "nodes", "node_credentials", "results", "ip_addresses", "node_ip_history", "schedules", "alert_rules", "alert_events", "alert_state", "settings", "agent_commands", "api_idempotency", "node_ip_addresses", "ip_change_signals", "notification_deliveries", "alert_notification_outbox", "maintenance_jobs", "installer_probes", "installer_probe_idempotency", "installer_jobs", "installer_events", "installer_idempotency", "audit_log", "engine_schedules", "user_two_factor", "api_access_tokens", "monthly_report_runs", "digest_periods", "digest_schedule_state"} // every table a migration creates may be listed; the count follows the list
 		if e := pool.QueryRow(ctx, "SELECT count(*) FROM information_schema.tables WHERE table_schema='public' AND table_name = ANY($1)", tables).Scan(&got); e != nil || got != len(tables) {
 			t.Fatalf("required tables: got %d want %d: %v", got, len(tables), e)
 		}
@@ -93,7 +93,7 @@ func TestMigrations(t *testing.T) {
 		if e := pool.QueryRow(ctx, `SELECT count(*) FROM alert_rules WHERE metric IN ('offline','failed','down_pct','up_pct','ping','jitter','loss','ip_changed')`).Scan(&defaults); e != nil || defaults != 8 {
 			t.Fatalf("seeded alert rules: got %d want 8: %v", defaults, e)
 		}
-		t.Log("PASS: 35 required tables and eight baseline alert rules created by embedded migrations")
+		t.Log("PASS: 37 required tables and eight baseline alert rules created by embedded migrations")
 	})
 	t.Run("IndexesUUIDUnitsAndTimeTypes", func(t *testing.T) {
 		var got int
@@ -389,13 +389,14 @@ func TestDeliveryFilterIndexMigrationRollbackIntegration(t *testing.T) {
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal(err)
 	}
+	latestVersion := currentMigrationVersion(t, ctx, pool)
 	exec(t, ctx, pool, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps)
       VALUES('10000000-0000-4000-8000-000000000124','filter-rollback',100,50)`)
 	exec(t, ctx, pool, `INSERT INTO alert_events(id,node_id,severity,ts,title)
       VALUES('a0000000-0000-4000-8000-000000000124','10000000-0000-4000-8000-000000000124','warn',now(),'Filter rollback')`)
 	exec(t, ctx, pool, `INSERT INTO notification_deliveries(id,event_id,channel,status)
       VALUES('f0000000-0000-4000-8000-000000000124','a0000000-0000-4000-8000-000000000124','email','sent')`)
-	assertDeliveryFilterMigrationState(t, ctx, pool, 36, 3)
+	assertDeliveryFilterMigrationState(t, ctx, pool, latestVersion, 3)
 	if err := db.MigrateDownTo(ctx, pool, 35); err != nil {
 		t.Fatal(err)
 	}
@@ -403,7 +404,7 @@ func TestDeliveryFilterIndexMigrationRollbackIntegration(t *testing.T) {
 	if err := db.Migrate(ctx, pool, "up"); err != nil {
 		t.Fatal(err)
 	}
-	assertDeliveryFilterMigrationState(t, ctx, pool, 36, 3)
+	assertDeliveryFilterMigrationState(t, ctx, pool, latestVersion, 3)
 }
 
 func assertDeliveryFilterMigrationState(t *testing.T, ctx context.Context, pool *pgxpool.Pool, version int64, indexes int) {
