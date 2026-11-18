@@ -257,6 +257,7 @@ func TestDigestLoopLogsSafeFailureCode(t *testing.T) {
 		{
 			name:    "enqueue failure",
 			failure: withDigestCode("enqueue", errors.New("credential=private-value")),
+			zone:    func(context.Context) (string, error) { return "UTC", nil },
 			code:    "enqueue",
 		},
 		{
@@ -285,6 +286,20 @@ func TestDigestLoopLogsSafeFailureCode(t *testing.T) {
 				t.Fatalf("log exposed raw error content: %q", logged)
 			}
 		})
+	}
+}
+
+func TestDigestFailureSummaryKeepsSpecificCodesAndSafePeriods(t *testing.T) {
+	failure := errors.Join(
+		withDigestCode("schedule_read", withDigestCode("schedule_write", errors.New("credential=private-value"))),
+		&digestPeriodFailure{key: digestPeriodKey{kind: DailyPeriod, localDate: "2026-03-09"}, cause: withDigestCode("enqueue", errors.New("token=private-value"))},
+		&digestPeriodFailure{key: digestPeriodKey{kind: WeeklyPeriod, localDate: "2026-03-02"}, cause: withDigestCode("claim", errors.New("password=private-value"))},
+	)
+	if got := digestErrorCode(failure); got != "schedule_write" {
+		t.Fatalf("top-level code %q, want schedule_write", got)
+	}
+	if got := digestFailureSummary(failure); got != "schedule_write,daily:2026-03-09:enqueue,weekly:2026-03-02:claim" {
+		t.Fatalf("safe summary %q", got)
 	}
 }
 

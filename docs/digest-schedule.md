@@ -29,7 +29,10 @@ period already due, so it does not backfill from project inception. Later runs
 materialize missed dates in batches of at most 32 per kind and advance the
 watermark in the same transaction. Remaining backlog is picked up by later loop
 iterations. A time-zone preference change establishes a new initialization
-boundary; already-created periods retain their first-claim time-zone snapshot.
+boundary only when first initialized. A later time-zone change preserves the
+watermark, materializes any missed dates and applies the new zone to newly
+created periods. Already-created periods retain their first-claim time-zone
+snapshot.
 
 The scheduler checks ready retry rows and materializes every due period after
 its watermark, so periods missed while centers are stopped are recovered after
@@ -72,5 +75,5 @@ completed period.
 
 ```bash
 go test ./internal/center/report -run 'TestAC1|TestDigestTimezone' -count=1
-go test -race -p 1 -tags integration ./internal/center/report -run 'TestAC1DigestScheduler|TestAC2DigestScheduler|TestAC2ConcurrentDigest' -count=1
+go test -race -p 1 -tags integration ./internal/center/report -run 'TestAC1DigestScheduler|TestAC2DigestScheduler|TestAC2ConcurrentDigest|TestAC1DigestLoop|TestAC2DigestLoop' -count=1
 ```

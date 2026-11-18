@@ -7,12 +7,14 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/db"
@@ -749,5 +751,139 @@ func TestAC2DigestSchedulerKeepsOneCompletedPeriodAfterTimezoneChangeIntegration
 	}
 	if count := completedDigestPeriods(t, ctx, pool); count != 2 {
 		t.Fatalf("completed periods = %d, want 2", count)
+	}
+}
+
+func TestAC1DigestSchedulerRecoversDowntimeAcrossTimezoneChangeIntegration(t *testing.T) {
+	pool, ctx := openDigestPool(t)
+	setDigestTimezone(t, ctx, pool, "UTC")
+	now := time.Date(2026, 3, 10, 9, 0, 0, 0, time.UTC)
+	scheduler := &DigestScheduler{DB: pool, Now: func() time.Time { return now }, Enqueue: func(context.Context, pgx.Tx, Period) error { return nil }}
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	setDigestTimezone(t, ctx, pool, "Asia/Ho_Chi_Minh")
+	now = time.Date(2026, 3, 16, 9, 0, 0, 0, time.UTC)
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := completedDigestPeriods(t, ctx, pool); got != 9 {
+		t.Fatalf("completed periods after time-zone change and downtime = %d, want 9", got)
+	}
+	if _, completed, zone := digestPeriodState(t, ctx, pool, DailyPeriod, "2026-03-11"); !completed || zone != "Asia/Ho_Chi_Minh" {
+		t.Fatalf("missed daily period: completed=%v zone=%q", completed, zone)
+	}
+	if _, completed, zone := digestPeriodState(t, ctx, pool, WeeklyPeriod, "2026-03-09"); !completed || zone != "Asia/Ho_Chi_Minh" {
+		t.Fatalf("missed weekly period: completed=%v zone=%q", completed, zone)
+	}
+	if _, completed, zone := digestPeriodState(t, ctx, pool, DailyPeriod, "2026-03-09"); !completed || zone != "UTC" {
+		t.Fatalf("original period snapshot changed: completed=%v zone=%q", completed, zone)
+	}
+}
+
+func TestAC1DigestSchedulerPersistsFallDSTEnvelopesIntegration(t *testing.T) {
+	pool, ctx := openDigestPool(t)
+	setDigestTimezone(t, ctx, pool, "America/New_York")
+	now := time.Date(2026, 11, 2, 13, 0, 0, 0, time.UTC)
+	var periods []Period
+	scheduler := &DigestScheduler{DB: pool, Now: fixedNow(now), Enqueue: func(_ context.Context, _ pgx.Tx, period Period) error {
+		periods = append(periods, period)
+		return nil
+	}}
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		kind PeriodKind
+		date string
+		span time.Duration
+	}{
+		{DailyPeriod, "2026-11-01", 25 * time.Hour},
+		{WeeklyPeriod, "2026-10-26", 169 * time.Hour},
+	} {
+		period := findDigestPeriod(t, periods, tc.kind, tc.date)
+		if got := period.To().Sub(period.From()); got != tc.span {
+			t.Errorf("%s envelope = %s, want %s", tc.kind, got, tc.span)
+		}
+		if _, completed, zone := digestPeriodState(t, ctx, pool, tc.kind, tc.date); !completed || zone != "America/New_York" {
+			t.Errorf("persisted %s: completed=%v zone=%q", tc.kind, completed, zone)
+		}
+	}
+}
+
+func TestAC2DigestLoopKeepsEarlierPendingWakeupAfterRunErrorIntegration(t *testing.T) {
+	pool, ctx := openDigestPool(t)
+	now := time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC)
+	if _, err := pool.Exec(ctx, `INSERT INTO digest_periods (kind, local_date, timezone, next_attempt_at)
+		VALUES ('daily', '2026-03-09', 'UTC', $1)`, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	scheduler := &DigestScheduler{DB: pool, Now: fixedNow(now), Timezone: func(context.Context) (string, error) { return "UTC", nil },
+		retryDelay: 5 * time.Minute, schedulePollInterval: 10 * time.Minute}
+	if got := scheduler.loopWait(ctx, withDigestCode("enqueue", errors.New("credential=private-value"))); got != time.Minute {
+		t.Fatalf("loop wait after failed run = %s, want pending eligibility in one minute", got)
+	}
+}
+
+type delayedDigestRenewDB struct {
+	*pgxpool.Pool
+	started chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (db *delayedDigestRenewDB) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, "UPDATE digest_periods SET lease_until") {
+		db.once.Do(func() { close(db.started) })
+		<-db.release
+	}
+	return db.Pool.Exec(ctx, sql, args...)
+}
+
+func TestAC2DigestSchedulerIgnoresRenewalAfterCommittedCompletionIntegration(t *testing.T) {
+	pool, ctx := openDigestPool(t)
+	setDigestTimezone(t, ctx, pool, "UTC")
+	now := movingDigestNow(time.Date(2026, 3, 10, 9, 0, 0, 0, time.UTC))
+	if _, err := pool.Exec(ctx, `INSERT INTO digest_periods (kind, local_date, timezone, completed_at)
+		VALUES ('weekly', '2026-03-02', 'UTC', $1)`, now()); err != nil {
+		t.Fatal(err)
+	}
+	db := &delayedDigestRenewDB{Pool: pool, started: make(chan struct{}), release: make(chan struct{})}
+	scheduler := &DigestScheduler{DB: db, Now: now, leaseDuration: 90 * time.Millisecond,
+		Enqueue: func(ctx context.Context, _ pgx.Tx, _ Period) error {
+			select {
+			case <-db.started:
+				return nil
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}}
+	done := make(chan error, 1)
+	go func() { done <- scheduler.RunOnce(ctx) }()
+	select {
+	case <-db.started:
+	case <-time.After(time.Second):
+		close(db.release)
+		t.Fatal("lease renewal did not begin")
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		var completed bool
+		if err := pool.QueryRow(ctx, `SELECT completed_at IS NOT NULL FROM digest_periods WHERE kind='daily' AND local_date='2026-03-09'`).Scan(&completed); err != nil {
+			close(db.release)
+			t.Fatal(err)
+		}
+		if completed {
+			break
+		}
+		if time.Now().After(deadline) {
+			close(db.release)
+			t.Fatal("digest completion did not commit while renewal was delayed")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	close(db.release)
+	if err := <-done; err != nil {
+		t.Fatalf("committed digest was reported as a lease failure: %v", err)
 	}
 }

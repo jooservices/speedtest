@@ -79,18 +79,16 @@ and a resumable node-first geolocation refresh cursor. Its down migration
 preserves cached locations and address history. `00035_geo_provider_rolling_window.sql`
 adds the persisted next-request time used to enforce ip-api's 15-per-minute batch
 limit across minute boundaries; its down migration drops only that column.
+`00036_notification_delivery_filter_indexes.sql` adds ordered status, channel and
+status/channel indexes for the owner delivery-history filters, so each filtered
+count and newest-first page uses an index instead of scanning the table; its down
+migration drops only those indexes.
 `00036_digest_periods.sql` adds durable daily and weekly digest period claims,
 their time-zone snapshot, expiring lease, retry time and completion marker. Its
 `digest_schedule_state` table stores the per-kind initialization boundary and
 schedule watermark used to recover missed periods in bounded batches. The
 primary key on kind and local date keeps one completion when the owner time zone
 changes; its down migration drops both digest tables and the pending index.
-otherwise intact. Usage down preserves the 60-minute schedule default from
-00015 and restores overrides without changing rows that were not overridden.
-`00036_notification_delivery_filter_indexes.sql` adds ordered status, channel and
-status/channel indexes for the owner delivery-history filters, so each filtered
-count and newest-first page uses an index instead of scanning the table; its down
-migration drops only those indexes.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file

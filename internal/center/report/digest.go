@@ -119,6 +119,14 @@ type digestError struct {
 	cause error
 }
 
+type digestPeriodFailure struct {
+	key   digestPeriodKey
+	cause error
+}
+
+func (e *digestPeriodFailure) Error() string { return e.cause.Error() }
+func (e *digestPeriodFailure) Unwrap() error { return e.cause }
+
 func (e *digestError) Error() string { return e.cause.Error() }
 
 func (e *digestError) Unwrap() error { return e.cause }
@@ -131,11 +139,55 @@ func withDigestCode(code string, cause error) error {
 }
 
 func digestErrorCode(err error) string {
-	var failure *digestError
-	if errors.As(err, &failure) {
-		return failure.code
+	var codes []string
+	collectDigestFailureCodes(err, "", &codes)
+	if len(codes) > 0 {
+		return codes[0][strings.LastIndex(codes[0], ":")+1:]
 	}
 	return "run_failed"
+}
+
+// Only controlled codes and calendar keys enter logs; underlying errors may
+// contain credentials or request payloads and must never be logged here.
+func digestFailureSummary(err error) string {
+	var codes []string
+	collectDigestFailureCodes(err, "", &codes)
+	if len(codes) == 0 {
+		return "run_failed"
+	}
+	return strings.Join(codes, ",")
+}
+
+func collectDigestFailureCodes(err error, period string, codes *[]string) {
+	if err == nil || len(*codes) >= digestScheduleBatchSize*2 {
+		return
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		for _, cause := range joined.Unwrap() {
+			collectDigestFailureCodes(cause, period, codes)
+		}
+		return
+	}
+	if failure, ok := err.(*digestPeriodFailure); ok {
+		period = string(failure.key.kind) + ":" + failure.key.localDate + ":"
+		collectDigestFailureCodes(failure.cause, period, codes)
+		return
+	}
+	if failure, ok := err.(*digestError); ok {
+		before := len(*codes)
+		collectDigestFailureCodes(failure.cause, period, codes)
+		if len(*codes) == before {
+			*codes = append(*codes, period+failure.code)
+		} else if len(*codes) == before+1 && (*codes)[before] == period+"run_failed" {
+			(*codes)[before] = period + failure.code
+		}
+		return
+	}
+	if unwrapped, ok := err.(interface{ Unwrap() error }); ok && unwrapped.Unwrap() != nil {
+		collectDigestFailureCodes(unwrapped.Unwrap(), period, codes)
+		return
+	}
+	*codes = append(*codes, period+"run_failed")
 }
 
 func (s *DigestScheduler) now() time.Time {
@@ -182,7 +234,7 @@ func (s *DigestScheduler) RunOnce(ctx context.Context) error {
 	var errs []error
 	for _, key := range keys {
 		if err := s.process(ctx, key, zone); err != nil {
-			errs = append(errs, err)
+			errs = append(errs, &digestPeriodFailure{key: key, cause: err})
 		}
 	}
 	return errors.Join(errs...)
@@ -264,11 +316,10 @@ func (s *DigestScheduler) scheduleKind(ctx context.Context, tx pgx.Tx, now time.
 		return err
 	}
 	if savedZone != zone {
-		if _, err := tx.Exec(ctx, `UPDATE digest_schedule_state SET timezone=$2, initialized_at=$3, scheduled_through=$4::date WHERE kind=$1`,
-			string(latest.kind), zone, now, boundary); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE digest_schedule_state SET timezone=$2 WHERE kind=$1`,
+			string(latest.kind), zone); err != nil {
 			return err
 		}
-		scheduledThrough = boundary
 	}
 	periodDates, err := digestDatesAfter(latest.kind, scheduledThrough, latest.localDate, digestScheduleBatchSize)
 	if err != nil {
@@ -363,6 +414,12 @@ func (s *DigestScheduler) process(ctx context.Context, key digestPeriodKey, zone
 	workCtx, finishLease := s.maintainLease(ctx, key, leaseID, s.leaseTTL())
 	enqueueErr := s.enqueue(workCtx, key, leaseID, period)
 	leaseErr := finishLease()
+	if enqueueErr == nil && errors.Is(leaseErr, errDigestLeaseLost) {
+		// A renewal already in flight can observe zero rows after the
+		// successful completion transaction clears the lease. The commit is
+		// authoritative; this late renewal is harmless.
+		return nil
+	}
 	if leaseErr != nil {
 		code := "lease_renewal"
 		if errors.Is(leaseErr, errDigestLeaseLost) {
@@ -510,21 +567,27 @@ func (s *DigestScheduler) Loop(ctx context.Context) {
 }
 
 func (s *DigestScheduler) loopWait(ctx context.Context, runErr error) time.Duration {
+	wait := s.pollInterval()
 	if runErr != nil {
-		s.logger().Warn("digest schedule run failed; it will be retried", "code", digestErrorCode(runErr))
-		return s.retry()
+		s.logger().Warn("digest schedule run failed; it will be retried", "code", digestErrorCode(runErr), "failures", digestFailureSummary(runErr))
+		wait = minDigestWait(wait, s.retry())
 	}
 	zone, location, err := s.ownerLocation(ctx)
 	if err != nil {
 		s.logger().Warn("digest schedule time zone is not readable; it will be retried", "code", "timezone_read")
-		return s.retry()
+		wait = minDigestWait(wait, s.retry())
+	}
+	if s.DB == nil {
+		return wait
 	}
 	now := s.now()
-	wait := minDigestWait(nextDigestRun(now, location).Sub(now), s.pollInterval())
+	if err == nil {
+		wait = minDigestWait(wait, nextDigestRun(now, location).Sub(now))
+	}
 	next, found, err := s.nextPendingEligibility(ctx)
 	if err != nil {
 		s.logger().Warn("digest schedule state is not readable; it will be retried", "code", "pending_read")
-		return s.retry()
+		wait = minDigestWait(wait, s.retry())
 	}
 	if found {
 		eligibilityWait := next.Sub(now)
@@ -533,13 +596,15 @@ func (s *DigestScheduler) loopWait(ctx context.Context, runErr error) time.Durat
 		}
 		wait = minDigestWait(wait, eligibilityWait)
 	}
-	backlog, err := s.hasScheduleBacklog(ctx, now, zone, location)
-	if err != nil {
-		s.logger().Warn("digest schedule watermark is not readable; it will be retried", "code", "schedule_state_read")
-		return s.retry()
-	}
-	if backlog {
-		wait = minDigestWait(wait, s.retry())
+	if location != nil {
+		backlog, backlogErr := s.hasScheduleBacklog(ctx, now, zone, location)
+		if backlogErr != nil {
+			s.logger().Warn("digest schedule watermark is not readable; it will be retried", "code", "schedule_state_read")
+			wait = minDigestWait(wait, s.retry())
+		}
+		if backlog {
+			wait = minDigestWait(wait, s.retry())
+		}
 	}
 	return wait
 }
