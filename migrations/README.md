@@ -83,7 +83,7 @@ limit across minute boundaries; its down migration drops only that column.
 status/channel indexes for the owner delivery-history filters, so each filtered
 count and newest-first page uses an index instead of scanning the table; its down
 migration drops only those indexes.
-`00036_digest_periods.sql` adds durable daily and weekly digest period claims,
+`00037_digest_periods.sql` adds durable daily and weekly digest period claims,
 their time-zone snapshot, expiring lease, retry time and completion marker. Its
 `digest_schedule_state` table stores the per-kind initialization boundary and
 schedule watermark used to recover missed periods in bounded batches. The
