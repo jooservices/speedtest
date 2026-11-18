@@ -7,60 +7,118 @@ import (
 	"strings"
 	"testing"
 	"time"
-	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jooservices/speedtest/internal/center/notify/template"
 )
 
 type renderDB struct {
-	event   []any
-	tmpl    string
-	tmplErr error
+	event    []any
+	eventErr error
+	tmpl     string
+	tmplErr  error
 }
 
-func TestAC1DigestDispatchBoundsTelegramAndKeepsCompleteEmailDetail(t *testing.T) {
-	id := "digest-large"
-	fullSummary := strings.Repeat("Router <long-name> — 3 tests: 2 successful, 1 failed; avg down 125.25 Mbps, avg up 22.50 Mbps\n", 150)
-	telegramSummary := "150 nodes, 450 tests: 300 successful, 150 failed. Per-node counts and averages continue in the dashboard."
+func TestAC1DigestDispatchIncludesPerNodeValuesAndUsesCurrentSafeURL(t *testing.T) {
+	id := "digest-short"
+	summary := "Router <long-name> — 3 tests: 2 successful, 1 failed; avg down 125.25 Mbps, avg up 22.50 Mbps"
 	payload, err := json.Marshal(map[string]string{
-		"period": "Daily period: 2026-11-17 (UTC)", "summary": fullSummary,
-		"telegram_summary": telegramSummary, "link": "https://speedtest.example.test/#/",
+		"period": "Daily period: 2026-11-17 (UTC)", "summary": summary,
+		"telegram_summary": summary, "telegram_part": "1", "telegram_parts": "1",
+		"link": "https://old-center.example/#/",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	db := &renderDB{event: []any{"Daily summary", "Command center", time.Date(2026, 11, 18, 8, 0, 0, 0, time.UTC), "digest.daily", payload}}
 	store := &Store{}
-	telegram, err := store.renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, "https://speedtest.example.test")
+	telegram, err := store.renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, "https://new-center.example")
 	if err != nil {
-		t.Fatal("render oversized Telegram digest:", err)
+		t.Fatal("render per-node Telegram digest:", err)
 	}
-	if got := telegramTextUnits(telegram); got > 4096 {
-		t.Fatalf("Telegram message has %d rendered characters, want at most 4096", got)
+	if got := telegramTextUnits(telegram); got > maxTelegramMessageUnits {
+		t.Fatalf("Telegram message has %d UTF-16 units, want at most %d", got, maxTelegramMessageUnits)
 	}
-	if !strings.Contains(telegram, telegramSummary) || !strings.Contains(telegram, "https://speedtest.example.test/#/") {
-		t.Fatalf("bounded Telegram summary lacks aggregate or dashboard continuation: %q", telegram)
+	for _, want := range []string{"Part 1 of 1", "Router &lt;long-name&gt;", "2 successful, 1 failed", "avg down 125.25 Mbps", "avg up 22.50 Mbps", "https://new-center.example/#/"} {
+		if !strings.Contains(telegram, want) {
+			t.Errorf("Telegram message does not contain %q: %q", want, telegram)
+		}
 	}
-	if strings.Contains(telegram, "Router &lt;long-name&gt;") {
-		t.Fatal("Telegram digest unexpectedly included per-node details")
+	if strings.Contains(telegram, "old-center.example") || strings.Contains(telegram, "continue in the dashboard") {
+		t.Fatalf("Telegram message contains a stale link or false continuation claim: %q", telegram)
 	}
-	mail, err := store.renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "email"}, "https://speedtest.example.test")
+	mail, err := store.renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "email"}, "https://new-center.example")
 	if err != nil {
-		t.Fatal("render full e-mail digest:", err)
+		t.Fatal("render e-mail digest:", err)
 	}
-	if !strings.Contains(mail, fullSummary) || utf8.RuneCountInString(mail) <= 4096 {
-		t.Fatal("e-mail digest did not retain the complete per-node details")
+	if !strings.Contains(mail, summary) || !strings.Contains(mail, "https://new-center.example/#/") || strings.Contains(mail, "old-center.example") {
+		t.Fatal("e-mail digest did not retain details or use the current safe link")
 	}
+}
 
-	db.tmpl = strings.Repeat("{summary}", 60)
-	boundedFallback, err := store.renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, "https://speedtest.example.test")
+func TestAC1DigestTelegramCustomTemplatesKeepDetailsAndPartNumberBounded(t *testing.T) {
+	id := "digest-custom"
+	summary := "Node 😀 & router — 2 tests: 1 successful, 1 failed; avg down 12.25 Mbps, avg up 8.50 Mbps"
+	payload, err := json.Marshal(map[string]string{
+		"period": "Daily period: 2026-11-17 (UTC)", "summary": summary,
+		"telegram_summary": summary, "telegram_part": "3", "telegram_parts": "9",
+		"link": "https://speedtest.example.test/#/",
+	})
 	if err != nil {
-		t.Fatal("render oversized custom Telegram template:", err)
+		t.Fatal(err)
 	}
-	if utf8.RuneCountInString(boundedFallback) > 4096 ||
-		!strings.Contains(boundedFallback, telegramSummary) ||
-		!strings.Contains(boundedFallback, "Full per-node details and averages continue in the dashboard") {
-		t.Fatalf("oversized custom template did not use a bounded continuation: %q", boundedFallback)
+	db := &renderDB{event: []any{"Daily summary", "Command center", time.Unix(1, 0).UTC(), "digest.daily", payload}}
+	store := &Store{}
+	for name, body := range map[string]string{
+		"template without summary":              "Digest ready.",
+		"template expands summary past limit":   strings.Repeat("{summary}", 60),
+		"supplementary characters exceed limit": strings.Repeat("😀", 2500),
+	} {
+		t.Run(name, func(t *testing.T) {
+			db.tmpl = body
+			message, err := store.renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, "https://speedtest.example.test")
+			if err != nil {
+				t.Fatal("render custom Telegram template:", err)
+			}
+			if units := telegramTextUnits(message); units > maxTelegramMessageUnits {
+				t.Fatalf("Telegram message has %d UTF-16 units", units)
+			}
+			for _, want := range []string{"Part 3 of 9", "Node 😀 &amp; router", "1 successful, 1 failed", "avg down 12.25 Mbps", "avg up 8.50 Mbps"} {
+				if !strings.Contains(message, want) {
+					t.Errorf("Telegram message does not contain %q: %q", want, message)
+				}
+			}
+			if strings.Contains(message, "continue in the dashboard") {
+				t.Fatalf("Telegram message makes a false continuation claim: %q", message)
+			}
+		})
+	}
+}
+
+func TestAC2DigestDispatchOmitsUnsafeCurrentURLButKeepsDetails(t *testing.T) {
+	id := "digest-unsafe-current-url"
+	summary := "Router — 1 test: 1 successful, 0 failed; avg down 7.00 Mbps, avg up 3.00 Mbps"
+	payload, err := json.Marshal(map[string]string{
+		"period": "Daily period: 2026-11-17 (UTC)", "summary": summary,
+		"telegram_summary": summary, "telegram_part": "1", "telegram_parts": "1",
+		"link": "https://old-center.example/#/",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := &renderDB{
+		event: []any{"Daily summary", "Command center", time.Unix(1, 0).UTC(), "digest.daily", payload},
+		tmpl:  "Full details continue in the dashboard: {link}",
+	}
+	message, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, "https://owner:secret@wrong.example")
+	if err != nil {
+		t.Fatal("render digest with unsafe current URL:", err)
+	}
+	if !strings.Contains(message, summary) || strings.Contains(message, "owner:secret") || strings.Contains(message, "wrong.example") {
+		t.Fatalf("digest lost details or exposed an unsafe URL: %q", message)
+	}
+	if strings.Contains(message, "old-center.example") || strings.Contains(message, "continue in the dashboard") {
+		t.Fatalf("digest retained a stale link or false continuation: %q", message)
 	}
 }
 
@@ -87,7 +145,7 @@ func TestAC2EmptyDigestDispatchDoesNotUseUnsafeSettingsLinkFallback(t *testing.T
 	}
 }
 
-func TestAC2DigestDispatchDropsDashboardLinkForDifferentCenterURL(t *testing.T) {
+func TestAC2DigestDispatchRegeneratesDashboardLinkForChangedCenterURL(t *testing.T) {
 	id := "digest-stale-link"
 	payload, err := json.Marshal(map[string]string{
 		"period":  "Daily period: 2026-11-17 (UTC)",
@@ -102,8 +160,8 @@ func TestAC2DigestDispatchDropsDashboardLinkForDifferentCenterURL(t *testing.T) 
 	if err != nil {
 		t.Fatal("render digest with stale center link:", err)
 	}
-	if strings.Contains(text, "old-center.example") || strings.Contains(text, "new-center.example") {
-		t.Fatalf("digest included a link that did not match current settings: %q", text)
+	if strings.Contains(text, "old-center.example") || !strings.Contains(text, "new-center.example/#/") {
+		t.Fatalf("digest did not use a safe link from current settings: %q", text)
 	}
 }
 
@@ -111,9 +169,10 @@ func TestAC1DigestTelegramLimitCountsSupplementaryCharacters(t *testing.T) {
 	id := "digest-unicode-template"
 	payload, err := json.Marshal(map[string]string{
 		"period":           "Daily period: 2026-11-17 (UTC)",
-		"summary":          "2 nodes, 2 tests: 2 successful, 0 failed. Per-node counts and averages continue in the dashboard.",
-		"telegram_summary": "2 nodes, 2 tests: 2 successful, 0 failed. Per-node counts and averages continue in the dashboard.",
-		"link":             "https://speedtest.example.test/#/",
+		"summary":          "2 nodes — 2 tests: 2 successful, 0 failed; avg down 10 Mbps, avg up 5 Mbps.",
+		"telegram_summary": "2 nodes — 2 tests: 2 successful, 0 failed; avg down 10 Mbps, avg up 5 Mbps.",
+		"telegram_part":    "1", "telegram_parts": "1",
+		"link": "https://speedtest.example.test/#/",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -126,8 +185,104 @@ func TestAC1DigestTelegramLimitCountsSupplementaryCharacters(t *testing.T) {
 	if err != nil {
 		t.Fatal("render supplementary-character template:", err)
 	}
-	if telegramTextUnits(message) > 4096 || !strings.Contains(message, "Open dashboard") {
-		t.Fatalf("supplementary-character template did not fall back safely: units=%d message=%q", telegramTextUnits(message), message)
+	if telegramTextUnits(message) > maxTelegramMessageUnits || !strings.Contains(message, "avg down 10 Mbps") {
+		t.Fatalf("supplementary-character template did not fall back with details: units=%d message=%q", telegramTextUnits(message), message)
+	}
+}
+
+func TestAC1DigestTelegramUsesFullSummaryWithoutChunkFieldAndBoundsLongPeriod(t *testing.T) {
+	id := "digest-legacy-payload"
+	summary := "Node 😀 — 1 test: 1 successful, 0 failed; avg down 10 Mbps, avg up 5 Mbps"
+	payload, err := json.Marshal(map[string]string{
+		"period": strings.Repeat("&", 60), "summary": summary,
+		"telegram_part": "2", "telegram_parts": "2",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := &renderDB{event: []any{"Daily summary", "Command center", time.Unix(1, 0).UTC(), "digest.daily", payload}}
+	message, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, "")
+	if err != nil {
+		t.Fatal("render digest without a chunk summary:", err)
+	}
+	for _, want := range []string{"Part 2 of 2", "Digest period", "Node 😀", "1 successful, 0 failed", "avg down 10 Mbps", "avg up 5 Mbps"} {
+		if !strings.Contains(message, want) {
+			t.Errorf("Telegram message does not contain %q: %q", want, message)
+		}
+	}
+}
+
+func TestAC1BoundedDigestDropsOversizedOptionalLinkAndRejectsOversizedPart(t *testing.T) {
+	data := map[string]string{
+		"period": "Daily period: 2026-11-17 (UTC)", "summary": strings.Repeat("x", maxDigestChunkTextUnits),
+		"link": strings.Repeat("&", 512), "telegram_part": "1", "telegram_parts": "1",
+	}
+	message, err := renderBoundedTelegramDigest(data)
+	if err != nil {
+		t.Fatal("render bounded digest without overlong optional link:", err)
+	}
+	if telegramTextUnits(message) > maxTelegramMessageUnits || !strings.Contains(message, data["summary"]) || strings.Contains(message, "Dashboard:") {
+		t.Fatalf("bounded digest did not preserve detail while dropping its optional link: units=%d", telegramTextUnits(message))
+	}
+	data["summary"] = strings.Repeat("x", maxTelegramMessageUnits+1)
+	if _, err := renderBoundedTelegramDigest(data); !errors.Is(err, template.ErrInvalidTemplate) {
+		t.Fatalf("oversized digest part error = %v, want ErrInvalidTemplate", err)
+	}
+}
+
+func TestAC1DigestPartHeaderRejectsInvalidNumbering(t *testing.T) {
+	for _, data := range []map[string]string{
+		{}, {"telegram_part": "x", "telegram_parts": "3"},
+		{"telegram_part": "4", "telegram_parts": "3"},
+	} {
+		if got := digestPartHeader(data); got != "" {
+			t.Errorf("invalid part header = %q, want empty", got)
+		}
+	}
+	if got := digestPartHeader(map[string]string{"telegram_part": "2", "telegram_parts": "3"}); got != "Part 2 of 3" {
+		t.Errorf("part header = %q, want Part 2 of 3", got)
+	}
+}
+
+func TestAC1DigestInvalidTemplateAndEventReadFailuresAreReturned(t *testing.T) {
+	id := "digest-read-error"
+	payload, err := json.Marshal(map[string]string{
+		"period": "Daily period", "summary": "Node — 1 test: 1 successful, 0 failed; avg down 1 Mbps, avg up 1 Mbps",
+		"telegram_summary": "Node — 1 test: 1 successful, 0 failed; avg down 1 Mbps, avg up 1 Mbps",
+		"telegram_part":    "1", "telegram_parts": "1",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	db := &renderDB{event: []any{"Daily summary", "Command center", time.Unix(1, 0).UTC(), "digest.daily", payload}, tmpl: "invalid {"}
+	if _, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, ""); !errors.Is(err, template.ErrInvalidTemplate) {
+		t.Fatalf("invalid digest template error = %v, want ErrInvalidTemplate", err)
+	}
+	if _, err := renderBoundedBody("invalid {", map[string]string{}); !errors.Is(err, template.ErrInvalidTemplate) {
+		t.Fatalf("invalid bounded template error = %v, want ErrInvalidTemplate", err)
+	}
+	db.tmpl = " "
+	if _, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, ""); !errors.Is(err, template.ErrInvalidTemplate) {
+		t.Fatalf("empty saved digest template error = %v, want ErrInvalidTemplate", err)
+	}
+	db.eventErr = errors.New("event store unavailable")
+	if _, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, ""); err == nil || !strings.Contains(err.Error(), "event store unavailable") {
+		t.Fatalf("event read error = %v, want propagated storage error", err)
+	}
+}
+
+func TestAC1DigestRendererUsesDefaultBodyWhenTemplateIsAbsent(t *testing.T) {
+	data := map[string]string{
+		"period":        "Daily period: 2026-11-17 (UTC)",
+		"summary":       "Node — 1 test: 1 successful, 0 failed; avg down 1 Mbps, avg up 1 Mbps",
+		"telegram_part": "1", "telegram_parts": "1",
+	}
+	message, err := renderDeliveryTemplate("telegram", "digest.daily", "", data)
+	if err != nil {
+		t.Fatal("render digest with missing template body:", err)
+	}
+	if !strings.Contains(message, "Part 1 of 1") || !strings.Contains(message, data["summary"]) {
+		t.Fatalf("default digest body omitted part numbering or summary: %q", message)
 	}
 }
 
@@ -140,6 +295,9 @@ func (r *renderDB) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 			return memRow{err: pgx.ErrNoRows}
 		}
 		return memRow{vals: []any{r.tmpl}}
+	}
+	if r.eventErr != nil {
+		return memRow{err: r.eventErr}
 	}
 	return memRow{vals: r.event}
 }

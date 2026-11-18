@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -32,8 +33,21 @@ type digestQueuedEvent struct {
 	channels []string
 }
 
+type digestQueuedPart struct {
+	id       string
+	payload  []byte
+	channels []string
+}
+
 type digestCaptureSender struct {
 	messages map[string][]string
+}
+
+type digestRetrySender struct {
+	failMarker string
+	failed     bool
+	attempted  map[string][]string
+	sent       map[string][]string
 }
 
 func (s *digestCaptureSender) Send(_ context.Context, channel, _, _, message string) error {
@@ -41,6 +55,20 @@ func (s *digestCaptureSender) Send(_ context.Context, channel, _, _, message str
 		s.messages = map[string][]string{}
 	}
 	s.messages[channel] = append(s.messages[channel], message)
+	return nil
+}
+
+func (s *digestRetrySender) Send(_ context.Context, channel, _, _, message string) error {
+	if s.attempted == nil {
+		s.attempted = map[string][]string{}
+		s.sent = map[string][]string{}
+	}
+	s.attempted[channel] = append(s.attempted[channel], message)
+	if channel == "telegram" && !s.failed && strings.Contains(message, s.failMarker) {
+		s.failed = true
+		return errors.New("temporary test failure")
+	}
+	s.sent[channel] = append(s.sent[channel], message)
 	return nil
 }
 
@@ -68,14 +96,21 @@ func TestAC1AC2DigestNotificationsEnabledPopulatedRestartAndLateResultIntegratio
 		"Node <alpha> forged — 1 test: 1 successful, 0 failed; avg down 80.00 Mbps, avg up 20.00 Mbps",
 		"https://speedtest.example.test/#/")
 	assertDigestPayloadHasNoCredential(t, queued["digest.daily"].payload)
+	updateDigestSettings(t, ctx, pool, notifications, func(view *settings.Settings) {
+		view.CenterURL = "https://new-center.example.test"
+	})
 	if consumed := consumeDigestOutbox(t, ctx, notifications); consumed != 2 {
 		t.Fatalf("consumed digest outbox rows = %d, want 2", consumed)
 	}
 	if dispatched := dispatchDigestDeliveries(t, ctx, notifications, 4); dispatched != 4 {
 		t.Fatalf("dispatched digest deliveries = %d, want 4", dispatched)
 	}
-	assertCapturedDigestMessage(t, capture.messages["telegram"], "1 node, 2 tests: 1 successful, 1 failed", "https://speedtest.example.test/#/")
-	assertCapturedDigestMessage(t, capture.messages["email"], "Node <alpha> forged", "https://speedtest.example.test/#/")
+	assertCapturedDigestMessage(t, capture.messages["telegram"], "Node &lt;alpha&gt; forged — 2 tests: 1 successful, 1 failed; avg down 100.00 Mbps, avg up 40.00 Mbps", "https://new-center.example.test/#/")
+	assertCapturedDigestMessage(t, capture.messages["telegram"], "Node &lt;alpha&gt; forged — 1 test: 1 successful, 0 failed; avg down 80.00 Mbps, avg up 20.00 Mbps", "https://new-center.example.test/#/")
+	assertCapturedDigestMessage(t, capture.messages["email"], "Node <alpha> forged — 2 tests: 1 successful, 1 failed; avg down 100.00 Mbps, avg up 40.00 Mbps", "https://new-center.example.test/#/")
+	if got := countEmailDeliveries(t, ctx, pool); got != 2 {
+		t.Fatalf("e-mail deliveries for two completed periods = %d, want one per period", got)
+	}
 
 	restarted := newDigestScheduler(pool, notifications, nil)
 	restarted.Now = func() time.Time { return now }
@@ -92,6 +127,207 @@ func TestAC1AC2DigestNotificationsEnabledPopulatedRestartAndLateResultIntegratio
 	assertDigestQueuedEvent(t, loadDigestEvents(t, ctx, pool)["digest.daily"], []string{"telegram", "email"},
 		"Node <alpha> forged — 2 tests: 1 successful, 1 failed; avg down 100.00 Mbps, avg up 40.00 Mbps",
 		"https://speedtest.example.test/#/")
+}
+
+func TestAC1AC2DigestTelegramOnlyDestinationDeliversPerNodeDetailsIntegration(t *testing.T) {
+	pool, ctx := openDigestNotificationPool(t)
+	notifications := configureDigestNotifications(t, ctx, pool, false, true)
+	capture := &digestCaptureSender{}
+	notifications.Sender = capture
+	insertDigestSummaryFixtures(t, ctx, pool)
+	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	notifications.Now = func() time.Time { return now }
+	scheduler := newDigestScheduler(pool, notifications, nil)
+	scheduler.Now = func() time.Time { return now }
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal("run Telegram-only digest scheduler:", err)
+	}
+	queued := loadDigestEvents(t, ctx, pool)
+	assertDigestQueuedEvent(t, queued["digest.daily"], []string{"telegram"},
+		"Node <alpha> forged — 2 tests: 1 successful, 1 failed; avg down 100.00 Mbps, avg up 40.00 Mbps",
+		"https://speedtest.example.test/#/")
+	if consumed := consumeDigestOutbox(t, ctx, notifications); consumed != 2 {
+		t.Fatalf("consumed Telegram-only outbox rows = %d, want 2", consumed)
+	}
+	if dispatched := dispatchDigestDeliveries(t, ctx, notifications, 2); dispatched != 2 {
+		t.Fatalf("Telegram-only deliveries = %d, want 2", dispatched)
+	}
+	assertCapturedDigestMessage(t, capture.messages["telegram"], "Node &lt;alpha&gt; forged — 2 tests: 1 successful, 1 failed; avg down 100.00 Mbps, avg up 40.00 Mbps", "https://speedtest.example.test/#/")
+	if got := countEmailDeliveries(t, ctx, pool); got != 0 {
+		t.Fatalf("e-mail deliveries while destination is disabled = %d, want 0", got)
+	}
+}
+
+func TestAC1AC2DigestEmailOnlyDestinationDeliversFullSummaryIntegration(t *testing.T) {
+	pool, ctx := openDigestNotificationPool(t)
+	notifications := configureDigestNotifications(t, ctx, pool, true, false)
+	capture := &digestCaptureSender{}
+	notifications.Sender = capture
+	insertDigestSummaryFixtures(t, ctx, pool)
+	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	notifications.Now = func() time.Time { return now }
+	scheduler := newDigestScheduler(pool, notifications, nil)
+	scheduler.Now = func() time.Time { return now }
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal("run e-mail-only digest scheduler:", err)
+	}
+	queued := loadDigestEvents(t, ctx, pool)
+	assertDigestQueuedEvent(t, queued["digest.daily"], []string{"email"},
+		"Node <alpha> forged — 2 tests: 1 successful, 1 failed; avg down 100.00 Mbps, avg up 40.00 Mbps",
+		"https://speedtest.example.test/#/")
+	if consumed := consumeDigestOutbox(t, ctx, notifications); consumed != 2 {
+		t.Fatalf("consumed e-mail-only outbox rows = %d, want 2", consumed)
+	}
+	if dispatched := dispatchDigestDeliveries(t, ctx, notifications, 2); dispatched != 2 {
+		t.Fatalf("e-mail-only deliveries = %d, want 2", dispatched)
+	}
+	if len(capture.messages["telegram"]) != 0 || len(capture.messages["email"]) != 2 {
+		t.Fatalf("e-mail-only sends = %v", capture.messages)
+	}
+	assertCapturedDigestMessage(t, capture.messages["email"], "Node <alpha> forged — 2 tests: 1 successful, 1 failed; avg down 100.00 Mbps, avg up 40.00 Mbps", "https://speedtest.example.test/#/")
+	assertCapturedDigestMessage(t, capture.messages["email"], "Node <alpha> forged — 1 test: 1 successful, 0 failed; avg down 80.00 Mbps, avg up 20.00 Mbps", "https://speedtest.example.test/#/")
+	if got := countEmailDeliveries(t, ctx, pool); got != 2 {
+		t.Fatalf("e-mail deliveries = %d, want one per digest period", got)
+	}
+}
+
+func TestAC1AC2LargeDigestTelegramPartsRetryIndependentlyAndKeepEmailCompleteIntegration(t *testing.T) {
+	pool, ctx := openDigestNotificationPool(t)
+	notifications := configureDigestNotifications(t, ctx, pool, true, true)
+	var now = time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	notifications.Now = func() time.Time { return now }
+	sender := &digestRetrySender{failMarker: "n-020-"}
+	notifications.Sender = sender
+	nodeNames := insertLargeDigestSummaryFixtures(t, ctx, pool, 70)
+	disabled := false
+	if _, err := (&notify.EventStore{DB: pool}).UpdateEvent(ctx, "digest.weekly", notify.EventPatch{Enabled: &disabled}); err != nil {
+		t.Fatal("disable weekly digest fixture event:", err)
+	}
+	scheduler := newDigestScheduler(pool, notifications, nil)
+	scheduler.Now = func() time.Time { return now }
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal("run large digest scheduler:", err)
+	}
+	parts := loadDigestEventParts(t, ctx, pool, "digest.daily")
+	if len(parts) < 2 {
+		t.Fatalf("queued Telegram parts = %d, want multiple", len(parts))
+	}
+	if got := countCompletedDailyDigestPeriods(t, ctx, pool); got != 1 {
+		t.Fatalf("completed daily digest periods = %d, want 1", got)
+	}
+	var telegramSummary strings.Builder
+	for index, part := range parts {
+		var payload map[string]string
+		if err := json.Unmarshal(part.payload, &payload); err != nil {
+			t.Fatal("decode queued Telegram part")
+		}
+		if payload["telegram_part"] != fmt.Sprint(index+1) || payload["telegram_parts"] != fmt.Sprint(len(parts)) {
+			t.Errorf("part numbering = %q of %q, want %d of %d", payload["telegram_part"], payload["telegram_parts"], index+1, len(parts))
+		}
+		telegramSummary.WriteString(payload["telegram_summary"])
+		if index == 0 {
+			if strings.Join(part.channels, ",") != "telegram,email" || !strings.Contains(payload["summary"], nodeNames[len(nodeNames)-1]) {
+				t.Fatalf("first part must carry one full e-mail summary and both channels: channels=%v", part.channels)
+			}
+		} else if strings.Join(part.channels, ",") != "telegram" {
+			t.Errorf("part %d channels = %v, want Telegram only", index+1, part.channels)
+		}
+	}
+	if got := telegramSummary.String(); !strings.Contains(got, nodeNames[0]) || !strings.Contains(got, nodeNames[len(nodeNames)-1]) {
+		t.Fatal("queued Telegram parts do not reconstruct all per-node summaries")
+	}
+	if consumed := consumeDigestOutbox(t, ctx, notifications); consumed != len(parts) {
+		t.Fatalf("consumed outbox rows = %d, want %d", consumed, len(parts))
+	}
+	if got := countEmailDeliveries(t, ctx, pool); got != 1 {
+		t.Fatalf("e-mail deliveries = %d, want exactly one", got)
+	}
+	if dispatched := dispatchDigestDeliveries(t, ctx, notifications, len(parts)+3); dispatched != len(parts)+1 {
+		t.Fatalf("initial delivery attempts = %d, want %d Telegram parts plus one e-mail", dispatched, len(parts)+1)
+	}
+	if !sender.failed {
+		t.Fatal("the configured Telegram chunk failure was not exercised")
+	}
+	if got := countDigestDeliveryStatus(t, ctx, pool, "telegram", "pending"); got != 1 {
+		t.Fatalf("pending Telegram deliveries after one failure = %d, want 1", got)
+	}
+	if got := countDigestDeliveryStatus(t, ctx, pool, "telegram", "sent"); got != len(parts)-1 {
+		t.Fatalf("sent Telegram deliveries after first pass = %d, want %d", got, len(parts)-1)
+	}
+	for _, message := range sender.attempted["telegram"] {
+		if units := digestTelegramUTF16Units(message); units > 4096 {
+			t.Fatalf("sent Telegram text has %d UTF-16 units", units)
+		}
+		if !strings.HasPrefix(message, "Part ") {
+			t.Fatalf("Telegram message has no explicit part number: %q", message)
+		}
+	}
+	now = now.Add(time.Minute)
+	if dispatched := dispatchDigestDeliveries(t, ctx, notifications, 2); dispatched != 1 {
+		t.Fatalf("retry delivery attempts = %d, want the single failed part", dispatched)
+	}
+	if got := countDigestDeliveryStatus(t, ctx, pool, "telegram", "sent"); got != len(parts) {
+		t.Fatalf("sent Telegram deliveries after retry = %d, want %d", got, len(parts))
+	}
+	if got := countEmailDeliveries(t, ctx, pool); got != 1 {
+		t.Fatalf("e-mail deliveries after Telegram retry = %d, want 1", got)
+	}
+	if len(sender.sent["email"]) != 1 {
+		t.Fatalf("e-mail sends = %d, want exactly one", len(sender.sent["email"]))
+	}
+	if got := len(sender.attempted["telegram"]); got != len(parts)+1 {
+		t.Fatalf("Telegram sends including one retry = %d, want %d", got, len(parts)+1)
+	}
+	telegram := strings.Join(sender.sent["telegram"], "\n")
+	for index, name := range nodeNames {
+		escapedName := strings.ReplaceAll(name, "&", "&amp;")
+		if count := strings.Count(telegram, escapedName); count != 1 {
+			t.Errorf("Telegram contains node %d name %d times, want once", index, count)
+		}
+		down, up := 100+float64(index), 40+float64(index)
+		for _, value := range []string{
+			"1 test: 1 successful, 0 failed",
+			fmt.Sprintf("avg down %.2f Mbps", down),
+			fmt.Sprintf("avg up %.2f Mbps", up),
+		} {
+			if !strings.Contains(telegram, value) {
+				t.Errorf("Telegram summary for node %d omits %q", index, value)
+			}
+		}
+	}
+	email := sender.sent["email"][0]
+	for index, name := range nodeNames {
+		down, up := 100+float64(index), 40+float64(index)
+		for _, value := range []string{
+			name + " — 1 test: 1 successful, 0 failed",
+			fmt.Sprintf("avg down %.2f Mbps", down),
+			fmt.Sprintf("avg up %.2f Mbps", up),
+		} {
+			if !strings.Contains(email, value) {
+				t.Errorf("e-mail summary for node %d omits %q", index, value)
+			}
+		}
+	}
+}
+
+func TestAC2DigestNotificationsWithBothDestinationsDisabledStaySilentIntegration(t *testing.T) {
+	pool, ctx := openDigestNotificationPool(t)
+	notifications := configureDigestNotifications(t, ctx, pool, false, false)
+	insertDigestSummaryFixtures(t, ctx, pool)
+	scheduler := newDigestScheduler(pool, notifications, nil)
+	scheduler.Now = func() time.Time { return time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC) }
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal("run digest scheduler with disabled destinations:", err)
+	}
+	if got := countDigestEvents(t, ctx, pool); got != 0 {
+		t.Fatalf("digest event count with both destinations disabled = %d, want 0", got)
+	}
+	if got := countAllDigestDeliveries(t, ctx, pool); got != 0 {
+		t.Fatalf("delivery count with both destinations disabled = %d, want 0", got)
+	}
+	if got := countCompletedDigestPeriods(t, ctx, pool); got != 2 {
+		t.Fatalf("completed digest periods = %d, want 2", got)
+	}
 }
 
 func TestAC1AC2DigestNotificationsDisabledEventChannelAndEmptyPeriodIntegration(t *testing.T) {
@@ -294,14 +530,37 @@ func insertDigestSummaryFixtures(t *testing.T, ctx context.Context, pool *pgxpoo
 	insertDigestResult(t, ctx, pool, 3, "2026-11-11 10:00:00+00", "ok", 80, 20)
 }
 
+func insertLargeDigestSummaryFixtures(t *testing.T, ctx context.Context, pool *pgxpool.Pool, count int) []string {
+	t.Helper()
+	if _, err := pool.Exec(ctx, `INSERT INTO ip_addresses(ip) VALUES('203.0.113.124'::inet) ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal("insert large digest IP fixture")
+	}
+	names := make([]string, 0, count)
+	for index := range count {
+		name := fmt.Sprintf("n-%03d-%s", index, strings.Repeat("界&😀", 31))
+		nodeID := fmt.Sprintf("b1000000-0000-4000-8000-%012x", index+1)
+		if _, err := pool.Exec(ctx, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES($1,$2,100,50)`, nodeID, name); err != nil {
+			t.Fatalf("insert large digest node %d: %v", index, err)
+		}
+		insertDigestNodeResult(t, ctx, pool, nodeID, 1000+index, "2026-11-17 10:00:00+00", "ok", 100+float64(index), 40+float64(index))
+		names = append(names, name)
+	}
+	return names
+}
+
 func insertDigestResult(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id int, at, status string, down, up float64) {
+	t.Helper()
+	insertDigestNodeResult(t, ctx, pool, digestTestNodeID, id, at, status, down, up)
+}
+
+func insertDigestNodeResult(t *testing.T, ctx context.Context, pool *pgxpool.Pool, nodeID string, id int, at, status string, down, up float64) {
 	t.Helper()
 	resultID := fmt.Sprintf("00000000-0000-4000-8000-%012x", id)
 	_, err := pool.Exec(ctx, `INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,ip,threads,error,server,engine)
 		VALUES($1::uuid,$2::uuid,$3::timestamptz,$4,CASE WHEN $4='failed' THEN NULL::double precision ELSE $5::double precision END,
 		CASE WHEN $4='failed' THEN NULL::double precision ELSE $6::double precision END,10,1,'203.0.113.124'::inet,4,
 		CASE WHEN $4='failed' THEN 'timeout' END,
-		CASE WHEN $4='failed' THEN NULL ELSE '{"id":1,"name":"fixture","city":"test"}'::jsonb END,'ookla')`, resultID, digestTestNodeID, at, status, down, up)
+		CASE WHEN $4='failed' THEN NULL ELSE '{"id":1,"name":"fixture","city":"test"}'::jsonb END,'ookla')`, resultID, nodeID, at, status, down, up)
 	if err != nil {
 		t.Fatalf("insert digest result: %v", err)
 	}
@@ -328,6 +587,29 @@ func loadDigestEvents(t *testing.T, ctx context.Context, pool *pgxpool.Pool) map
 		t.Fatal("read digest outbox events")
 	}
 	return result
+}
+
+func loadDigestEventParts(t *testing.T, ctx context.Context, pool *pgxpool.Pool, key string) []digestQueuedPart {
+	t.Helper()
+	rows, err := pool.Query(ctx, `SELECT e.id::text,e.payload,COALESCE(o.channels,ARRAY[]::text[])
+		FROM alert_events e LEFT JOIN alert_notification_outbox o ON o.event_id=e.id
+		WHERE e.event_key=$1 ORDER BY (e.payload->>'telegram_part')::integer`, key)
+	if err != nil {
+		t.Fatal("load digest outbox parts")
+	}
+	defer rows.Close()
+	var parts []digestQueuedPart
+	for rows.Next() {
+		var part digestQueuedPart
+		if err := rows.Scan(&part.id, &part.payload, &part.channels); err != nil {
+			t.Fatal("scan digest outbox part")
+		}
+		parts = append(parts, part)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal("read digest outbox parts")
+	}
+	return parts
 }
 
 func assertDigestQueuedEvent(t *testing.T, event digestQueuedEvent, channels []string, summary, link string) {
@@ -361,7 +643,7 @@ func assertDigestPayloadHasNoCredential(t *testing.T, payload []byte) {
 func consumeDigestOutbox(t *testing.T, ctx context.Context, store *notify.Store) int {
 	t.Helper()
 	consumed := 0
-	for range 3 {
+	for range 1000 {
 		didConsume, err := store.Consume(ctx)
 		if err != nil {
 			t.Fatal("consume digest outbox")
@@ -409,6 +691,25 @@ func countDigestEvents(t *testing.T, ctx context.Context, pool *pgxpool.Pool) in
 	return count
 }
 
+func countCompletedDailyDigestPeriods(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM digest_periods WHERE kind='daily' AND completed_at IS NOT NULL`).Scan(&count); err != nil {
+		t.Fatal("count completed daily digest periods:", err)
+	}
+	return count
+}
+
+func countDigestDeliveryStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, channel, status string) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries d
+		JOIN alert_events e ON e.id=d.event_id WHERE e.event_key='digest.daily' AND d.channel=$1 AND d.status=$2`, channel, status).Scan(&count); err != nil {
+		t.Fatal("count digest delivery status:", err)
+	}
+	return count
+}
+
 func countEmailDeliveries(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int {
 	t.Helper()
 	var count int
@@ -434,4 +735,15 @@ func countAllDigestDeliveries(t *testing.T, ctx context.Context, pool *pgxpool.P
 		t.Fatal("count digest deliveries:", err)
 	}
 	return count
+}
+
+func digestTelegramUTF16Units(text string) int {
+	units := 0
+	for _, character := range text {
+		units++
+		if character > 0xFFFF {
+			units++
+		}
+	}
+	return units
 }

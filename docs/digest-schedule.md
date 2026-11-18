@@ -68,14 +68,23 @@ period's digest, not as a second digest for the completed period.
 
 ## Message and delivery
 
-Daily and weekly e-mail messages include each node's successful and failed test
-counts and average download and upload speeds. Node names are rendered on one
-line. Populated periods use the transaction's `Settings.CenterURL` value to
-build the dashboard link. Only absolute HTTP or HTTPS base URLs without
-credentials, query strings or fragments, and with a generated link no longer
-than 512 characters, are accepted. The link points to `/#/`, the UI's dashboard
-route. Empty periods say that no speed test results were recorded and do not
-require a dashboard link.
+Daily and weekly digests include every node's successful and failed test counts
+and average download and upload speeds. Node names are rendered on one line.
+E-mail receives the complete summary once. Telegram receives the same details
+in individually retryable outbox deliveries. Each part has an explicit `Part N of M`
+label, and the parts are created in the same transaction as the period's
+completion marker. Each final Telegram `sendMessage` text is at most 4096
+UTF-16 units after HTML escaping. Long text is split at Unicode rune boundaries
+without dropping characters. Empty periods say that no speed test results were
+recorded and do not require a dashboard link.
+
+When a digest link is included, it is built from the current
+`Settings.CenterURL` during dispatch. Only absolute HTTP or HTTPS base URLs
+without credentials, query strings or fragments, and with a generated link no
+longer than 512 characters, are accepted. The link points to `/#/`, the UI's
+dashboard route. An invalid or changed URL can remove the link, but it never
+removes digest details or claims that omitted details are available on the
+rolling dashboard.
 
 Eligibility is checked before the summary is formatted. Disabled digest events,
 periods without an enabled configured Telegram or e-mail destination, and
@@ -84,21 +93,22 @@ event or outbox row. This avoids retrying permanent settings errors. Successful
 event/outbox creation and the period completion marker commit together, so a
 late result or later settings change cannot requeue a completed period.
 
-Digest templates support `{period}`, `{summary}` and `{link}`. E-mail receives
-the complete per-node counts and averages. Telegram receives node/test count
-totals and an explicit dashboard continuation; it stays within the Bot API's
-4096-character `sendMessage` limit after rendering. If an owner template would
-exceed the limit, one bounded aggregate/dashboard message is sent instead. A
-single outbox delivery still makes only one Telegram `sendMessage` attempt, so
-partial multi-message success cannot duplicate part of a digest on retry.
-Telegram dynamic values are HTML-escaped; e-mail renders plain text.
+Digest templates support `{period}`, `{summary}` and `{link}`. Telegram always
+includes the complete detail for its numbered part, even if a custom template
+omits `{summary}`. A custom template that exceeds the provider limit falls back
+to a bounded part message without losing that part's details. Each part is one
+outbox event and delivery, so a failed part can retry without resending or
+discarding successful parts. Telegram dynamic values are HTML-escaped; e-mail
+renders plain text and carries the full summary on its single delivery.
 
 Integration coverage checks enabled and disabled destinations, populated and
-empty summaries, outbox dispatch after scheduler restart, and a late result for
-a completed period:
+empty summaries, bounded Unicode Telegram parts with an independent failed
+part retry, one full e-mail delivery, current-URL changes before dispatch,
+outbox dispatch after scheduler restart, and a late result for a completed
+period:
 
 ```bash
-go test -race -p 1 -tags integration ./cmd/center -run '^TestAC1AC2DigestNotifications(EnabledPopulatedRestartAndLateResult|DisabledEventChannelAndEmptyPeriod)Integration$' -count=1
+go test -race -p 1 -tags integration ./cmd/center -run '^TestAC.*Digest.*Integration$' -count=1
 ```
 
 ## Verification

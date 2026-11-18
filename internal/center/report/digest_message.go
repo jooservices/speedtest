@@ -18,10 +18,9 @@ var ErrInvalidDashboardURL = errors.New("invalid dashboard URL")
 
 // DigestMessage contains the safe dynamic fields used by daily and weekly notification templates.
 type DigestMessage struct {
-	Period          string
-	Summary         string
-	TelegramSummary string
-	Link            string
+	Period  string
+	Summary string
+	Link    string
 }
 
 // FormatDigest builds an owner-local period label and one line per summarized node.
@@ -34,7 +33,6 @@ func FormatDigest(summary PeriodSummary, dashboardBaseURL string) (DigestMessage
 	message := DigestMessage{Period: period}
 	if len(summary.Nodes) == 0 {
 		message.Summary = "No speed test results were recorded for this period."
-		message.TelegramSummary = message.Summary
 		return message, nil
 	}
 	message.Link, err = safeDashboardLink(dashboardBaseURL)
@@ -46,25 +44,7 @@ func FormatDigest(summary PeriodSummary, dashboardBaseURL string) (DigestMessage
 		lines = append(lines, formatDigestNode(node))
 	}
 	message.Summary = strings.Join(lines, "\n")
-	message.TelegramSummary = formatTelegramDigestSummary(summary.Nodes)
 	return message, nil
-}
-
-func formatTelegramDigestSummary(nodes []NodeSummary) string {
-	var successes, failures int64
-	for _, node := range nodes {
-		successes += int64(node.Successes)
-		failures += int64(node.Failures)
-	}
-	nodeLabel, testLabel := "nodes", "tests"
-	if len(nodes) == 1 {
-		nodeLabel = "node"
-	}
-	if successes+failures == 1 {
-		testLabel = "test"
-	}
-	return fmt.Sprintf("%d %s, %d %s: %d successful, %d failed. Per-node counts and averages continue in the dashboard.",
-		len(nodes), nodeLabel, successes+failures, testLabel, successes, failures)
 }
 
 func digestPeriodLabel(summary PeriodSummary) (string, error) {
@@ -137,4 +117,9 @@ func safeDashboardLink(raw string) (string, error) {
 func IsDashboardLinkFor(baseURL, link string) bool {
 	expected, err := safeDashboardLink(baseURL)
 	return err == nil && expected == link
+}
+
+// DashboardLink returns the generated dashboard route for a safe configured base URL.
+func DashboardLink(baseURL string) (string, error) {
+	return safeDashboardLink(baseURL)
 }

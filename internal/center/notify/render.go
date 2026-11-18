@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"strings"
+	"strconv"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -16,7 +16,6 @@ import (
 const (
 	maxTelegramMessageUnits = 4096
 	maxDigestPeriodUnits    = 256
-	maxDigestSummaryUnits   = 512
 )
 
 type rowQuerier interface {
@@ -93,14 +92,23 @@ func prepareDeliveryVariables(data map[string]string, eventKey, channel, centerU
 func prepareDigestVariables(data map[string]string, channel, centerURL string) {
 	data["node"] = "Command center"
 	data["center"] = ""
-	if data["link"] != "" && !report.IsDashboardLinkFor(centerURL, data["link"]) {
-		data["link"] = ""
+	if data["link"] != "" {
+		link, err := report.DashboardLink(centerURL)
+		if err != nil {
+			data["link"] = ""
+			data["digest_link_safe"] = "false"
+		} else {
+			data["link"] = link
+			data["digest_link_safe"] = "true"
+		}
 	}
 	if channel != "telegram" {
 		return
 	}
-	data["summary"] = boundedDigestSummary(data)
-	if telegramTextUnits(data["period"]) > maxDigestPeriodUnits {
+	if data["telegram_summary"] != "" {
+		data["summary"] = data["telegram_summary"]
+	}
+	if telegramEscapedTextUnits(data["period"]) > maxDigestPeriodUnits {
 		data["period"] = "Digest period"
 	}
 }
@@ -111,8 +119,24 @@ func renderDeliveryTemplate(channel, eventKey, body string, data map[string]stri
 		body = "{period}\n{summary}\n{link}"
 	}
 	rendered, err := template.Render(channel, body, data)
-	if err != nil || channel != "telegram" || !digest || telegramTextUnits(rendered) <= maxTelegramMessageUnits {
+	if err != nil || channel != "telegram" || !digest {
 		return rendered, err
+	}
+	if data["digest_link_safe"] == "false" {
+		return renderBoundedTelegramDigest(data)
+	}
+	if !templateHasSummary(body) {
+		summary, renderErr := template.Render("telegram", "{summary}", data)
+		if renderErr != nil {
+			return "", renderErr
+		}
+		rendered += "\n" + summary
+	}
+	if part := digestPartHeader(data); part != "" {
+		rendered = part + "\n" + rendered
+	}
+	if telegramTextUnits(rendered) <= maxTelegramMessageUnits {
+		return rendered, nil
 	}
 	return renderBoundedTelegramDigest(data)
 }
@@ -121,30 +145,57 @@ func isDigestEvent(key string) bool {
 	return key == "digest.daily" || key == "digest.weekly"
 }
 
-func boundedDigestSummary(data map[string]string) string {
-	summary := data["telegram_summary"]
-	if summary == "" && strings.HasPrefix(data["summary"], "No speed test results were recorded") {
-		summary = data["summary"]
+func templateHasSummary(body string) bool {
+	for _, placeholder := range template.PlaceholdersIn(body) {
+		if placeholder == "summary" {
+			return true
+		}
 	}
-	if summary == "" || telegramTextUnits(summary) > maxDigestSummaryUnits {
-		return "Per-node counts and averages continue in the dashboard."
-	}
-	return summary
+	return false
 }
 
 func renderBoundedTelegramDigest(data map[string]string) (string, error) {
-	body := "{period}\n{summary}\nFull per-node details and averages continue in the dashboard. Open dashboard: {link}"
-	if data["link"] == "" {
-		body = "{period}\n{summary}"
+	bounded := mapsClone(data)
+	body := "{period}\n{summary}"
+	if bounded["link"] != "" {
+		body += "\nDashboard: {link}"
 	}
-	rendered, err := template.Render("telegram", body, data)
+	rendered, err := renderBoundedBody(body, bounded)
+	if err != nil || telegramTextUnits(rendered) <= maxTelegramMessageUnits {
+		return rendered, err
+	}
+	bounded["link"] = ""
+	rendered, err = renderBoundedBody("{period}\n{summary}", bounded)
 	if err != nil {
-		return "", err
+		return rendered, err
 	}
 	if telegramTextUnits(rendered) > maxTelegramMessageUnits {
 		return "", template.ErrInvalidTemplate
 	}
 	return rendered, nil
+}
+
+func renderBoundedBody(body string, data map[string]string) (string, error) {
+	rendered, err := template.Render("telegram", body, data)
+	if err != nil {
+		return "", err
+	}
+	if part := digestPartHeader(data); part != "" {
+		rendered = part + "\n" + rendered
+	}
+	return rendered, nil
+}
+
+func digestPartHeader(data map[string]string) string {
+	part, err := strconv.Atoi(data["telegram_part"])
+	if err != nil || part < 1 {
+		return ""
+	}
+	total, err := strconv.Atoi(data["telegram_parts"])
+	if err != nil || total < part {
+		return ""
+	}
+	return "Part " + strconv.Itoa(part) + " of " + strconv.Itoa(total)
 }
 
 func telegramTextUnits(text string) int {
@@ -154,6 +205,14 @@ func telegramTextUnits(text string) int {
 		if character > 0xFFFF {
 			units++
 		}
+	}
+	return units
+}
+
+func telegramEscapedTextUnits(text string) int {
+	units := 0
+	for _, character := range text {
+		units += telegramEscapedRuneUnits(character)
 	}
 	return units
 }

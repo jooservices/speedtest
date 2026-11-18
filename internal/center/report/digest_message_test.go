@@ -39,7 +39,7 @@ func TestAC1FormatDailyDigestIncludesNodeCountsAveragesAndDashboardRoute(t *test
 	}
 }
 
-func TestAC1FormatDigestRetainsFullEmailDetailAndBuildsTelegramAggregate(t *testing.T) {
+func TestAC1FormatDigestRetainsPerNodeTelegramAndEmailDetails(t *testing.T) {
 	const nodeCount = 160
 	down, up := 125.25, 22.5
 	nodes := make([]NodeSummary, 0, nodeCount)
@@ -61,14 +61,10 @@ func TestAC1FormatDigestRetainsFullEmailDetailAndBuildsTelegramAggregate(t *test
 	if !strings.Contains(message.Summary, "avg down 125.25 Mbps, avg up 22.50 Mbps") {
 		t.Fatal("full digest summary omitted per-node averages")
 	}
-	if !strings.Contains(message.TelegramSummary, "160 nodes, 480 tests: 320 successful, 160 failed") {
-		t.Fatalf("Telegram aggregate = %q", message.TelegramSummary)
-	}
-	if !strings.Contains(message.TelegramSummary, "Per-node counts and averages continue in the dashboard") {
-		t.Fatalf("Telegram continuation is missing: %q", message.TelegramSummary)
-	}
-	if strings.Contains(message.TelegramSummary, nodes[0].Node) || strings.Contains(message.TelegramSummary, nodes[len(nodes)-1].Node) {
-		t.Fatal("Telegram aggregate contains user-controlled node names")
+	for _, node := range []NodeSummary{nodes[0], nodes[len(nodes)-1]} {
+		if !strings.Contains(message.Summary, node.Node+" — 3 tests: 2 successful, 1 failed") {
+			t.Fatalf("per-node summary omitted %q", node.Node)
+		}
 	}
 	if len(message.Summary) <= 4096 {
 		t.Fatalf("test fixture summary has only %d bytes; want a realistic oversized digest", len(message.Summary))
@@ -168,11 +164,14 @@ func TestAC1DigestAverageFormattingHandlesMissingAndNonFiniteValues(t *testing.T
 }
 
 func TestAC1DashboardLinkUsesConfiguredHTTPBasePath(t *testing.T) {
-	got, err := safeDashboardLink("http://speedtest.example.test/center/")
+	got, err := DashboardLink("http://speedtest.example.test/center/")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "http://speedtest.example.test/center/#/" {
 		t.Errorf("dashboard link = %q", got)
+	}
+	if _, err := DashboardLink("https://owner:secret@speedtest.example.test"); !errors.Is(err, ErrInvalidDashboardURL) {
+		t.Fatalf("DashboardLink() error = %v, want unsafe URL rejection", err)
 	}
 }
