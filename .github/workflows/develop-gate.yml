@@ -1,0 +1,128 @@
+# The full gate set for a commit that was merged into develop, and one check that answers for all of it.
+# The four other workflows already run on every push to develop; this one adds what a pull request run does not
+# (the staging deploy tests) and the heavy checks that no other workflow runs (mutation check, UI coverage), and ends
+# with the single check named "Develop gate". The staging deploy, and anything else that needs to know that a develop
+# commit is fully verified, reads that one check by name.
+name: Develop gate
+
+on:
+  push:
+    branches: [develop]
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  staging-deploy-tests:
+    name: Staging deploy tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Smoke script unit tests
+        run: node --test tests/deploy/*.test.mjs
+
+      - name: Deploy script test
+        run: make test-staging-deploy
+
+  mutation:
+    name: Mutation check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The integration tests that the mutation check runs read the worktree .env and need a Postgres whose database carries the ownership marker.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: speedtest
+          POSTGRES_DB: speedtest_test
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U speedtest -d speedtest_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test environment
+        run: |
+          cp .env.example .env
+          psql -h 127.0.0.1 -U speedtest -d speedtest_test -c "COMMENT ON DATABASE speedtest_test IS 'workspaces-project:speedtest'"
+
+      - name: Mutation check
+        run: make mutation-check
+
+  ui-coverage:
+    name: UI coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Cache the Playwright browser
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: UI coverage
+        run: make ui-coverage
+
+  gate:
+    name: Develop gate
+    if: always()
+    needs: [staging-deploy-tests, mutation, ui-coverage]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      # A job that failed, was cancelled or was skipped makes the gate fail: only an all-success result passes.
+      - name: Every job of the gate succeeded
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "job results: ${RESULTS}"
+          for result in ${RESULTS}; do
+            if [ "${result}" != "success" ]; then
+              echo "Develop gate: a job ended as ${result}"
+              exit 1
+            fi
+          done
