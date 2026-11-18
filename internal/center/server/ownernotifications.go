@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/jooservices/speedtest/internal/center/audit"
+	"github.com/jooservices/speedtest/internal/center/catalog"
 	"github.com/jooservices/speedtest/internal/center/notify"
 	"github.com/jooservices/speedtest/internal/center/settings"
 )
@@ -172,7 +173,7 @@ func (h *ownerNotifications) queueTest(w http.ResponseWriter, r *http.Request, c
 	writeEnvelope(w, http.StatusAccepted, "Notification queued", d)
 }
 
-// listDeliveries pages the delivery attempts, optionally for one alert event.
+// listDeliveries pages the delivery attempts, optionally for one alert event or one status/channel pair.
 func (h *ownerNotifications) listDeliveries(w http.ResponseWriter, r *http.Request) {
 	page, size, ok := paging(w, r)
 	if !ok {
@@ -182,21 +183,60 @@ func (h *ownerNotifications) listDeliveries(w http.ResponseWriter, r *http.Reque
 		invalid(w, r, "page must be at most 1000000.")
 		return
 	}
-	event := ""
-	if v, present := r.URL.Query()["event"]; present {
-		if len(v) != 1 || !uuidPattern.MatchString(v[0]) {
-			invalid(w, r, "event must be an alert event ID.")
-			return
-		}
-		event = v[0]
+	filter, ok := deliveryFilter(w, r)
+	if !ok {
+		return
 	}
-	filter := notify.DeliveryFilter{Event: event, Status: r.URL.Query().Get("status"), Channel: r.URL.Query().Get("channel")}
 	items, total, err := h.store.Deliveries(r.Context(), filter, page, size)
 	if err != nil {
 		notificationError(w, r, err)
 		return
 	}
 	writePage(w, items, page, size, total)
+}
+
+// deliveryFilter reads the optional event, status and channel filters, rejecting unknown enum values.
+func deliveryFilter(w http.ResponseWriter, r *http.Request) (notify.DeliveryFilter, bool) {
+	var filter notify.DeliveryFilter
+	var present bool
+	var ok bool
+	if filter.Event, present, ok = notificationFilterValue(w, r, "event", "event must be an alert event ID."); !ok {
+		return filter, false
+	}
+	if present && !uuidPattern.MatchString(filter.Event) {
+		invalid(w, r, "event must be an alert event ID.")
+		return filter, false
+	}
+	if filter.Status, present, ok = notificationFilterValue(w, r, "status", "status must be pending, sent or failed."); !ok {
+		return filter, false
+	}
+	if present && !notify.ValidDeliveryStatus(filter.Status) {
+		invalid(w, r, "status must be pending, sent or failed.")
+		return filter, false
+	}
+	if filter.Channel, present, ok = notificationFilterValue(w, r, "channel", "channel must be email, telegram, slack or webhook."); !ok {
+		return filter, false
+	}
+	if present {
+		if _, known := catalog.LookupChannel(filter.Channel); !known {
+			invalid(w, r, "channel must be email, telegram, slack or webhook.")
+			return filter, false
+		}
+	}
+	return filter, true
+}
+
+// notificationFilterValue returns one optional query value and rejects a repeated parameter.
+func notificationFilterValue(w http.ResponseWriter, r *http.Request, name, detail string) (string, bool, bool) {
+	values, present := r.URL.Query()[name]
+	if !present {
+		return "", false, true
+	}
+	if len(values) != 1 {
+		invalid(w, r, detail)
+		return "", true, false
+	}
+	return values[0], true, true
 }
 
 func (h *ownerNotifications) getDelivery(w http.ResponseWriter, r *http.Request, id string) {
