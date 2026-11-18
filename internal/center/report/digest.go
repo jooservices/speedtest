@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const digestHour = 8
@@ -98,8 +99,9 @@ type DigestScheduler struct {
 	Timezone func(context.Context) (string, error)
 	Log      *slog.Logger
 
-	leaseDuration time.Duration
-	retryDelay    time.Duration
+	leaseDuration        time.Duration
+	retryDelay           time.Duration
+	schedulePollInterval time.Duration
 }
 
 const (
@@ -107,9 +109,34 @@ const (
 	digestRetryDelay        = 5 * time.Minute
 	digestCleanupTime       = 5 * time.Second
 	digestScheduleBatchSize = 32
+	digestSchedulePoll      = time.Minute
 )
 
 var errDigestLeaseLost = errors.New("digest period lease is no longer owned")
+
+type digestError struct {
+	code  string
+	cause error
+}
+
+func (e *digestError) Error() string { return e.cause.Error() }
+
+func (e *digestError) Unwrap() error { return e.cause }
+
+func withDigestCode(code string, cause error) error {
+	if cause == nil {
+		return nil
+	}
+	return &digestError{code: code, cause: cause}
+}
+
+func digestErrorCode(err error) string {
+	var failure *digestError
+	if errors.As(err, &failure) {
+		return failure.code
+	}
+	return "run_failed"
+}
 
 func (s *DigestScheduler) now() time.Time {
 	if s.Now != nil {
@@ -146,24 +173,19 @@ func (s *DigestScheduler) RunOnce(ctx context.Context) error {
 	now := s.now()
 	zone, location, err := s.ownerLocation(ctx)
 	if err != nil {
-		return err
+		return withDigestCode("timezone_read", err)
 	}
 	keys, err := s.periodKeys(ctx, now, zone, location)
 	if err != nil {
-		return err
+		return withDigestCode("schedule_read", err)
 	}
 	var errs []error
 	for _, key := range keys {
-		if err := s.process(ctx, key, now, zone); err != nil {
+		if err := s.process(ctx, key, zone); err != nil {
 			errs = append(errs, err)
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func (s *DigestScheduler) location(ctx context.Context) (*time.Location, error) {
-	_, location, err := s.ownerLocation(ctx)
-	return location, err
 }
 
 func (s *DigestScheduler) ownerLocation(ctx context.Context) (string, *time.Location, error) {
@@ -202,11 +224,11 @@ func (s *DigestScheduler) ownerTimezone(ctx context.Context) (string, error) {
 
 func (s *DigestScheduler) periodKeys(ctx context.Context, now time.Time, zone string, location *time.Location) ([]digestPeriodKey, error) {
 	if err := s.schedule(ctx, now, zone, dueDigestPeriods(now, location)); err != nil {
-		return nil, err
+		return nil, withDigestCode("schedule_write", err)
 	}
 	pending, err := s.pending(ctx, now)
 	if err != nil {
-		return nil, err
+		return nil, withDigestCode("pending_read", err)
 	}
 	return pending, nil
 }
@@ -329,28 +351,33 @@ func (s *DigestScheduler) pending(ctx context.Context, now time.Time) ([]digestP
 	return keys, rows.Err()
 }
 
-func (s *DigestScheduler) process(ctx context.Context, key digestPeriodKey, now time.Time, zone string) error {
-	leaseID, storedZone, claimed, err := s.claim(ctx, key, now, zone)
+func (s *DigestScheduler) process(ctx context.Context, key digestPeriodKey, zone string) error {
+	leaseID, storedZone, claimed, err := s.claim(ctx, key, zone)
 	if err != nil || !claimed {
-		return err
+		return withDigestCode("claim", err)
 	}
 	period, err := NewPeriod(key.kind, key.localDate, storedZone)
 	if err != nil {
-		return s.release(ctx, key, leaseID, s.now().Add(s.retry()), err)
+		return s.release(ctx, key, leaseID, s.now().Add(s.retry()), withDigestCode("period_build", err))
 	}
 	workCtx, finishLease := s.maintainLease(ctx, key, leaseID, s.leaseTTL())
 	enqueueErr := s.enqueue(workCtx, key, leaseID, period)
 	leaseErr := finishLease()
 	if leaseErr != nil {
-		return errors.Join(enqueueErr, leaseErr)
+		code := "lease_renewal"
+		if errors.Is(leaseErr, errDigestLeaseLost) {
+			code = "lease_lost"
+		}
+		return errors.Join(withDigestCode("enqueue", enqueueErr), withDigestCode(code, leaseErr))
 	}
 	if enqueueErr != nil {
-		return s.release(ctx, key, leaseID, s.now().Add(s.retry()), enqueueErr)
+		return s.release(ctx, key, leaseID, s.now().Add(s.retry()), withDigestCode("enqueue", enqueueErr))
 	}
 	return nil
 }
 
-func (s *DigestScheduler) claim(ctx context.Context, key digestPeriodKey, now time.Time, zone string) (string, string, bool, error) {
+func (s *DigestScheduler) claim(ctx context.Context, key digestPeriodKey, zone string) (string, string, bool, error) {
+	now := s.now()
 	leaseID := uuid.NewString()
 	var storedZone string
 	err := s.DB.QueryRow(ctx, claimDigestSQL, string(key.kind), key.localDate, zone, now, leaseID, now.Add(s.leaseTTL())).Scan(&storedZone)
@@ -472,27 +499,92 @@ func (s *DigestScheduler) Loop(ctx context.Context) {
 			return
 		}
 		wait := s.loopWait(ctx, runErr)
+		timer := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
+			timer.Stop()
 			return
-		case <-time.After(wait):
+		case <-timer.C:
 		}
 	}
 }
 
 func (s *DigestScheduler) loopWait(ctx context.Context, runErr error) time.Duration {
 	if runErr != nil {
-		s.logger().Warn("digest schedule run failed; it will be retried", "error", "see the center log")
+		s.logger().Warn("digest schedule run failed; it will be retried", "code", digestErrorCode(runErr))
 		return s.retry()
 	}
-	location, err := s.location(ctx)
+	zone, location, err := s.ownerLocation(ctx)
 	if err != nil {
-		s.logger().Warn("digest schedule time zone is not readable; it will be retried", "error", "see the center log")
+		s.logger().Warn("digest schedule time zone is not readable; it will be retried", "code", "timezone_read")
 		return s.retry()
 	}
 	now := s.now()
-	if wait := nextDigestRun(now, location).Sub(now); wait > 0 {
-		return wait
+	wait := minDigestWait(nextDigestRun(now, location).Sub(now), s.pollInterval())
+	next, found, err := s.nextPendingEligibility(ctx)
+	if err != nil {
+		s.logger().Warn("digest schedule state is not readable; it will be retried", "code", "pending_read")
+		return s.retry()
 	}
-	return s.retry()
+	if found {
+		eligibilityWait := next.Sub(now)
+		if eligibilityWait <= 0 {
+			eligibilityWait = s.retry()
+		}
+		wait = minDigestWait(wait, eligibilityWait)
+	}
+	backlog, err := s.hasScheduleBacklog(ctx, now, zone, location)
+	if err != nil {
+		s.logger().Warn("digest schedule watermark is not readable; it will be retried", "code", "schedule_state_read")
+		return s.retry()
+	}
+	if backlog {
+		wait = minDigestWait(wait, s.retry())
+	}
+	return wait
+}
+
+func (s *DigestScheduler) pollInterval() time.Duration {
+	if s.schedulePollInterval > 0 {
+		return s.schedulePollInterval
+	}
+	return digestSchedulePoll
+}
+
+func minDigestWait(first, second time.Duration) time.Duration {
+	if first <= 0 {
+		return second
+	}
+	if second <= 0 || first < second {
+		return first
+	}
+	return second
+}
+
+func (s *DigestScheduler) nextPendingEligibility(ctx context.Context) (time.Time, bool, error) {
+	var next pgtype.Timestamptz
+	err := s.DB.QueryRow(ctx, `SELECT MIN(GREATEST(next_attempt_at, COALESCE(lease_until, next_attempt_at)))
+		FROM digest_periods WHERE completed_at IS NULL`).Scan(&next)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	return next.Time, next.Valid, nil
+}
+
+func (s *DigestScheduler) hasScheduleBacklog(ctx context.Context, now time.Time, zone string, location *time.Location) (bool, error) {
+	for _, latest := range dueDigestPeriods(now, location) {
+		var savedZone, scheduledThrough string
+		err := s.DB.QueryRow(ctx, `SELECT timezone, scheduled_through::text FROM digest_schedule_state WHERE kind=$1`,
+			string(latest.kind)).Scan(&savedZone, &scheduledThrough)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return true, nil
+		}
+		if err != nil {
+			return false, err
+		}
+		if savedZone != zone || scheduledThrough < latest.localDate {
+			return true, nil
+		}
+	}
+	return false, nil
 }

@@ -66,6 +66,28 @@ func fixedNow(value time.Time) func() time.Time {
 	return func() time.Time { return value }
 }
 
+func movingDigestNow(start time.Time) func() time.Time {
+	wallStart := time.Now()
+	return func() time.Time { return start.Add(time.Since(wallStart)) }
+}
+
+func waitForDigestCompletion(t *testing.T, ctx context.Context, pool *pgxpool.Pool, kind PeriodKind, date string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		var completed bool
+		err := pool.QueryRow(ctx, `SELECT completed_at IS NOT NULL FROM digest_periods WHERE kind=$1 AND local_date=$2::date`, string(kind), date).Scan(&completed)
+		if err != nil {
+			t.Fatal("cannot read digest completion state")
+		}
+		if completed {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("period %s %s was not completed before its next daily run", kind, date)
+}
+
 func findDigestPeriod(t *testing.T, periods []Period, kind PeriodKind, date string) Period {
 	t.Helper()
 	for _, period := range periods {
@@ -238,6 +260,277 @@ func TestAC1DigestSchedulerUsesDisplayPreferenceBrowserFallbackIntegration(t *te
 	daily := findDigestPeriod(t, periods, DailyPeriod, "2026-03-08")
 	if daily.Timezone() != "UTC" {
 		t.Fatalf("browser display preference was scheduled in %q, want UTC", daily.Timezone())
+	}
+}
+
+func TestAC2DigestLoopWakesAtRetryEligibilityBeforeNextDailyRunIntegration(t *testing.T) {
+	pool, ctx := openDigestPool(t)
+	setDigestTimezone(t, ctx, pool, "UTC")
+	start := time.Date(2026, 3, 10, 9, 0, 0, 0, time.UTC)
+	now := movingDigestNow(start)
+	retryAt := now().Add(250 * time.Millisecond)
+	if _, err := pool.Exec(ctx, `INSERT INTO digest_periods (kind, local_date, timezone, claimed_at, next_attempt_at)
+		VALUES ('daily', '2026-03-09', 'UTC', $1, $2)`, now(), retryAt); err != nil {
+		t.Fatal("cannot insert the retry-delayed digest fixture")
+	}
+	queued := make(chan struct{}, 1)
+	scheduler := &DigestScheduler{
+		DB:                   pool,
+		Now:                  now,
+		retryDelay:           40 * time.Millisecond,
+		schedulePollInterval: 5 * time.Second,
+		Enqueue: func(_ context.Context, _ pgx.Tx, period Period) error {
+			if period.Kind() == DailyPeriod && period.LocalDate() == "2026-03-09" {
+				queued <- struct{}{}
+			}
+			return nil
+		},
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { scheduler.Loop(loopCtx); close(done) }()
+	select {
+	case <-queued:
+	case <-time.After(2 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("retry-delayed period did not run after becoming eligible")
+	}
+	waitForDigestCompletion(t, ctx, pool, DailyPeriod, "2026-03-09")
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("digest loop did not stop after cancellation")
+	}
+}
+
+func TestAC2DigestLoopWakesAtLeaseExpiryBeforeNextDailyRunIntegration(t *testing.T) {
+	pool, ctx := openDigestPool(t)
+	setDigestTimezone(t, ctx, pool, "UTC")
+	start := time.Date(2026, 3, 10, 9, 0, 0, 0, time.UTC)
+	now := movingDigestNow(start)
+	claimedAt := now()
+	leaseUntil := claimedAt.Add(250 * time.Millisecond)
+	if _, err := pool.Exec(ctx, `INSERT INTO digest_periods (kind, local_date, timezone, claimed_at, lease_id, lease_until, attempt_count, next_attempt_at)
+		VALUES ('daily', '2026-03-09', 'UTC', $1, gen_random_uuid(), $2, 1, $1)`, claimedAt, leaseUntil); err != nil {
+		t.Fatal("cannot insert the leased digest fixture")
+	}
+	queued := make(chan struct{}, 1)
+	scheduler := &DigestScheduler{
+		DB:                   pool,
+		Now:                  now,
+		retryDelay:           40 * time.Millisecond,
+		schedulePollInterval: 5 * time.Second,
+		Enqueue: func(_ context.Context, _ pgx.Tx, period Period) error {
+			if period.Kind() == DailyPeriod && period.LocalDate() == "2026-03-09" {
+				queued <- struct{}{}
+			}
+			return nil
+		},
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { scheduler.Loop(loopCtx); close(done) }()
+	select {
+	case <-queued:
+	case <-time.After(2 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("expired lease was not recovered before the next daily run")
+	}
+	waitForDigestCompletion(t, ctx, pool, DailyPeriod, "2026-03-09")
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("digest loop did not stop after cancellation")
+	}
+}
+
+func TestAC1DigestLoopRechecksOwnerTimezoneWhileWaitingIntegration(t *testing.T) {
+	pool, ctx := openDigestPool(t)
+	setDigestTimezone(t, ctx, pool, "UTC")
+	clockMu := sync.Mutex{}
+	nowValue := time.Date(2026, 3, 10, 0, 59, 59, 0, time.UTC)
+	now := func() time.Time {
+		clockMu.Lock()
+		defer clockMu.Unlock()
+		return nowValue
+	}
+	reads := atomic.Int32{}
+	sleeping, resume := make(chan struct{}), make(chan struct{})
+	queued := make(chan struct{}, 1)
+	scheduler := &DigestScheduler{
+		DB:                   pool,
+		Now:                  now,
+		schedulePollInterval: 25 * time.Millisecond,
+		Timezone: func(readCtx context.Context) (string, error) {
+			var raw []byte
+			if err := pool.QueryRow(readCtx, `SELECT value FROM settings WHERE key='display'`).Scan(&raw); err != nil {
+				return "", err
+			}
+			var preferences struct {
+				Timezone string `json:"timezone"`
+			}
+			if err := json.Unmarshal(raw, &preferences); err != nil {
+				return "", err
+			}
+			if reads.Add(1) == 2 {
+				close(sleeping)
+				<-resume
+			}
+			return preferences.Timezone, nil
+		},
+		Enqueue: func(_ context.Context, _ pgx.Tx, period Period) error {
+			if period.Kind() == DailyPeriod && period.LocalDate() == "2026-03-09" {
+				queued <- struct{}{}
+			}
+			return nil
+		},
+	}
+	loopCtx, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() { scheduler.Loop(loopCtx); close(done) }()
+	select {
+	case <-sleeping:
+	case <-time.After(2 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("digest loop did not enter its scheduled wait")
+	}
+	setDigestTimezone(t, ctx, pool, "Asia/Ho_Chi_Minh")
+	clockMu.Lock()
+	nowValue = time.Date(2026, 3, 10, 1, 0, 0, 0, time.UTC)
+	clockMu.Unlock()
+	close(resume)
+	select {
+	case <-queued:
+	case <-time.After(2 * time.Second):
+		cancel()
+		<-done
+		t.Fatal("digest loop did not claim the new owner-local 08:00 period")
+	}
+	waitForDigestCompletion(t, ctx, pool, DailyPeriod, "2026-03-09")
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("digest loop did not stop after cancellation")
+	}
+}
+
+func TestAC1DigestSchedulerKeepsSelectionAndClaimOnOneTimezoneSnapshotIntegration(t *testing.T) {
+	pool, ctx := openDigestPool(t)
+	now := time.Date(2026, 3, 10, 1, 0, 0, 0, time.UTC)
+	var calls atomic.Int32
+	var periods []Period
+	scheduler := &DigestScheduler{
+		DB:  pool,
+		Now: fixedNow(now),
+		Timezone: func(context.Context) (string, error) {
+			if calls.Add(1) == 1 {
+				return "Asia/Ho_Chi_Minh", nil
+			}
+			return "UTC", nil
+		},
+		Enqueue: func(_ context.Context, _ pgx.Tx, period Period) error {
+			periods = append(periods, period)
+			return nil
+		},
+	}
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("owner time zone was read %d times in one scheduling decision, want 1", calls.Load())
+	}
+	findDigestPeriod(t, periods, DailyPeriod, "2026-03-09")
+	for _, period := range periods {
+		if period.Timezone() != "Asia/Ho_Chi_Minh" {
+			t.Errorf("period %s %s stored zone %q, want the selection snapshot", period.Kind(), period.LocalDate(), period.Timezone())
+		}
+	}
+}
+
+func TestAC2DigestSchedulerUsesFreshLeaseForEachSequentialClaimIntegration(t *testing.T) {
+	pool, ctx := openDigestPool(t)
+	setDigestTimezone(t, ctx, pool, "UTC")
+	now := movingDigestNow(time.Date(2026, 3, 10, 9, 0, 0, 0, time.UTC))
+	lease := 1200 * time.Millisecond
+	weeklyStarted, releaseWeekly := make(chan struct{}), make(chan struct{})
+	dailyStarted, releaseDaily := make(chan struct{}), make(chan struct{})
+	secondStarted, releaseSecond := make(chan struct{}), make(chan struct{})
+	first := &DigestScheduler{
+		DB:            pool,
+		Now:           now,
+		leaseDuration: lease,
+		Enqueue: func(_ context.Context, _ pgx.Tx, period Period) error {
+			if period.Kind() == WeeklyPeriod {
+				close(weeklyStarted)
+				<-releaseWeekly
+				return nil
+			}
+			close(dailyStarted)
+			<-releaseDaily
+			return nil
+		},
+	}
+	firstDone := make(chan error, 1)
+	go func() { firstDone <- first.RunOnce(ctx) }()
+	select {
+	case <-weeklyStarted:
+	case <-time.After(time.Second):
+		t.Fatal("first weekly enqueue did not start")
+	}
+	timer := time.NewTimer(lease + 150*time.Millisecond)
+	<-timer.C
+	close(releaseWeekly)
+	select {
+	case <-dailyStarted:
+	case <-time.After(time.Second):
+		close(releaseDaily)
+		t.Fatal("second daily enqueue did not start")
+	}
+	var leaseUntil time.Time
+	if err := pool.QueryRow(ctx, `SELECT lease_until FROM digest_periods WHERE kind='daily' AND local_date='2026-03-09'`).Scan(&leaseUntil); err != nil {
+		close(releaseDaily)
+		t.Fatal("cannot read second period lease")
+	}
+	if !leaseUntil.After(now()) {
+		close(releaseDaily)
+		t.Fatalf("second period lease expired while its callback was active: %s", leaseUntil)
+	}
+	second := &DigestScheduler{
+		DB:  pool,
+		Now: now,
+		Enqueue: func(context.Context, pgx.Tx, Period) error {
+			close(secondStarted)
+			<-releaseSecond
+			return nil
+		},
+	}
+	secondDone := make(chan error, 1)
+	go func() { secondDone <- second.RunOnce(ctx) }()
+	select {
+	case <-secondStarted:
+		close(releaseSecond)
+		close(releaseDaily)
+		<-firstDone
+		<-secondDone
+		t.Fatal("another center reclaimed the active second period")
+	case err := <-secondDone:
+		if err != nil {
+			close(releaseDaily)
+			t.Fatal(err)
+		}
+	case <-time.After(2 * time.Second):
+		close(releaseDaily)
+		t.Fatal("second center did not finish its claim check")
+	}
+	close(releaseDaily)
+	if err := <-firstDone; err != nil {
+		t.Fatal(err)
 	}
 }
 

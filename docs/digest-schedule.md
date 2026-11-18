@@ -34,8 +34,15 @@ boundary; already-created periods retain their first-claim time-zone snapshot.
 The scheduler checks ready retry rows and materializes every due period after
 its watermark, so periods missed while centers are stopped are recovered after
 a restart, including a weekly period whose Monday 08:00 boundary arrives while
-the loop is waiting. A failed run is retried after five minutes rather than
-waiting for the next day.
+the loop is waiting. Each scheduling decision uses one time-zone snapshot for
+period selection, row creation and claim. The loop polls the owner preference
+once per minute to notice changes while waiting.
+
+The loop wakes at the next owner-local 08:00 boundary, the earliest pending
+retry or lease-expiry time, or the one-minute preference poll, whichever comes
+first. If a bounded schedule batch leaves more due periods, the next batch is
+scheduled after the retry delay. A failed run is retried after five minutes
+rather than waiting for the next day.
 
 ## Claim, lease and completion
 
@@ -45,8 +52,8 @@ completed row for the same local date and kind. The first claim stores the IANA
 time-zone snapshot; a retry keeps that snapshot, so its period bounds stay
 stable.
 
-A claim takes a 15-minute lease and records the attempt count and next retry
-time. The lease is renewed while the enqueue callback runs. A failed enqueue
+A claim takes a 15-minute lease measured from that individual claim and records
+the attempt count and next retry time. The lease is renewed while the enqueue callback runs. A failed enqueue
 releases the row with a five-minute retry delay and leaves `completed_at` null.
 A center that loses its lease cannot complete the period and its enqueue
 transaction rolls back, so another center can retry without a duplicate
