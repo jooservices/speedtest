@@ -4,10 +4,13 @@ package report_test
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jooservices/speedtest/internal/center/report"
 )
@@ -109,6 +112,134 @@ func TestAC1PeriodSummaryUsesExactLocalDatesAcrossMidnightRollbackIntegration(t 
 	if err != nil || len(weekly.Nodes) != 1 || weekly.Nodes[0].Successes != 6 || weekly.Nodes[0].AvgDown == nil || *weekly.Nodes[0].AvgDown != 350 {
 		t.Fatalf("summary for weekly period containing rollback: %v nodes=%+v", err, weekly.Nodes)
 	}
+}
+
+func TestAC1PrimaryEngineSummaryUsesTimestampIndexForLargeFixtureIntegration(t *testing.T) {
+	pool, ctx := openPool(t)
+	node := "00000000-0000-4000-8000-000000000126"
+	reportNode(t, ctx, pool, node, "plan-node")
+	mustExec(t, ctx, pool, `INSERT INTO ip_addresses(ip) VALUES ('203.0.113.124'::inet) ON CONFLICT DO NOTHING`)
+	insertSummaryPlanFixture(t, ctx, pool, node)
+	mustExec(t, ctx, pool, `ANALYZE results`)
+	period, err := report.NewPeriod(report.DailyPeriod, "2010-11-06", "America/St_Johns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured := &summaryPlanPool{pool: pool}
+	got, err := (&report.Store{DB: captured}).Summarize(ctx, period)
+	if err != nil {
+		t.Fatalf("Summarize() error = %v", err)
+	}
+	if len(got.Nodes) != 1 || got.Nodes[0].Successes != 25 {
+		t.Fatalf("summary did not select the 25 exact local-date results: %+v", got.Nodes)
+	}
+	indexDefinition := resultTimestampIndex(t, ctx, pool)
+	if !strings.Contains(indexDefinition, "(ts)") {
+		t.Fatalf("results timestamp index has an unexpected definition: %s", indexDefinition)
+	}
+	plan := explainSummaryQuery(t, ctx, pool, captured)
+	assertBoundedTimestampIndexPlan(t, plan)
+}
+
+const summaryPlanFixtureRows = 100000
+
+func insertSummaryPlanFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool, node string) {
+	t.Helper()
+	_, err := pool.Exec(ctx, `INSERT INTO results(id,node_id,ts,status,down_mbps,up_mbps,ping_ms,server_id,ip,threads,server,engine)
+		SELECT md5('joost-123-summary-plan-' || sequence::text)::uuid,$1::uuid,
+			TIMESTAMPTZ '2010-01-01 00:00:00+00' + sequence * INTERVAL '1 hour',
+			'ok',100,50,10,1,'203.0.113.124'::inet,4,
+			'{"id":1,"name":"plan fixture","city":"test"}'::jsonb,'ookla'
+		FROM generate_series(0,$2::integer - 1) AS fixture(sequence)`, node, summaryPlanFixtureRows)
+	if err != nil {
+		t.Fatal("large summary query-plan fixture insert failed")
+	}
+}
+
+func resultTimestampIndex(t *testing.T, ctx context.Context, pool *pgxpool.Pool) string {
+	t.Helper()
+	var definition string
+	if err := pool.QueryRow(ctx, `SELECT indexdef FROM pg_indexes WHERE tablename='results' AND indexname='results_ts_idx'`).Scan(&definition); err != nil {
+		t.Fatal("results timestamp index is missing")
+	}
+	return definition
+}
+
+func explainSummaryQuery(t *testing.T, ctx context.Context, pool *pgxpool.Pool, captured *summaryPlanPool) summaryExplainNode {
+	t.Helper()
+	var raw []byte
+	if err := pool.QueryRow(ctx, `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) `+captured.query, captured.args...).Scan(&raw); err != nil {
+		t.Fatal("summary query plan failed")
+	}
+	var document []summaryExplainDocument
+	if err := json.Unmarshal(raw, &document); err != nil || len(document) != 1 {
+		t.Fatal("summary query plan was not valid JSON")
+	}
+	return document[0].Plan
+}
+
+func assertBoundedTimestampIndexPlan(t *testing.T, plan summaryExplainNode) {
+	t.Helper()
+	stats := summaryPlanStats{}
+	inspectSummaryPlan(plan, &stats)
+	if !stats.timestampIndexRead {
+		t.Error("summary plan did not read results through results_ts_idx")
+	}
+	if stats.resultsSequentialScan {
+		t.Error("summary plan sequentially scanned results")
+	}
+	if stats.resultRowsOverBound {
+		t.Errorf("summary plan read more than %d result rows", summaryPlanReadLimit)
+	}
+}
+
+func inspectSummaryPlan(node summaryExplainNode, stats *summaryPlanStats) {
+	if node.IndexName == "results_ts_idx" && node.ActualRows <= summaryPlanReadLimit {
+		stats.timestampIndexRead = true
+	}
+	if node.RelationName == "results" {
+		if node.NodeType == "Seq Scan" {
+			stats.resultsSequentialScan = true
+		}
+		if node.ActualRows > summaryPlanReadLimit {
+			stats.resultRowsOverBound = true
+		}
+	}
+	for _, child := range node.Plans {
+		inspectSummaryPlan(child, stats)
+	}
+}
+
+const summaryPlanReadLimit = 1000
+
+type summaryPlanPool struct {
+	pool  *pgxpool.Pool
+	query string
+	args  []any
+}
+
+func (p *summaryPlanPool) Query(ctx context.Context, query string, args ...any) (pgx.Rows, error) {
+	p.query = query
+	p.args = append([]any(nil), args...)
+	return p.pool.Query(ctx, query, args...)
+}
+
+type summaryExplainDocument struct {
+	Plan summaryExplainNode `json:"Plan"`
+}
+
+type summaryExplainNode struct {
+	NodeType     string               `json:"Node Type"`
+	RelationName string               `json:"Relation Name"`
+	IndexName    string               `json:"Index Name"`
+	ActualRows   float64              `json:"Actual Rows"`
+	Plans        []summaryExplainNode `json:"Plans"`
+}
+
+type summaryPlanStats struct {
+	timestampIndexRead    bool
+	resultsSequentialScan bool
+	resultRowsOverBound   bool
 }
 
 func periodResult(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id int, node, at, status, engine string, down any) {
