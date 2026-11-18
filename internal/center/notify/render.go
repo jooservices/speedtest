@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -14,8 +16,14 @@ import (
 )
 
 const (
-	maxTelegramMessageUnits = 4096
-	maxDigestPeriodUnits    = 256
+	maxTelegramMessageUnits        = 4096
+	maxDigestPeriodUnits           = 256
+	maxDigestDashboardLinkRunes    = 512
+	maxDigestDashboardLinkUnits    = maxDigestDashboardLinkRunes * 6
+	maxDigestPartHeaderUnits       = 47
+	digestDashboardLinePrefixUnits = 12 // newline plus "Dashboard: "
+	maxDigestChunkTextUnits        = maxTelegramMessageUnits - maxDigestDashboardLinkUnits - maxDigestPeriodUnits - maxDigestPartHeaderUnits - 2 - digestDashboardLinePrefixUnits
+	emptyDigestSummary             = "No speed test results were recorded for this period."
 )
 
 type rowQuerier interface {
@@ -30,7 +38,9 @@ func (s *Store) renderDelivery(ctx context.Context, q rowQuerier, d Delivery, ce
 	if err != nil {
 		return "", err
 	}
-	prepareDeliveryVariables(delivery.values, delivery.eventKey, d.Channel, centerURL)
+	if err := prepareDeliveryVariables(delivery.values, delivery.eventKey, d.Channel, centerURL); err != nil {
+		return "", err
+	}
 	if delivery.values["severity_icon"] == "" {
 		delivery.values["severity_icon"] = template.SeverityIcon(delivery.values["severity"])
 	}
@@ -76,10 +86,9 @@ func loadDeliveryTemplateData(ctx context.Context, q rowQuerier, eventID string)
 	return fields, nil
 }
 
-func prepareDeliveryVariables(data map[string]string, eventKey, channel, centerURL string) {
+func prepareDeliveryVariables(data map[string]string, eventKey, channel, centerURL string) error {
 	if isDigestEvent(eventKey) {
-		prepareDigestVariables(data, channel, centerURL)
-		return
+		return prepareDigestVariables(data, channel, centerURL)
 	}
 	if data["link"] == "" {
 		data["link"] = trimRightSlash(centerURL) + "/#/alerts"
@@ -87,23 +96,24 @@ func prepareDeliveryVariables(data map[string]string, eventKey, channel, centerU
 	if data["center"] == "" {
 		data["center"] = trimRightSlash(centerURL)
 	}
+	return nil
 }
 
-func prepareDigestVariables(data map[string]string, channel, centerURL string) {
+func prepareDigestVariables(data map[string]string, channel, centerURL string) error {
 	data["node"] = "Command center"
 	data["center"] = ""
-	if data["link"] != "" {
+	if digestHasResults(data["summary"]) {
 		link, err := report.DashboardLink(centerURL)
 		if err != nil {
-			data["link"] = ""
-			data["digest_link_safe"] = "false"
-		} else {
-			data["link"] = link
-			data["digest_link_safe"] = "true"
+			return err
 		}
+		data["link"] = link
+	} else {
+		data["link"] = ""
 	}
+	data["digest_link_safe"] = "true"
 	if channel != "telegram" {
-		return
+		return nil
 	}
 	if data["telegram_summary"] != "" {
 		data["summary"] = data["telegram_summary"]
@@ -111,26 +121,21 @@ func prepareDigestVariables(data map[string]string, channel, centerURL string) {
 	if telegramEscapedTextUnits(data["period"]) > maxDigestPeriodUnits {
 		data["period"] = "Digest period"
 	}
+	return nil
 }
 
 func renderDeliveryTemplate(channel, eventKey, body string, data map[string]string) (string, error) {
 	digest := isDigestEvent(eventKey)
-	if body == "" && digest {
-		body = "{period}\n{summary}\n{link}"
+	if digest {
+		var err error
+		body, err = digestTemplateBody(body, data)
+		if err != nil {
+			return "", err
+		}
 	}
 	rendered, err := template.Render(channel, body, data)
 	if err != nil || channel != "telegram" || !digest {
 		return rendered, err
-	}
-	if data["digest_link_safe"] == "false" {
-		return renderBoundedTelegramDigest(data)
-	}
-	if !templateHasSummary(body) {
-		summary, renderErr := template.Render("telegram", "{summary}", data)
-		if renderErr != nil {
-			return "", renderErr
-		}
-		rendered += "\n" + summary
 	}
 	if part := digestPartHeader(data); part != "" {
 		rendered = part + "\n" + rendered
@@ -141,35 +146,47 @@ func renderDeliveryTemplate(channel, eventKey, body string, data map[string]stri
 	return renderBoundedTelegramDigest(data)
 }
 
+func digestTemplateBody(body string, data map[string]string) (string, error) {
+	if body == "" {
+		body = "{period}\n{summary}\n{link}"
+	}
+	populated := digestHasResults(data["summary"])
+	if populated && (data["digest_link_safe"] != "true" || data["link"] == "") {
+		return "", report.ErrInvalidDashboardURL
+	}
+	return includeDigestRequirements(body, populated), nil
+}
+
 func isDigestEvent(key string) bool {
 	return key == "digest.daily" || key == "digest.weekly"
 }
 
-func templateHasSummary(body string) bool {
-	for _, placeholder := range template.PlaceholdersIn(body) {
-		if placeholder == "summary" {
-			return true
-		}
+func digestHasResults(summary string) bool {
+	return strings.TrimSpace(summary) != emptyDigestSummary
+}
+
+func includeDigestRequirements(body string, populated bool) string {
+	placeholders := template.PlaceholdersIn(body)
+	if !slices.Contains(placeholders, "summary") {
+		body += "\n{summary}"
 	}
-	return false
+	if populated && !slices.Contains(placeholders, "link") {
+		body += "\nDashboard: {link}"
+	}
+	return body
 }
 
 func renderBoundedTelegramDigest(data map[string]string) (string, error) {
 	bounded := mapsClone(data)
 	body := "{period}\n{summary}"
-	if bounded["link"] != "" {
+	if digestHasResults(bounded["summary"]) {
+		if bounded["digest_link_safe"] != "true" || bounded["link"] == "" {
+			return "", report.ErrInvalidDashboardURL
+		}
 		body += "\nDashboard: {link}"
 	}
 	rendered, err := renderBoundedBody(body, bounded)
-	if err != nil || telegramTextUnits(rendered) <= maxTelegramMessageUnits {
-		return rendered, err
-	}
-	bounded["link"] = ""
-	rendered, err = renderBoundedBody("{period}\n{summary}", bounded)
-	if err != nil {
-		return rendered, err
-	}
-	if telegramTextUnits(rendered) > maxTelegramMessageUnits {
+	if err != nil || telegramTextUnits(rendered) > maxTelegramMessageUnits {
 		return "", template.ErrInvalidTemplate
 	}
 	return rendered, nil
@@ -221,7 +238,7 @@ func (s *Store) templateBody(ctx context.Context, q rowQuerier, eventKey, channe
 	var body string
 	err := q.QueryRow(ctx, `SELECT body FROM notification_templates WHERE event_key=$1 AND channel=$2`, eventKey, channel).Scan(&body)
 	if err == nil {
-		if body == "" {
+		if strings.TrimSpace(body) == "" {
 			return "", template.ErrInvalidTemplate
 		}
 		return body, nil

@@ -92,10 +92,7 @@ func safeDashboardLink(raw string) (string, error) {
 	if err != nil {
 		return "", ErrInvalidDashboardURL
 	}
-	scheme := strings.ToLower(u.Scheme)
-	unsafe := (scheme != "https" && scheme != "http") || u.Hostname() == "" || u.User != nil || u.Opaque != "" ||
-		u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#")
-	if unsafe {
+	if !safeDashboardAuthority(u) || !safeDashboardLocation(u, raw) {
 		return "", fmt.Errorf("%w: must be an absolute HTTP(S) base URL without credentials, query, or fragment", ErrInvalidDashboardURL)
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
@@ -111,6 +108,15 @@ func safeDashboardLink(raw string) (string, error) {
 		return "", fmt.Errorf("%w: exceeds the %d-character dashboard link limit", ErrInvalidDashboardURL, maxDashboardLinkRunes)
 	}
 	return link, nil
+}
+
+func safeDashboardAuthority(u *url.URL) bool {
+	scheme := strings.ToLower(u.Scheme)
+	return (scheme == "https" || scheme == "http") && u.Hostname() != "" && u.User == nil && u.Opaque == ""
+}
+
+func safeDashboardLocation(u *url.URL, raw string) bool {
+	return u.RawQuery == "" && !u.ForceQuery && u.Fragment == "" && !strings.Contains(raw, "#")
 }
 
 // IsDashboardLinkFor reports whether link is the generated dashboard route for baseURL.

@@ -278,6 +278,11 @@ func TestAC1AC2LargeDigestTelegramPartsRetryIndependentlyAndKeepEmailCompleteInt
 	if got := len(sender.attempted["telegram"]); got != len(parts)+1 {
 		t.Fatalf("Telegram sends including one retry = %d, want %d", got, len(parts)+1)
 	}
+	for _, message := range sender.sent["telegram"] {
+		if !strings.Contains(message, "https://speedtest.example.test/#/") {
+			t.Errorf("Telegram part omitted the current safe dashboard link: %q", message)
+		}
+	}
 	telegram := strings.Join(sender.sent["telegram"], "\n")
 	for index, name := range nodeNames {
 		escapedName := strings.ReplaceAll(name, "&", "&amp;")
@@ -307,6 +312,92 @@ func TestAC1AC2LargeDigestTelegramPartsRetryIndependentlyAndKeepEmailCompleteInt
 				t.Errorf("e-mail summary for node %d omits %q", index, value)
 			}
 		}
+	}
+}
+
+func TestAC1DigestDispatchRetriesBothChannelsWhenCurrentURLTurnsUnsafeIntegration(t *testing.T) {
+	pool, ctx := openDigestNotificationPool(t)
+	notifications := configureDigestNotifications(t, ctx, pool, true, true)
+	capture := &digestCaptureSender{}
+	notifications.Sender = capture
+	insertDigestSummaryFixtures(t, ctx, pool)
+	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	notifications.Now = func() time.Time { return now }
+	scheduler := newDigestScheduler(pool, notifications, nil)
+	scheduler.Now = func() time.Time { return now }
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal("queue digest with a valid center URL:", err)
+	}
+	if consumed := consumeDigestOutbox(t, ctx, notifications); consumed != 2 {
+		t.Fatalf("consumed digest outbox rows = %d, want 2", consumed)
+	}
+	updateDigestSettings(t, ctx, pool, notifications, func(view *settings.Settings) {
+		view.CenterURL = "https://owner:secret@speedtest.example.test"
+	})
+	now = now.Add(time.Minute)
+	if dispatched := dispatchDigestDeliveries(t, ctx, notifications, 8); dispatched != 4 {
+		t.Fatalf("attempts with unsafe current URL = %d, want 4", dispatched)
+	}
+	if len(capture.messages["telegram"]) != 0 || len(capture.messages["email"]) != 0 {
+		t.Fatalf("unsafe current URL reached a sender: %v", capture.messages)
+	}
+	if got := countDigestChannelStatus(t, ctx, pool, "telegram", "pending"); got != 2 {
+		t.Fatalf("pending Telegram retries after unsafe URL = %d, want 2", got)
+	}
+	if got := countDigestChannelStatus(t, ctx, pool, "email", "pending"); got != 2 {
+		t.Fatalf("pending e-mail retries after unsafe URL = %d, want 2", got)
+	}
+	updateDigestSettings(t, ctx, pool, notifications, func(view *settings.Settings) {
+		view.CenterURL = "https://repaired-center.example.test"
+	})
+	now = now.Add(time.Minute)
+	if dispatched := dispatchDigestDeliveries(t, ctx, notifications, 8); dispatched != 4 {
+		t.Fatalf("retry attempts after URL repair = %d, want 4", dispatched)
+	}
+	if len(capture.messages["telegram"]) != 2 || len(capture.messages["email"]) != 2 {
+		t.Fatalf("repaired deliveries = %v", capture.messages)
+	}
+	assertCapturedDigestMessage(t, capture.messages["telegram"], "Node &lt;alpha&gt; forged — 2 tests: 1 successful, 1 failed; avg down 100.00 Mbps, avg up 40.00 Mbps", "https://repaired-center.example.test/#/")
+	assertCapturedDigestMessage(t, capture.messages["telegram"], "Node &lt;alpha&gt; forged — 1 test: 1 successful, 0 failed; avg down 80.00 Mbps, avg up 20.00 Mbps", "https://repaired-center.example.test/#/")
+	assertCapturedDigestMessage(t, capture.messages["email"], "Node <alpha> forged — 2 tests: 1 successful, 1 failed; avg down 100.00 Mbps, avg up 40.00 Mbps", "https://repaired-center.example.test/#/")
+	assertCapturedDigestMessage(t, capture.messages["email"], "Node <alpha> forged — 1 test: 1 successful, 0 failed; avg down 80.00 Mbps, avg up 20.00 Mbps", "https://repaired-center.example.test/#/")
+}
+
+func TestAC2DigestDispatchWaitsForDefaultQuietHoursWithFixedClockIntegration(t *testing.T) {
+	pool, ctx := openDigestNotificationPool(t)
+	notifications := configureDigestNotifications(t, ctx, pool, true, true)
+	capture := &digestCaptureSender{}
+	notifications.Sender = capture
+	insertDigestSummaryFixtures(t, ctx, pool)
+	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	notifications.Now = func() time.Time { return now }
+	scheduler := newDigestScheduler(pool, notifications, nil)
+	scheduler.Now = func() time.Time { return now }
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal("queue digest before quiet hours:", err)
+	}
+	if consumed := consumeDigestOutbox(t, ctx, notifications); consumed != 2 {
+		t.Fatalf("consumed digest outbox rows = %d, want 2", consumed)
+	}
+	now = time.Date(2026, 11, 18, 18, 0, 0, 0, time.UTC)
+	if dispatched := dispatchDigestDeliveries(t, ctx, notifications, 8); dispatched != 4 {
+		t.Fatalf("dispatch checks inside quiet hours = %d, want 4", dispatched)
+	}
+	if len(capture.messages["telegram"]) != 0 || len(capture.messages["email"]) != 0 {
+		t.Fatalf("quiet-hour deliveries reached a sender: %v", capture.messages)
+	}
+	if got := countDigestChannelStatus(t, ctx, pool, "telegram", "pending"); got != 2 {
+		t.Fatalf("Telegram deliveries inside quiet hours = %d pending, want 2", got)
+	}
+	if got := countDigestChannelStatus(t, ctx, pool, "email", "pending"); got != 2 {
+		t.Fatalf("e-mail deliveries inside quiet hours = %d pending, want 2", got)
+	}
+	now = time.Date(2026, 11, 19, 0, 1, 0, 0, time.UTC)
+	if dispatched := dispatchDigestDeliveries(t, ctx, notifications, 8); dispatched != 4 {
+		t.Fatalf("dispatch checks after quiet hours = %d, want 4", dispatched)
+	}
+	if len(capture.messages["telegram"]) != 2 || len(capture.messages["email"]) != 2 {
+		t.Fatalf("deliveries after quiet hours = %v", capture.messages)
 	}
 }
 
@@ -479,7 +570,6 @@ func configureDigestNotifications(t *testing.T, ctx context.Context, pool *pgxpo
 	}
 	defaults := settings.Defaults("https://speedtest.example.test")
 	defaults.Timezone = "UTC"
-	defaults.NotifyQuietStart, defaults.NotifyQuietEnd = "", ""
 	defaults.Notify.Email = settings.ChannelConfig{On: emailOn, To: "owner@example.test"}
 	defaults.Notify.Telegram = settings.ChannelConfig{On: telegramOn, To: "10001"}
 	raw, err := json.Marshal(defaults)
@@ -489,6 +579,19 @@ func configureDigestNotifications(t *testing.T, ctx context.Context, pool *pgxpo
 	if _, err := pool.Exec(ctx, `INSERT INTO settings(key,value,revision,updated_at) VALUES('display',$1::jsonb,1,now())`, raw); err != nil {
 		t.Fatal("save integration settings")
 	}
+	for key, value := range map[string]any{
+		"notifyQuietStart": defaults.NotifyQuietStart, "notifyQuietEnd": defaults.NotifyQuietEnd,
+		"notifyQuietTimezone": defaults.NotifyQuietZone, "notifyQuietCritical": defaults.NotifyQuietCritical,
+	} {
+		encoded, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal("encode quiet-hour setting")
+		}
+		if _, err := pool.Exec(ctx, `INSERT INTO settings(key,value,revision,updated_at) VALUES($1,$2::jsonb,1,now())
+			ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value,revision=settings.revision+1,updated_at=now()`, key, encoded); err != nil {
+			t.Fatalf("save quiet-hour setting %s", key)
+		}
+	}
 	encrypted, err := cipher.Encrypt([]byte(digestTestToken))
 	if err != nil {
 		t.Fatal("encrypt integration notification credential")
@@ -497,7 +600,10 @@ func configureDigestNotifications(t *testing.T, ctx context.Context, pool *pgxpo
 		t.Fatal("save integration notification credential")
 	}
 	preferences := settings.NewPostgresStore(pool, cipher, defaults)
-	return &notify.Store{DB: pool, Settings: preferences}
+	return &notify.Store{
+		DB: pool, Settings: preferences,
+		Now: func() time.Time { return time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC) },
+	}
 }
 
 func updateDigestSettings(t *testing.T, ctx context.Context, pool *pgxpool.Pool, notifications *notify.Store, update func(*settings.Settings)) {
@@ -706,6 +812,16 @@ func countDigestDeliveryStatus(t *testing.T, ctx context.Context, pool *pgxpool.
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries d
 		JOIN alert_events e ON e.id=d.event_id WHERE e.event_key='digest.daily' AND d.channel=$1 AND d.status=$2`, channel, status).Scan(&count); err != nil {
 		t.Fatal("count digest delivery status:", err)
+	}
+	return count
+}
+
+func countDigestChannelStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, channel, status string) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries d
+		JOIN alert_events e ON e.id=d.event_id WHERE e.event_key IN ('digest.daily','digest.weekly') AND d.channel=$1 AND d.status=$2`, channel, status).Scan(&count); err != nil {
+		t.Fatal("count digest channel status:", err)
 	}
 	return count
 }

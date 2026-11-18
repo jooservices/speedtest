@@ -10,6 +10,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/notify/template"
+	"github.com/jooservices/speedtest/internal/center/report"
 )
 
 type renderDB struct {
@@ -17,6 +18,15 @@ type renderDB struct {
 	eventErr error
 	tmpl     string
 	tmplErr  error
+}
+
+func assertMessageContains(t *testing.T, message string, wants ...string) {
+	t.Helper()
+	for _, want := range wants {
+		if !strings.Contains(message, want) {
+			t.Errorf("message does not contain %q: %q", want, message)
+		}
+	}
 }
 
 func TestAC1DigestDispatchIncludesPerNodeValuesAndUsesCurrentSafeURL(t *testing.T) {
@@ -39,11 +49,8 @@ func TestAC1DigestDispatchIncludesPerNodeValuesAndUsesCurrentSafeURL(t *testing.
 	if got := telegramTextUnits(telegram); got > maxTelegramMessageUnits {
 		t.Fatalf("Telegram message has %d UTF-16 units, want at most %d", got, maxTelegramMessageUnits)
 	}
-	for _, want := range []string{"Part 1 of 1", "Router &lt;long-name&gt;", "2 successful, 1 failed", "avg down 125.25 Mbps", "avg up 22.50 Mbps", "https://new-center.example/#/"} {
-		if !strings.Contains(telegram, want) {
-			t.Errorf("Telegram message does not contain %q: %q", want, telegram)
-		}
-	}
+	assertMessageContains(t, telegram, "Part 1 of 1", "Router &lt;long-name&gt;", "2 successful, 1 failed",
+		"avg down 125.25 Mbps", "avg up 22.50 Mbps", "https://new-center.example/#/")
 	if strings.Contains(telegram, "old-center.example") || strings.Contains(telegram, "continue in the dashboard") {
 		t.Fatalf("Telegram message contains a stale link or false continuation claim: %q", telegram)
 	}
@@ -83,7 +90,7 @@ func TestAC1DigestTelegramCustomTemplatesKeepDetailsAndPartNumberBounded(t *test
 			if units := telegramTextUnits(message); units > maxTelegramMessageUnits {
 				t.Fatalf("Telegram message has %d UTF-16 units", units)
 			}
-			for _, want := range []string{"Part 3 of 9", "Node 😀 &amp; router", "1 successful, 1 failed", "avg down 12.25 Mbps", "avg up 8.50 Mbps"} {
+			for _, want := range []string{"Part 3 of 9", "Node 😀 &amp; router", "1 successful, 1 failed", "avg down 12.25 Mbps", "avg up 8.50 Mbps", "https://speedtest.example.test/#/"} {
 				if !strings.Contains(message, want) {
 					t.Errorf("Telegram message does not contain %q: %q", want, message)
 				}
@@ -95,7 +102,7 @@ func TestAC1DigestTelegramCustomTemplatesKeepDetailsAndPartNumberBounded(t *test
 	}
 }
 
-func TestAC2DigestDispatchOmitsUnsafeCurrentURLButKeepsDetails(t *testing.T) {
+func TestAC1DigestDispatchRejectsUnsafeCurrentURLForBothChannels(t *testing.T) {
 	id := "digest-unsafe-current-url"
 	summary := "Router — 1 test: 1 successful, 0 failed; avg down 7.00 Mbps, avg up 3.00 Mbps"
 	payload, err := json.Marshal(map[string]string{
@@ -106,19 +113,64 @@ func TestAC2DigestDispatchOmitsUnsafeCurrentURLButKeepsDetails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	db := &renderDB{
-		event: []any{"Daily summary", "Command center", time.Unix(1, 0).UTC(), "digest.daily", payload},
-		tmpl:  "Full details continue in the dashboard: {link}",
+	db := &renderDB{event: []any{"Daily summary", "Command center", time.Unix(1, 0).UTC(), "digest.daily", payload}}
+	for _, channel := range []string{"telegram", "email"} {
+		t.Run(channel, func(t *testing.T) {
+			_, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: channel}, "https://owner:secret@wrong.example")
+			if !errors.Is(err, report.ErrInvalidDashboardURL) {
+				t.Fatalf("render digest with unsafe current URL error = %v, want ErrInvalidDashboardURL", err)
+			}
+		})
 	}
-	message, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, "https://owner:secret@wrong.example")
+}
+
+func TestAC1DigestCustomTemplatesCannotOmitRequiredData(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		summary string
+		link    bool
+	}{
+		{name: "populated period", summary: "Node — 2 tests: 1 successful, 1 failed; avg down 12 Mbps, avg up 3 Mbps", link: true},
+		{name: "empty period", summary: emptyDigestSummary},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			for _, channel := range []string{"telegram", "email"} {
+				t.Run(channel, func(t *testing.T) {
+					assertCustomDigestTemplateRequiredData(t, channel, test.summary, test.link)
+				})
+			}
+		})
+	}
+}
+
+func assertCustomDigestTemplateRequiredData(t *testing.T, channel, summary string, link bool) {
+	t.Helper()
+	id := "digest-required-data"
+	payload, err := json.Marshal(map[string]string{
+		"period": "Daily period: 2026-11-17 (UTC)", "summary": summary,
+		"telegram_summary": summary, "telegram_part": "1", "telegram_parts": "1",
+		"link": "https://stale.example/#/",
+	})
 	if err != nil {
-		t.Fatal("render digest with unsafe current URL:", err)
+		t.Fatal(err)
 	}
-	if !strings.Contains(message, summary) || strings.Contains(message, "owner:secret") || strings.Contains(message, "wrong.example") {
-		t.Fatalf("digest lost details or exposed an unsafe URL: %q", message)
+	db := &renderDB{event: []any{"Daily summary", "Command center", time.Unix(1, 0).UTC(), "digest.daily", payload}, tmpl: "Custom notification"}
+	message, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: channel}, "https://current.example")
+	if err != nil {
+		t.Fatal("render custom digest template:", err)
 	}
-	if strings.Contains(message, "old-center.example") || strings.Contains(message, "continue in the dashboard") {
-		t.Fatalf("digest retained a stale link or false continuation: %q", message)
+	if !strings.Contains(message, summary) {
+		t.Errorf("custom %s template omitted required summary %q: %q", channel, summary, message)
+	}
+	if got := strings.Count(message, summary); got != 1 {
+		t.Errorf("custom %s template rendered summary %d times, want once", channel, got)
+	}
+	if link {
+		if !strings.Contains(message, "https://current.example/#/") || strings.Contains(message, "stale.example") {
+			t.Errorf("custom %s template omitted the current safe link or kept the stale link: %q", channel, message)
+		}
+	} else if strings.Contains(message, "https://") || strings.Contains(message, "/#/") {
+		t.Errorf("empty %s digest unexpectedly contains a dashboard link: %q", channel, message)
 	}
 }
 
@@ -201,7 +253,7 @@ func TestAC1DigestTelegramUsesFullSummaryWithoutChunkFieldAndBoundsLongPeriod(t 
 		t.Fatal(err)
 	}
 	db := &renderDB{event: []any{"Daily summary", "Command center", time.Unix(1, 0).UTC(), "digest.daily", payload}}
-	message, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, "")
+	message, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, "https://speedtest.example.test")
 	if err != nil {
 		t.Fatal("render digest without a chunk summary:", err)
 	}
@@ -212,19 +264,54 @@ func TestAC1DigestTelegramUsesFullSummaryWithoutChunkFieldAndBoundsLongPeriod(t 
 	}
 }
 
-func TestAC1BoundedDigestDropsOversizedOptionalLinkAndRejectsOversizedPart(t *testing.T) {
-	data := map[string]string{
-		"period": "Daily period: 2026-11-17 (UTC)", "summary": strings.Repeat("x", maxDigestChunkTextUnits),
-		"link": strings.Repeat("&", 512), "telegram_part": "1", "telegram_parts": "1",
-	}
-	message, err := renderBoundedTelegramDigest(data)
+func TestAC1DigestBoundedFallbackKeepsMaximumAcceptedAmpersandLink(t *testing.T) {
+	const linkPrefix = "https://speedtest.example.test/"
+	const linkSuffix = "/#/"
+	ampersands := maxDigestDashboardLinkRunes - len([]rune(linkPrefix)) - len([]rune(linkSuffix))
+	link, err := report.DashboardLink(linkPrefix + strings.Repeat("&", ampersands))
 	if err != nil {
-		t.Fatal("render bounded digest without overlong optional link:", err)
+		t.Fatal("create maximum-length accepted dashboard link:", err)
 	}
-	if telegramTextUnits(message) > maxTelegramMessageUnits || !strings.Contains(message, data["summary"]) || strings.Contains(message, "Dashboard:") {
-		t.Fatalf("bounded digest did not preserve detail while dropping its optional link: units=%d", telegramTextUnits(message))
+	if got := len([]rune(link)); got != maxDigestDashboardLinkRunes {
+		t.Fatalf("dashboard link has %d runes, want %d", got, maxDigestDashboardLinkRunes)
+	}
+	data := map[string]string{
+		"period":  "Daily period: 2026-11-17 (UTC)",
+		"summary": "Node 😀 — 3 tests: 2 successful, 1 failed; avg down 12 Mbps, avg up 4 Mbps",
+		"link":    link, "digest_link_safe": "true", "telegram_part": "1", "telegram_parts": "1",
+	}
+	baseline, err := renderBoundedTelegramDigest(data)
+	if err != nil {
+		t.Fatal("render bounded digest baseline:", err)
+	}
+	data["summary"] += strings.Repeat("x", maxTelegramMessageUnits-telegramTextUnits(baseline))
+	message, err := renderDeliveryTemplate("telegram", "digest.daily", "Full details continue in the dashboard: {summary}{summary}", data)
+	if err != nil {
+		t.Fatal("render oversized custom template with bounded fallback:", err)
+	}
+	if got := telegramTextUnits(message); got != maxTelegramMessageUnits {
+		t.Fatalf("bounded message has %d UTF-16 units, want exactly %d", got, maxTelegramMessageUnits)
+	}
+	if !strings.Contains(message, "Node 😀 — 3 tests: 2 successful, 1 failed; avg down 12 Mbps, avg up 4 Mbps") {
+		t.Fatal("bounded fallback omitted per-node detail")
+	}
+	if strings.Count(message, strings.Repeat("&amp;", ampersands)) != 1 || !strings.Contains(message, "Dashboard: ") {
+		t.Fatal("bounded fallback dropped or duplicated the accepted dashboard link")
+	}
+	if strings.Contains(message, "continue in the dashboard") {
+		t.Fatalf("bounded fallback retained a false continuation claim: %q", message)
+	}
+	assertBoundedDigestRejectsUnsafeAndOversized(t, data)
+}
+
+func assertBoundedDigestRejectsUnsafeAndOversized(t *testing.T, data map[string]string) {
+	t.Helper()
+	data["digest_link_safe"] = "false"
+	if _, err := renderBoundedTelegramDigest(data); !errors.Is(err, report.ErrInvalidDashboardURL) {
+		t.Fatalf("unsafe bounded link error = %v, want ErrInvalidDashboardURL", err)
 	}
 	data["summary"] = strings.Repeat("x", maxTelegramMessageUnits+1)
+	data["digest_link_safe"] = "true"
 	if _, err := renderBoundedTelegramDigest(data); !errors.Is(err, template.ErrInvalidTemplate) {
 		t.Fatalf("oversized digest part error = %v, want ErrInvalidTemplate", err)
 	}
@@ -255,14 +342,14 @@ func TestAC1DigestInvalidTemplateAndEventReadFailuresAreReturned(t *testing.T) {
 		t.Fatal(err)
 	}
 	db := &renderDB{event: []any{"Daily summary", "Command center", time.Unix(1, 0).UTC(), "digest.daily", payload}, tmpl: "invalid {"}
-	if _, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, ""); !errors.Is(err, template.ErrInvalidTemplate) {
+	if _, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, "https://speedtest.example.test"); !errors.Is(err, template.ErrInvalidTemplate) {
 		t.Fatalf("invalid digest template error = %v, want ErrInvalidTemplate", err)
 	}
 	if _, err := renderBoundedBody("invalid {", map[string]string{}); !errors.Is(err, template.ErrInvalidTemplate) {
 		t.Fatalf("invalid bounded template error = %v, want ErrInvalidTemplate", err)
 	}
 	db.tmpl = " "
-	if _, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, ""); !errors.Is(err, template.ErrInvalidTemplate) {
+	if _, err := (&Store{}).renderDelivery(context.Background(), db, Delivery{EventID: &id, Channel: "telegram"}, "https://speedtest.example.test"); !errors.Is(err, template.ErrInvalidTemplate) {
 		t.Fatalf("empty saved digest template error = %v, want ErrInvalidTemplate", err)
 	}
 	db.eventErr = errors.New("event store unavailable")
@@ -273,8 +360,9 @@ func TestAC1DigestInvalidTemplateAndEventReadFailuresAreReturned(t *testing.T) {
 
 func TestAC1DigestRendererUsesDefaultBodyWhenTemplateIsAbsent(t *testing.T) {
 	data := map[string]string{
-		"period":        "Daily period: 2026-11-17 (UTC)",
-		"summary":       "Node — 1 test: 1 successful, 0 failed; avg down 1 Mbps, avg up 1 Mbps",
+		"period":  "Daily period: 2026-11-17 (UTC)",
+		"summary": "Node — 1 test: 1 successful, 0 failed; avg down 1 Mbps, avg up 1 Mbps",
+		"link":    "https://speedtest.example.test/#/", "digest_link_safe": "true",
 		"telegram_part": "1", "telegram_parts": "1",
 	}
 	message, err := renderDeliveryTemplate("telegram", "digest.daily", "", data)

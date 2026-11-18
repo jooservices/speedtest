@@ -14,24 +14,14 @@ import (
 
 var digestEventChannels = []string{"telegram", "email"}
 
-const maxDigestChunkTextUnits = 3400
-
 // PublishDigestEventTx builds and records an eligible daily or weekly digest in
 // the caller's transaction. Disabled or undeliverable periods are completed
 // without creating an alert event or outbox row.
 func (s *Store) PublishDigestEventTx(ctx context.Context, tx pgx.Tx, key string, build func(settings.Settings) (map[string]string, bool, error)) error {
-	if key != "digest.daily" && key != "digest.weekly" {
-		return ErrInvalidEvent
-	}
-	event, err := (&EventStore{DB: tx}).GetEvent(ctx, key)
-	if err != nil || !event.Enabled {
+	event, view, eligible, err := s.eligibleDigestEvent(ctx, tx, key)
+	if err != nil || !eligible {
 		return err
 	}
-	view, channels, err := configuredDigestChannels(ctx, s, tx, event.Channels)
-	if err != nil || len(channels) == 0 {
-		return err
-	}
-	event.Channels = channels
 	if build == nil {
 		return ErrInvalidEvent
 	}
@@ -44,7 +34,7 @@ func (s *Store) PublishDigestEventTx(ctx context.Context, tx pgx.Tx, key string,
 	if err != nil {
 		return err
 	}
-	channels, publish, err = s.eventDelivery(ctx, tx, event, key, "", data, now, "")
+	channels, publish, err := s.eventDelivery(ctx, tx, event, key, "", data, now, "")
 	if err != nil {
 		return err
 	}
@@ -52,6 +42,22 @@ func (s *Store) PublishDigestEventTx(ctx context.Context, tx pgx.Tx, key string,
 		return recordEventTx(ctx, tx, event, "", data, now, channels, publish)
 	}
 	return s.recordDigestTelegramParts(ctx, tx, event, payload, channels, now)
+}
+
+func (s *Store) eligibleDigestEvent(ctx context.Context, tx pgx.Tx, key string) (EventView, settings.Settings, bool, error) {
+	if key != "digest.daily" && key != "digest.weekly" {
+		return EventView{}, settings.Settings{}, false, ErrInvalidEvent
+	}
+	event, err := (&EventStore{DB: tx}).GetEvent(ctx, key)
+	if err != nil || !event.Enabled {
+		return EventView{}, settings.Settings{}, false, err
+	}
+	view, channels, err := configuredDigestChannels(ctx, s, tx, event.Channels)
+	if err != nil || len(channels) == 0 {
+		return EventView{}, settings.Settings{}, false, err
+	}
+	event.Channels = channels
+	return event, view, true, nil
 }
 
 func (s *Store) recordDigestTelegramParts(ctx context.Context, tx pgx.Tx, event EventView, payload map[string]string, channels []string, now time.Time) error {
@@ -104,21 +110,25 @@ func splitDigestTelegramSummary(summary string) []string {
 			current.Reset()
 			units = 0
 		}
-		for _, character := range line {
-			characterUnits := telegramEscapedRuneUnits(character)
-			if units+characterUnits > maxDigestChunkTextUnits && current.Len() > 0 {
-				chunks = append(chunks, current.String())
-				current.Reset()
-				units = 0
-			}
-			current.WriteRune(character)
-			units += characterUnits
-		}
+		appendLongDigestLine(line, &chunks, &current, &units)
 	}
 	if current.Len() > 0 {
 		chunks = append(chunks, current.String())
 	}
 	return chunks
+}
+
+func appendLongDigestLine(line string, chunks *[]string, current *strings.Builder, units *int) {
+	for _, character := range line {
+		characterUnits := telegramEscapedRuneUnits(character)
+		if *units+characterUnits > maxDigestChunkTextUnits && current.Len() > 0 {
+			*chunks = append(*chunks, current.String())
+			current.Reset()
+			*units = 0
+		}
+		current.WriteRune(character)
+		*units += characterUnits
+	}
 }
 
 func telegramEscapedRuneUnits(character rune) int {
