@@ -95,6 +95,6 @@ func safeDashboardLink(raw string) (string, error) {
 		u.Path += "/"
 	}
 	u.RawPath = ""
-	u.Fragment = "/dashboard"
+	u.Fragment = "/"
 	return u.String(), nil
 }

@@ -72,7 +72,8 @@ Daily and weekly messages include each node's successful and failed test counts
 and average download and upload speeds. Node names are rendered on one line.
 Populated periods include a dashboard link built from the configured
 `SPEEDTEST_PUBLIC_URL`; only absolute HTTP or HTTPS URLs without credentials,
-query strings or fragments are accepted. The link points to `/#/dashboard`.
+query strings or fragments are accepted. The link points to `/#/`, the UI's
+dashboard route.
 Empty periods say that no speed test results were recorded and do not require a
 dashboard link.
 

@@ -63,10 +63,10 @@ func TestAC1AC2DigestNotificationsEnabledPopulatedRestartAndLateResultIntegratio
 	queued := loadDigestEvents(t, ctx, pool)
 	assertDigestQueuedEvent(t, queued["digest.daily"], []string{"telegram", "email"},
 		"Node <alpha> forged — 2 tests: 1 successful, 1 failed; avg down 100.00 Mbps, avg up 40.00 Mbps",
-		"https://speedtest.example.test/#/dashboard")
+		"https://speedtest.example.test/#/")
 	assertDigestQueuedEvent(t, queued["digest.weekly"], []string{"telegram", "email"},
 		"Node <alpha> forged — 1 test: 1 successful, 0 failed; avg down 80.00 Mbps, avg up 20.00 Mbps",
-		"https://speedtest.example.test/#/dashboard")
+		"https://speedtest.example.test/#/")
 	assertDigestPayloadHasNoCredential(t, queued["digest.daily"].payload)
 	if consumed := consumeDigestOutbox(t, ctx, notifications); consumed != 2 {
 		t.Fatalf("consumed digest outbox rows = %d, want 2", consumed)
@@ -74,8 +74,8 @@ func TestAC1AC2DigestNotificationsEnabledPopulatedRestartAndLateResultIntegratio
 	if dispatched := dispatchDigestDeliveries(t, ctx, notifications, 4); dispatched != 4 {
 		t.Fatalf("dispatched digest deliveries = %d, want 4", dispatched)
 	}
-	assertCapturedDigestMessage(t, capture.messages["telegram"], "Node &lt;alpha&gt; forged", "https://speedtest.example.test/#/dashboard")
-	assertCapturedDigestMessage(t, capture.messages["email"], "Node <alpha> forged", "https://speedtest.example.test/#/dashboard")
+	assertCapturedDigestMessage(t, capture.messages["telegram"], "Node &lt;alpha&gt; forged", "https://speedtest.example.test/#/")
+	assertCapturedDigestMessage(t, capture.messages["email"], "Node <alpha> forged", "https://speedtest.example.test/#/")
 
 	restarted := newDigestScheduler(pool, "https://speedtest.example.test", notifications, nil)
 	restarted.Now = func() time.Time { return now }
@@ -91,7 +91,7 @@ func TestAC1AC2DigestNotificationsEnabledPopulatedRestartAndLateResultIntegratio
 	}
 	assertDigestQueuedEvent(t, loadDigestEvents(t, ctx, pool)["digest.daily"], []string{"telegram", "email"},
 		"Node <alpha> forged — 2 tests: 1 successful, 1 failed; avg down 100.00 Mbps, avg up 40.00 Mbps",
-		"https://speedtest.example.test/#/dashboard")
+		"https://speedtest.example.test/#/")
 }
 
 func TestAC1AC2DigestNotificationsDisabledEventChannelAndEmptyPeriodIntegration(t *testing.T) {

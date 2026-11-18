@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestAC1FormatDailyDigestIncludesNodeCountsAveragesAndSafeDashboardLink(t *testing.T) {
+func TestAC1FormatDailyDigestIncludesNodeCountsAveragesAndDashboardRoute(t *testing.T) {
 	down, up := 125.25, 22.5
 	got, err := FormatDigest(PeriodSummary{
 		Kind: DailyPeriod, LocalDate: "2026-11-17", Timezone: "Asia/Ho_Chi_Minh",
@@ -32,7 +32,7 @@ func TestAC1FormatDailyDigestIncludesNodeCountsAveragesAndSafeDashboardLink(t *t
 	if strings.Contains(got.Summary, "\nforged") {
 		t.Fatal("node name introduced a new message line")
 	}
-	if got.Link != "https://speedtest.example.test/#/dashboard" {
+	if got.Link != "https://speedtest.example.test/#/" {
 		t.Errorf("dashboard link = %q", got.Link)
 	}
 }
@@ -108,7 +108,7 @@ func TestAC1DashboardLinkUsesConfiguredHTTPBasePath(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got != "http://speedtest.example.test/center/#/dashboard" {
+	if got != "http://speedtest.example.test/center/#/" {
 		t.Errorf("dashboard link = %q", got)
 	}
 }
