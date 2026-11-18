@@ -1,11 +1,11 @@
 # Durable daily and weekly digest schedule
 
 `internal/center/report.DigestScheduler` identifies the owner-local periods that
-a digest should cover and claims each one durably in PostgreSQL. It does not
-render or send a message: the center passes a `DigestEnqueue` callback that
-publishes the digest inside the same database transaction that completes the
-period. Notification formatting and channel selection stay in
-`internal/center/notify` (JOOST-127).
+a digest should cover and claims each one durably in PostgreSQL. The center's
+enqueue callback reads the period summary, formats a message and publishes the
+catalog event through the notification outbox in the same database transaction
+that completes the period. Channel selection and delivery settings are handled
+by `internal/center/notify` (JOOST-127).
 
 ## Due periods
 
@@ -65,6 +65,32 @@ completion. Successful enqueue and the completion marker commit together.
 A late measurement is not a new period: once `completed_at` is set, repeated
 scheduler runs skip that row. Late data appears in live reports and the next
 period's digest, not as a second digest for the completed period.
+
+## Message and delivery
+
+Daily and weekly messages include each node's successful and failed test counts
+and average download and upload speeds. Node names are rendered on one line.
+Populated periods include a dashboard link built from the configured
+`SPEEDTEST_PUBLIC_URL`; only absolute HTTP or HTTPS URLs without credentials,
+query strings or fragments are accepted. The link points to `/#/dashboard`.
+Empty periods say that no speed test results were recorded and do not require a
+dashboard link.
+
+Digest templates support `{period}`, `{summary}` and `{link}`. Telegram renders
+dynamic values as escaped HTML; e-mail renders plain text. The event's selected
+channels are intersected with enabled, configured Telegram and e-mail
+destinations. Disabled digest events or channels create no delivery. The period
+completion marker and any outbox rows commit together, so a late result cannot
+requeue a completed period. A populated period cannot complete if its dashboard
+URL is missing or invalid; it is retried on the normal five-minute schedule.
+
+Integration coverage checks enabled and disabled destinations, populated and
+empty summaries, outbox dispatch after scheduler restart, and a late result for
+a completed period:
+
+```bash
+go test -race -p 1 -tags integration ./cmd/center -run '^TestAC1AC2DigestNotifications(EnabledPopulatedRestartAndLateResult|DisabledEventChannelAndEmptyPeriod)Integration$' -count=1
+```
 
 ## Verification
 
