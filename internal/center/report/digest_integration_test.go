@@ -17,6 +17,7 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/db"
 	"github.com/jooservices/speedtest/internal/center/db/dbtest"
+	"github.com/jooservices/speedtest/internal/center/settings"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
 
@@ -51,11 +52,11 @@ func openDigestPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 
 func setDigestTimezone(t *testing.T, ctx context.Context, pool *pgxpool.Pool, zone string) {
 	t.Helper()
-	raw, err := json.Marshal(zone)
+	raw, err := json.Marshal(map[string]string{"timezone": zone})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := pool.Exec(ctx, `INSERT INTO settings (key, value) VALUES ('timezone', $1::jsonb)
+	if _, err := pool.Exec(ctx, `INSERT INTO settings (key, value) VALUES ('display', $1::jsonb)
 		ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value`, string(raw)); err != nil {
 		t.Fatal("cannot set the digest test time zone")
 	}
@@ -130,6 +131,113 @@ func TestAC1DigestSchedulerClaimsDueDayAndWeekAtOwnerLocalEightIntegration(t *te
 	}
 	if attempts, completed, zone := digestPeriodState(t, ctx, pool, DailyPeriod, "2026-03-08"); attempts != 1 || !completed || zone != "America/New_York" {
 		t.Fatalf("daily state attempts=%d completed=%v zone=%q", attempts, completed, zone)
+	}
+}
+
+func TestAC1DigestSchedulerRecoversMissedPeriodsFromWatermarkAfterMondayRestartIntegration(t *testing.T) {
+	pool, ctx := openDigestPool(t)
+	setDigestTimezone(t, ctx, pool, "UTC")
+	now := time.Date(2026, 3, 10, 9, 0, 0, 0, time.UTC)
+	var queued []Period
+	scheduler := &DigestScheduler{
+		DB:  pool,
+		Now: func() time.Time { return now },
+		Enqueue: func(_ context.Context, _ pgx.Tx, period Period) error {
+			queued = append(queued, period)
+			return nil
+		},
+	}
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(queued) != 2 || completedDigestPeriods(t, ctx, pool) != 2 {
+		t.Fatalf("first schedule initialization queued %d periods, completed %d; want only the two currently due periods", len(queued), completedDigestPeriods(t, ctx, pool))
+	}
+
+	now = time.Date(2026, 3, 16, 7, 59, 0, 0, time.UTC)
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if completedDigestPeriods(t, ctx, pool) != 7 {
+		t.Fatalf("Monday before 08:00 completed %d periods, want the two initial and five missed daily periods", completedDigestPeriods(t, ctx, pool))
+	}
+	var earlyWeeklyRows int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM digest_periods WHERE kind='weekly' AND local_date='2026-03-09'`).Scan(&earlyWeeklyRows); err != nil || earlyWeeklyRows != 0 {
+		t.Fatalf("the week ending Sunday has %d rows before Monday 08:00, err=%v", earlyWeeklyRows, err)
+	}
+
+	now = time.Date(2026, 3, 16, 8, 0, 0, 0, time.UTC)
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if completedDigestPeriods(t, ctx, pool) != 9 {
+		t.Fatalf("after Monday 08:00 completed %d periods, want seven daily and two weekly periods", completedDigestPeriods(t, ctx, pool))
+	}
+	for _, date := range []string{"2026-03-09", "2026-03-10", "2026-03-11", "2026-03-12", "2026-03-13", "2026-03-14", "2026-03-15"} {
+		if _, completed, _ := digestPeriodState(t, ctx, pool, DailyPeriod, date); !completed {
+			t.Errorf("missed daily period %s was not completed", date)
+		}
+	}
+	for _, date := range []string{"2026-03-02", "2026-03-09"} {
+		if _, completed, _ := digestPeriodState(t, ctx, pool, WeeklyPeriod, date); !completed {
+			t.Errorf("missed weekly period %s was not completed", date)
+		}
+	}
+	var dailyWatermark, weeklyWatermark string
+	if err := pool.QueryRow(ctx, `SELECT scheduled_through::text FROM digest_schedule_state WHERE kind='daily'`).Scan(&dailyWatermark); err != nil {
+		t.Fatal("daily schedule watermark was not persisted")
+	}
+	if err := pool.QueryRow(ctx, `SELECT scheduled_through::text FROM digest_schedule_state WHERE kind='weekly'`).Scan(&weeklyWatermark); err != nil {
+		t.Fatal("weekly schedule watermark was not persisted")
+	}
+	if dailyWatermark != "2026-03-15" || weeklyWatermark != "2026-03-09" {
+		t.Fatalf("schedule watermarks daily=%s weekly=%s", dailyWatermark, weeklyWatermark)
+	}
+}
+
+func TestAC1DigestSchedulerUsesDisplayPreferenceBrowserFallbackIntegration(t *testing.T) {
+	pool, ctx := openDigestPool(t)
+	store := settings.NewPostgresStore(pool, nil, settings.Defaults(""))
+	view, etag, err := store.Get(ctx)
+	if err != nil {
+		t.Fatal("cannot read owner display settings")
+	}
+	input := settings.InputOf(view)
+	input.Timezone = "America/New_York"
+	view, etag, err = store.Replace(ctx, etag, input)
+	if err != nil {
+		t.Fatal("cannot save the owner IANA display time zone")
+	}
+	input = settings.InputOf(view)
+	input.Timezone = "browser"
+	if _, _, err = store.Replace(ctx, etag, input); err != nil {
+		t.Fatal("cannot switch the owner display preference to browser")
+	}
+	var retainedZone string
+	var flat []byte
+	if err := pool.QueryRow(ctx, `SELECT value FROM settings WHERE key='timezone'`).Scan(&flat); err != nil {
+		t.Fatal("agent quiet-hours time zone was not retained")
+	}
+	if err := json.Unmarshal(flat, &retainedZone); err != nil || retainedZone != "America/New_York" {
+		t.Fatalf("retained agent time zone=%q, err=%v", retainedZone, err)
+	}
+
+	now := time.Date(2026, 3, 10, 1, 0, 0, 0, time.UTC)
+	var periods []Period
+	scheduler := &DigestScheduler{
+		DB:  pool,
+		Now: fixedNow(now),
+		Enqueue: func(_ context.Context, _ pgx.Tx, period Period) error {
+			periods = append(periods, period)
+			return nil
+		},
+	}
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	daily := findDigestPeriod(t, periods, DailyPeriod, "2026-03-08")
+	if daily.Timezone() != "UTC" {
+		t.Fatalf("browser display preference was scheduled in %q, want UTC", daily.Timezone())
 	}
 }
 

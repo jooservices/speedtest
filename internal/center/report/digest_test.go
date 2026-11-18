@@ -42,7 +42,10 @@ func TestAC1DueDigestPeriodsUseOwnerLocalEightAndMonday(t *testing.T) {
 		{
 			name: "Monday before 08:00 does not include the new week yet",
 			now:  time.Date(2026, 3, 9, 0, 59, 0, 0, time.UTC),
-			want: []digestPeriodKey{{kind: DailyPeriod, localDate: "2026-03-07"}},
+			want: []digestPeriodKey{
+				{kind: DailyPeriod, localDate: "2026-03-07"},
+				{kind: WeeklyPeriod, localDate: "2026-02-23"},
+			},
 		},
 		{
 			name: "Monday at 08:00 includes Sunday and the preceding Monday-Sunday week",
@@ -145,6 +148,76 @@ func TestAC1NextDigestRunUsesOwnerLocalEightAcrossDST(t *testing.T) {
 				t.Errorf("nextDigestRun() = %s, want %s", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestAC1DigestScheduleDateRecoveryIsBounded(t *testing.T) {
+	tests := []struct {
+		name    string
+		kind    PeriodKind
+		after   string
+		through string
+		limit   int
+		want    []string
+	}{
+		{
+			name:    "daily catch-up stops at the batch limit",
+			kind:    DailyPeriod,
+			after:   "2026-03-01",
+			through: "2026-03-10",
+			limit:   3,
+			want:    []string{"2026-03-02", "2026-03-03", "2026-03-04"},
+		},
+		{
+			name:    "weekly catch-up advances by seven calendar days",
+			kind:    WeeklyPeriod,
+			after:   "2026-03-02",
+			through: "2026-03-23",
+			limit:   8,
+			want:    []string{"2026-03-09", "2026-03-16", "2026-03-23"},
+		},
+		{
+			name:    "no new due dates returns an empty batch",
+			kind:    DailyPeriod,
+			after:   "2026-03-10",
+			through: "2026-03-10",
+			limit:   3,
+			want:    []string{},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := digestDatesAfter(tc.kind, tc.after, tc.through, tc.limit)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("scheduled dates=%v, want %v", got, tc.want)
+			}
+			for index := range tc.want {
+				if got[index] != tc.want[index] {
+					t.Errorf("scheduled date %d=%s, want %s", index, got[index], tc.want[index])
+				}
+			}
+		})
+	}
+}
+
+func TestAC1DigestScheduleRejectsInvalidPeriodDatesAndKinds(t *testing.T) {
+	if _, err := previousDigestDate(DailyPeriod, "not-a-date"); err == nil {
+		t.Fatal("invalid period date must fail")
+	}
+	if _, err := previousDigestDate(PeriodKind("monthly"), "2026-03-01"); err == nil {
+		t.Fatal("unsupported period kind must fail")
+	}
+	if _, err := digestDatesAfter(DailyPeriod, "bad", "2026-03-01", 2); err == nil {
+		t.Fatal("invalid watermark date must fail")
+	}
+	if _, err := digestDatesAfter(DailyPeriod, "2026-03-01", "bad", 2); err == nil {
+		t.Fatal("invalid latest date must fail")
+	}
+	if _, err := digestDatesAfter(PeriodKind("monthly"), "2026-03-01", "2026-03-31", 2); err == nil {
+		t.Fatal("unsupported period kind must fail")
 	}
 }
 

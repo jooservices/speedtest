@@ -16,6 +16,15 @@ CREATE TABLE digest_periods (
 CREATE INDEX digest_periods_pending_idx ON digest_periods (next_attempt_at, local_date)
     WHERE completed_at IS NULL;
 
+-- Per-kind watermark bounds recovery to periods scheduled since first startup.
+CREATE TABLE digest_schedule_state (
+    kind text PRIMARY KEY CHECK (kind IN ('daily', 'weekly')),
+    timezone text NOT NULL CHECK (length(timezone) > 0),
+    initialized_at timestamptz NOT NULL,
+    scheduled_through date NOT NULL
+);
+
 -- +goose Down
+DROP TABLE digest_schedule_state;
 DROP INDEX digest_periods_pending_idx;
 DROP TABLE digest_periods;

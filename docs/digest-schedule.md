@@ -9,8 +9,10 @@ period. Notification formatting and channel selection stay in
 
 ## Due periods
 
-The owner time zone is the `timezone` setting. A browser-only or invalid value
-falls back to UTC, because the center cannot read a browser preference.
+The owner time zone comes from the `timezone` field in the `display` settings
+JSON. A browser-only or invalid value falls back to UTC, because the center
+cannot read a browser preference. The flat `timezone` setting remains reserved
+for agent quiet hours and does not control digest scheduling.
 
 - The daily digest becomes due at 08:00 owner-local time for the preceding local
   day. Before 08:00 that day is still waiting for its run.
@@ -21,10 +23,19 @@ falls back to UTC, because the center cannot read a browser preference.
   preceding week 167 or 169 hours. The period envelope comes from
   `report.NewPeriod`, not from a fixed 24-hour or 7-day duration.
 
-The scheduler checks ready retry rows before the currently due periods, so an
-attempt interrupted before completion is recovered after a restart. The `Loop`
-method runs once at startup and then at the next owner-local 08:00; a failed run
-is retried after five minutes rather than waiting for the next day.
+`digest_schedule_state` persists each kind's initialization time, time zone and
+last materialized local date. The first scheduling decision starts at the latest
+period already due, so it does not backfill from project inception. Later runs
+materialize missed dates in batches of at most 32 per kind and advance the
+watermark in the same transaction. Remaining backlog is picked up by later loop
+iterations. A time-zone preference change establishes a new initialization
+boundary; already-created periods retain their first-claim time-zone snapshot.
+
+The scheduler checks ready retry rows and materializes every due period after
+its watermark, so periods missed while centers are stopped are recovered after
+a restart, including a weekly period whose Monday 08:00 boundary arrives while
+the loop is waiting. A failed run is retried after five minutes rather than
+waiting for the next day.
 
 ## Claim, lease and completion
 

@@ -24,9 +24,8 @@ type digestPeriodKey struct {
 	localDate string
 }
 
-// dueDigestPeriods returns the latest daily period and, once Monday 08:00 has
-// passed, the preceding Monday-Sunday week. Before 08:00 the previous day is
-// still waiting for its own run.
+// dueDigestPeriods returns the latest daily and weekly periods whose 08:00
+// owner-local boundary has passed.
 func dueDigestPeriods(now time.Time, location *time.Location) []digestPeriodKey {
 	local := now.In(location)
 	day := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, location)
@@ -34,12 +33,15 @@ func dueDigestPeriods(now time.Time, location *time.Location) []digestPeriodKey 
 	if local.Hour() < digestHour {
 		daily = daily.AddDate(0, 0, -1)
 	}
-	out := []digestPeriodKey{{kind: DailyPeriod, localDate: daily.Format(digestDateLayout)}}
 	weekStart := day.AddDate(0, 0, -daysSinceMonday(day.Weekday()))
-	if !now.Before(digestHourOf(weekStart)) {
-		out = append(out, digestPeriodKey{kind: WeeklyPeriod, localDate: weekStart.AddDate(0, 0, -7).Format(digestDateLayout)})
+	weekly := weekStart.AddDate(0, 0, -7)
+	if now.Before(digestHourOf(weekStart)) {
+		weekly = weekly.AddDate(0, 0, -7)
 	}
-	return out
+	return []digestPeriodKey{
+		{kind: DailyPeriod, localDate: daily.Format(digestDateLayout)},
+		{kind: WeeklyPeriod, localDate: weekly.Format(digestDateLayout)},
+	}
 }
 
 func daysSinceMonday(weekday time.Weekday) int {
@@ -101,9 +103,10 @@ type DigestScheduler struct {
 }
 
 const (
-	digestClaimLease  = 15 * time.Minute
-	digestRetryDelay  = 5 * time.Minute
-	digestCleanupTime = 5 * time.Second
+	digestClaimLease        = 15 * time.Minute
+	digestRetryDelay        = 5 * time.Minute
+	digestCleanupTime       = 5 * time.Second
+	digestScheduleBatchSize = 32
 )
 
 var errDigestLeaseLost = errors.New("digest period lease is no longer owned")
@@ -141,17 +144,17 @@ func (s *DigestScheduler) retry() time.Duration {
 // for a later attempt.
 func (s *DigestScheduler) RunOnce(ctx context.Context) error {
 	now := s.now()
-	location, err := s.location(ctx)
+	zone, location, err := s.ownerLocation(ctx)
 	if err != nil {
 		return err
 	}
-	keys, err := s.periodKeys(ctx, now, location)
+	keys, err := s.periodKeys(ctx, now, zone, location)
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, key := range keys {
-		if err := s.process(ctx, key, now); err != nil {
+		if err := s.process(ctx, key, now, zone); err != nil {
 			errs = append(errs, err)
 		}
 	}
@@ -159,11 +162,20 @@ func (s *DigestScheduler) RunOnce(ctx context.Context) error {
 }
 
 func (s *DigestScheduler) location(ctx context.Context) (*time.Location, error) {
+	_, location, err := s.ownerLocation(ctx)
+	return location, err
+}
+
+func (s *DigestScheduler) ownerLocation(ctx context.Context) (string, *time.Location, error) {
 	zone, err := s.ownerTimezone(ctx)
 	if err != nil {
-		return nil, err
+		return "", nil, err
 	}
-	return time.LoadLocation(zone)
+	location, err := time.LoadLocation(zone)
+	if err != nil {
+		return "", nil, err
+	}
+	return zone, location, nil
 }
 
 func (s *DigestScheduler) ownerTimezone(ctx context.Context) (string, error) {
@@ -172,33 +184,136 @@ func (s *DigestScheduler) ownerTimezone(ctx context.Context) (string, error) {
 		return digestTimezone(zone), err
 	}
 	var raw []byte
-	err := s.DB.QueryRow(ctx, `SELECT value FROM settings WHERE key = 'timezone' AND value IS NOT NULL`).Scan(&raw)
+	err := s.DB.QueryRow(ctx, `SELECT value FROM settings WHERE key = 'display' AND value IS NOT NULL`).Scan(&raw)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "UTC", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	var zone string
-	if json.Unmarshal(raw, &zone) != nil {
+	var preferences struct {
+		Timezone string `json:"timezone"`
+	}
+	if json.Unmarshal(raw, &preferences) != nil {
 		return "UTC", nil
 	}
-	return digestTimezone(zone), nil
+	return digestTimezone(preferences.Timezone), nil
 }
 
-func (s *DigestScheduler) periodKeys(ctx context.Context, now time.Time, location *time.Location) ([]digestPeriodKey, error) {
+func (s *DigestScheduler) periodKeys(ctx context.Context, now time.Time, zone string, location *time.Location) ([]digestPeriodKey, error) {
+	if err := s.schedule(ctx, now, zone, dueDigestPeriods(now, location)); err != nil {
+		return nil, err
+	}
 	pending, err := s.pending(ctx, now)
 	if err != nil {
 		return nil, err
 	}
-	return mergeDigestPeriods(pending, dueDigestPeriods(now, location)), nil
+	return pending, nil
+}
+
+func (s *DigestScheduler) schedule(ctx context.Context, now time.Time, zone string, due []digestPeriodKey) error {
+	tx, err := s.DB.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	for _, latest := range due {
+		if err := s.scheduleKind(ctx, tx, now, zone, latest); err != nil {
+			return err
+		}
+	}
+	return tx.Commit(ctx)
+}
+
+func (s *DigestScheduler) scheduleKind(ctx context.Context, tx pgx.Tx, now time.Time, zone string, latest digestPeriodKey) error {
+	boundary, err := previousDigestDate(latest.kind, latest.localDate)
+	if err != nil {
+		return err
+	}
+	_, err = tx.Exec(ctx, `INSERT INTO digest_schedule_state (kind, timezone, initialized_at, scheduled_through)
+		VALUES ($1, $2, $3, $4::date) ON CONFLICT (kind) DO NOTHING`, string(latest.kind), zone, now, boundary)
+	if err != nil {
+		return err
+	}
+	var savedZone, scheduledThrough string
+	err = tx.QueryRow(ctx, `SELECT timezone, scheduled_through::text FROM digest_schedule_state WHERE kind=$1 FOR UPDATE`,
+		string(latest.kind)).Scan(&savedZone, &scheduledThrough)
+	if err != nil {
+		return err
+	}
+	if savedZone != zone {
+		if _, err := tx.Exec(ctx, `UPDATE digest_schedule_state SET timezone=$2, initialized_at=$3, scheduled_through=$4::date WHERE kind=$1`,
+			string(latest.kind), zone, now, boundary); err != nil {
+			return err
+		}
+		scheduledThrough = boundary
+	}
+	periodDates, err := digestDatesAfter(latest.kind, scheduledThrough, latest.localDate, digestScheduleBatchSize)
+	if err != nil {
+		return err
+	}
+	for _, date := range periodDates {
+		if _, err := tx.Exec(ctx, `INSERT INTO digest_periods (kind, local_date, timezone, next_attempt_at)
+			VALUES ($1, $2::date, $3, $4) ON CONFLICT (kind, local_date) DO NOTHING`, string(latest.kind), date, zone, now); err != nil {
+			return err
+		}
+		scheduledThrough = date
+	}
+	if len(periodDates) == 0 {
+		return nil
+	}
+	_, err = tx.Exec(ctx, `UPDATE digest_schedule_state SET scheduled_through=$2::date WHERE kind=$1`, string(latest.kind), scheduledThrough)
+	return err
+}
+
+func previousDigestDate(kind PeriodKind, date string) (string, error) {
+	parsed, err := time.Parse(digestDateLayout, date)
+	if err != nil {
+		return "", err
+	}
+	step, err := digestPeriodStep(kind)
+	if err != nil {
+		return "", err
+	}
+	return parsed.AddDate(0, 0, -step).Format(digestDateLayout), nil
+}
+
+func digestDatesAfter(kind PeriodKind, after, through string, limit int) ([]string, error) {
+	start, err := time.Parse(digestDateLayout, after)
+	if err != nil {
+		return nil, err
+	}
+	end, err := time.Parse(digestDateLayout, through)
+	if err != nil {
+		return nil, err
+	}
+	step, err := digestPeriodStep(kind)
+	if err != nil {
+		return nil, err
+	}
+	dates := make([]string, 0, limit)
+	for next := start.AddDate(0, 0, step); !next.After(end) && len(dates) < limit; next = next.AddDate(0, 0, step) {
+		dates = append(dates, next.Format(digestDateLayout))
+	}
+	return dates, nil
+}
+
+func digestPeriodStep(kind PeriodKind) (int, error) {
+	switch kind {
+	case DailyPeriod:
+		return 1, nil
+	case WeeklyPeriod:
+		return 7, nil
+	default:
+		return 0, fmt.Errorf("unsupported digest period kind %q", kind)
+	}
 }
 
 func (s *DigestScheduler) pending(ctx context.Context, now time.Time) ([]digestPeriodKey, error) {
 	rows, err := s.DB.Query(ctx, `SELECT kind, local_date::text FROM digest_periods
 		WHERE completed_at IS NULL AND next_attempt_at <= $1
 			AND (lease_until IS NULL OR lease_until <= $1)
-		ORDER BY local_date, kind`, now)
+		ORDER BY local_date, kind LIMIT $2`, now, digestScheduleBatchSize)
 	if err != nil {
 		return nil, err
 	}
@@ -214,26 +329,12 @@ func (s *DigestScheduler) pending(ctx context.Context, now time.Time) ([]digestP
 	return keys, rows.Err()
 }
 
-func mergeDigestPeriods(groups ...[]digestPeriodKey) []digestPeriodKey {
-	seen := make(map[digestPeriodKey]bool)
-	var keys []digestPeriodKey
-	for _, group := range groups {
-		for _, key := range group {
-			if !seen[key] {
-				seen[key] = true
-				keys = append(keys, key)
-			}
-		}
-	}
-	return keys
-}
-
-func (s *DigestScheduler) process(ctx context.Context, key digestPeriodKey, now time.Time) error {
-	leaseID, zone, claimed, err := s.claim(ctx, key, now)
+func (s *DigestScheduler) process(ctx context.Context, key digestPeriodKey, now time.Time, zone string) error {
+	leaseID, storedZone, claimed, err := s.claim(ctx, key, now, zone)
 	if err != nil || !claimed {
 		return err
 	}
-	period, err := NewPeriod(key.kind, key.localDate, zone)
+	period, err := NewPeriod(key.kind, key.localDate, storedZone)
 	if err != nil {
 		return s.release(ctx, key, leaseID, s.now().Add(s.retry()), err)
 	}
@@ -249,14 +350,10 @@ func (s *DigestScheduler) process(ctx context.Context, key digestPeriodKey, now 
 	return nil
 }
 
-func (s *DigestScheduler) claim(ctx context.Context, key digestPeriodKey, now time.Time) (string, string, bool, error) {
-	zone, err := s.ownerTimezone(ctx)
-	if err != nil {
-		return "", "", false, err
-	}
+func (s *DigestScheduler) claim(ctx context.Context, key digestPeriodKey, now time.Time, zone string) (string, string, bool, error) {
 	leaseID := uuid.NewString()
 	var storedZone string
-	err = s.DB.QueryRow(ctx, claimDigestSQL, string(key.kind), key.localDate, zone, now, leaseID, now.Add(s.leaseTTL())).Scan(&storedZone)
+	err := s.DB.QueryRow(ctx, claimDigestSQL, string(key.kind), key.localDate, zone, now, leaseID, now.Add(s.leaseTTL())).Scan(&storedZone)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", "", false, nil
 	}
