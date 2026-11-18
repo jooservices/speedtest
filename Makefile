@@ -153,8 +153,8 @@ integration-e2e:
 ## ui-coverage runs every browser and unit run that records UI coverage, then fails when a ui/assets/js file is under 85% of lines.
 ui-coverage:
 	node tests/e2e/main.mjs
-	node tests/ui/smoke.mjs
-	node tests/ui/wizard.mjs
+	UI_TEST_PORT=$${E2E_HTTP_PORT:-0} node tests/ui/smoke.mjs
+	UI_TEST_PORT=$${E2E_HTTP_PORT:-0} node tests/ui/wizard.mjs
 	node tests/ui/coverage.mjs
 	node scripts/ui-coverage.mjs --min 85
 
