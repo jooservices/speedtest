@@ -72,15 +72,24 @@
       pagination.style.display = pagination.hidden ? 'none' : '';
       pageStatus.textContent = state.loading || state.error
         ? ''
-        : 'Page ' + state.page + ' of ' + state.pagination.last_page + ' · ' + F.count(state.pagination.total) + ' deliveries';
+        : 'Page ' + F.count(state.page) + ' of ' + F.count(state.pagination.last_page) + ' · ' + F.count(state.pagination.total) + ' deliveries';
       if (state.loading) {
         results.appendChild(h('p', { class: 'hint', role: 'status', 'aria-live': 'polite' }, 'Loading delivery history…'));
         return;
       }
       if (state.error) {
+        var retryButton = U.btn('Retry', { size: 'sm', icon: 'refresh', onClick: function () {
+          var restoreFocus = document.activeElement === retryButton;
+          return load().then(function () {
+            if (!restoreFocus || !root.isConnected || document.activeElement !== document.body) return;
+            var target = state.error ? results.querySelector('button')
+              : !next.disabled ? next : !previous.disabled ? previous : statusSelect;
+            if (target) target.focus();
+          });
+        } });
         results.appendChild(h('div', { class: 'stack', role: 'alert' },
           U.callout('Could not load delivery history. Check your connection and try again.', 'warn', 'info'),
-          U.btn('Retry', { size: 'sm', icon: 'refresh', onClick: load })));
+          retryButton));
         return;
       }
       if (!state.rows.length) {
@@ -115,6 +124,11 @@
       state.error = false;
       render();
       return request().then(function (response) {
+        if (state.page > response.meta.pagination.last_page) {
+          state.page = response.meta.pagination.last_page;
+          state.loading = false;
+          return load();
+        }
         state.rows = response.data;
         state.pagination = response.meta.pagination;
       }, function () { state.error = true; }).then(function () {

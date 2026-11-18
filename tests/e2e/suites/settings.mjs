@@ -573,8 +573,9 @@ export function settingsSuite(T, ctx) {
         await removeFailure();
         removeFailure = null;
         loadingGate = await deliveryHistory.blockNextList();
+        const retryRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/api/notifications/deliveries', { timeout: 10000 });
         await deliveryHistory.retry();
-        await loadingGate.started;
+        await retryRequest;
         await deliveryHistory.loadingState().waitFor();
         assert.match(await deliveryHistory.loadingState().innerText(), /Loading delivery history/);
         assert.equal(await deliveryHistory.statusDisabled(), 'true', 'filters expose their loading state accessibly');
@@ -655,9 +656,13 @@ export function settingsSuite(T, ctx) {
         await removeFailure();
         const failedPageRequests = removeFailure.requests;
         removeFailure = null;
+        const pageRetryRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/api/notifications/deliveries', { timeout: 10000 });
         await deliveryHistory.retry();
+        const retryURL = new URL((await pageRetryRequest).url());
         await deliveryHistory.waitForPage(2);
-        assert.equal(failedPageRequests.at(-1).searchParams.get('page'), '2', 'SC-SET-12 Retry requests the selected page');
+        assert.equal(failedPageRequests.at(-1).searchParams.get('page'), '2', 'SC-SET-12 failed page request used page two');
+        assert.equal(retryURL.searchParams.get('page'), '2', 'SC-SET-12 Retry requests the selected page');
+        assert.equal(await deliveryHistory.activePaginationName(), 'Previous delivery history page', 'SC-SET-12 Retry restores focus to an enabled pagination control');
         assert.ok(await deliveryHistory.rows().count() >= 3, 'SC-SET-12 retry restores data for the selected page');
         await deliveryHistory.previous();
         await deliveryHistory.waitForPage(1);
@@ -683,6 +688,15 @@ export function settingsSuite(T, ctx) {
             if (width === 390) assert.equal(layout.tableDisplay, 'block', 'the table becomes stacked cards on a phone');
           }
         }
+        await deliveryHistory.restoreViewport();
+        await deliveryHistory.focusNext();
+        await deliveryHistory.enterKey();
+        await deliveryHistory.waitForPage(2);
+        T.db("DELETE FROM notification_deliveries WHERE id::text IN ('d1260000-0000-4000-8000-000000000001', 'd1260000-0000-4000-8000-000000000002')");
+        await T.tab('Notifications');
+        await T.tab('Delivery history');
+        await deliveryHistory.waitForPage(1);
+        assert.equal(await deliveryHistory.rows().count(), 11, 'a page beyond the new last page reloads the valid page');
       } finally {
         if (loadingGate) await loadingGate.remove();
         if (removeFailure) await removeFailure();
