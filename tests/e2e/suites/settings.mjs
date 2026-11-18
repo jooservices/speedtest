@@ -555,7 +555,7 @@ export function settingsSuite(T, ctx) {
     // Delivery history reads the authenticated list endpoint and exposes only safe delivery metadata.
     async deliveryHistory() {
       deliveryHistory.seed();
-      let loadingGate, removeFailure, injectedMarkup, emptyLaterHandler;
+      let loadingGate, removeFailure, injectedMarkup, emptyLaterHandler, clampHandler;
       const originalTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme') || 'dark');
       try {
         removeFailure = await deliveryHistory.failNextList();
@@ -719,9 +719,18 @@ export function settingsSuite(T, ctx) {
           }
         }
         await deliveryHistory.restoreViewport();
-        T.db("DELETE FROM notification_deliveries WHERE id::text IN ('d1260000-0000-4000-8000-000000000001', 'd1260000-0000-4000-8000-000000000002', 'd1260000-0000-4000-8000-000000000003', 'd1260000-0000-4000-8000-000000000004')");
-        const remaining = Number(T.db('SELECT count(*) FROM notification_deliveries'));
-        assert.ok(remaining > 0 && remaining <= 10, 'the fixture now fits on one page before requesting old page two');
+        clampHandler = async route => {
+          const response = await route.fetch();
+          const body = await response.json();
+          const requestedPage = new URL(route.request().url()).searchParams.get('page');
+          if (requestedPage === '2') body.data = [];
+          else body.data = body.data.slice(0, 8);
+          body.meta.pagination.total = 8;
+          body.meta.pagination.last_page = 1;
+          await route.fulfill({ response, body: JSON.stringify(body) });
+        };
+        await page.route('**/api/notifications/deliveries**', clampHandler);
+        await deliveryHistory.focusNext();
         const outOfRangeRequest = page.waitForRequest(request => {
           const url = new URL(request.url());
           return url.pathname === '/api/notifications/deliveries' && url.searchParams.get('page') === '2';
@@ -730,16 +739,18 @@ export function settingsSuite(T, ctx) {
           const url = new URL(request.url());
           return url.pathname === '/api/notifications/deliveries' && url.searchParams.get('page') === '1';
         }, { timeout: 10000 });
-        await deliveryHistory.focusNext();
         await Promise.all([deliveryHistory.enterKey(), outOfRangeRequest, clampedRequest]);
         await deliveryHistory.waitForPage(1);
-        assert.equal(await deliveryHistory.rows().count(), remaining + 1, 'a page beyond the new last page reloads every remaining delivery plus the table header');
+        assert.equal(await deliveryHistory.rows().count(), 9, 'a page beyond the new last page reloads eight deliveries plus the table header');
         assert.equal(await deliveryHistory.activeName(), 'Status', 'clamping to one page restores focus to an enabled filter');
+        await page.unroute('**/api/notifications/deliveries**', clampHandler);
+        clampHandler = null;
       } finally {
         if (loadingGate) await loadingGate.remove();
         if (removeFailure) await removeFailure();
         if (injectedMarkup) await injectedMarkup.remove();
         if (emptyLaterHandler) await page.unroute('**/api/notifications/deliveries**', emptyLaterHandler);
+        if (clampHandler) await page.unroute('**/api/notifications/deliveries**', clampHandler);
         await deliveryHistory.restoreViewport();
         await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), originalTheme);
         deliveryHistory.cleanup();
