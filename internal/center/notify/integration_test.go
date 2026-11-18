@@ -106,7 +106,7 @@ func TestOutboxExactlyOnceConcurrentRestartAndRollback(t *testing.T) {
 	if err := p.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE channel='slack'`).Scan(&count); err != nil || count != 0 {
 		t.Fatal("partial channel insert survived rollback")
 	}
-	items, total, err := worker.Deliveries(ctx, "A0000000-0000-4000-8000-000000000001", 1, 25)
+	items, total, err := worker.Deliveries(ctx, DeliveryFilter{Event: "A0000000-0000-4000-8000-000000000001"}, 1, 25)
 	if err != nil || total != 3 || len(items) != 3 {
 		t.Fatal("event UUID filter must be case insensitive", err)
 	}
@@ -175,11 +175,11 @@ func TestDeliveryRetryLifecycle(t *testing.T) {
 	if expired.Status != "failed" || expired.Attempts != 0 {
 		t.Fatal("expiry must not send")
 	}
-	items, total, err := worker.Deliveries(ctx, "", 1, 1)
+	items, total, err := worker.Deliveries(ctx, DeliveryFilter{}, 1, 1)
 	if err != nil || total != 2 || len(items) != 1 || items[0].ID != expired.ID {
 		t.Fatal("pagination/newest first")
 	}
-	empty, total, err := worker.Deliveries(ctx, "20000000-0000-4000-8000-000000000001", 1, 25)
+	empty, total, err := worker.Deliveries(ctx, DeliveryFilter{Event: "20000000-0000-4000-8000-000000000001"}, 1, 25)
 	if err != nil || total != 0 || len(empty) != 0 {
 		t.Fatal("event filter")
 	}
@@ -187,7 +187,7 @@ func TestDeliveryRetryLifecycle(t *testing.T) {
 		t.Fatal("missing delivery")
 	}
 	for _, page := range []int{0, 1000001} {
-		if _, _, err := worker.Deliveries(ctx, "", page, 25); err == nil {
+		if _, _, err := worker.Deliveries(ctx, DeliveryFilter{}, page, 25); err == nil {
 			t.Fatal("invalid pagination")
 		}
 	}
@@ -311,7 +311,7 @@ func TestNotificationMigrationRollback(t *testing.T) {
 	if ok, err := worker.Consume(ctx); ok || err != nil {
 		t.Fatal("rollback replayed consumed event")
 	}
-	items, total, err := worker.Deliveries(ctx, "", 1, 25)
+	items, total, err := worker.Deliveries(ctx, DeliveryFilter{}, 1, 25)
 	if err != nil || total != 0 || len(items) != 0 {
 		t.Fatal("reapplied empty delivery log")
 	}
@@ -326,7 +326,7 @@ func TestStorageFailuresAreRetriableAndSafe(t *testing.T) {
 	if _, err := worker.Test(ctx, "webhook"); err == nil {
 		t.Fatal("failed enqueue was successful")
 	}
-	if _, _, err := worker.Deliveries(ctx, "", 1, 25); err == nil {
+	if _, _, err := worker.Deliveries(ctx, DeliveryFilter{}, 1, 25); err == nil {
 		t.Fatal("failed list was successful")
 	}
 	if _, err := worker.Dispatch(ctx); err == nil {

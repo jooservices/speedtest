@@ -15,7 +15,7 @@ import (
 type OwnerNotificationsStore interface {
 	Test(context.Context, string) (notify.Delivery, error)
 	Delivery(context.Context, string) (notify.Delivery, error)
-	Deliveries(context.Context, string, int, int) ([]notify.Delivery, int, error)
+	Deliveries(context.Context, notify.DeliveryFilter, int, int) ([]notify.Delivery, int, error)
 	ListNotificationEvents(context.Context) ([]notify.EventView, error)
 	GetNotificationEvent(context.Context, string) (notify.EventView, error)
 	UpdateNotificationEvent(context.Context, string, notify.EventPatch) (notify.EventView, error)
@@ -190,7 +190,8 @@ func (h *ownerNotifications) listDeliveries(w http.ResponseWriter, r *http.Reque
 		}
 		event = v[0]
 	}
-	items, total, err := h.store.Deliveries(r.Context(), event, page, size)
+	filter := notify.DeliveryFilter{Event: event, Status: r.URL.Query().Get("status"), Channel: r.URL.Query().Get("channel")}
+	items, total, err := h.store.Deliveries(r.Context(), filter, page, size)
 	if err != nil {
 		notificationError(w, r, err)
 		return

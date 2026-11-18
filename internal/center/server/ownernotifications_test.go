@@ -14,7 +14,7 @@ import (
 
 type notificationStub struct {
 	err        error
-	event      string
+	filter     notify.DeliveryFilter
 	nodeEvent  string
 	nodeID     string
 	nodeOn     bool
@@ -28,8 +28,8 @@ func (f *notificationStub) Test(context.Context, string) (notify.Delivery, error
 func (f *notificationStub) Delivery(context.Context, string) (notify.Delivery, error) {
 	return notify.Delivery{ID: nodeID, Channel: "webhook", Status: "sent"}, f.err
 }
-func (f *notificationStub) Deliveries(_ context.Context, event string, page, size int) ([]notify.Delivery, int, error) {
-	f.event, f.page, f.size = event, page, size
+func (f *notificationStub) Deliveries(_ context.Context, filter notify.DeliveryFilter, page, size int) ([]notify.Delivery, int, error) {
+	f.filter, f.page, f.size = filter, page, size
 	return []notify.Delivery{}, 51, f.err
 }
 func (f *notificationStub) ListNotificationEvents(context.Context) ([]notify.EventView, error) {
@@ -115,7 +115,7 @@ func assertNotificationTestDeliveryAccess(t *testing.T, h http.Handler) {
 
 func assertNotificationDeliveryPaging(t *testing.T, h http.Handler, f *notificationStub) {
 	t.Helper()
-	if rec := do(h, "GET", "/api/notifications/deliveries?event="+nodeID+"&page=2&size=10", "", ownerRead); rec.Code != 200 || f.event != nodeID || f.page != 2 || f.size != 10 || !strings.Contains(rec.Body.String(), `"last_page":6`) {
+	if rec := do(h, "GET", "/api/notifications/deliveries?event="+nodeID+"&page=2&size=10", "", ownerRead); rec.Code != 200 || f.filter.Event != nodeID || f.page != 2 || f.size != 10 || !strings.Contains(rec.Body.String(), `"last_page":6`) {
 		t.Fatal("paging")
 	}
 }
