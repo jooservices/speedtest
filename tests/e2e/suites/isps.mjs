@@ -6,6 +6,49 @@ const E2E_PLAN = '23000000-0000-4000-8000-000000000001';
 export function ispsSuite(T) {
   const { page, assert } = T;
   return {
+    async lateListResponseCannotReplaceRefreshedPage() {
+      await T.open('#/nodes', 'Nodes');
+      const fresh = (await T.api('/api/isps?range=30d')).body;
+      assert.ok(fresh.data.length > 0, 'seeded ISP data is available for the refreshed page');
+      const first = fresh.data[0];
+      const currentRow = page.getByRole('button', { name: `Show trend for ${first.name} (AS${first.asn})` });
+      for (const status of [200, 503]) {
+        let release, firstRouted;
+        const held = new Promise(resolve => { release = resolve; });
+        const routed = new Promise(resolve => { firstRouted = resolve; });
+        let requests = 0;
+        const intercept = async route => {
+          if (++requests > 1) {
+            await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(fresh) });
+            return;
+          }
+          firstRouted();
+          await held;
+          const body = status === 200 ? { ...fresh, data: [] } : { type: 'about:blank', title: 'Temporary failure', status, detail: 'Retry later.' };
+          try {
+            await route.fulfill({ status, contentType: status === 200 ? 'application/json' : 'application/problem+json', body: JSON.stringify(body) });
+          } catch (error) {
+            if (!route.request().failure()) throw error;
+          }
+        };
+        await page.route('**/api/isps?*', intercept);
+        try {
+          await page.goto(T.url('#/isps'));
+          await routed;
+          await page.evaluate(() => window.ST.refresh());
+          await currentRow.waitFor();
+          release();
+          await T.settled();
+          assert.equal(await currentRow.count(), 1, `late ISP ${status} response cannot replace refreshed data`);
+          assert.equal(await page.getByText('Could not load ISPs').count(), 0, `late ISP ${status} response cannot show stale error`);
+          if (status === 503) T.expectRefusal(status);
+        } finally {
+          release();
+          await page.unroute('**/api/isps?*', intercept);
+        }
+        await T.open('#/nodes', 'Nodes');
+      }
+    },
     async lateListResponseCannotReplaceNewPage() {
       for (const status of [200, 503]) {
         await T.open('#/nodes', 'Nodes');

@@ -53,6 +53,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-ISP-03', area: 'isps', title: 'ISP plan defaults update while explicit speeds stay fixed', covers: 'plan assignment, equal and different speed overrides, later plan edits', run: S.isps.planDefaultsPreserveOverrides },
     { id: 'SC-ISP-04', area: 'isps', title: 'the monthly ISP report previews known metrics and downloads Unicode CSV and PDF', covers: 'JOOST-79 known monthly data, preview metrics, validation, month picker, out-of-order month responses, CSV and PDF downloads', run: S.isps.monthlyReport },
     { id: 'SC-ISP-05', area: 'isps', title: 'late ISP responses cannot replace the current page', covers: 'JOOST-130 stale ISP success and failure after navigation', run: S.isps.lateListResponseCannotReplaceNewPage },
+    { id: 'SC-ISP-06', area: 'isps', title: 'late ISP responses cannot replace a refreshed ISP page', covers: 'JOOST-130 stale ISP success and failure after refresh of the same route', run: S.isps.lateListResponseCannotReplaceRefreshedPage },
 
     { id: 'SC-ENG-01', area: 'engines', title: 'a second installed engine has an independent saved schedule', covers: 'JOOST-71 capabilities, enable/disable, 60-minute default and persistence', run: S.engines.enableSecondEngine },
     { id: 'SC-ENG-02', area: 'engines', title: 'the engine selector filters charts, results and statistics', covers: 'JOOST-71 engine-isolated views and empty states', run: S.engines.selectEngine },
