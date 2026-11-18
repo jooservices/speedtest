@@ -115,8 +115,45 @@ func assertNotificationTestDeliveryAccess(t *testing.T, h http.Handler) {
 
 func assertNotificationDeliveryPaging(t *testing.T, h http.Handler, f *notificationStub) {
 	t.Helper()
-	if rec := do(h, "GET", "/api/notifications/deliveries?event="+nodeID+"&page=2&size=10", "", ownerRead); rec.Code != 200 || f.filter.Event != nodeID || f.page != 2 || f.size != 10 || !strings.Contains(rec.Body.String(), `"last_page":6`) {
+	if rec := do(h, "GET", "/api/notifications/deliveries?event="+nodeID+"&status=sent&channel=email&page=2&size=10", "", ownerRead); rec.Code != 200 || f.filter.Event != nodeID || f.filter.Status != "sent" || f.filter.Channel != "email" || f.page != 2 || f.size != 10 || !strings.Contains(rec.Body.String(), `"last_page":6`) {
 		t.Fatal("paging")
+	}
+}
+
+func TestNotificationDeliveryFilterAC1(t *testing.T) {
+	f := &notificationStub{}
+	h := newNodeHandler(Options{OwnerNotifications: f})
+	rec := do(h, "GET", "/api/notifications/deliveries?event="+nodeID+"&status=failed&channel=webhook", "", ownerRead)
+	if rec.Code != 200 || f.filter != (notify.DeliveryFilter{Event: nodeID, Status: "failed", Channel: "webhook"}) {
+		t.Fatalf("combined filter = %d %+v", rec.Code, f.filter)
+	}
+	for _, query := range []string{"status=sent", "channel=telegram", "status=pending&channel=email"} {
+		if rec := do(h, "GET", "/api/notifications/deliveries?"+query, "", ownerRead); rec.Code != 200 {
+			t.Errorf("filter %s = %d", query, rec.Code)
+		}
+	}
+}
+
+func TestNotificationDeliveryFilterValidationAC2(t *testing.T) {
+	f := &notificationStub{}
+	h := newNodeHandler(Options{OwnerNotifications: f})
+	for _, query := range []string{
+		"status=nope",
+		"status=",
+		"status=sent&status=failed",
+		"channel=nope",
+		"channel=",
+		"channel=email&channel=telegram",
+		"event=",
+		"event=not-a-uuid",
+		"event=" + nodeID + "&event=" + nodeID,
+	} {
+		if rec := do(h, "GET", "/api/notifications/deliveries?"+query, "", ownerRead); rec.Code != 422 {
+			t.Errorf("%s = %d", query, rec.Code)
+		}
+		if rec := do(h, "GET", "/api/notifications/deliveries?"+query, "", nil); rec.Code != 401 {
+			t.Errorf("unauthenticated %s = %d", query, rec.Code)
+		}
 	}
 }
 
