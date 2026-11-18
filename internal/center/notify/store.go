@@ -53,7 +53,12 @@ type Delivery struct {
 	Error       *string    `json:"error"`
 }
 
-const columns = `id::text,event_id::text,channel,status,attempts,created_at,last_attempt,error`
+const (
+	columns             = `id::text,event_id::text,channel,status,attempts,created_at,last_attempt,error`
+	deliveryFilterWhere = `($1='' OR event_id=NULLIF($1,'')::uuid) AND ($2='' OR status=$2) AND ($3='' OR channel=$3)`
+	deliveryCountSQL    = `SELECT count(*) FROM notification_deliveries WHERE ` + deliveryFilterWhere
+	deliveryPageSQL     = `SELECT ` + columns + ` FROM notification_deliveries WHERE ` + deliveryFilterWhere + ` ORDER BY created_at DESC,id DESC LIMIT $4 OFFSET $5`
+)
 
 // Store owns durable delivery creation and dispatch. Now is injectable for retry tests.
 type Store struct {
@@ -143,12 +148,11 @@ func (s *Store) Deliveries(ctx context.Context, filter DeliveryFilter, page, siz
 	if page < 1 || size < 1 || size > 100 || page > 1000000 {
 		return nil, 0, errors.New("invalid pagination")
 	}
-	const where = `($1='' OR event_id=NULLIF($1,'')::uuid) AND ($2='' OR status=$2) AND ($3='' OR channel=$3)`
 	var total int
-	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE `+where, filter.Event, filter.Status, filter.Channel).Scan(&total); err != nil {
+	if err := s.DB.QueryRow(ctx, deliveryCountSQL, filter.Event, filter.Status, filter.Channel).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.DB.Query(ctx, `SELECT `+columns+` FROM notification_deliveries WHERE `+where+` ORDER BY created_at DESC,id DESC LIMIT $4 OFFSET $5`, filter.Event, filter.Status, filter.Channel, size, (page-1)*size)
+	rows, err := s.DB.Query(ctx, deliveryPageSQL, filter.Event, filter.Status, filter.Channel, size, (page-1)*size)
 	if err != nil {
 		return nil, 0, err
 	}
