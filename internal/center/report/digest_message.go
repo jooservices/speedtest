@@ -1,12 +1,17 @@
 package report
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"net/url"
 	"strings"
 	"time"
 )
+
+// ErrInvalidDashboardURL marks permanent configuration input that cannot be
+// repaired by retrying the same claimed digest period.
+var ErrInvalidDashboardURL = errors.New("invalid dashboard URL")
 
 // DigestMessage contains the safe dynamic fields used by daily and weekly notification templates.
 type DigestMessage struct {
@@ -78,15 +83,15 @@ func formatDigestAverage(value *float64) string {
 
 func safeDashboardLink(raw string) (string, error) {
 	if raw != strings.TrimSpace(raw) {
-		return "", fmt.Errorf("dashboard URL contains surrounding whitespace")
+		return "", fmt.Errorf("%w: contains surrounding whitespace", ErrInvalidDashboardURL)
 	}
 	u, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("invalid dashboard URL")
+		return "", fmt.Errorf("%w", ErrInvalidDashboardURL)
 	}
 	scheme := strings.ToLower(u.Scheme)
 	if (scheme != "https" && scheme != "http") || u.Hostname() == "" || u.User != nil || u.Opaque != "" || u.RawQuery != "" || u.Fragment != "" {
-		return "", fmt.Errorf("dashboard URL must be an absolute HTTP(S) base URL without credentials, query, or fragment")
+		return "", fmt.Errorf("%w: must be an absolute HTTP(S) base URL without credentials, query, or fragment", ErrInvalidDashboardURL)
 	}
 	u.Path = strings.TrimRight(u.Path, "/")
 	if u.Path == "" {

@@ -55,7 +55,7 @@ func TestAC1AC2DigestNotificationsEnabledPopulatedRestartAndLateResultIntegratio
 	}
 
 	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
-	scheduler := newDigestScheduler(pool, "https://speedtest.example.test", notifications, nil)
+	scheduler := newDigestScheduler(pool, notifications, nil)
 	scheduler.Now = func() time.Time { return now }
 	if err := scheduler.RunOnce(ctx); err != nil {
 		t.Fatal("run digest scheduler:", err)
@@ -77,7 +77,7 @@ func TestAC1AC2DigestNotificationsEnabledPopulatedRestartAndLateResultIntegratio
 	assertCapturedDigestMessage(t, capture.messages["telegram"], "Node &lt;alpha&gt; forged", "https://speedtest.example.test/#/")
 	assertCapturedDigestMessage(t, capture.messages["email"], "Node <alpha> forged", "https://speedtest.example.test/#/")
 
-	restarted := newDigestScheduler(pool, "https://speedtest.example.test", notifications, nil)
+	restarted := newDigestScheduler(pool, notifications, nil)
 	restarted.Now = func() time.Time { return now }
 	if err := restarted.RunOnce(ctx); err != nil {
 		t.Fatal("restart digest scheduler:", err)
@@ -104,13 +104,15 @@ func TestAC1AC2DigestNotificationsDisabledEventChannelAndEmptyPeriodIntegration(
 		t.Fatal("disable daily digest event:", err)
 	}
 
-	scheduler := newDigestScheduler(pool, "https://speedtest.example.test", notifications, nil)
+	scheduler := newDigestScheduler(pool, notifications, nil)
 	scheduler.Now = func() time.Time { return time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC) }
 	if err := scheduler.RunOnce(ctx); err != nil {
 		t.Fatal("run digest scheduler:", err)
 	}
 	queued := loadDigestEvents(t, ctx, pool)
-	assertDigestQueuedEvent(t, queued["digest.daily"], []string{}, "", "")
+	if _, ok := queued["digest.daily"]; ok {
+		t.Fatal("disabled daily digest created an event")
+	}
 	assertDigestQueuedEvent(t, queued["digest.weekly"], []string{"telegram"}, "No speed test results were recorded for this period.", "")
 	if consumed := consumeDigestOutbox(t, ctx, notifications); consumed != 1 {
 		t.Fatalf("consumed digest outbox rows = %d, want 1", consumed)
@@ -123,6 +125,83 @@ func TestAC1AC2DigestNotificationsDisabledEventChannelAndEmptyPeriodIntegration(
 	}
 	if got := countEmailDeliveries(t, ctx, pool); got != 0 {
 		t.Fatalf("disabled e-mail deliveries = %d, want 0", got)
+	}
+}
+
+func TestAC2DigestDisabledPeriodsWithMissingURLStayCompleteAfterReenableIntegration(t *testing.T) {
+	pool, ctx := openDigestNotificationPool(t)
+	notifications := configureDigestNotifications(t, ctx, pool, false, false)
+	insertDigestSummaryFixtures(t, ctx, pool)
+	updateDigestSettings(t, ctx, pool, notifications, func(view *settings.Settings) {
+		view.CenterURL = ""
+	})
+	disabled := false
+	if _, err := (&notify.EventStore{DB: pool}).UpdateEvent(ctx, "digest.daily", notify.EventPatch{Enabled: &disabled}); err != nil {
+		t.Fatal("disable daily digest event:", err)
+	}
+
+	now := time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC)
+	scheduler := newDigestScheduler(pool, notifications, nil)
+	scheduler.Now = func() time.Time { return now }
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal("run disabled digest scheduler:", err)
+	}
+	if got := countDigestEvents(t, ctx, pool); got != 0 {
+		t.Fatalf("disabled digest events = %d, want 0", got)
+	}
+	if got := countCompletedDigestPeriods(t, ctx, pool); got != 2 {
+		t.Fatalf("completed disabled digest periods = %d, want 2", got)
+	}
+
+	updateDigestSettings(t, ctx, pool, notifications, func(view *settings.Settings) {
+		view.CenterURL = "https://speedtest.example.test"
+		view.Notify.Telegram.On = true
+	})
+	enabled := true
+	if _, err := (&notify.EventStore{DB: pool}).UpdateEvent(ctx, "digest.daily", notify.EventPatch{Enabled: &enabled}); err != nil {
+		t.Fatal("re-enable daily digest event:", err)
+	}
+	insertDigestResult(t, ctx, pool, 4, "2026-11-17 15:00:00+00", "ok", 900, 500)
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal("run scheduler after re-enabling settings:", err)
+	}
+	if got := countDigestEvents(t, ctx, pool); got != 0 {
+		t.Fatalf("late digest events after re-enabling settings = %d, want 0", got)
+	}
+	if got := countAllDigestDeliveries(t, ctx, pool); got != 0 {
+		t.Fatalf("late digest deliveries after re-enabling settings = %d, want 0", got)
+	}
+}
+
+func TestAC2DigestPopulatedPeriodsWithUnsafeCenterURLCompleteSilentlyIntegration(t *testing.T) {
+	pool, ctx := openDigestNotificationPool(t)
+	notifications := configureDigestNotifications(t, ctx, pool, false, true)
+	insertDigestSummaryFixtures(t, ctx, pool)
+	updateDigestSettings(t, ctx, pool, notifications, func(view *settings.Settings) {
+		view.CenterURL = "https://owner:secret@speedtest.example.test"
+	})
+	scheduler := newDigestScheduler(pool, notifications, nil)
+	scheduler.Now = func() time.Time { return time.Date(2026, 11, 18, 9, 0, 0, 0, time.UTC) }
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal("run scheduler with unsafe center URL:", err)
+	}
+	if got := countDigestEvents(t, ctx, pool); got != 0 {
+		t.Fatalf("unsafe URL digest events = %d, want 0", got)
+	}
+	if got := countAllDigestDeliveries(t, ctx, pool); got != 0 {
+		t.Fatalf("unsafe URL digest deliveries = %d, want 0", got)
+	}
+	if got := countCompletedDigestPeriods(t, ctx, pool); got != 2 {
+		t.Fatalf("completed unsafe URL digest periods = %d, want 2", got)
+	}
+	updateDigestSettings(t, ctx, pool, notifications, func(view *settings.Settings) {
+		view.CenterURL = "https://speedtest.example.test"
+	})
+	if err := scheduler.RunOnce(ctx); err != nil {
+		t.Fatal("run scheduler after URL repair:", err)
+	}
+	if got := countDigestEvents(t, ctx, pool); got != 0 {
+		t.Fatalf("repaired URL late digest events = %d, want 0", got)
 	}
 }
 
@@ -185,6 +264,22 @@ func configureDigestNotifications(t *testing.T, ctx context.Context, pool *pgxpo
 	return &notify.Store{DB: pool, Settings: preferences}
 }
 
+func updateDigestSettings(t *testing.T, ctx context.Context, pool *pgxpool.Pool, notifications *notify.Store, update func(*settings.Settings)) {
+	t.Helper()
+	view, _, err := notifications.Settings.NotificationConfig(ctx, nil, "telegram")
+	if err != nil {
+		t.Fatal("read digest settings:", err)
+	}
+	update(&view)
+	raw, err := json.Marshal(view)
+	if err != nil {
+		t.Fatal("encode digest settings:", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE settings SET value=$1::jsonb,revision=revision+1,updated_at=now() WHERE key='display'`, raw); err != nil {
+		t.Fatal("update digest settings:", err)
+	}
+}
+
 func insertDigestSummaryFixtures(t *testing.T, ctx context.Context, pool *pgxpool.Pool) {
 	t.Helper()
 	if _, err := pool.Exec(ctx, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps)
@@ -231,9 +326,6 @@ func loadDigestEvents(t *testing.T, ctx context.Context, pool *pgxpool.Pool) map
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal("read digest outbox events")
-	}
-	if len(result) != 2 {
-		t.Fatalf("digest event keys = %v, want daily and weekly", result)
 	}
 	return result
 }
@@ -322,6 +414,24 @@ func countEmailDeliveries(t *testing.T, ctx context.Context, pool *pgxpool.Pool)
 	var count int
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE channel='email'`).Scan(&count); err != nil {
 		t.Fatal("count e-mail deliveries")
+	}
+	return count
+}
+
+func countCompletedDigestPeriods(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM digest_periods WHERE completed_at IS NOT NULL`).Scan(&count); err != nil {
+		t.Fatal("count completed digest periods:", err)
+	}
+	return count
+}
+
+func countAllDigestDeliveries(t *testing.T, ctx context.Context, pool *pgxpool.Pool) int {
+	t.Helper()
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries`).Scan(&count); err != nil {
+		t.Fatal("count digest deliveries:", err)
 	}
 	return count
 }

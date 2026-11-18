@@ -151,7 +151,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		return services{}, nil, err
 	}
 	owner.Events = notifications
-	digest := newDigestScheduler(pool, cfg.PublicURL, notifications, logger)
+	digest := newDigestScheduler(pool, notifications, logger)
 	_, alertStore, retention := newOperationalStores(pool, cfg, logger, notifications, operational)
 	mailer := buildReportMailer(pool, notifications, logger)
 	dbip, err := geo.DBIPConfigFromEnv()

@@ -1,6 +1,7 @@
 package report
 
 import (
+	"errors"
 	"math"
 	"strings"
 	"testing"
@@ -61,22 +62,25 @@ func TestAC1FormatDigestRejectsInvalidPeriodAndUnsafeDashboardURL(t *testing.T) 
 		name string
 		data PeriodSummary
 		url  string
+		want error
 	}{
 		{name: "unsupported period", data: PeriodSummary{Kind: "monthly", LocalDate: "2026-11-17", Timezone: "UTC", Nodes: []NodeSummary{{}}}, url: "https://speedtest.example.test"},
 		{name: "invalid date", data: PeriodSummary{Kind: DailyPeriod, LocalDate: "not-a-date", Timezone: "UTC", Nodes: []NodeSummary{{}}}, url: "https://speedtest.example.test"},
 		{name: "weekly date must be Monday", data: PeriodSummary{Kind: WeeklyPeriod, LocalDate: "2026-11-17", Timezone: "UTC", Nodes: []NodeSummary{{}}}, url: "https://speedtest.example.test"},
-		{name: "missing URL", data: valid, url: ""},
-		{name: "malformed URL", data: valid, url: "https://%"},
-		{name: "surrounding whitespace", data: valid, url: " https://speedtest.example.test"},
-		{name: "unsafe scheme", data: valid, url: "javascript:alert(1)"},
-		{name: "missing host", data: valid, url: "https:///dashboard"},
-		{name: "URL credentials", data: valid, url: "https://owner:secret@speedtest.example.test"},
-		{name: "query string", data: valid, url: "https://speedtest.example.test?next=other"},
-		{name: "fragment", data: valid, url: "https://speedtest.example.test/#/alerts"},
+		{name: "missing URL", data: valid, url: "", want: ErrInvalidDashboardURL},
+		{name: "malformed URL", data: valid, url: "https://%", want: ErrInvalidDashboardURL},
+		{name: "surrounding whitespace", data: valid, url: " https://speedtest.example.test", want: ErrInvalidDashboardURL},
+		{name: "unsafe scheme", data: valid, url: "javascript:alert(1)", want: ErrInvalidDashboardURL},
+		{name: "missing host", data: valid, url: "https:///dashboard", want: ErrInvalidDashboardURL},
+		{name: "URL credentials", data: valid, url: "https://owner:secret@speedtest.example.test", want: ErrInvalidDashboardURL},
+		{name: "query string", data: valid, url: "https://speedtest.example.test?next=other", want: ErrInvalidDashboardURL},
+		{name: "fragment", data: valid, url: "https://speedtest.example.test/#/alerts", want: ErrInvalidDashboardURL},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			if _, err := FormatDigest(test.data, test.url); err == nil {
 				t.Fatal("FormatDigest() accepted invalid input")
+			} else if test.want != nil && !errors.Is(err, test.want) {
+				t.Fatalf("FormatDigest() error = %v, want %v", err, test.want)
 			}
 		})
 	}

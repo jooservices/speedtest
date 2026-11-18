@@ -19,7 +19,7 @@ import (
 )
 
 func TestAC2DigestSchedulerIsNotBuiltWithoutNotificationSettings(t *testing.T) {
-	if got := newDigestScheduler(nil, "", nil, nil); got != nil {
+	if got := newDigestScheduler(nil, nil, nil); got != nil {
 		t.Fatal("digest scheduler was built without notification settings")
 	}
 }

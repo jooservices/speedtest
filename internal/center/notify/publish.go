@@ -103,21 +103,28 @@ func (s *Store) publishEventTxWithChannelFilter(ctx context.Context, tx pgx.Tx, 
 	if exclude != "" && !send {
 		return false, nil
 	}
+	if err := recordEventTx(ctx, tx, event, nodeID, data, ts, channels, send); err != nil {
+		return false, err
+	}
+	return send, nil
+}
+
+func recordEventTx(ctx context.Context, tx pgx.Tx, event EventView, nodeID string, data map[string]string, ts time.Time, channels []string, send bool) error {
 	nodeArg := any(nil)
 	if nodeID != "" {
 		nodeArg = nodeID
 	}
 	id := uuid.NewString()
 	if _, err := tx.Exec(ctx, `INSERT INTO alert_events(id,node_id,severity,ts,resolved_at,title,detail,acked,event_key,payload)
-		VALUES($1,$2,$3,$4,$4,$5,$6,true,$7,$8)`, id, nodeArg, event.Severity, ts, event.Title, event.Description, key, marshalEventPayload(data)); err != nil {
-		return false, err
+		VALUES($1,$2,$3,$4,$4,$5,$6,true,$7,$8)`, id, nodeArg, event.Severity, ts, event.Title, event.Description, event.Key, marshalEventPayload(data)); err != nil {
+		return err
 	}
 	if send {
 		if err := enqueueEvent(ctx, tx, id, channels); err != nil {
-			return false, err
+			return err
 		}
 	}
-	return send, nil
+	return nil
 }
 
 func (s *Store) eventDelivery(ctx context.Context, tx pgx.Tx, event EventView, key, nodeID string, data map[string]string, ts time.Time, exclude string) ([]string, bool, error) {
