@@ -79,6 +79,10 @@ and a resumable node-first geolocation refresh cursor. Its down migration
 preserves cached locations and address history. `00035_geo_provider_rolling_window.sql`
 adds the persisted next-request time used to enforce ip-api's 15-per-minute batch
 limit across minute boundaries; its down migration drops only that column.
+`00036_notification_delivery_filter_indexes.sql` adds ordered status, channel and
+status/channel indexes for the owner delivery-history filters, so each filtered
+count and newest-first page uses an index instead of scanning the table; its down
+migration drops only those indexes.
 otherwise intact. Usage down preserves the 60-minute schedule default from
 00015 and restores overrides without changing rows that were not overridden.
 SQL files are embedded by

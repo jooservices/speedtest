@@ -3461,6 +3461,7 @@ paths:
         - Notifications
       summary: Read notification delivery log
       description: Newest createdAt,id first. Optional event, status and channel filters combine.
+        Malformed query encoding is rejected with 422 before the list is read.
         Secret-free attempt/error metadata; retries preserve one logical delivery per event/channel.
         Notification page is limited to 1000000.
       security:
