@@ -45,12 +45,11 @@ func NewPeriod(kind PeriodKind, localDate, timezone string) (Period, error) {
 	if err != nil {
 		return Period{}, err
 	}
-	year, month, day := date.Date()
-	from := time.Date(year, month, day, 0, 0, 0, 0, location)
-	if from.In(location).Format("2006-01-02") != localDate {
+	from, exists := periodBoundary(date, location)
+	if !exists {
 		return Period{}, fmt.Errorf("%w: local date does not exist in time zone", ErrInvalidPeriod)
 	}
-	to := from.AddDate(0, 0, days)
+	to, _ := periodBoundary(date.AddDate(0, 0, days), location)
 
 	return Period{
 		kind:      kind,
@@ -59,6 +58,28 @@ func NewPeriod(kind PeriodKind, localDate, timezone string) (Period, error) {
 		from:      from.UTC(),
 		to:        to.UTC(),
 	}, nil
+}
+
+func periodBoundary(date time.Time, location *time.Location) (time.Time, bool) {
+	year, month, day := date.Date()
+	approximate := time.Date(year, month, day, 0, 0, 0, 0, location)
+	low, high := -48*time.Hour, 48*time.Hour
+	for high-low > time.Nanosecond {
+		middle := low + (high-low)/2
+		candidate := approximate.Add(middle).In(location)
+		if localDate(candidate).Before(date) {
+			low = middle
+		} else {
+			high = middle
+		}
+	}
+	boundary := approximate.Add(high)
+	return boundary, localDate(boundary.In(location)).Equal(date)
+}
+
+func localDate(value time.Time) time.Time {
+	year, month, day := value.Date()
+	return time.Date(year, month, day, 0, 0, 0, 0, time.UTC)
 }
 
 func periodDays(kind PeriodKind) (int, bool) {
