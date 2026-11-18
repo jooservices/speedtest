@@ -3,6 +3,7 @@ package report
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -36,9 +37,21 @@ const primaryEngineSummarySQL = `SELECT n.id::text, n.name, n.primary_engine,
 	AVG(r.up_mbps) FILTER (WHERE r.status <> 'failed')
 FROM results r
 JOIN nodes n ON n.id = r.node_id
-WHERE r.ts >= $1 AND r.ts < $2 AND r.engine = n.primary_engine
+WHERE (%s) AND r.engine = n.primary_engine
 GROUP BY n.id, n.name, n.primary_engine
 ORDER BY lower(n.name), n.id`
+
+func summaryQuery(period Period) (string, []any) {
+	predicates := make([]string, 0, len(period.intervals))
+	args := make([]any, 0, len(period.intervals)*2)
+	for index, interval := range period.intervals {
+		start := index*2 + 1
+		end := start + 1
+		predicates = append(predicates, fmt.Sprintf("(r.ts >= $%d AND r.ts < $%d)", start, end))
+		args = append(args, interval.from, interval.to)
+	}
+	return fmt.Sprintf(primaryEngineSummarySQL, strings.Join(predicates, " OR ")), args
+}
 
 // Summarize returns one row per node with results from that node's primary engine in period.
 func (s *Store) Summarize(ctx context.Context, period Period) (PeriodSummary, error) {
@@ -53,7 +66,8 @@ func (s *Store) Summarize(ctx context.Context, period Period) (PeriodSummary, er
 		To:        period.to,
 		Nodes:     []NodeSummary{},
 	}
-	err := s.collect(ctx, primaryEngineSummarySQL, []any{period.from, period.to}, func(rows pgx.Rows) error {
+	query, args := summaryQuery(period)
+	err := s.collect(ctx, query, args, func(rows pgx.Rows) error {
 		var node NodeSummary
 		if err := rows.Scan(&node.NodeID, &node.Node, &node.Engine, &node.Successes, &node.Failures, &node.AvgDown, &node.AvgUp); err != nil {
 			return err

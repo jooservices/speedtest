@@ -101,6 +101,14 @@ func TestAC1PeriodSummaryUsesExactLocalDatesAcrossMidnightRollbackIntegration(t 
 			t.Errorf("summary for exact local date %s: %+v", tc.date, nodeSummary)
 		}
 	}
+	week, err := report.NewPeriod(report.WeeklyPeriod, "2010-11-01", "America/St_Johns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	weekly, err := (&report.Store{DB: pool}).Summarize(ctx, week)
+	if err != nil || len(weekly.Nodes) != 1 || weekly.Nodes[0].Successes != 6 || weekly.Nodes[0].AvgDown == nil || *weekly.Nodes[0].AvgDown != 350 {
+		t.Fatalf("summary for weekly period containing rollback: %v nodes=%+v", err, weekly.Nodes)
+	}
 }
 
 func periodResult(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id int, node, at, status, engine string, down any) {

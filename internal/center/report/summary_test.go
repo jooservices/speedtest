@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 )
@@ -119,6 +120,30 @@ func TestAC2SummarizeReturnsExplicitEmptyNodeList(t *testing.T) {
 	got, err := (&Store{DB: &summaryPool{}}).Summarize(context.Background(), period)
 	if err != nil || got.Nodes == nil || len(got.Nodes) != 0 {
 		t.Fatalf("empty summary = %+v, %v", got, err)
+	}
+}
+
+func TestAC1SummarizeBuildsOneIndexablePredicatePerLocalDateInterval(t *testing.T) {
+	period, err := NewPeriod(DailyPeriod, "2010-11-06", "America/St_Johns")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := &summaryPool{}
+	if _, err := (&Store{DB: pool}).Summarize(context.Background(), period); err != nil {
+		t.Fatalf("Summarize() error = %v", err)
+	}
+	wantArgs := []any{
+		time.Date(2010, 11, 6, 2, 30, 0, 0, time.UTC),
+		time.Date(2010, 11, 7, 2, 30, 0, 0, time.UTC),
+		time.Date(2010, 11, 7, 2, 31, 0, 0, time.UTC),
+		time.Date(2010, 11, 7, 3, 30, 0, 0, time.UTC),
+	}
+	if !reflect.DeepEqual(pool.args, wantArgs) {
+		t.Fatalf("interval query arguments = %#v, want %#v", pool.args, wantArgs)
+	}
+	wantPredicate := "((r.ts >= $1 AND r.ts < $2) OR (r.ts >= $3 AND r.ts < $4)) AND r.engine = n.primary_engine"
+	if !strings.Contains(pool.query, wantPredicate) {
+		t.Fatalf("summary query missing exact, indexable interval predicates %q: %s", wantPredicate, pool.query)
 	}
 }
 
