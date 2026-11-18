@@ -43,6 +43,13 @@ export function deliveryHistorySteps(T) {
     async focusStatus() { await page.getByLabel('Status', { exact: true }).focus(); },
     async tabKey() { await page.keyboard.press('Tab'); },
     async enterKey() { await page.keyboard.press('Enter'); },
+    async focusNext() { await page.getByRole('button', { name: 'Next delivery history page' }).focus(); },
+    async activePaginationName() {
+      return page.evaluate(() => document.activeElement.getAttribute('aria-label'));
+    },
+    async retryFocused() {
+      return page.getByRole('button', { name: 'Retry' }).evaluate(element => element === document.activeElement);
+    },
     async activeName() {
       return page.evaluate(() => {
         const active = document.activeElement;
@@ -75,14 +82,20 @@ export function deliveryHistorySteps(T) {
       };
     },
     async failNextList() {
-      const handler = route => route.fulfill({
-        status: 500,
-        contentType: 'application/problem+json',
-        body: JSON.stringify({ type: 'about:blank', title: 'Failure', status: 500,
-          detail: 'provider response canary; message body canary; destination-secret-canary' })
-      });
+      const requests = [];
+      const handler = route => {
+        requests.push(new URL(route.request().url()));
+        return route.fulfill({
+          status: 500,
+          contentType: 'application/problem+json',
+          body: JSON.stringify({ type: 'about:blank', title: 'Failure', status: 500,
+            detail: 'provider response canary; message body canary; destination-secret-canary' })
+        });
+      };
       await page.route(routePattern, handler);
-      return () => page.unroute(routePattern, handler);
+      const remove = () => page.unroute(routePattern, handler);
+      remove.requests = requests;
+      return remove;
     },
     async injectMarkupIntoNextFailure() {
       const markup = '<img src=x data-delivery-injected="true">';

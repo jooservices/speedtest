@@ -38,8 +38,9 @@
     var state = { page: 1, status: '', channel: '', rows: [], pagination: { current_page: 1, per_page: PAGE_SIZE, total: 0, last_page: 1 }, loading: false, error: false };
     var results = h('div', { id: 'delivery-history-results', 'aria-busy': 'true', 'data-testid': 'delivery-history-results' });
     var pageStatus = h('span', { class: 'hint', role: 'status', 'aria-live': 'polite', 'aria-atomic': 'true' });
-    var previous = U.btn('Previous', { size: 'sm', aria: 'Previous delivery history page', onClick: function () { changePage(state.page - 1); } });
-    var next = U.btn('Next', { size: 'sm', aria: 'Next delivery history page', onClick: function () { changePage(state.page + 1); } });
+    var previous = U.btn('Previous', { size: 'sm', aria: 'Previous delivery history page', onClick: function () { changePage(state.page - 1, previous); } });
+    var next = U.btn('Next', { size: 'sm', aria: 'Next delivery history page', onClick: function () { changePage(state.page + 1, next); } });
+    var pagination = h('nav', { class: 'row between wrap', 'aria-label': 'Delivery history pagination' }, previous, pageStatus, next);
     var statusSelect = U.select([
       { value: '', label: 'All statuses' }, { value: 'pending', label: 'Pending' },
       { value: 'sent', label: 'Sent' }, { value: 'failed', label: 'Failed' }
@@ -58,16 +59,18 @@
       h('div', { class: 'row wrap', style: 'gap:12px' },
         U.field('Status', statusSelect), U.field('Channel', channelSelect)),
       h('div', { class: 'stack', style: 'gap:8px' }, results),
-      h('nav', { class: 'row between wrap', 'aria-label': 'Delivery history pagination' }, previous, pageStatus, next)));
+      pagination));
 
     function render() {
       U.clear(results);
       results.setAttribute('aria-busy', state.loading ? 'true' : 'false');
       statusSelect.setAttribute('aria-disabled', state.loading ? 'true' : 'false');
       channelSelect.setAttribute('aria-disabled', state.loading ? 'true' : 'false');
-      previous.disabled = state.loading || state.page <= 1;
-      next.disabled = state.loading || state.page >= state.pagination.last_page;
-      pageStatus.textContent = state.loading
+      previous.disabled = state.page <= 1;
+      next.disabled = state.page >= state.pagination.last_page;
+      pagination.hidden = state.loading || state.error;
+      pagination.style.display = pagination.hidden ? 'none' : '';
+      pageStatus.textContent = state.loading || state.error
         ? ''
         : 'Page ' + state.page + ' of ' + state.pagination.last_page + ' · ' + F.count(state.pagination.total) + ' deliveries';
       if (state.loading) {
@@ -119,10 +122,19 @@
         render();
       });
     }
-    function changePage(page) {
+    function changePage(page, activatedButton) {
       if (state.loading || page < 1 || page > state.pagination.last_page) return;
       state.page = page;
-      load();
+      return load().then(function () {
+        if (state.error) {
+          results.querySelector('button').focus();
+          return;
+        }
+        var focusTarget = activatedButton.disabled
+          ? (activatedButton === previous ? next : previous)
+          : activatedButton;
+        focusTarget.focus();
+      });
     }
     function changeStatus(value) {
       if (state.loading) { statusSelect.value = state.status; return; }

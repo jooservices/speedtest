@@ -558,12 +558,27 @@ export function settingsSuite(T, ctx) {
       let loadingGate, removeFailure, injectedMarkup;
       const originalTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme') || 'dark');
       try {
-        loadingGate = await deliveryHistory.blockNextList();
+        removeFailure = await deliveryHistory.failNextList();
         await deliveryHistory.open();
+        await page.getByRole('alert').waitFor();
+        const initialError = await page.getByRole('alert').innerText();
+        assert.match(initialError, /Could not load delivery history/);
+        assert.equal(await deliveryHistory.pageStatus().count(), 0, 'SC-SET-12 initial failure has no default page count');
+        assert.equal(await page.getByRole('navigation', { name: 'Delivery history pagination' }).isVisible(), false, 'SC-SET-12 initial failure hides pagination');
+        assert.equal(await deliveryHistory.rows().count(), 0, 'SC-SET-12 initial failure has no rows presented as current data');
+        for (const secret of ['provider response canary', 'message body canary', 'destination-secret-canary']) {
+          assert.ok(!initialError.includes(secret), `the request-error state hides ${secret}`);
+        }
+        T.expectRefusal(500);
+        await removeFailure();
+        removeFailure = null;
+        loadingGate = await deliveryHistory.blockNextList();
+        await deliveryHistory.retry();
         await loadingGate.started;
         await deliveryHistory.loadingState().waitFor();
         assert.match(await deliveryHistory.loadingState().innerText(), /Loading delivery history/);
         assert.equal(await deliveryHistory.statusDisabled(), 'true', 'filters expose their loading state accessibly');
+        assert.equal(await deliveryHistory.pageStatus().count(), 0, 'SC-SET-12 loading state does not present stale page counts');
         await loadingGate.release();
         await page.getByText('safe failure detail 12', { exact: true }).waitFor();
         assert.equal(await deliveryHistory.statusDisabled(), 'false', 'filters become available after loading');
@@ -581,12 +596,14 @@ export function settingsSuite(T, ctx) {
         assert.equal(await deliveryHistory.activeName(), 'Next delivery history page', 'Tab reaches pagination');
         await deliveryHistory.enterKey();
         await deliveryHistory.waitForPage(2);
+        assert.equal(await deliveryHistory.activePaginationName(), 'Previous delivery history page', 'SC-SET-12 keyboard Next restores focus to the available direction at the last page');
         assert.ok(await deliveryHistory.rows().count() >= 3, 'page two contains the remaining fixtures and its header');
         assert.match(await deliveryHistory.rows().nth(1).innerText(), /Telegram/, 'older page starts with its newest remaining delivery');
         assert.match(await deliveryHistory.rows().nth(2).innerText(), /Slack/);
 
-        await deliveryHistory.previous();
+        await deliveryHistory.enterKey();
         await deliveryHistory.waitForPage(1);
+        assert.equal(await deliveryHistory.activePaginationName(), 'Next delivery history page', 'SC-SET-12 keyboard Previous restores focus to the available direction at the first page');
         await deliveryHistory.status('failed');
         await page.getByText('safe failure detail 12', { exact: true }).waitFor();
         assert.equal(await deliveryHistory.rows().count(), 7, 'the failed filter shows all six failures');
@@ -594,6 +611,7 @@ export function settingsSuite(T, ctx) {
         await page.getByText('safe failure detail 11', { exact: true }).waitFor();
         assert.equal(await deliveryHistory.rows().count(), 3, 'status and channel filters combine');
         await deliveryHistory.status('pending');
+        await deliveryHistory.waitForPage(1);
         await deliveryHistory.channel('email');
         await page.getByText('No deliveries match these filters', { exact: true }).waitFor();
         assert.equal(await page.getByTestId('delivery-history-results').getByRole('table').count(), 0, 'an empty filter result has no stale table');
@@ -603,16 +621,46 @@ export function settingsSuite(T, ctx) {
         removeFailure = await deliveryHistory.failNextList();
         await deliveryHistory.status('failed');
         const requestError = await page.getByRole('alert').innerText();
+        const failedFilterRequests = removeFailure.requests;
         assert.match(requestError, /Could not load delivery history/);
+        assert.equal(await deliveryHistory.pageStatus().count(), 0, 'SC-SET-12 filter failure hides stale pagination counts');
+        assert.equal(await page.getByRole('navigation', { name: 'Delivery history pagination' }).isVisible(), false, 'SC-SET-12 filter failure hides pagination');
+        assert.equal(await page.getByLabel('Status', { exact: true }).inputValue(), 'failed', 'SC-SET-12 failure retains the selected status filter');
+        assert.equal(await deliveryHistory.rows().count(), 0, 'SC-SET-12 filter failure clears stale rows');
         for (const secret of ['provider response canary', 'message body canary', 'destination-secret-canary']) {
           assert.ok(!requestError.includes(secret), `the request-error state hides ${secret}`);
         }
         T.expectRefusal(500);
         await removeFailure();
+        assert.equal(failedFilterRequests.at(-1).searchParams.get('status'), 'failed', 'SC-SET-12 failed request used the selected status filter');
         removeFailure = null;
         await deliveryHistory.retry();
         await deliveryHistory.waitForPage(1);
         assert.equal(await deliveryHistory.rows().count(), 7, 'retry restores the six failed deliveries');
+        assert.equal(await page.getByLabel('Status', { exact: true }).inputValue(), 'failed', 'SC-SET-12 Retry retains the selected status filter');
+
+        await deliveryHistory.status('');
+        await deliveryHistory.waitForPage(1);
+        await deliveryHistory.channel('');
+        await deliveryHistory.waitForPage(1);
+        await page.getByText('safe failure detail 12', { exact: true }).waitFor();
+        removeFailure = await deliveryHistory.failNextList();
+        await deliveryHistory.focusNext();
+        await deliveryHistory.enterKey();
+        await page.getByRole('alert').waitFor();
+        assert.equal(await deliveryHistory.pageStatus().count(), 0, 'SC-SET-12 page failure hides old totals and page labels');
+        assert.equal(await deliveryHistory.rows().count(), 0, 'SC-SET-12 page failure clears previous page rows');
+        assert.equal(await deliveryHistory.retryFocused(), true, 'SC-SET-12 failed pagination moves focus to Retry');
+        T.expectRefusal(500);
+        await removeFailure();
+        const failedPageRequests = removeFailure.requests;
+        removeFailure = null;
+        await deliveryHistory.retry();
+        await deliveryHistory.waitForPage(2);
+        assert.equal(failedPageRequests.at(-1).searchParams.get('page'), '2', 'SC-SET-12 Retry requests the selected page');
+        assert.ok(await deliveryHistory.rows().count() >= 3, 'SC-SET-12 retry restores data for the selected page');
+        await deliveryHistory.previous();
+        await deliveryHistory.waitForPage(1);
 
         injectedMarkup = await deliveryHistory.injectMarkupIntoNextFailure();
         await deliveryHistory.channel('email');
