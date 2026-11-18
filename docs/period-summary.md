@@ -22,14 +22,14 @@ to weekly periods. Results exactly at an interval start are included; results
 exactly at an interval end are excluded.
 
 `Store.Summarize` returns the period kind, local start date, time zone, UTC
-envelope bounds and a `nodes` array. It includes one entry for each node with results in
-the period, using only that node's `primary_engine`; results from other engines
-are excluded. Each node entry reports its ID, name, primary engine, success and
+envelope bounds and a `nodes` array. It includes one entry for each node with at
+least one result from that node's `primary_engine` in the period; results from
+other engines are excluded. Each node entry reports its ID, name, primary engine, success and
 failure counts, and average download and upload speeds in Mbps. `ok` and
 `degraded` results count as successes; `failed` results count as failures. The
 speed averages use successful results only and are `null` when the node has no
 successful results.
 
-When no node has results in the period, `nodes` is an empty JSON array, not
+When no node has a primary-engine result in the period, `nodes` is an empty JSON array, not
 `null`. Nodes are ordered by case-insensitive name and then ID. The summary is
 per-node; it never combines measurements from different nodes.

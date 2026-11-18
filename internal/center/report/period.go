@@ -80,6 +80,12 @@ func periodIntervals(date time.Time, days int, location *time.Location) []utcInt
 		if zoneEnd.IsZero() || zoneEnd.After(searchEnd) {
 			zoneEnd = searchEnd
 		}
+		if !zoneEnd.After(cursor) {
+			// Go 1.27 can return a stale ZoneBounds end for a POSIX TZ footer.
+			// Scan seconds only in that exceptional case so the cursor advances
+			// without treating a later offset change as part of this interval.
+			zoneEnd = nextOffsetChange(cursor, searchEnd, location, offset)
+		}
 
 		utcStart := later(cursor, date.Add(-time.Duration(offset)*time.Second))
 		utcEnd := earlier(zoneEnd, localEnd.Add(-time.Duration(offset)*time.Second))
@@ -89,6 +95,16 @@ func periodIntervals(date time.Time, days int, location *time.Location) []utcInt
 		cursor = zoneEnd
 	}
 	return intervals
+}
+
+func nextOffsetChange(cursor, searchEnd time.Time, location *time.Location, offset int) time.Time {
+	for probe := cursor.Add(time.Second); probe.Before(searchEnd); probe = probe.Add(time.Second) {
+		_, probeOffset := probe.In(location).Zone()
+		if probeOffset != offset {
+			return probe
+		}
+	}
+	return searchEnd
 }
 
 func appendUTCInterval(intervals []utcInterval, from, to time.Time) []utcInterval {

@@ -156,6 +156,19 @@ func TestAC2SummarizeReturnsInvalidPeriodAndDatabaseErrors(t *testing.T) {
 	if _, err := (&Store{DB: invalidPool}).Summarize(context.Background(), Period{}); !errors.Is(err, ErrInvalidPeriod) || invalidPool.queries != 0 {
 		t.Fatalf("invalid period error = %v, queries = %d", err, invalidPool.queries)
 	}
+	for _, tc := range []struct{ date, zone string }{
+		{date: "9999-12-31", zone: "UTC"},
+		{date: "0000-01-01", zone: "Asia/Tokyo"},
+	} {
+		period, err := NewPeriod(DailyPeriod, tc.date, tc.zone)
+		if err != nil {
+			t.Fatalf("NewPeriod(%s, %s): %v", tc.date, tc.zone, err)
+		}
+		pool := &summaryPool{}
+		if _, err := (&Store{DB: pool}).Summarize(context.Background(), period); !errors.Is(err, ErrInvalidPeriod) || pool.queries != 0 {
+			t.Fatalf("unencodable UTC bound for %s/%s: err=%v queries=%d", tc.date, tc.zone, err, pool.queries)
+		}
+	}
 	for _, tc := range []struct {
 		name string
 		pool *summaryPool

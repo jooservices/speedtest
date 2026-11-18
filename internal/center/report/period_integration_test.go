@@ -188,22 +188,21 @@ func assertBoundedTimestampIndexPlan(t *testing.T, plan summaryExplainNode) {
 	if stats.resultsSequentialScan {
 		t.Error("summary plan sequentially scanned results")
 	}
-	if stats.resultRowsOverBound {
-		t.Errorf("summary plan read more than %d result rows", summaryPlanReadLimit)
+	if stats.resultRowsRead > summaryPlanReadLimit {
+		t.Errorf("summary plan read %.0f result rows, want at most %d", stats.resultRowsRead, summaryPlanReadLimit)
 	}
 }
 
 func inspectSummaryPlan(node summaryExplainNode, stats *summaryPlanStats) {
-	if node.IndexName == "results_ts_idx" && node.ActualRows <= summaryPlanReadLimit {
+	if node.IndexName == "results_ts_idx" && node.ActualLoops > 0 &&
+		strings.Contains(node.IndexCond, "ts >=") && strings.Contains(node.IndexCond, "ts <") {
 		stats.timestampIndexRead = true
 	}
 	if node.RelationName == "results" {
 		if node.NodeType == "Seq Scan" {
 			stats.resultsSequentialScan = true
 		}
-		if node.ActualRows > summaryPlanReadLimit {
-			stats.resultRowsOverBound = true
-		}
+		stats.resultRowsRead += (node.ActualRows + node.RowsRemovedByFilter + node.RowsRemovedByIndexRecheck) * node.ActualLoops
 	}
 	for _, child := range node.Plans {
 		inspectSummaryPlan(child, stats)
@@ -211,6 +210,25 @@ func inspectSummaryPlan(node summaryExplainNode, stats *summaryPlanStats) {
 }
 
 const summaryPlanReadLimit = 1000
+
+func TestSummaryPlanGuardCountsFilteredRowsAndRequiresBothTimestampBounds(t *testing.T) {
+	wide := summaryExplainNode{
+		NodeType: "Index Scan", RelationName: "results", IndexName: "results_ts_idx",
+		IndexCond:  "(ts >= lower_bound) AND (ts < upper_bound)",
+		ActualRows: 25, ActualLoops: 1, RowsRemovedByFilter: 99975,
+	}
+	stats := summaryPlanStats{}
+	inspectSummaryPlan(wide, &stats)
+	if !stats.timestampIndexRead || stats.resultRowsRead != 100000 {
+		t.Fatalf("wide scan stats = %+v, want bounded index recognized and 100000 rows read", stats)
+	}
+	wide.IndexCond = "(ts >= lower_bound)"
+	stats = summaryPlanStats{}
+	inspectSummaryPlan(wide, &stats)
+	if stats.timestampIndexRead {
+		t.Fatal("timestamp index missing an upper bound was accepted")
+	}
+}
 
 type summaryPlanPool struct {
 	pool  *pgxpool.Pool
@@ -229,17 +247,21 @@ type summaryExplainDocument struct {
 }
 
 type summaryExplainNode struct {
-	NodeType     string               `json:"Node Type"`
-	RelationName string               `json:"Relation Name"`
-	IndexName    string               `json:"Index Name"`
-	ActualRows   float64              `json:"Actual Rows"`
-	Plans        []summaryExplainNode `json:"Plans"`
+	NodeType                  string               `json:"Node Type"`
+	RelationName              string               `json:"Relation Name"`
+	IndexName                 string               `json:"Index Name"`
+	IndexCond                 string               `json:"Index Cond"`
+	ActualRows                float64              `json:"Actual Rows"`
+	ActualLoops               float64              `json:"Actual Loops"`
+	RowsRemovedByFilter       float64              `json:"Rows Removed by Filter"`
+	RowsRemovedByIndexRecheck float64              `json:"Rows Removed by Index Recheck"`
+	Plans                     []summaryExplainNode `json:"Plans"`
 }
 
 type summaryPlanStats struct {
 	timestampIndexRead    bool
 	resultsSequentialScan bool
-	resultRowsOverBound   bool
+	resultRowsRead        float64
 }
 
 func periodResult(t *testing.T, ctx context.Context, pool *pgxpool.Pool, id int, node, at, status, engine string, down any) {

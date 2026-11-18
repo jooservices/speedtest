@@ -58,6 +58,9 @@ func (s *Store) Summarize(ctx context.Context, period Period) (PeriodSummary, er
 	if !period.to.After(period.from) {
 		return PeriodSummary{}, fmt.Errorf("%w: period must be created with NewPeriod", ErrInvalidPeriod)
 	}
+	if period.from.Year() < 0 || period.from.Year() > 9999 || period.to.Year() < 0 || period.to.Year() > 9999 {
+		return PeriodSummary{}, fmt.Errorf("%w: UTC bounds cannot be encoded as JSON", ErrInvalidPeriod)
+	}
 	out := PeriodSummary{
 		Kind:      period.kind,
 		LocalDate: period.localDate,
