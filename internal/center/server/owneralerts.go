@@ -79,7 +79,7 @@ func (h *ownerAlerts) serve(w http.ResponseWriter, r *http.Request) {
 		case "acknowledgements":
 			h.acknowledgeAll(w, r)
 		default:
-			writeNotFoundProblem(w, r)
+			writeRouteNotFound(w, r)
 		}
 		return
 	}
@@ -107,7 +107,7 @@ func (h *ownerAlerts) serve(w http.ResponseWriter, r *http.Request) {
 		h.acknowledge(w, r, strings.ToLower(parts[3]))
 		return
 	}
-	writeNotFoundProblem(w, r)
+	writeRouteNotFound(w, r)
 }
 
 // getEvent returns one alert event with its ETag (GET /api/alerts/events/{id}).

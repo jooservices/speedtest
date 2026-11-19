@@ -104,7 +104,7 @@ func (h *installerAPI) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		h.get(w, r)
 	default:
-		writeNotFoundProblem(w, r)
+		writeRouteNotFound(w, r)
 	}
 }
 

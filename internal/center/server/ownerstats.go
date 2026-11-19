@@ -62,7 +62,7 @@ func (h *ownerStats) serve(w http.ResponseWriter, r *http.Request) {
 	case "/api/stats/events":
 		h.events(w, r)
 	default:
-		writeNotFoundProblem(w, r)
+		writeRouteNotFound(w, r)
 	}
 }
 

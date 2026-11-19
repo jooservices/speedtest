@@ -13,9 +13,9 @@ func TestRouteTableOrderNilAreasAndFallback(t *testing.T) {
 		return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hits = append(hits, name); w.WriteHeader(204) })
 	}
 	var table routeTable
-	table.add(nil, onPath(func(string) bool { return true })) // an area without a store is left out
-	table.add(mark("specific"), onPath(func(p string) bool { return p == "/api/x/special" }))
-	table.add(mark("general"), onPath(func(p string) bool { return p == "/api/x/special" || p == "/api/x/other" }))
+	table.add("unset", nil, onPath(func(string) bool { return true })) // an area without a store is left out
+	table.add("specific", mark("specific"), onPath(func(p string) bool { return p == "/api/x/special" }))
+	table.add("general", mark("general"), onPath(func(p string) bool { return p == "/api/x/special" || p == "/api/x/other" }))
 	if len(table) != 2 {
 		t.Fatalf("a nil handler was registered: %d routes", len(table))
 	}
@@ -28,7 +28,7 @@ func TestRouteTableOrderNilAreasAndFallback(t *testing.T) {
 			t.Errorf("%s served by %v, want %s", tc.path, hits, tc.want)
 		}
 	}
-	if table.handlerFor(httptest.NewRequest(http.MethodGet, "/nothing", nil)) != nil {
+	if _, ok := table.routeFor(httptest.NewRequest(http.MethodGet, "/nothing", nil)); ok {
 		t.Fatal("no route should match")
 	}
 }
