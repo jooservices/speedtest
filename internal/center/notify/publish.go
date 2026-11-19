@@ -59,21 +59,13 @@ func (s *Store) PublishEventTx(ctx context.Context, tx pgx.Tx, key, nodeID strin
 }
 
 func (s *Store) publishEventTx(ctx context.Context, tx pgx.Tx, key, nodeID string, payload map[string]string, ts time.Time, exclude string) (bool, error) {
-	_, ok := catalog.LookupEvent(key)
-	if !ok {
-		return false, ErrEventNotFound
-	}
-	store := &EventStore{DB: tx}
-	event, err := store.GetEvent(ctx, key)
+	return s.publishEventTxWithChannelFilter(ctx, tx, key, nodeID, payload, ts, exclude, nil)
+}
+
+func (s *Store) publishEventTxWithChannelFilter(ctx context.Context, tx pgx.Tx, key, nodeID string, payload map[string]string, ts time.Time, exclude string, allowedChannels []string) (bool, error) {
+	event, err := publicationEvent(ctx, tx, key, nodeID)
 	if err != nil {
 		return false, err
-	}
-	if event.NodeScoped && nodeID != "" {
-		enabled, err := store.NodeEnabled(ctx, key, nodeID)
-		if err != nil {
-			return false, err
-		}
-		event.Enabled = enabled
 	}
 	duplicate, err := releaseAlreadyNotified(ctx, tx, key, nodeID, payload)
 	if err != nil {
@@ -86,6 +78,10 @@ func (s *Store) publishEventTx(ctx context.Context, tx pgx.Tx, key, nodeID strin
 	if err != nil {
 		return false, err
 	}
+	event, err = s.restrictEventChannels(ctx, tx, event, allowedChannels)
+	if err != nil {
+		return false, err
+	}
 	channels, send, err := s.eventDelivery(ctx, tx, event, key, nodeID, data, ts, exclude)
 	if err != nil {
 		return false, err
@@ -93,21 +89,60 @@ func (s *Store) publishEventTx(ctx context.Context, tx pgx.Tx, key, nodeID strin
 	if exclude != "" && !send {
 		return false, nil
 	}
+	if err := recordEventTx(ctx, tx, event, nodeID, data, ts, channels, send); err != nil {
+		return false, err
+	}
+	return send, nil
+}
+
+func (s *Store) restrictEventChannels(ctx context.Context, tx pgx.Tx, event EventView, allowed []string) (EventView, error) {
+	if !event.Enabled || allowed == nil {
+		return event, nil
+	}
+	channels, err := configuredChannels(ctx, s, tx, event.Channels, allowed)
+	if err != nil {
+		return EventView{}, err
+	}
+	event.Channels = channels
+	return event, nil
+}
+
+func publicationEvent(ctx context.Context, tx pgx.Tx, key, nodeID string) (EventView, error) {
+	_, ok := catalog.LookupEvent(key)
+	if !ok {
+		return EventView{}, ErrEventNotFound
+	}
+	store := &EventStore{DB: tx}
+	event, err := store.GetEvent(ctx, key)
+	if err != nil {
+		return EventView{}, err
+	}
+	if event.NodeScoped && nodeID != "" {
+		enabled, err := store.NodeEnabled(ctx, key, nodeID)
+		if err != nil {
+			return EventView{}, err
+		}
+		event.Enabled = enabled
+	}
+	return event, nil
+}
+
+func recordEventTx(ctx context.Context, tx pgx.Tx, event EventView, nodeID string, data map[string]string, ts time.Time, channels []string, send bool) error {
 	nodeArg := any(nil)
 	if nodeID != "" {
 		nodeArg = nodeID
 	}
 	id := uuid.NewString()
 	if _, err := tx.Exec(ctx, `INSERT INTO alert_events(id,node_id,severity,ts,resolved_at,title,detail,acked,event_key,payload)
-		VALUES($1,$2,$3,$4,$4,$5,$6,true,$7,$8)`, id, nodeArg, event.Severity, ts, event.Title, event.Description, key, marshalEventPayload(data)); err != nil {
-		return false, err
+		VALUES($1,$2,$3,$4,$4,$5,$6,true,$7,$8)`, id, nodeArg, event.Severity, ts, event.Title, event.Description, event.Key, marshalEventPayload(data)); err != nil {
+		return err
 	}
 	if send {
 		if err := enqueueEvent(ctx, tx, id, channels); err != nil {
-			return false, err
+			return err
 		}
 	}
-	return send, nil
+	return nil
 }
 
 func (s *Store) eventDelivery(ctx context.Context, tx pgx.Tx, event EventView, key, nodeID string, data map[string]string, ts time.Time, exclude string) ([]string, bool, error) {
