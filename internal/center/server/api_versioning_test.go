@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -11,6 +12,8 @@ import (
 
 	"github.com/jooservices/speedtest/docs"
 	"github.com/jooservices/speedtest/internal/center/apicontract"
+	"github.com/jooservices/speedtest/internal/center/installer"
+	"github.com/jooservices/speedtest/internal/center/jobs"
 	"gopkg.in/yaml.v3"
 )
 
@@ -87,19 +90,62 @@ func maskTimestamps(body string) string {
 // sameExceptAliasHeaders reports whether two responses carry the same headers once Deprecation and Sunset are ignored.
 // It works on copies, so the caller can still check the alias headers on the originals.
 func sameExceptAliasHeaders(a, b http.Header) bool {
-	stripped := func(h http.Header) string {
+	stripped := func(h http.Header) http.Header {
 		c := h.Clone()
 		c.Del("Deprecation")
 		c.Del("Sunset")
-		return fmt.Sprint(c)
+		return c
 	}
-	return stripped(a) == stripped(b)
+	return reflect.DeepEqual(stripped(a), stripped(b))
+}
+
+func TestSameExceptAliasHeadersKeepsHeaderValueBoundaries_AC2(t *testing.T) {
+	combined := http.Header{"X-Example": {"a b"}, "Deprecation": {"first"}}
+	split := http.Header{"X-Example": {"a", "b"}, "Sunset": {"second"}}
+	if sameExceptAliasHeaders(combined, split) {
+		t.Fatal("different header value lists compared equal")
+	}
+	matching := http.Header{"X-Example": {"a b"}, "Sunset": {"different"}}
+	if !sameExceptAliasHeaders(combined, matching) {
+		t.Fatal("Deprecation and Sunset should be ignored")
+	}
+}
+
+func TestVersionedResponseRejectsEmptyAliasHeaders_AC3(t *testing.T) {
+	for _, name := range []string{"Deprecation", "Sunset"} {
+		t.Run(name, func(t *testing.T) {
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/problem+json")
+				if strings.HasPrefix(r.URL.Path, apiVersionPrefix) {
+					w.Header().Add(name, "")
+				} else {
+					w.Header().Set("Deprecation", legacyAPIDeprecation)
+					w.Header().Set("Sunset", legacyAPISunset)
+				}
+				w.WriteHeader(http.StatusUnprocessableEntity)
+				_, _ = w.Write([]byte(`{"type":"/problems/validation"}`))
+			})
+			case_ := errorParityCase{area: "test", method: http.MethodGet, path: "/api/test", wantStatus: http.StatusUnprocessableEntity}
+			if err := checkErrorOperationParity(handler, case_); err == nil || !strings.Contains(err.Error(), "carries alias headers") {
+				t.Fatalf("parity check did not reject the empty versioned %s header: %v", name, err)
+			}
+		})
+	}
+}
+
+func versionedResponseHasAliasHeaders(headers http.Header) bool {
+	for name := range headers {
+		if strings.EqualFold(name, "Deprecation") || strings.EqualFold(name, "Sunset") {
+			return true
+		}
+	}
+	return false
 }
 
 // TestEveryOperationServedUnderAPIv1 calls every docs/openapi.yaml operation on /api/v1 and on its /api alias, once
-// with an anonymous handler and once with an owner session, and requires the same status, body and headers. Only the
-// alias may carry Deprecation and Sunset. The handlers are bare (no stores), so this proves the routing and the header
-// rules; each store handler is covered by its own tests.
+// with an anonymous handler and once with an owner session, and requires the same status, body and headers. It also
+// compares one validation or missing-resource error per OpenAPI resource area. Only the alias may carry Deprecation
+// and Sunset. The operation comparisons use lightweight handlers; each store handler is covered by its own tests.
 func TestEveryOperationServedUnderAPIv1(t *testing.T) {
 	operations, err := apicontract.Operations()
 	if err != nil {
@@ -133,6 +179,7 @@ func TestEveryOperationServedUnderAPIv1(t *testing.T) {
 			})
 		}
 	}
+	checkErrorParityPerArea(t)
 }
 
 // checkOperationParity compares one operation on its x-canonical-path (versioned) with its /api alias: status, body
@@ -161,6 +208,156 @@ func checkOperationParity(t *testing.T, handler http.Handler, operation apicontr
 	if !sameExceptAliasHeaders(onV1.Header(), onAlias.Header()) {
 		t.Errorf("headers on %s = %v, on alias %s = %v", versioned, onV1.Header(), legacy, onAlias.Header())
 	}
+}
+
+type errorParityCase struct {
+	area, method, path, body string
+	prepare                  func(*http.Request)
+	wantStatus               int
+}
+
+func checkErrorParityPerArea(t *testing.T) {
+	t.Helper()
+	authHandler := NewHandler(Options{Auth: anonymousNodeTestAuth{}})
+	handler := newNodeHandler(Options{
+		AccessTokens:       &accessTokenTestStore{},
+		NodeCredentials:    &fakeNodeCredentialService{},
+		OwnerNodes:         &fakeOwnerNodes{},
+		OwnerSchedules:     &fakeOwnerSchedules{},
+		OwnerJobs:          fakeOwnerJobs{err: jobs.ErrNotFound},
+		OwnerDashboard:     &fakeOwnerDashboard{},
+		OwnerIP:            &fakeOwnerIP{},
+		OwnerNotifications: &notificationStub{},
+		Settings:           settingsWithLanguage("en"),
+		OwnerResults:       &fakeOwnerResults{},
+		OwnerStats:         &fakeOwnerStats{},
+		OwnerUsage:         &fakeOwnerUsage{},
+		OwnerISP:           &fakeOwnerISP{},
+		OwnerReport:        &fakeReports{},
+		OwnerAlerts:        &fakeOwnerAlerts{},
+		Installer:          &fakeInstallerService{serviceErr: installer.ErrNotFound},
+		AgentAPI:           stubAgentStore{},
+	})
+	areasByOperation, areas := specOperationAreas(t)
+	cases := []errorParityCase{
+		{area: "Auth", method: http.MethodPost, path: "/api/auth/login", body: `{"email":"bad address","password":"valid password"}`, prepare: ownerWriteWith(nil), wantStatus: http.StatusUnprocessableEntity},
+		{area: "Access tokens", method: http.MethodGet, path: "/api/access-tokens?page=0", prepare: ownerRead, wantStatus: http.StatusUnprocessableEntity},
+		{area: "Agent", method: http.MethodPost, path: "/api/agent/heartbeat", body: `{}`, prepare: func(r *http.Request) { r.Header.Set("Authorization", "Bearer good") }, wantStatus: http.StatusUnprocessableEntity},
+		{area: "Nodes", method: http.MethodGet, path: "/api/nodes?size=0", prepare: ownerRead, wantStatus: http.StatusUnprocessableEntity},
+		{area: "Results", method: http.MethodGet, path: "/api/results?range=1y", prepare: ownerRead, wantStatus: http.StatusUnprocessableEntity},
+		{area: "Statistics", method: http.MethodGet, path: "/api/stats/trend?range=90d", prepare: ownerRead, wantStatus: http.StatusUnprocessableEntity},
+		{area: "Bandwidth", method: http.MethodGet, path: "/api/usage?group=year", prepare: ownerRead, wantStatus: http.StatusUnprocessableEntity},
+		{area: "Dashboard", method: http.MethodGet, path: "/api/dashboard?range=1y", prepare: ownerRead, wantStatus: http.StatusUnprocessableEntity},
+		{area: "Schedules", method: http.MethodPut, path: "/api/schedules/rules", body: `{"stagger":true,"maxConcurrent":0,"quiet":{"quietStart":"","quietEnd":"","timezone":"UTC"}}`, prepare: ownerWriteWith(map[string]string{"If-Match": `"parity-schedules"`}), wantStatus: http.StatusUnprocessableEntity},
+		{area: "Alerts", method: http.MethodGet, path: "/api/alerts/events?state=bad", prepare: ownerRead, wantStatus: http.StatusUnprocessableEntity},
+		{area: "Notifications", method: http.MethodGet, path: "/api/notifications/deliveries?size=101", prepare: ownerRead, wantStatus: http.StatusUnprocessableEntity},
+		{area: "Settings", method: http.MethodPatch, path: "/api/settings", body: `{"language":"fr"}`, prepare: ownerWriteWith(map[string]string{"If-Match": `"3"`}), wantStatus: http.StatusUnprocessableEntity},
+		{area: "IP", method: http.MethodGet, path: "/api/ip/lookup?ip=x1.example", prepare: ownerRead, wantStatus: http.StatusUnprocessableEntity},
+		{area: "Jobs", method: http.MethodGet, path: "/api/jobs/{id}", prepare: ownerRead, wantStatus: http.StatusNotFound},
+		{area: "Installer", method: http.MethodGet, path: "/api/installations/{id}", prepare: ownerRead, wantStatus: http.StatusNotFound},
+		{area: "ISPs", method: http.MethodGet, path: "/api/isps/compare?range=7d&isps=,,,", prepare: ownerRead, wantStatus: http.StatusUnprocessableEntity},
+		{area: "Reports", method: http.MethodGet, path: "/api/reports/monthly?format=xml", prepare: ownerRead, wantStatus: http.StatusUnprocessableEntity},
+	}
+	seen := make(map[string]bool, len(cases))
+	for _, tc := range cases {
+		if seen[tc.area] {
+			t.Errorf("multiple error comparisons for resource area %q", tc.area)
+			continue
+		}
+		seen[tc.area] = true
+		operation := tc.method + " " + strings.SplitN(tc.path, "?", 2)[0]
+		if got := areasByOperation[operation]; got != tc.area {
+			t.Errorf("error comparison %s belongs to area %q, want %q", operation, got, tc.area)
+			continue
+		}
+		t.Run("error AC1 AC2 AC3 "+tc.area, func(t *testing.T) {
+			areaHandler := handler
+			if tc.area == "Auth" {
+				areaHandler = authHandler
+			}
+			if err := checkErrorOperationParity(areaHandler, tc); err != nil {
+				t.Fatal(err)
+			}
+			t.Logf("error response parity: area=%s operation=%s %s status=%d", tc.area, tc.method, strings.SplitN(tc.path, "?", 2)[0], tc.wantStatus)
+		})
+	}
+	for area := range areas {
+		if !seen[area] {
+			t.Errorf("no error comparison for OpenAPI resource area %q", area)
+		}
+	}
+}
+
+func specOperationAreas(t *testing.T) (map[string]string, map[string]bool) {
+	t.Helper()
+	var spec struct {
+		Paths map[string]map[string]any `yaml:"paths"`
+	}
+	if err := yaml.Unmarshal(docs.OpenAPI, &spec); err != nil {
+		t.Fatalf("parse docs/openapi.yaml resource areas: %v", err)
+	}
+	operations := make(map[string]string)
+	areas := make(map[string]bool)
+	for path, item := range spec.Paths {
+		if !strings.HasPrefix(path, apiLegacyPrefix+"/") {
+			continue
+		}
+		for method, raw := range item {
+			if !specMethods[method] {
+				continue
+			}
+			operation, _ := raw.(map[string]any)
+			tags, _ := operation["tags"].([]any)
+			if len(tags) == 0 {
+				t.Fatalf("%s %s has no OpenAPI resource area", strings.ToUpper(method), path)
+			}
+			area, ok := tags[0].(string)
+			if !ok || area == "" {
+				t.Fatalf("%s %s has an invalid OpenAPI resource area: %v", strings.ToUpper(method), path, tags[0])
+			}
+			operations[strings.ToUpper(method)+" "+path] = area
+			areas[area] = true
+		}
+	}
+	return operations, areas
+}
+
+func checkErrorOperationParity(handler http.Handler, tc errorParityCase) error {
+	legacy := concretePath(tc.path)
+	versioned := concretePath(apiVersionPrefix + strings.TrimPrefix(tc.path, apiLegacyPrefix))
+	onV1 := serveParityRequest(handler, tc.method, versioned, tc.body, tc.prepare)
+	onAlias := serveParityRequest(handler, tc.method, legacy, tc.body, tc.prepare)
+	if onV1.Code != onAlias.Code {
+		return fmt.Errorf("status on %s = %d, on alias %s = %d", versioned, onV1.Code, legacy, onAlias.Code)
+	}
+	if onV1.Code != tc.wantStatus {
+		return fmt.Errorf("%s error status = %d, want %d", tc.area, onV1.Code, tc.wantStatus)
+	}
+	if maskTimestamps(onV1.Body.String()) != maskTimestamps(onAlias.Body.String()) {
+		return fmt.Errorf("body on %s = %q, on alias %s = %q", versioned, onV1.Body.String(), legacy, onAlias.Body.String())
+	}
+	if got := onAlias.Header().Get("Deprecation"); got != legacyAPIDeprecation {
+		return fmt.Errorf("alias %s Deprecation = %q, want %q", legacy, got, legacyAPIDeprecation)
+	}
+	if got := onAlias.Header().Get("Sunset"); got != legacyAPISunset {
+		return fmt.Errorf("alias %s Sunset = %q, want %q", legacy, got, legacyAPISunset)
+	}
+	if versionedResponseHasAliasHeaders(onV1.Header()) {
+		return fmt.Errorf("%s carries alias headers: %v", versioned, onV1.Header())
+	}
+	if !sameExceptAliasHeaders(onV1.Header(), onAlias.Header()) {
+		return fmt.Errorf("headers on %s = %v, on alias %s = %v", versioned, onV1.Header(), legacy, onAlias.Header())
+	}
+	return nil
+}
+
+func serveParityRequest(handler http.Handler, method, target, body string, prepare func(*http.Request)) *httptest.ResponseRecorder {
+	return do(handler, method, target, body, func(r *http.Request) {
+		r.Header.Set(requestIDHeader, parityRequestID)
+		if prepare != nil {
+			prepare(r)
+		}
+	})
 }
 
 // TestLegacyResponsesCarryDeprecationAndSunset checks that a legacy /api operation marks success and error responses
