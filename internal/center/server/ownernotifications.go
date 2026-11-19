@@ -151,7 +151,7 @@ func (h *ownerNotifications) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		h.getDelivery(w, r, strings.TrimPrefix(rest, "deliveries/"))
 	default:
-		writeNotFoundProblem(w, r)
+		writeRouteNotFound(w, r)
 	}
 }
 

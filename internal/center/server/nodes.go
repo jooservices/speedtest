@@ -145,7 +145,7 @@ func newAPIHandler(service NodeCredentialService, perMinute int, ownerAuth *serv
 		case strings.HasPrefix(r.URL.Path, "/api/nodes/"):
 			handleNodeCredential(service, limiter, w, r)
 		default:
-			writeNotFoundProblem(w, r)
+			writeRouteNotFound(w, r)
 		}
 	})
 	protected := ownerAuth.requireOwner(dispatch)

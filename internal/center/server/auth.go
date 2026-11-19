@@ -105,7 +105,7 @@ func (s *serverAuth) serve(w http.ResponseWriter, r *http.Request) {
 	case "/api/auth/2fa", "/api/auth/2fa/setup", "/api/auth/2fa/enable", "/api/auth/2fa/disable":
 		s.twoFactor(w, r)
 	default:
-		writeNotFoundProblem(w, r)
+		writeRouteNotFound(w, r)
 	}
 }
 

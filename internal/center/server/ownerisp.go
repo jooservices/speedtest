@@ -137,7 +137,7 @@ func (h *ownerISP) resource(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 3 && parts[1] == "plans" && uuidPattern.MatchString(parts[2]):
 		h.planItem(w, r, id, parts[2])
 	default:
-		writeNotFoundProblem(w, r)
+		writeRouteNotFound(w, r)
 	}
 }
 
