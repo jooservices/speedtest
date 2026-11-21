@@ -257,50 +257,65 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 // settle decides what happens to one claimed delivery (hold, expire or attempt) and records
 // the outcome in tx. The caller commits.
 func (s *Store) settle(ctx context.Context, tx pgx.Tx, d Delivery, now time.Time) error {
-	status := "failed"
-	var safeError *string
-	last := d.LastAttempt
-	next := now
-	attempts := d.Attempts
-	held := false
-	var attemptErr error
-	if now.Before(d.CreatedAt.Add(24*time.Hour)) && d.EventID != nil {
-		var err error
-		if held, err = heldByQuietHours(ctx, tx, *d.EventID, now); err != nil {
-			return err
-		}
-	}
-	switch {
-	case held:
-		// Quiet hours: the alert stays recorded and the delivery waits; look again in a minute.
-		status = "pending"
-		next = now.Add(time.Minute)
-	case !now.Before(d.CreatedAt.Add(24 * time.Hour)):
-		text := "delivery expired after 24 hours"
-		safeError = &text
-	default:
-		attemptErr = s.attempt(ctx, tx, d)
-		attempts++
-		last = &now
-		status = "sent"
-		if attemptErr != nil {
-			status = "pending"
-			text := "notification attempt failed"
-			safeError = &text
-			next = now.Add(Backoff(attempts))
-			deadline := d.CreatedAt.Add(24 * time.Hour)
-			if next.After(deadline) {
-				next = deadline
-			}
-		}
-	}
-	if _, err := tx.Exec(ctx, `UPDATE notification_deliveries SET status=$2,attempts=$3,last_attempt=$4,error=$5,next_attempt_at=$6 WHERE id=$1`, d.ID, status, attempts, last, safeError, next); err != nil {
+	o, err := s.decide(ctx, tx, d, now)
+	if err != nil {
 		return err
 	}
-	if attemptErr != nil && attempts >= 3 && d.EventID != nil {
-		return s.escalateDeliveryFailure(ctx, tx, d.ID, *d.EventID, d.Channel, attempts, now)
+	if _, err := tx.Exec(ctx, `UPDATE notification_deliveries SET status=$2,attempts=$3,last_attempt=$4,error=$5,next_attempt_at=$6 WHERE id=$1`, d.ID, o.status, o.attempts, o.last, o.safeError, o.next); err != nil {
+		return err
+	}
+	if o.attemptErr != nil && o.attempts >= 3 && d.EventID != nil {
+		return s.escalateDeliveryFailure(ctx, tx, d.ID, *d.EventID, d.Channel, o.attempts, now)
 	}
 	return nil
+}
+
+// settleOutcome is what settle records on a delivery row after deciding its fate.
+type settleOutcome struct {
+	status     string
+	safeError  *string
+	last       *time.Time
+	next       time.Time
+	attempts   int
+	attemptErr error
+}
+
+// decide picks the outcome for one claimed delivery: hold for quiet hours, expire after 24 hours,
+// or make an attempt.
+func (s *Store) decide(ctx context.Context, tx pgx.Tx, d Delivery, now time.Time) (settleOutcome, error) {
+	deadline := d.CreatedAt.Add(24 * time.Hour)
+	if !now.Before(deadline) {
+		text := "delivery expired after 24 hours"
+		return settleOutcome{status: "failed", safeError: &text, last: d.LastAttempt, next: now, attempts: d.Attempts}, nil
+	}
+	if d.EventID != nil {
+		held, err := heldByQuietHours(ctx, tx, *d.EventID, now)
+		if err != nil {
+			return settleOutcome{}, err
+		}
+		if held {
+			// Quiet hours: the alert stays recorded and the delivery waits; look again in a minute.
+			return settleOutcome{status: "pending", last: d.LastAttempt, next: now.Add(time.Minute), attempts: d.Attempts}, nil
+		}
+	}
+	return s.attemptOutcome(ctx, tx, d, now, deadline), nil
+}
+
+// attemptOutcome sends the delivery and reports the row state that follows: sent, or pending
+// again with a backoff that never passes the 24 hour deadline.
+func (s *Store) attemptOutcome(ctx context.Context, tx pgx.Tx, d Delivery, now, deadline time.Time) settleOutcome {
+	err := s.attempt(ctx, tx, d)
+	o := settleOutcome{status: "sent", last: &now, next: now, attempts: d.Attempts + 1, attemptErr: err}
+	if err != nil {
+		text := "notification attempt failed"
+		o.status = "pending"
+		o.safeError = &text
+		o.next = now.Add(Backoff(o.attempts))
+		if o.next.After(deadline) {
+			o.next = deadline
+		}
+	}
+	return o
 }
 
 // heldByQuietHours reports whether an alert notification must wait because the owner's notification quiet hours
