@@ -248,6 +248,15 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, err
 	}
+	if err := s.settle(ctx, tx, d, now); err != nil {
+		return false, err
+	}
+	return true, tx.Commit(ctx)
+}
+
+// settle decides what happens to one claimed delivery (hold, expire or attempt) and records
+// the outcome in tx. The caller commits.
+func (s *Store) settle(ctx context.Context, tx pgx.Tx, d Delivery, now time.Time) error {
 	status := "failed"
 	var safeError *string
 	last := d.LastAttempt
@@ -256,8 +265,9 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 	held := false
 	var attemptErr error
 	if now.Before(d.CreatedAt.Add(24*time.Hour)) && d.EventID != nil {
+		var err error
 		if held, err = heldByQuietHours(ctx, tx, *d.EventID, now); err != nil {
-			return false, err
+			return err
 		}
 	}
 	switch {
@@ -284,15 +294,13 @@ func (s *Store) Dispatch(ctx context.Context) (bool, error) {
 			}
 		}
 	}
-	if _, err = tx.Exec(ctx, `UPDATE notification_deliveries SET status=$2,attempts=$3,last_attempt=$4,error=$5,next_attempt_at=$6 WHERE id=$1`, d.ID, status, attempts, last, safeError, next); err != nil {
-		return false, err
+	if _, err := tx.Exec(ctx, `UPDATE notification_deliveries SET status=$2,attempts=$3,last_attempt=$4,error=$5,next_attempt_at=$6 WHERE id=$1`, d.ID, status, attempts, last, safeError, next); err != nil {
+		return err
 	}
 	if attemptErr != nil && attempts >= 3 && d.EventID != nil {
-		if err := s.escalateDeliveryFailure(ctx, tx, d.ID, *d.EventID, d.Channel, attempts, now); err != nil {
-			return false, err
-		}
+		return s.escalateDeliveryFailure(ctx, tx, d.ID, *d.EventID, d.Channel, attempts, now)
 	}
-	return true, tx.Commit(ctx)
+	return nil
 }
 
 // heldByQuietHours reports whether an alert notification must wait because the owner's notification quiet hours
