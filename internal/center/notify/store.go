@@ -58,6 +58,10 @@ const (
 	deliveryFilterWhere = `($1='' OR event_id=NULLIF($1,'')::uuid) AND ($2='' OR status=$2) AND ($3='' OR channel=$3)`
 	deliveryCountSQL    = `SELECT count(*) FROM notification_deliveries WHERE ` + deliveryFilterWhere
 	deliveryPageSQL     = `SELECT ` + columns + ` FROM notification_deliveries WHERE ` + deliveryFilterWhere + ` ORDER BY created_at DESC,id DESC LIMIT $4 OFFSET $5`
+	// outboxPendingSQL and duePendingSQL are the claim predicates. The probes and the
+	// locking selects share them, so the two cannot drift apart.
+	outboxPendingSQL = `consumed_at IS NULL`
+	duePendingSQL    = `status='pending' AND next_attempt_at<=$1`
 )
 
 // Store owns durable delivery creation and dispatch. Now is injectable for retry tests.
@@ -168,8 +172,31 @@ func (s *Store) Deliveries(ctx context.Context, filter DeliveryFilter, page, siz
 	return items, total, rows.Err()
 }
 
+// hasOutboxWork reports whether an unconsumed outbox event exists. It runs on the pool
+// without a transaction, so an idle queue costs one query and no rollback.
+func (s *Store) hasOutboxWork(ctx context.Context) (bool, error) {
+	var work bool
+	err := s.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM alert_notification_outbox WHERE `+outboxPendingSQL+`)`).Scan(&work)
+	return work, err
+}
+
+// hasDueDelivery reports whether a pending delivery is due at now, without a transaction.
+func (s *Store) hasDueDelivery(ctx context.Context, now time.Time) (bool, error) {
+	var work bool
+	err := s.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM notification_deliveries WHERE `+duePendingSQL+`)`, now).Scan(&work)
+	return work, err
+}
+
 // Consume atomically creates all channel rows and marks one outbox event handled.
+// An idle queue returns before a transaction is opened.
 func (s *Store) Consume(ctx context.Context) (bool, error) {
+	work, err := s.hasOutboxWork(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !work {
+		return false, nil
+	}
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -177,7 +204,7 @@ func (s *Store) Consume(ctx context.Context) (bool, error) {
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	var event string
 	var channels []string
-	err = tx.QueryRow(ctx, `SELECT event_id::text,channels FROM alert_notification_outbox WHERE consumed_at IS NULL ORDER BY created_at,event_id FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&event, &channels)
+	err = tx.QueryRow(ctx, `SELECT event_id::text,channels FROM alert_notification_outbox WHERE `+outboxPendingSQL+` ORDER BY created_at,event_id FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&event, &channels)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -199,14 +226,22 @@ func (s *Store) Consume(ctx context.Context) (bool, error) {
 // Dispatch locks one due row while sending, preventing concurrent worker attempts.
 // External providers cannot participate in the transaction: a crash after acceptance
 // can cause redelivery. Logical event/channel creation is exactly once.
+// An idle queue returns before a transaction is opened.
 func (s *Store) Dispatch(ctx context.Context) (bool, error) {
+	now := s.now()
+	work, err := s.hasDueDelivery(ctx, now)
+	if err != nil {
+		return false, err
+	}
+	if !work {
+		return false, nil
+	}
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	now := s.now()
-	d, err := scanDelivery(tx.QueryRow(ctx, `SELECT `+columns+` FROM notification_deliveries WHERE status='pending' AND next_attempt_at<=$1 ORDER BY next_attempt_at,id FOR UPDATE SKIP LOCKED LIMIT 1`, now))
+	d, err := scanDelivery(tx.QueryRow(ctx, `SELECT `+columns+` FROM notification_deliveries WHERE `+duePendingSQL+` ORDER BY next_attempt_at,id FOR UPDATE SKIP LOCKED LIMIT 1`, now))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}

@@ -19,6 +19,7 @@ import (
 
 	"github.com/jooservices/speedtest/internal/shared/testenv"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/db"
@@ -524,5 +525,232 @@ func TestNotificationLoopObserverIntegration(t *testing.T) {
 	store.Loop(run)
 	if len(outcomes) != 1 || outcomes[0] {
 		t.Fatal("cancelled pass advanced success", outcomes)
+	}
+}
+
+// statementTrace records the SQL a pool sends, so a test can see whether an idle
+// check opened a transaction (BEGIN and ROLLBACK are statements too).
+type statementTrace struct {
+	mu  sync.Mutex
+	sql []string
+}
+
+func (s *statementTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sql = append(s.sql, data.SQL)
+	return ctx
+}
+
+func (s *statementTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// take returns the statements recorded since the previous take and clears them.
+func (s *statementTrace) take() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.sql
+	s.sql = nil
+	return out
+}
+
+// tracedPool opens a second pool on the same test database as database(), with the trace attached.
+func tracedPool(t *testing.T, trace pgx.QueryTracer) *pgxpool.Pool {
+	t.Helper()
+	env, err := godotenv.Read("../../../.env")
+	if err != nil {
+		t.Fatal("worktree .env required")
+	}
+	testenv.Apply(t, env)
+	cfg, err := config.LoadCenter()
+	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
+		t.Fatal("configured non-live test database required")
+	}
+	poolCfg, err := pgxpool.ParseConfig(cfg.Database.DSN())
+	if err != nil {
+		t.Fatal("invalid test database configuration")
+	}
+	poolCfg.ConnConfig.Tracer = trace
+	pool, err := pgxpool.NewWithConfig(t.Context(), poolCfg)
+	if err != nil {
+		t.Fatal("cannot open traced pool")
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// assertProbesOnly fails unless statements are exactly want single-statement probes
+// and none of them opens or ends a transaction.
+func assertProbesOnly(t *testing.T, statements []string, want int) {
+	t.Helper()
+	if len(statements) != want {
+		t.Fatalf("idle check issued %d statements %q, want %d", len(statements), statements, want)
+	}
+	for _, sql := range statements {
+		if !strings.HasPrefix(sql, "SELECT EXISTS(") {
+			t.Fatalf("idle check issued %q; want only the probe, no transaction", sql)
+		}
+	}
+}
+
+// AC1, AC2, AC6: with both queues empty, Consume, Dispatch and an idle Loop pass
+// return (false, nil), begin no transaction and issue only the probe queries.
+func TestIdleQueueChecksBeginNoTransaction(t *testing.T) {
+	_, ctx := database(t)
+	var trace statementTrace
+	pool := tracedPool(t, &trace)
+	trace.take()
+	worker := &Store{DB: pool}
+
+	if consumed, err := worker.Consume(ctx); consumed || err != nil {
+		t.Fatal("AC1 idle consume", consumed, err)
+	}
+	assertProbesOnly(t, trace.take(), 1)
+
+	if dispatched, err := worker.Dispatch(ctx); dispatched || err != nil {
+		t.Fatal("AC2 idle dispatch", dispatched, err)
+	}
+	assertProbesOnly(t, trace.take(), 1)
+
+	run, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var outcomes []bool
+	loop := &Store{DB: pool, ObserveRun: func(ok bool) { outcomes = append(outcomes, ok); cancel() }}
+	loop.Loop(run)
+	if len(outcomes) != 1 || !outcomes[0] {
+		t.Fatal("AC6 idle pass", outcomes)
+	}
+	assertProbesOnly(t, trace.take(), 2)
+}
+
+// AC4: a failing probe is returned as an error, and the Loop pass is reported as failed.
+func TestIdleQueueProbeFailureReportsFailedPass(t *testing.T) {
+	p, ctx := database(t)
+	execute(t, p, `ALTER TABLE alert_notification_outbox RENAME TO temporarily_unavailable_outbox`)
+	worker := &Store{DB: p}
+	if _, err := worker.Consume(ctx); err == nil {
+		t.Fatal("AC4 probe failure was reported as an idle queue")
+	}
+	run, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var outcomes []bool
+	loop := &Store{DB: p, ObserveRun: func(ok bool) { outcomes = append(outcomes, ok); cancel() }}
+	loop.Loop(run)
+	execute(t, p, `ALTER TABLE temporarily_unavailable_outbox RENAME TO alert_notification_outbox`)
+	if len(outcomes) != 1 || outcomes[0] {
+		t.Fatal("AC4 failed probe pass was not reported as failed", outcomes)
+	}
+}
+
+// AC3: work that exists is still claimed as before. A due delivery is sent once,
+// and a delivery whose next attempt is later is not claimed early.
+func TestQueueWorkStillFlowsAfterProbe(t *testing.T) {
+	p, ctx := database(t)
+	var count atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count.Add(1)
+		w.WriteHeader(204)
+	}))
+	defer remote.Close()
+	prefs := preferences(t, p, remote.URL+"/secret-token")
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: func() time.Time { return now }}
+	due, err := worker.Test(ctx, "webhook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const laterID = "40000000-0000-4000-8000-000000000001"
+	execute(t, p, `INSERT INTO notification_deliveries(id,channel,created_at,next_attempt_at) VALUES($1,'webhook',$2,$3)`, laterID, now, now.Add(time.Hour))
+	if ok, err := worker.Dispatch(ctx); !ok || err != nil {
+		t.Fatal("AC3 due delivery not claimed", err)
+	}
+	if ok, err := worker.Dispatch(ctx); ok || err != nil {
+		t.Fatal("AC3 later delivery claimed early", err)
+	}
+	if count.Load() != 1 {
+		t.Fatal("AC3 send count", count.Load())
+	}
+	sent, err := worker.Delivery(ctx, due.ID)
+	if err != nil || sent.Status != "sent" {
+		t.Fatal("AC3 due delivery not sent", sent.Status, err)
+	}
+	later, err := worker.Delivery(ctx, laterID)
+	if err != nil || later.Status != "pending" || later.Attempts != 0 {
+		t.Fatal("AC3 later delivery changed", err)
+	}
+}
+
+// AC5: a row that arrives after an empty probe is handled on the next Loop pass, exactly once.
+func TestLateOutboxRowHandledOnceAfterEmptyProbe(t *testing.T) {
+	p, ctx := database(t)
+	var count atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count.Add(1)
+		w.WriteHeader(204)
+	}))
+	defer remote.Close()
+	prefs := preferences(t, p, remote.URL+"/secret-token")
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: clock}
+	if consumed, err := worker.Consume(ctx); consumed || err != nil {
+		t.Fatal("AC5 empty probe", err)
+	}
+	execute(t, p, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES('10000000-0000-4000-8000-000000000002','Late',100,50)`)
+	execute(t, p, `INSERT INTO alert_events(id,node_id,severity,ts,title) VALUES('a0000000-0000-4000-8000-000000000002','10000000-0000-4000-8000-000000000002','warn',now(),'Late row')`)
+	execute(t, p, `INSERT INTO alert_notification_outbox(event_id,channels) VALUES('a0000000-0000-4000-8000-000000000002',ARRAY['webhook'])`)
+	run, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var outcomes []bool
+	loop := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: clock, ObserveRun: func(ok bool) { outcomes = append(outcomes, ok); cancel() }}
+	loop.Loop(run)
+	if len(outcomes) != 1 || !outcomes[0] {
+		t.Fatal("AC5 late row pass", outcomes)
+	}
+	var deliveries int
+	var status string
+	var consumed bool
+	if err := p.QueryRow(ctx, `SELECT count(*), coalesce(min(status),'') FROM notification_deliveries WHERE event_id='a0000000-0000-4000-8000-000000000002'`).Scan(&deliveries, &status); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.QueryRow(ctx, `SELECT consumed_at IS NOT NULL FROM alert_notification_outbox WHERE event_id='a0000000-0000-4000-8000-000000000002'`).Scan(&consumed); err != nil {
+		t.Fatal(err)
+	}
+	if deliveries != 1 || status != "sent" || count.Load() != 1 || !consumed {
+		t.Fatal("AC5 late row not handled exactly once", deliveries, status, count.Load(), consumed)
+	}
+}
+
+// AC5: eight workers race for one due delivery; exactly one claims and sends it.
+func TestConcurrentWorkersNeverClaimSameDelivery(t *testing.T) {
+	p, ctx := database(t)
+	var count atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count.Add(1)
+		w.WriteHeader(204)
+	}))
+	defer remote.Close()
+	prefs := preferences(t, p, remote.URL+"/secret-token")
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: func() time.Time { return now }}
+	if _, err := worker.Test(ctx, "webhook"); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	var claimed atomic.Int32
+	for i := 0; i < 8; i++ {
+		wg.Go(func() {
+			ok, err := worker.Dispatch(ctx)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if ok {
+				claimed.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	if claimed.Load() != 1 || count.Load() != 1 {
+		t.Fatal("AC5 claims", claimed.Load(), count.Load())
 	}
 }
