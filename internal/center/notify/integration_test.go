@@ -19,6 +19,7 @@ import (
 
 	"github.com/jooservices/speedtest/internal/shared/testenv"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 	"github.com/jooservices/speedtest/internal/center/db"
@@ -524,5 +525,441 @@ func TestNotificationLoopObserverIntegration(t *testing.T) {
 	store.Loop(run)
 	if len(outcomes) != 1 || outcomes[0] {
 		t.Fatal("cancelled pass advanced success", outcomes)
+	}
+}
+
+// statementTrace records the SQL a pool sends, so a test can see whether an idle
+// check opened a transaction (BEGIN and ROLLBACK are statements too).
+type statementTrace struct {
+	mu  sync.Mutex
+	sql []string
+}
+
+func (s *statementTrace) TraceQueryStart(ctx context.Context, _ *pgx.Conn, data pgx.TraceQueryStartData) context.Context {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sql = append(s.sql, data.SQL)
+	return ctx
+}
+
+func (s *statementTrace) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+// take returns the statements recorded since the previous take and clears them.
+func (s *statementTrace) take() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := s.sql
+	s.sql = nil
+	return out
+}
+
+// testPool opens a second pool on the test database as database() does. A nil trace
+// adds no tracer, and a zero maxConns keeps the driver default.
+func testPool(t *testing.T, trace pgx.QueryTracer, maxConns int32) *pgxpool.Pool {
+	t.Helper()
+	env, err := godotenv.Read("../../../.env")
+	if err != nil {
+		t.Fatal("worktree .env required")
+	}
+	testenv.Apply(t, env)
+	cfg, err := config.LoadCenter()
+	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
+		t.Fatal("configured non-live test database required")
+	}
+	poolCfg, err := pgxpool.ParseConfig(cfg.Database.DSN())
+	if err != nil {
+		t.Fatal("invalid test database configuration")
+	}
+	if trace != nil {
+		poolCfg.ConnConfig.Tracer = trace
+	}
+	if maxConns > 0 {
+		poolCfg.MaxConns = maxConns
+	}
+	pool, err := pgxpool.NewWithConfig(t.Context(), poolCfg)
+	if err != nil {
+		t.Fatal("cannot open test pool")
+	}
+	t.Cleanup(pool.Close)
+	return pool
+}
+
+// rollbacks returns xact_rollback of the test database. It first flushes the pending
+// statistics of the pool's connection, because PostgreSQL publishes them with a delay.
+func rollbacks(t *testing.T, p *pgxpool.Pool) int64 {
+	t.Helper()
+	if _, err := p.Exec(t.Context(), `SELECT pg_stat_force_next_flush()`); err != nil {
+		t.Fatal(err)
+	}
+	var n int64
+	if err := p.QueryRow(t.Context(), `SELECT xact_rollback FROM pg_stat_database WHERE datname=current_database()`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+// assertProbesOnly fails unless statements are exactly want single-statement probes
+// and none of them opens or ends a transaction.
+func assertProbesOnly(t *testing.T, statements []string, want int) {
+	t.Helper()
+	if len(statements) != want {
+		t.Fatalf("idle check issued %d statements %q, want %d", len(statements), statements, want)
+	}
+	for _, sql := range statements {
+		if !strings.HasPrefix(sql, "SELECT EXISTS(") {
+			t.Fatalf("idle check issued %q; want only the probe, no transaction", sql)
+		}
+	}
+}
+
+// AC1: with both queues empty, 100 idle Consume and 100 idle Dispatch calls add no rollback.
+func TestAC1IdleQueueChecksAddNoRollback(t *testing.T) {
+	_, ctx := database(t)
+	pool := testPool(t, nil, 1)
+	worker := &Store{DB: pool}
+	before := rollbacks(t, pool)
+	for i := 0; i < 100; i++ {
+		if consumed, err := worker.Consume(ctx); consumed || err != nil {
+			t.Fatal("AC1 idle consume", consumed, err)
+		}
+		if dispatched, err := worker.Dispatch(ctx); dispatched || err != nil {
+			t.Fatal("AC1 idle dispatch", dispatched, err)
+		}
+	}
+	if after := rollbacks(t, pool); after != before {
+		t.Fatalf("AC1 idle checks added %d rollbacks, want 0", after-before)
+	}
+}
+
+// AC2: an idle Consume or Dispatch issues exactly one statement, the existence check, and no transaction control.
+func TestAC2IdleConsumeAndDispatchIssueOnlyTheExistenceCheck(t *testing.T) {
+	_, ctx := database(t)
+	var trace statementTrace
+	pool := testPool(t, &trace, 0)
+	trace.take()
+	worker := &Store{DB: pool}
+
+	if consumed, err := worker.Consume(ctx); consumed || err != nil {
+		t.Fatal("AC2 idle consume", consumed, err)
+	}
+	assertProbesOnly(t, trace.take(), 1)
+	if dispatched, err := worker.Dispatch(ctx); dispatched || err != nil {
+		t.Fatal("AC2 idle dispatch", dispatched, err)
+	}
+	assertProbesOnly(t, trace.take(), 1)
+}
+
+// AC3: one outbox event with two channels and one due delivery: two delivery rows, consumed_at set once,
+// the delivery result and retry fields as recorded, and a second Consume returns (false, nil).
+func TestAC3FanOutAndDispatchKeepResultAndRetryFields(t *testing.T) {
+	p, ctx := database(t)
+	var count atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count.Add(1)
+		w.WriteHeader(204)
+	}))
+	defer remote.Close()
+	prefs := preferences(t, p, remote.URL+"/secret-token")
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: func() time.Time { return now }}
+	execute(t, p, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES('10000000-0000-4000-8000-000000000003','Fanout',100,50)`)
+	execute(t, p, `INSERT INTO alert_events(id,node_id,severity,ts,title) VALUES('a0000000-0000-4000-8000-000000000003','10000000-0000-4000-8000-000000000003','warn',now(),'Fan out')`)
+	execute(t, p, `INSERT INTO alert_notification_outbox(event_id,channels) VALUES('a0000000-0000-4000-8000-000000000003',ARRAY['webhook','email'])`)
+
+	if ok, err := worker.Consume(ctx); !ok || err != nil {
+		t.Fatal("AC3 consume", ok, err)
+	}
+	var rows int
+	if err := p.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE event_id=$1`, "a0000000-0000-4000-8000-000000000003").Scan(&rows); err != nil || rows != 2 {
+		t.Fatal("AC3 delivery rows", rows, err)
+	}
+	var consumedAt time.Time
+	if err := p.QueryRow(ctx, `SELECT consumed_at FROM alert_notification_outbox WHERE event_id=$1`, "a0000000-0000-4000-8000-000000000003").Scan(&consumedAt); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := worker.Consume(ctx); ok || err != nil {
+		t.Fatal("AC3 second consume must return (false, nil)", ok, err)
+	}
+	var again time.Time
+	if err := p.QueryRow(ctx, `SELECT consumed_at FROM alert_notification_outbox WHERE event_id=$1`, "a0000000-0000-4000-8000-000000000003").Scan(&again); err != nil || !again.Equal(consumedAt) {
+		t.Fatal("AC3 consumed_at changed after the second consume", err)
+	}
+
+	for i := 0; i < 2; i++ {
+		if ok, err := worker.Dispatch(ctx); !ok || err != nil {
+			t.Fatal("AC3 dispatch", i, ok, err)
+		}
+	}
+	if ok, err := worker.Dispatch(ctx); ok || err != nil {
+		t.Fatal("AC3 nothing is due after both attempts", ok, err)
+	}
+	if count.Load() != 1 {
+		t.Fatal("AC3 webhook send count", count.Load())
+	}
+	type row struct {
+		status, channel string
+		attempts        int
+		errText         *string
+		next            time.Time
+	}
+	rowsOut, err := p.Query(ctx, `SELECT channel,status,attempts,error,next_attempt_at FROM notification_deliveries WHERE event_id=$1 ORDER BY channel`, "a0000000-0000-4000-8000-000000000003")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []row
+	for rowsOut.Next() {
+		var r row
+		if err := rowsOut.Scan(&r.channel, &r.status, &r.attempts, &r.errText, &r.next); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, r)
+	}
+	rowsOut.Close()
+	if len(got) != 2 {
+		t.Fatal("AC3 rows", got)
+	}
+	email, webhook := got[0], got[1]
+	if webhook.channel != "webhook" || webhook.status != "sent" || webhook.attempts != 1 || webhook.errText != nil {
+		t.Fatalf("AC3 webhook result %+v", webhook)
+	}
+	if email.channel != "email" || email.status != "pending" || email.attempts != 1 || email.errText == nil || *email.errText != "notification attempt failed" {
+		t.Fatalf("AC3 email retry result %+v", email)
+	}
+	if want := now.Add(Backoff(1)); !email.next.Equal(want) {
+		t.Fatalf("AC3 email next attempt %v, want %v", email.next, want)
+	}
+}
+
+// AC4: two concurrent Consume calls on one outbox row: exactly one returns true and one set of delivery rows exists.
+func TestAC4ConcurrentConsumeCreatesOneSetOfDeliveries(t *testing.T) {
+	p, ctx := database(t)
+	execute(t, p, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES('10000000-0000-4000-8000-000000000004','Race',100,50)`)
+	execute(t, p, `INSERT INTO alert_events(id,node_id,severity,ts,title) VALUES('a0000000-0000-4000-8000-000000000004','10000000-0000-4000-8000-000000000004','warn',now(),'Race')`)
+	execute(t, p, `INSERT INTO alert_notification_outbox(event_id,channels) VALUES('a0000000-0000-4000-8000-000000000004',ARRAY['webhook','email'])`)
+	worker := &Store{DB: p}
+	var wg sync.WaitGroup
+	var claimed atomic.Int32
+	for i := 0; i < 8; i++ {
+		wg.Go(func() {
+			ok, err := worker.Consume(ctx)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if ok {
+				claimed.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	if claimed.Load() != 1 {
+		t.Fatal("AC4 consumes that returned true", claimed.Load())
+	}
+	var rows int
+	if err := p.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE event_id='a0000000-0000-4000-8000-000000000004'`).Scan(&rows); err != nil || rows != 2 {
+		t.Fatal("AC4 delivery rows", rows, err)
+	}
+}
+
+// AC4: eight concurrent Dispatch calls on one due delivery: exactly one returns true and one send happens.
+func TestAC4ConcurrentDispatchSendsDeliveryOnce(t *testing.T) {
+	p, ctx := database(t)
+	var count atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count.Add(1)
+		w.WriteHeader(204)
+	}))
+	defer remote.Close()
+	prefs := preferences(t, p, remote.URL+"/secret-token")
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: func() time.Time { return now }}
+	if _, err := worker.Test(ctx, "webhook"); err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	var claimed atomic.Int32
+	for i := 0; i < 8; i++ {
+		wg.Go(func() {
+			ok, err := worker.Dispatch(ctx)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			if ok {
+				claimed.Add(1)
+			}
+		})
+	}
+	wg.Wait()
+	if claimed.Load() != 1 || count.Load() != 1 {
+		t.Fatal("AC4 claims", claimed.Load(), count.Load())
+	}
+}
+
+// AC4: the probe error is returned, and the Loop pass is reported as failed.
+func TestAC4ProbeFailureReportsFailedPass(t *testing.T) {
+	p, ctx := database(t)
+	execute(t, p, `ALTER TABLE alert_notification_outbox RENAME TO temporarily_unavailable_outbox`)
+	worker := &Store{DB: p}
+	if _, err := worker.Consume(ctx); err == nil {
+		t.Fatal("AC4 probe failure was reported as an idle queue")
+	}
+	run, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var outcomes []bool
+	loop := &Store{DB: p, ObserveRun: func(ok bool) { outcomes = append(outcomes, ok); cancel() }}
+	loop.Loop(run)
+	execute(t, p, `ALTER TABLE temporarily_unavailable_outbox RENAME TO alert_notification_outbox`)
+	if len(outcomes) != 1 || outcomes[0] {
+		t.Fatal("AC4 failed probe pass was not reported as failed", outcomes)
+	}
+}
+
+// AC5: a cancelled context makes Consume and Dispatch return the context error, and no
+// session of the database is left idle in transaction.
+func TestAC5CancelledContextReturnsErrorAndLeavesNoIdleTransaction(t *testing.T) {
+	p, ctx := database(t)
+	worker := &Store{DB: p}
+	cancelled, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := worker.Consume(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatal("AC5 consume before cancel", err)
+	}
+	if _, err := worker.Dispatch(cancelled); !errors.Is(err, context.Canceled) {
+		t.Fatal("AC5 dispatch before cancel", err)
+	}
+	for i := 0; i < 50; i++ {
+		during, stop := context.WithCancel(ctx)
+		go stop()
+		if _, err := worker.Consume(during); err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatal("AC5 consume during cancel", err)
+		}
+		if _, err := worker.Dispatch(during); err != nil && !errors.Is(err, context.Canceled) {
+			t.Fatal("AC5 dispatch during cancel", err)
+		}
+		stop()
+	}
+	var idle int
+	if err := p.QueryRow(ctx, `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND state='idle in transaction'`).Scan(&idle); err != nil || idle != 0 {
+		t.Fatal("AC5 sessions idle in transaction", idle, err)
+	}
+}
+
+// AC6: with a running Loop and an empty queue, an event inserted later gets its delivery rows and is dispatched within 2 seconds.
+func TestAC6RunningLoopDispatchesLateEventWithinTwoSeconds(t *testing.T) {
+	p, ctx := database(t)
+	var count atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count.Add(1)
+		w.WriteHeader(204)
+	}))
+	defer remote.Close()
+	prefs := preferences(t, p, remote.URL+"/secret-token")
+	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}}
+	run, cancel := context.WithCancel(ctx)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		worker.Loop(run)
+	}()
+	time.Sleep(1200 * time.Millisecond)
+	execute(t, p, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES('10000000-0000-4000-8000-000000000006','Loop',100,50)`)
+	execute(t, p, `INSERT INTO alert_events(id,node_id,severity,ts,title) VALUES('a0000000-0000-4000-8000-000000000006','10000000-0000-4000-8000-000000000006','crit',now(),'Loop')`)
+	start := time.Now()
+	execute(t, p, `INSERT INTO alert_notification_outbox(event_id,channels) VALUES('a0000000-0000-4000-8000-000000000006',ARRAY['webhook'])`)
+	var status string
+	for time.Since(start) < 2*time.Second {
+		var n int
+		if err := p.QueryRow(ctx, `SELECT count(*), coalesce(min(status),'') FROM notification_deliveries WHERE event_id='a0000000-0000-4000-8000-000000000006'`).Scan(&n, &status); err != nil {
+			t.Fatal(err)
+		}
+		if status == "sent" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	cancel()
+	<-done
+	if status != "sent" || count.Load() != 1 {
+		t.Fatal("AC6 late event not dispatched within 2s", status, count.Load())
+	}
+}
+
+// AC6: a row that arrives after an empty probe is handled on the next Loop pass, exactly once.
+func TestAC6LateOutboxRowHandledExactlyOnce(t *testing.T) {
+	p, ctx := database(t)
+	var count atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count.Add(1)
+		w.WriteHeader(204)
+	}))
+	defer remote.Close()
+	prefs := preferences(t, p, remote.URL+"/secret-token")
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	clock := func() time.Time { return now }
+	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: clock}
+	if consumed, err := worker.Consume(ctx); consumed || err != nil {
+		t.Fatal("AC6 empty probe", err)
+	}
+	execute(t, p, `INSERT INTO nodes(id,name,expected_down_mbps,expected_up_mbps) VALUES('10000000-0000-4000-8000-000000000002','Late',100,50)`)
+	execute(t, p, `INSERT INTO alert_events(id,node_id,severity,ts,title) VALUES('a0000000-0000-4000-8000-000000000002','10000000-0000-4000-8000-000000000002','warn',now(),'Late row')`)
+	execute(t, p, `INSERT INTO alert_notification_outbox(event_id,channels) VALUES('a0000000-0000-4000-8000-000000000002',ARRAY['webhook'])`)
+	run, cancel := context.WithCancel(ctx)
+	defer cancel()
+	var outcomes []bool
+	loop := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: clock, ObserveRun: func(ok bool) { outcomes = append(outcomes, ok); cancel() }}
+	loop.Loop(run)
+	if len(outcomes) != 1 || !outcomes[0] {
+		t.Fatal("AC6 late row pass", outcomes)
+	}
+	var deliveries int
+	var status string
+	var consumed bool
+	if err := p.QueryRow(ctx, `SELECT count(*), coalesce(min(status),'') FROM notification_deliveries WHERE event_id='a0000000-0000-4000-8000-000000000002'`).Scan(&deliveries, &status); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.QueryRow(ctx, `SELECT consumed_at IS NOT NULL FROM alert_notification_outbox WHERE event_id='a0000000-0000-4000-8000-000000000002'`).Scan(&consumed); err != nil {
+		t.Fatal(err)
+	}
+	if deliveries != 1 || status != "sent" || count.Load() != 1 || !consumed {
+		t.Fatal("AC6 late row not handled exactly once", deliveries, status, count.Load(), consumed)
+	}
+}
+
+// AC3: work that exists is still claimed as before. A due delivery is sent once, and a
+// delivery whose next attempt is later is not claimed early.
+func TestAC3QueueWorkStillFlowsAfterProbe(t *testing.T) {
+	p, ctx := database(t)
+	var count atomic.Int32
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		count.Add(1)
+		w.WriteHeader(204)
+	}))
+	defer remote.Close()
+	prefs := preferences(t, p, remote.URL+"/secret-token")
+	now := time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)
+	worker := &Store{DB: p, Settings: prefs, Sender: &Transport{}, Now: func() time.Time { return now }}
+	due, err := worker.Test(ctx, "webhook")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const laterID = "40000000-0000-4000-8000-000000000001"
+	execute(t, p, `INSERT INTO notification_deliveries(id,channel,created_at,next_attempt_at) VALUES($1,'webhook',$2,$3)`, laterID, now, now.Add(time.Hour))
+	if ok, err := worker.Dispatch(ctx); !ok || err != nil {
+		t.Fatal("AC3 due delivery not claimed", err)
+	}
+	if ok, err := worker.Dispatch(ctx); ok || err != nil {
+		t.Fatal("AC3 later delivery claimed early", err)
+	}
+	if count.Load() != 1 {
+		t.Fatal("AC3 send count", count.Load())
+	}
+	sent, err := worker.Delivery(ctx, due.ID)
+	if err != nil || sent.Status != "sent" {
+		t.Fatal("AC3 due delivery not sent", sent.Status, err)
+	}
+	later, err := worker.Delivery(ctx, laterID)
+	if err != nil || later.Status != "pending" || later.Attempts != 0 {
+		t.Fatal("AC3 later delivery changed", err)
 	}
 }
