@@ -1,11 +1,11 @@
 # Durable daily and weekly digest schedule
 
 `internal/center/report.DigestScheduler` identifies the owner-local periods that
-a digest should cover and claims each one durably in PostgreSQL. It does not
-render or send a message: the center passes a `DigestEnqueue` callback that
-publishes the digest inside the same database transaction that completes the
-period. Notification formatting and channel selection stay in
-`internal/center/notify` (JOOST-127).
+a digest should cover and claims each one durably in PostgreSQL. The center's
+enqueue callback reads the period summary, formats a message and publishes the
+catalog event through the notification outbox in the same database transaction
+that completes the period. Channel selection and delivery settings are handled
+by `internal/center/notify` (JOOST-127).
 
 ## Due periods
 
@@ -65,6 +65,51 @@ completion. Successful enqueue and the completion marker commit together.
 A late measurement is not a new period: once `completed_at` is set, repeated
 scheduler runs skip that row. Late data appears in live reports and the next
 period's digest, not as a second digest for the completed period.
+
+## Message and delivery
+
+Daily and weekly digests include every node's successful and failed test counts
+and average download and upload speeds. Node names are rendered on one line.
+E-mail receives the complete summary once. Telegram receives the same details
+in individually retryable outbox deliveries. Each part has an explicit `Part N of M`
+label, and the parts are created in the same transaction as the period's
+completion marker. Each final Telegram `sendMessage` text is at most 4096
+UTF-16 units after HTML escaping. Long text is split at Unicode rune boundaries
+without dropping characters. Empty periods say that no speed test results were
+recorded and do not require a dashboard link.
+
+When a digest link is included, it is built from the current
+`Settings.CenterURL` during dispatch. Only absolute HTTP or HTTPS base URLs
+without credentials, query strings or fragments, and with a generated link no
+longer than 512 characters, are accepted. The link points to `/#/`, the UI's
+dashboard route. An invalid or changed URL can remove the link, but it never
+removes digest details or claims that omitted details are available on the
+rolling dashboard.
+
+Eligibility is checked before the summary is formatted. Disabled digest events,
+periods without an enabled configured Telegram or e-mail destination, and
+populated periods without a valid dashboard URL complete silently without an
+event or outbox row. This avoids retrying permanent settings errors. Successful
+event/outbox creation and the period completion marker commit together, so a
+late result or later settings change cannot requeue a completed period.
+
+Digest templates support `{period}`, `{summary}` and `{link}`. Telegram always
+includes the complete detail for its numbered part, even if a custom template
+omits `{summary}`. A custom template that exceeds the provider limit falls back
+to a bounded part message without losing that part's details. Each part is one
+outbox event and delivery, so a failed part can retry without resending or
+discarding successful parts. Telegram dynamic values are HTML-escaped; e-mail
+renders plain text and carries the full summary on its single delivery.
+
+Integration coverage checks enabled and disabled destinations, populated and
+empty summaries, bounded Unicode Telegram parts with an independent failed
+part retry, one full e-mail delivery, current-URL changes before dispatch,
+outbox dispatch after scheduler restart, and a late result for a completed
+period:
+
+```bash
+go test -race -p 1 -tags integration ./cmd/center -run '^TestAC.*Digest.*Integration$' -count=1
+```
 
 ## Verification
 
