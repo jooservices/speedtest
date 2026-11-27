@@ -88,7 +88,7 @@ func newOperationalStores(pool *pgxpool.Pool, cfg config.CenterConfig, logger *s
 	return operational, alertStore, retention
 }
 
-func backgroundServices(notifications *notify.Store, retention *jobs.Retention, usageStore *usage.Store, logger *slog.Logger, mailer *report.Mailer, backfill *geo.Backfill, watcher *ipwatch.Watcher, dbip geo.DBIPConfig, alertStore *alerts.Store) func(context.Context) {
+func backgroundServices(notifications *notify.Store, retention *jobs.Retention, usageStore *usage.Store, logger *slog.Logger, mailer *report.Mailer, backfill *geo.Backfill, watcher *ipwatch.Watcher, dbip geo.DBIPConfig, alertStore *alerts.Store, digest *report.DigestScheduler) func(context.Context) {
 	return func(ctx context.Context) {
 		if notifications != nil {
 			go notifications.Loop(ctx)
@@ -98,6 +98,9 @@ func backgroundServices(notifications *notify.Store, retention *jobs.Retention, 
 		go backfill.Loop(ctx)
 		if mailer != nil {
 			go mailer.Loop(ctx)
+		}
+		if digest != nil {
+			go digest.Loop(ctx)
 		}
 		if watcher.Reader != nil {
 			// GeoLite2 (weekly, needs a licence key) or DB-IP Lite (monthly, free): the first one configured wins.
@@ -148,6 +151,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		return services{}, nil, err
 	}
 	owner.Events = notifications
+	digest := newDigestScheduler(pool, notifications, logger)
 	_, alertStore, retention := newOperationalStores(pool, cfg, logger, notifications, operational)
 	mailer := buildReportMailer(pool, notifications, logger)
 	dbip, err := geo.DBIPConfigFromEnv()
@@ -197,7 +201,7 @@ func buildServices(ctx context.Context, pool *pgxpool.Pool, cfg config.CenterCon
 		Audit:              &audit.Store{DB: pool},
 		AccessTokens:       &apitoken.Store{DB: pool},
 		Installer:          installerService,
-		Background:         backgroundServices(notifications, retention, usageStore, logger, mailer, backfill, watcher, dbip, alertStore),
+		Background:         backgroundServices(notifications, retention, usageStore, logger, mailer, backfill, watcher, dbip, alertStore, digest),
 	}, cleanup, nil
 }
 

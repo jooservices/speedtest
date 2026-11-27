@@ -109,11 +109,14 @@ export function settingsSuite(T, ctx) {
       assert.equal(await T.documentLanguage(), 'vi', 'the document language follows the saved setting');
 
       await T.open('#/', 'Dashboard');
-      const usagePayload = page.waitForResponse(response => new URL(response.url()).pathname === '/api/usage').then(response => response.json());
+      const usageRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/api/usage');
       await page.reload();
       await T.heading('Dashboard').waitFor();
       assert.equal(await T.documentLanguage(), 'vi', 'the document language is restored after a dashboard reload');
-      const usage = (await usagePayload).data;
+      // The body is read again through the page's cookies, not from the response of the reload: a body of a response the
+      // reload navigated away from is no longer available.
+      const usageURL = (await usageRequest).url();
+      const usage = (await (await page.request.get(usageURL)).json()).data;
       const latestBucket = Math.max(...usage.series.map(item => Date.parse(item.start)));
       assert.ok(Number.isFinite(latestBucket), 'the seeded bandwidth series includes a UTC bucket');
       const expectedDate = new Intl.DateTimeFormat('vi-VN', { timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(latestBucket) + ' UTC';

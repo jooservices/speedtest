@@ -72,7 +72,9 @@ export async function startStack({ seed = true } = {}) {
   writeFileSync(join(releaseDir, artifact), binary);
   writeFileSync(join(releaseDir, 'release.json'), JSON.stringify({ version: '2.0.0', commit: 'e2e', builtAt: new Date().toISOString(), files: { [artifact]: createHash('sha256').update(binary).digest('hex') } }));
   const centerEnv = { ...env, ...process.env, APP_ENV: 'local', APP_KEY: 'MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=', SPEEDTEST_HTTP_ADDR: `127.0.0.1:${port}`, // gitleaks:allow (fixed test-only key)
-    SPEEDTEST_PUBLIC_URL: `http://127.0.0.1:${port}`, SPEEDTEST_RELEASE_DIR: releaseDir, SPEEDTEST_ADMIN_EMAIL: '', SPEEDTEST_LOGIN_MAX_ATTEMPTS: '100', SPEEDTEST_GEO_DBIP_AUTO_UPDATE: 'false' };
+    SPEEDTEST_PUBLIC_URL: `http://127.0.0.1:${port}`, SPEEDTEST_RELEASE_DIR: releaseDir, SPEEDTEST_ADMIN_EMAIL: '', SPEEDTEST_LOGIN_MAX_ATTEMPTS: '100', SPEEDTEST_GEO_DBIP_AUTO_UPDATE: 'false',
+    // /api/notifications/* shares the agent request limit (default 120 a minute, burst 40); scenarios call it faster than a person and got 429 (JOOST-146).
+    SPEEDTEST_AGENT_REQUESTS_PER_MINUTE: '600' };
   run('go', ['run', './internal/center/db/cmd/migrate', 'up'], { env: centerEnv });
   run(join(out, 'bin', 'center'), ['seed-admin'], { env: centerEnv });
   if (seed) sqlFile(db, join(root, 'tests', 'e2e', 'seed.sql'));

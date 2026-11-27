@@ -120,7 +120,7 @@ func newRouter(options Options) http.Handler {
 	owners := ownerAreas(options, auth)
 	internalOwner := withAudit(dispatcher(owners, http.NotFoundHandler()), options.Audit, auth, options.NotificationEvents, logger)
 	if options.AccessTokens != nil {
-		owners.addToken(newMCPHandler(internalOwner), onPath(func(path string) bool { return path == "/mcp" }), func(*http.Request) (apitoken.Scope, bool) { return "", true })
+		owners.addToken("mcp", newMCPHandler(internalOwner), onPath(func(path string) bool { return path == "/mcp" }), func(*http.Request) (apitoken.Scope, bool) { return "", true })
 	}
 	platform := platformAreas(options, auth, readyz(options.Pinger, readinessTimeout))
 	areas := make(routeTable, 0, len(owners)+len(platform))

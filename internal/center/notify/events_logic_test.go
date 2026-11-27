@@ -1,10 +1,67 @@
 package notify
 
 import (
+	"context"
+	"errors"
+	"slices"
 	"testing"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jooservices/speedtest/internal/center/catalog"
+	"github.com/jooservices/speedtest/internal/center/settings"
 )
+
+type digestPreferencesFixture struct {
+	view   settings.Settings
+	secret string
+	err    error
+}
+
+func (p digestPreferencesFixture) NotificationConfig(context.Context, pgx.Tx, string) (settings.Settings, string, error) {
+	return p.view, p.secret, p.err
+}
+
+func TestAC2DigestPublisherRejectsNonDigestEvent(t *testing.T) {
+	if err := (&Store{}).PublishDigestEventTx(t.Context(), nil, "test.success", nil); !errors.Is(err, ErrInvalidEvent) {
+		t.Fatalf("PublishDigestEventTx() error = %v, want ErrInvalidEvent", err)
+	}
+}
+
+func TestAC2DigestChannelSelectionUsesOnlyEnabledConfiguredDestinations(t *testing.T) {
+	view := settings.Settings{}
+	view.Notify.Email = settings.ChannelConfig{On: true, To: "owner@example.test"}
+	view.Notify.Telegram = settings.ChannelConfig{On: true, To: "10001"}
+	configured := digestPreferencesFixture{view: view, secret: "configured"}
+	disabledView := view
+	disabledView.Notify.Email.On = false
+	readFailure := errors.New("settings read failed")
+	for _, test := range []struct {
+		name        string
+		preferences digestPreferencesFixture
+		channels    []string
+		allowed     []string
+		want        []string
+		wantErr     error
+	}{
+		{name: "filters supported channels", preferences: configured, channels: []string{"telegram", "email", "slack"}, allowed: []string{"telegram", "email"}, want: []string{"telegram", "email"}},
+		{name: "skips disabled destination", preferences: digestPreferencesFixture{view: disabledView, secret: "configured"}, channels: []string{"email", "telegram"}, allowed: []string{"telegram", "email"}, want: []string{"telegram"}},
+		{name: "propagates settings failure", preferences: digestPreferencesFixture{err: readFailure}, channels: []string{"email"}, allowed: []string{"email"}, wantErr: readFailure},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			store := &Store{Settings: test.preferences}
+			got, err := configuredChannels(t.Context(), store, nil, test.channels, test.allowed)
+			if test.wantErr != nil {
+				if !errors.Is(err, test.wantErr) {
+					t.Fatalf("configuredChannels() error = %v, want %v", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil || !slices.Equal(got, test.want) {
+				t.Fatalf("configuredChannels() = %v, %v; want %v", got, err, test.want)
+			}
+		})
+	}
+}
 
 func TestMergeAndValidateEventWrite(t *testing.T) {
 	base, ok := catalog.LookupEvent("test.success")

@@ -53,6 +53,7 @@ security:
 paths:
   /api/auth/me:
     get:
+      x-rest-exception: "plural /api/auth/me: Singleton: the caller's own session identity."
       operationId: getSession
       deprecated: true
       x-canonical-path: "/api/v1/auth/me"
@@ -208,6 +209,7 @@ paths:
               $ref: "#/components/schemas/PasswordChange"
   /api/auth/2fa:
     get:
+      x-rest-exception: "plural /api/auth/2fa: Singleton: the caller's own two-factor status."
       operationId: getTwoFactorStatus
       deprecated: true
       x-canonical-path: "/api/v1/auth/2fa"
@@ -233,6 +235,7 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/auth/2fa/setup:
     post:
+      x-rest-exception: "location POST /api/auth/2fa/setup 201: Creates a pending secret for the caller; no other resource is addressable."
       operationId: startTwoFactorSetup
       deprecated: true
       x-canonical-path: "/api/v1/auth/2fa/setup"
@@ -1203,6 +1206,7 @@ paths:
         - $ref: "#/components/parameters/CSRF"
   /api/agent/results:
     post:
+      x-rest-exception: "status POST /api/agent/results 207: Batch ingest returns per-item outcomes; 207 is not in the standard's table."
       operationId: ingestResults
       deprecated: true
       x-canonical-path: "/api/v1/agent/results"
@@ -1255,6 +1259,7 @@ paths:
               $ref: "#/components/schemas/ResultBatch"
   /api/agent/config:
     get:
+      x-rest-exception: "plural /api/agent/config: Singleton: the caller's own effective configuration."
       operationId: getAgentConfig
       deprecated: true
       x-canonical-path: "/api/v1/agent/config"
@@ -1339,6 +1344,7 @@ paths:
               $ref: "#/components/schemas/Heartbeat"
   /api/agent/commands:
     get:
+      x-rest-exception: "list-page GET /api/agent/commands: Returns at most 100 pending commands by design; the agent polls its own queue."
       operationId: pollCommands
       deprecated: true
       x-canonical-path: "/api/v1/agent/commands"
@@ -1417,6 +1423,7 @@ paths:
               $ref: "#/components/schemas/CommandAck"
   /api/agent/ip:
     get:
+      x-rest-exception: "plural /api/agent/ip: Singleton: the caller's observed public IP."
       operationId: getAgentIP
       deprecated: true
       x-canonical-path: "/api/v1/agent/ip"
@@ -1538,6 +1545,9 @@ paths:
             $ref: "#/components/schemas/ID"
   /api/results/export.csv:
     get:
+      x-rest-exception:
+        - "path-charset /api/results/export.csv: Download; the extension names the file format for the client."
+        - "plural /api/results/export.csv: Download of a file, not a collection."
       operationId: exportFilteredCSV
       deprecated: true
       x-canonical-path: "/api/v1/results/export.csv"
@@ -1589,6 +1599,9 @@ paths:
         - $ref: "#/components/parameters/Dir"
   /api/export/results.csv:
     get:
+      x-rest-exception:
+        - "path-charset /api/export/results.csv: Full export download; the extension names the file format."
+        - "plural /api/export/results.csv: Download of a file, not a collection."
       operationId: exportAllCSV
       deprecated: true
       x-canonical-path: "/api/v1/export/results.csv"
@@ -1626,6 +1639,9 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/export/results.json:
     get:
+      x-rest-exception:
+        - "path-charset /api/export/results.json: Full export download; the extension names the file format."
+        - "plural /api/export/results.json: Download of a file, not a collection."
       operationId: exportAllJSON
       deprecated: true
       x-canonical-path: "/api/v1/export/results.json"
@@ -1666,6 +1682,7 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/reports/monthly:
     get:
+      x-rest-exception: "plural /api/reports/monthly: A report for one UTC month, not a collection."
       operationId: getMonthlyReport
       deprecated: true
       x-canonical-path: "/api/v1/reports/monthly"
@@ -1764,6 +1781,7 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/isps/compare:
     get:
+      x-rest-exception: "plural /api/isps/compare: Computed comparison of selected ISPs in one period."
       operationId: compareISPs
       deprecated: true
       x-canonical-path: "/api/v1/isps/compare"
@@ -1845,6 +1863,7 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/isps/{id}/trend:
     get:
+      x-rest-exception: "plural /api/isps/{id}/trend: Computed trend for one ISP."
       operationId: getISPTrend
       deprecated: true
       x-canonical-path: "/api/v1/isps/{id}/trend"
@@ -1887,6 +1906,7 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/isps/{id}/plans:
     get:
+      x-rest-exception: "list-page GET /api/isps/{id}/plans: Plans are entered by the owner per ISP; the list is not paged in v1."
       operationId: listISPPlans
       deprecated: true
       x-canonical-path: "/api/v1/isps/{id}/plans"
@@ -2051,6 +2071,7 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/stats/summary:
     get:
+      x-rest-exception: "plural /api/stats/summary: Computed statistics view, not a collection."
       operationId: getSummary
       deprecated: true
       x-canonical-path: "/api/v1/stats/summary"
@@ -2095,6 +2116,7 @@ paths:
         - $ref: "#/components/parameters/To"
   /api/stats/trend:
     get:
+      x-rest-exception: "plural /api/stats/trend: Computed statistics view, not a collection."
       operationId: getTrend
       deprecated: true
       x-canonical-path: "/api/v1/stats/trend"
@@ -2159,6 +2181,7 @@ paths:
             default: false
   /api/stats/hour-of-day:
     get:
+      x-rest-exception: "plural /api/stats/hour-of-day: Computed statistics view, not a collection."
       operationId: getHourOfDay
       deprecated: true
       x-canonical-path: "/api/v1/stats/hour-of-day"
@@ -2204,6 +2227,7 @@ paths:
         - $ref: "#/components/parameters/Timezone"
   /api/stats/heatmap:
     get:
+      x-rest-exception: "plural /api/stats/heatmap: Computed statistics view, not a collection."
       operationId: getHeatmap
       deprecated: true
       x-canonical-path: "/api/v1/stats/heatmap"
@@ -2250,6 +2274,7 @@ paths:
         - $ref: "#/components/parameters/Timezone"
   /api/stats/distribution:
     get:
+      x-rest-exception: "plural /api/stats/distribution: Computed statistics view, not a collection."
       operationId: getDistribution
       deprecated: true
       x-canonical-path: "/api/v1/stats/distribution"
@@ -2304,6 +2329,7 @@ paths:
             default: 15
   /api/usage:
     get:
+      x-rest-exception: "plural /api/usage: Computed traffic view by node, engine and period."
       operationId: getUsage
       deprecated: true
       x-canonical-path: "/api/v1/usage"
@@ -2367,6 +2393,7 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/usage/advice:
     get:
+      x-rest-exception: "plural /api/usage/advice: Estimate computed from the previous 30 days of results."
       operationId: getUsageAdvice
       deprecated: true
       x-canonical-path: "/api/v1/usage/advice"
@@ -2427,6 +2454,9 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/usage/budgets:
     get:
+      x-rest-exception:
+        - "list-page GET /api/usage/budgets: One budget per scope; the list is not paged in v1."
+        - "status GET /api/usage/budgets 503: The budget store is temporarily unavailable; no standard code covers that."
       operationId: getUsageBudgets
       deprecated: true
       x-canonical-path: "/api/v1/usage/budgets"
@@ -2557,6 +2587,7 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/stats/events:
     get:
+      x-rest-exception: "list-page GET /api/stats/events: Returns the newest 500 marks, a bounded list."
       operationId: getStatisticsEvents
       deprecated: true
       x-canonical-path: "/api/v1/stats/events"
@@ -2601,6 +2632,7 @@ paths:
         - $ref: "#/components/parameters/To"
   /api/dashboard:
     get:
+      x-rest-exception: "plural /api/dashboard: Single snapshot of the fleet, not a collection."
       operationId: getDashboard
       deprecated: true
       x-canonical-path: "/api/v1/dashboard"
@@ -2639,6 +2671,7 @@ paths:
         - $ref: "#/components/parameters/Range"
   /api/series:
     get:
+      x-rest-exception: "list-page GET /api/series: Bounded series of at most `maxPoints` per node."
       operationId: getSeries
       deprecated: true
       x-canonical-path: "/api/v1/series"
@@ -3550,6 +3583,7 @@ paths:
             $ref: "#/components/schemas/ID"
   /api/notifications/events:
     get:
+      x-rest-exception: "list-page GET /api/notifications/events: The event catalog is bounded by the events the product defines."
       operationId: listNotificationEvents
       deprecated: true
       x-canonical-path: "/api/v1/notifications/events"
@@ -3983,6 +4017,7 @@ paths:
         - $ref: "#/components/parameters/CSRF"
   /api/settings:
     get:
+      x-rest-exception: "list-page GET /api/settings: Singleton: the preferences object, not a collection."
       operationId: getSettings
       deprecated: true
       x-canonical-path: "/api/v1/settings"
@@ -4117,6 +4152,7 @@ paths:
               $ref: "#/components/schemas/SettingsPatch"
   /api/settings/enrolment-key:
     post:
+      x-rest-exception: "location POST /api/settings/enrolment-key 201: Rotates the shared bootstrap key (singleton); no other resource is addressable."
       operationId: rotateEnrollmentKey
       deprecated: true
       x-canonical-path: "/api/v1/settings/enrolment-key"
@@ -4229,6 +4265,7 @@ paths:
         - $ref: "#/components/parameters/Size"
   /api/ip/lookup:
     get:
+      x-rest-exception: "plural /api/ip/lookup: Read of the location of one literal IP, not a collection."
       operationId: lookupIP
       deprecated: true
       x-canonical-path: "/api/v1/ip/lookup"
@@ -4270,6 +4307,7 @@ paths:
             $ref: "#/components/schemas/IP"
   /api/ip/providers:
     get:
+      x-rest-exception: "list-page GET /api/ip/providers: The configured providers, a bounded set."
       operationId: listGeoProviders
       deprecated: true
       x-canonical-path: "/api/v1/ip/providers"
@@ -4297,6 +4335,7 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/ip/map:
     get:
+      x-rest-exception: "plural /api/ip/map: Computed map of the current location per node."
       operationId: getMap
       deprecated: true
       x-canonical-path: "/api/v1/ip/map"
@@ -4515,6 +4554,7 @@ paths:
             $ref: "#/components/schemas/ID"
   /api/installations/{id}/events:
     get:
+      x-rest-exception: "list-page GET /api/installations/{id}/events: Server-sent event stream of one installation, not a paged list."
       operationId: streamInstallEvents
       deprecated: true
       x-canonical-path: "/api/v1/installations/{id}/events"

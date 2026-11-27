@@ -1,0 +1,54 @@
+# Deploys develop to the staging container on the Dev Workspace VM after the CI workflows passed, then proves that
+# the project runs (scripts/staging-smoke.mjs). The runner is installed on that VM and only connects out to GitHub.
+# It never runs for a pull request or a fork, and the staging password never reaches a log or a summary: the deploy
+# script writes it to a private file on the VM for the announcement step.
+name: Deploy staging
+
+on:
+  workflow_run:
+    workflows: ['Go tests']
+    types: [completed]
+    branches: [develop]
+
+concurrency:
+  group: deploy-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  checks: read
+
+jobs:
+  deploy:
+    name: Deploy and smoke test
+    if: >-
+      github.repository == 'jooservices/speedtest' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'develop'
+    runs-on: [self-hosted, staging]
+    timeout-minutes: 30
+    steps:
+      - name: Checkout the commit that passed CI
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      # Go tests runs on every push to develop and starts this workflow; the other CI checks of the same commit must
+      # have finished too, and none may have failed.
+      - name: Wait for the other CI checks of this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          for _ in $(seq 1 60); do
+            runs="$(gh api "repos/${GITHUB_REPOSITORY}/commits/${SHA}/check-runs?per_page=100" --jq '[.check_runs[] | select(.name != "Deploy and smoke test")]')"
+            if [ "$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")" = 0 ]; then break; fi
+            sleep 30
+          done
+          failed="$(jq -r '[.[] | select(.status == "completed" and (.conclusion | IN("success", "skipped", "neutral") | not)) | .name] | join(", ")' <<<"$runs")"
+          pending="$(jq '[.[] | select(.status != "completed")] | length' <<<"$runs")"
+          if [ -n "$failed" ] || [ "$pending" != 0 ]; then echo "CI is not green for ${SHA}: failed=[${failed}] pending=${pending}"; exit 1; fi
+
+      - name: Deploy and smoke test
+        run: deploy/docker/stg-deploy.sh

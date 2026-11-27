@@ -25,7 +25,7 @@ audit entries.
 | Bandwidth | 80%/100% budget, projected over-budget and widened/paused schedule events |
 | Security | new sign-in IP, failed-login burst, password change, API-token creation and 2FA change |
 | Platform | delivery escalation, retention completion and completed export |
-| Digests | daily, weekly and monthly ISP catalog entries; scheduling belongs to JOOST-79 |
+| Digests | daily and weekly period summaries plus the monthly ISP report |
 
 The default quality limits are download below 65% of expected, upload below
 40%, ping above 30 ms, jitter above 10 ms and loss above 2%. Each quality alert
@@ -46,7 +46,29 @@ value in Settings to enable each budget calculation; a zero or missing budget
 does not emit a budget event. Usage is derived from successful/degraded result
 byte counts per node and engine in the current calendar month. `bandwidth.interval_widened`
 is emitted when a node schedule interval increases or the schedule is paused.
-Digest scheduling and reports are handled by JOOST-79.
+Daily and weekly digest e-mail includes every node's success and failure counts
+and average download and upload speeds, with one e-mail delivery per period.
+Telegram includes those same per-node details. Large summaries are split into
+numbered parts, each with its own retryable event and delivery; all parts and
+the completed-period marker are committed in one transaction. Every final
+Telegram `sendMessage` text stays within 4096 UTF-16 units after HTML escaping.
+Custom Telegram templates retain each part's full details: the renderer adds
+the summary when `{summary}` is absent and uses a bounded part template if the
+custom rendering exceeds the provider limit. A Telegram part retry does not
+resend other successful parts or the e-mail. A dashboard link is optional; if
+present, dispatch validates it against the current `Settings.CenterURL` and
+regenerates the current safe route. Digest details never rely on the rolling
+dashboard to reconstruct their completed period.
+
+Empty periods receive a clear no-results message. The `digest.daily` and
+`digest.weekly` events use their configured templates and event settings, and
+queue only enabled, configured Telegram and e-mail destinations through the
+transactional notification outbox. Disabled events or missing destinations
+complete silently without an event or delivery. A populated period whose
+`Settings.CenterURL` is invalid at completion also completes silently. The
+outbox entries and completed-period marker are committed together, preventing
+late results or later settings changes from queuing that period again. The
+monthly ISP report remains separate.
 
 For immediate events, cooldown/repeat settings suppress duplicate delivery for
 the configured interval while keeping each event in the event history. Offline
