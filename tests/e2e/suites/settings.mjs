@@ -2,6 +2,14 @@ import { createHash } from 'node:crypto';
 import { request as apiRequest } from 'playwright';
 import { join } from 'node:path';
 
+function localizedBytes(value) {
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let amount = Number(value), unit = 0;
+  while (amount >= 1024 && unit < units.length - 1) { amount /= 1024; unit++; }
+  const digits = unit ? 1 : 0;
+  return new Intl.NumberFormat('vi-VN', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(amount) + ' ' + units[unit];
+}
+
 async function checkLocationSettingsLayout(page, assert) {
 	const originalTheme = await page.evaluate(() => document.documentElement.getAttribute('data-theme') || 'dark');
 	const originalViewport = page.viewportSize();
@@ -88,6 +96,53 @@ export function settingsSuite(T, ctx) {
     }
   }
   return {
+    // Language: the saved preference survives reload and a failed update restores it in the active locale.
+    async languagePreference() {
+      await T.open('#/settings', 'Settings');
+      await T.chooseLanguage('vi');
+      await T.toast('Saved').waitFor();
+      await T.eventually(() => T.savedLanguage() === 'vi', 'Vietnamese language is stored');
+      await T.reloadSettings();
+      assert.equal(await T.languageSelector().inputValue(), 'vi', 'the selected language survives reload');
+      assert.equal(await T.documentLanguage(), 'vi', 'the document language follows the saved setting');
+
+      await T.open('#/', 'Dashboard');
+      const usageRequest = page.waitForRequest(request => new URL(request.url()).pathname === '/api/usage');
+      await page.reload();
+      await T.heading('Dashboard').waitFor();
+      assert.equal(await T.documentLanguage(), 'vi', 'the document language is restored after a dashboard reload');
+      // The body is read again through the page's cookies, not from the response of the reload: a body of a response the
+      // reload navigated away from is no longer available.
+      const usageURL = (await usageRequest).url();
+      const usage = (await (await page.request.get(usageURL)).json()).data;
+      const latestBucket = Math.max(...usage.series.map(item => Date.parse(item.start)));
+      assert.ok(Number.isFinite(latestBucket), 'the seeded bandwidth series includes a UTC bucket');
+      const expectedDate = new Intl.DateTimeFormat('vi-VN', { timeZone: 'UTC', year: 'numeric', month: '2-digit', day: '2-digit' }).format(latestBucket) + ' UTC';
+      await T.eventually(async () => await T.bandwidthBucketDate() === expectedDate, 'the latest bandwidth bucket is displayed in vi-VN UTC format');
+      const totalBytes = Number(usage.totals.totalBytes);
+      assert.ok(totalBytes >= 1024, 'the seeded bandwidth total shows a localized fractional unit');
+      const expectedNumber = localizedBytes(totalBytes);
+      assert.ok(expectedNumber.includes(','), 'the displayed bandwidth number has a Vietnamese decimal separator');
+      await T.eventually(async () => await T.bandwidthRangeNumber() === expectedNumber, 'the bandwidth total is displayed in vi-VN number format');
+      await T.open('#/settings', 'Settings');
+
+      await T.failNextLanguageSave('en');
+      try {
+        await T.chooseLanguage('en');
+        await T.toast('Không thể lưu ngôn ngữ').waitFor();
+        T.expectRefusal(500);
+        assert.equal(await T.languageSelector().inputValue(), 'vi', 'a failed save restores the previous language');
+        assert.equal(T.savedLanguage(), 'vi', 'a failed save leaves the stored language unchanged');
+      } finally {
+        await T.allowLanguageSaves();
+      }
+
+      await T.chooseLanguage('en');
+      await T.toast('Saved').waitFor();
+      await T.eventually(() => T.savedLanguage() === 'en', 'English is restored for later scenarios');
+      assert.equal(await T.documentLanguage(), 'en');
+    },
+
     // General: every preference is saved on the center and survives a reload.
     async preferences() {
       await T.open('#/settings', 'Settings');

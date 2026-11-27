@@ -1,7 +1,7 @@
 /* App shell: sidebar, top bar, hash router, theme. */
 (function () {
   'use strict';
-  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h;
+  var ST = (/** @type {any} */ (window)).ST, U = ST.ui, h = U.h, F = ST.fmt;
   ST.pages = ST.pages || {};
 
   var NAV = [
@@ -17,6 +17,7 @@
   ];
 
   function applyTheme() {
+    ST.i18n.setLanguage(ST.settings().language || 'en');
     var t = ST.settings().theme === 'light' ? 'light' : 'dark';
     document.documentElement.setAttribute('data-theme', t);
   }
@@ -55,7 +56,7 @@
     NAV.forEach(function (n) {
       var active = current && (current.path === n.path);
       nav.appendChild(h('a', { href: '#' + n.path, class: active ? 'active' : '', 'aria-current': active ? 'page' : null, onClick: closeMenu },
-        U.icon(n.icon, 18), n.label, n.badge && open ? h('span', { class: 'badge', 'aria-label': open + ' open alerts' }, open) : null));
+        U.icon(n.icon, 18), n.label, n.badge && open ? h('span', { class: 'badge', 'aria-label': F.count(open) + ' open alerts' }, F.count(open)) : null));
     });
     sb.appendChild(nav);
     if (ST.demo) sb.appendChild(h('div', { class: 'sidebar-foot' },
@@ -64,7 +65,7 @@
         U.confirm({ title: 'Reset demo data?', text: 'This clears everything you changed in this preview (nodes, rules, settings, manual tests) and restores the sample data.', confirm: 'Reset', danger: true }).then(function (ok) { if (ok) ST.resetDemo(); });
       } }, U.icon('refresh', 14), 'Reset demo data')));
     var actions = h('div', { class: 'sidebar-actions' }), dark = settings.theme !== 'light';
-    actions.appendChild(h('div', { class: 'chip good', role: 'status', title: 'Nodes reporting' }, U.icon('activity', 12), nodes.filter(function (n) { return n.enabled; }).length + ' of ' + nodes.length + ' nodes active'));
+    actions.appendChild(h('div', { class: 'chip good', role: 'status', title: 'Nodes reporting' }, U.icon('activity', 12), F.count(nodes.filter(function (n) { return n.enabled; }).length) + ' of ' + F.count(nodes.length) + ' nodes active'));
     actions.appendChild(U.btn(dark ? 'Light theme' : 'Dark theme', { icon: dark ? 'sun' : 'moon', variant: 'ghost sidebar-action', title: dark ? 'Switch to light theme' : 'Switch to dark theme', onClick: ST.toggleTheme }));
     if (!ST.demo) actions.appendChild(U.btn('Sign out', { icon: 'logout', variant: 'ghost sidebar-action', onClick: function () { ST.signOut(); } }));
     sb.appendChild(actions);

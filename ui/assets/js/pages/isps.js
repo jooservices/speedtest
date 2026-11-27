@@ -166,6 +166,9 @@
   }
 
   function reportColumns() {
+    function reportCount(value) {
+      return ST.i18n.localize(value, { type: 'number', useGrouping: ST.i18n.lang() === 'vi', maximumFractionDigits: 0 });
+    }
     return [
       { key: 'isp', label: 'ISP', render: function (r) { return h('span', null, r.isp, h('span', { class: 'muted' }, ' AS' + r.asn)); } },
       { key: 'node', label: 'Node' },
@@ -174,9 +177,9 @@
       { key: 'p95DownMbps', label: 'p95', num: true, render: function (r) { return F.speed(r.p95DownMbps); } },
       { key: 'deliveredPercent', label: 'Delivered', num: true, render: function (r) { return r.deliveredPercent == null ? '—' : F.num(r.deliveredPercent, 0) + '%'; } },
       { key: 'worstHoursUtc', label: 'Worst hours (UTC)', render: function (r) { return r.worstHoursUtc.length ? r.worstHoursUtc.join(', ') : '—'; } },
-      { key: 'failures', label: 'Failures', num: true },
-      { key: 'downtimeMinutes', label: 'Downtime (min)', num: true },
-      { key: 'ipChanges', label: 'IP changes', num: true }
+      { key: 'failures', label: 'Failures', num: true, render: function (r) { return reportCount(r.failures); } },
+      { key: 'downtimeMinutes', label: 'Downtime (min)', num: true, render: function (r) { return reportCount(r.downtimeMinutes); } },
+      { key: 'ipChanges', label: 'IP changes', num: true, render: function (r) { return reportCount(r.ipChanges); } }
     ];
   }
 
@@ -206,7 +209,10 @@
         host.appendChild(U.empty('Could not load the report', err.message || 'Retry later.', U.btn('Retry', { onClick: load })));
       });
     }
-    var picker = U.select(months, month, function (v) { month = v; load(); }, 'report-month');
+    var monthOptions = months.map(function (value) {
+      return { value: value, label: ST.i18n.lang() === 'vi' ? F.date(Date.parse(value + '-15T12:00:00Z'), 'yearMonth') : value };
+    });
+    var picker = U.select(monthOptions, month, function (v) { month = v; load(); }, 'report-month');
     load();
     return h('div', { class: 'card', style: 'margin-top:16px' },
       h('h2', { class: 'section-title' }, 'Monthly report'),
@@ -223,12 +229,16 @@
     root.appendChild(U.pageHead('ISPs', 'Providers inferred from ASN data, with speed and reliability in the selected range.'));
     root.appendChild(h('div', { class: 'muted' }, 'Loading ISPs…'));
     var listPath = '/api/isps?range=' + encodeURIComponent(ST.settings().range) + ST.engineQuery();
-    ST.api.request(listPath).then(function (res) {
+    var controller = new AbortController(), active = true;
+    ST.api.request(listPath, { signal: controller.signal }).then(function (res) {
+      if (!active) return;
       render(root, res.data || []);
     }).catch(function (err) {
+      if (!active || err.name === 'AbortError') return;
       U.clear(root);
       root.appendChild(U.pageHead('ISPs', 'Providers inferred from ASN data, with speed and reliability in the selected range.'));
       root.appendChild(U.empty('Could not load ISPs', err.message || 'Retry from the menu.', U.btn('Retry', { onClick: function () { ST.refresh(); } })));
     });
+    return function () { active = false; controller.abort(); };
   };
 })();

@@ -18,7 +18,7 @@
   /* ---------- Settings ---------- */
   var defaultSettings = function () {
     return {
-      theme: 'dark', range: '7d', units: 'auto', timezone: 'browser', hour12: false, decimals: 1,
+      theme: 'dark', language: 'en', range: '7d', units: 'auto', timezone: 'browser', hour12: false, decimals: 1,
       retentionDays: 365, geoProvider: 'geolite2', geoFallback: 'ip-api', geoKey: '', geoAutoUpdate: true,
       engine: 'ookla', defaultThreads: 4, serverMode: 'auto', maxConcurrent: 1, stagger: true, quietStart: '', quietEnd: '', notifyQuietStart: '', notifyQuietEnd: '', notifyQuietTimezone: 'UTC', notifyQuietCritical: true,
       notify: { email: { on: true, to: 'ops@example.com' }, telegram: { on: false, to: '' }, slack: { on: false, to: '' }, webhook: { on: false, to: '' } },
@@ -46,6 +46,7 @@
     state.nodes = saved.nodes || ST.seedNodes();
     state.settings = Object.assign(defaultSettings(), saved.settings || {});
     state.settings.notify = Object.assign(defaultSettings().notify, (saved.settings || {}).notify || {});
+    ST.i18n.setLanguage(state.settings.language);
     state.rules = saved.rules || defaultRules();
     state.acked = saved.acked || {};
     state.bandwidthBudgets = saved.bandwidthBudgets || [];
@@ -82,7 +83,10 @@
     var zone = state.settings.timezone;
     return zone && zone !== 'browser' ? zone : (Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC');
   };
-  ST.setSettings = function (patch, silent) { Object.assign(state.settings, patch); persist(); if (!silent) ST.emit('settings'); };
+  ST.setSettings = function (patch, silent) {
+    if (Object.prototype.hasOwnProperty.call(patch, 'language')) ST.i18n.setLanguage(patch.language);
+    Object.assign(state.settings, patch); persist(); if (!silent) ST.emit('settings');
+  };
   ST.nodes = function () { return state.nodes; };
   ST.isps = function () {
     if (!ST.demo) return state.isps || [];
@@ -326,20 +330,9 @@
   /* ---------- Formatting ---------- */
   var F = /** @type {any} */ (ST.fmt = {});
   function tz() { var t = state.settings.timezone; return t === 'browser' ? undefined : t; }
-  var dtCache = {};
-  function dtf(opts) {
-    var k = JSON.stringify(opts) + state.settings.timezone + state.settings.hour12;
-    return dtCache[k] || (dtCache[k] = new Intl.DateTimeFormat('en-GB', Object.assign({ timeZone: tz(), hour12: state.settings.hour12 }, opts)));
-  }
   F.date = function (ts, kind) {
     if (ts == null) return '—';
-    switch (kind) {
-      case 'day': return dtf({ day: '2-digit', month: 'short' }).format(ts);
-      case 'time': return dtf({ hour: '2-digit', minute: '2-digit' }).format(ts);
-      case 'full': return dtf({ day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(ts);
-      case 'dayfull': return dtf({ weekday: 'short', day: '2-digit', month: 'short' }).format(ts);
-      default: return dtf({ day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(ts);
-    }
+    return ST.i18n.localize(ts, { type: 'date', kind: kind, timeZone: tz(), hour12: state.settings.hour12 });
   };
   var partsFmt = {};
   F.parts = function (ts) {
@@ -365,7 +358,8 @@
     if (s < 86400) return Math.floor(s / 3600) + 'h ' + Math.floor((s % 3600) / 60) + 'm';
     return Math.floor(s / 86400) + 'd ' + Math.floor((s % 86400) / 3600) + 'h';
   };
-  F.num = function (v, d) { return v == null ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: d == null ? 0 : d, maximumFractionDigits: d == null ? 0 : d }); };
+  F.num = function (v, d) { return ST.i18n.localize(v, { type: 'number', minimumFractionDigits: d == null ? 0 : d, maximumFractionDigits: d == null ? 0 : d }); };
+  F.count = function (v) { return ST.i18n.lang() === 'vi' ? F.num(v) : String(v); };
   F.speedParts = function (mbps) {
     if (mbps == null) return { v: '—', u: '' };
     var u = state.settings.units, d = state.settings.decimals;
@@ -457,6 +451,16 @@
     };
     function timestamp(value) { return value == null ? null : Date.parse(value); }
     function result(r) { return Object.assign({}, r, { ts: timestamp(r.ts) }); }
+    function readSettings(options) {
+      var languageRead = ST.i18n.beginLanguageRead();
+      return API.request('/api/settings', options).then(function (settings) {
+        if (ST.i18n.applyLanguageRead(settings.data.language, languageRead)) {
+          state.settings.language = settings.data.language;
+          ST.emit('settings');
+        }
+        return settings;
+      });
+    }
     function remember(r) {
       if (r.server && !ST.servers.some(function (s) { return s.id === r.server.id; })) ST.servers.push(r.server);
       if (r.geo) geos[r.ip] = r.geo;
@@ -476,7 +480,8 @@
       try {
         var session = await API.session(options);
         if (!session.data.user) { API.signIn(); throw new Error('Sign in to view your nodes.'); }
-        var settings = await API.request('/api/settings', options);
+        var settings = await readSettings(options);
+        if (current !== revision) return;
         var range = settings.data.range;
         var snapshot = await Promise.all([
           API.list('/api/nodes', options),
@@ -491,7 +496,9 @@
         ]);
         if (current !== revision) return;
         geos = {}; ST.servers = [];
-        state.settings = Object.assign({}, state.settings, settings.data, { geoKey: '', enrollToken: '' });
+        var loadedSettings = Object.assign({}, state.settings, settings.data, { geoKey: '', enrollToken: '' });
+        loadedSettings.language = state.settings.language;
+        state.settings = loadedSettings;
         state.nodes = snapshot[0].map(function (n) {
           if (n.geo && n.currentIp) geos[n.currentIp] = n.geo;
           return Object.assign({}, n, { agent: String(n.agent || '').replace(/^speedtest-agent\//, ''), createdAt: timestamp(n.createdAt), lastSeen: timestamp(n.lastSeen),
@@ -542,6 +549,17 @@
       writeChains[path] = turn;
       return turn;
     }
+    function settingsInput(response, patch) {
+      var input = Object.assign({}, response.data, patch);
+      delete input.geoKeyConfigured; delete input.enrollKeyConfigured;
+      delete input.enrollToken;
+      if (!input.geoKey) delete input.geoKey;
+      Object.keys(input.notify).forEach(function (key) {
+        input.notify[key] = Object.assign({}, input.notify[key]);
+        delete input.notify[key].configured;
+      });
+      return input;
+    }
     function editable(path, method, body, contentType) {
       return conditional(path, function (response) {
         return mutation(path, method, body, { ifMatch: response.etag, contentType: contentType });
@@ -576,15 +594,20 @@
     ST.ackAll = function () { return mutation('/api/alerts/acknowledgements', 'POST', undefined, { idempotencyKey: API.key() }); };
     ST.setSettings = function (patch) {
       return conditional('/api/settings', function (response) {
-        var input = Object.assign({}, response.data, patch);
-        delete input.geoKeyConfigured; delete input.enrollKeyConfigured;
-        delete input.enrollToken;
-        if (!input.geoKey) delete input.geoKey;
-        Object.keys(input.notify).forEach(function (key) {
-          input.notify[key] = Object.assign({}, input.notify[key]);
-          delete input.notify[key].configured;
+        return mutation('/api/settings', 'PUT', settingsInput(response, patch), { ifMatch: response.etag });
+      });
+    };
+    ST.saveLanguage = function (language) {
+      return ST.i18n.saveLanguage(language, function (requested) {
+        return conditional('/api/settings', function (response) {
+          return API.request('/api/settings', { method: 'PUT', body: settingsInput(response, { language: requested }), ifMatch: response.etag })
+            .then(function (saved) { return saved.data; });
         });
-        return mutation('/api/settings', 'PUT', input, { ifMatch: response.etag });
+      }, function () {
+        return readSettings().then(function (settings) { return settings.data; });
+      }, function (savedLanguage) {
+        state.settings.language = savedLanguage;
+        ST.emit('settings');
       });
     };
     // Schedules are computed by the center: next runs, data usage and clashes come from /api/schedules.

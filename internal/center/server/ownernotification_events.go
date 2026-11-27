@@ -57,7 +57,7 @@ func (h *ownerNotifications) serveCatalog(w http.ResponseWriter, r *http.Request
 	case strings.HasPrefix(rest, "templates/"):
 		h.serveTemplate(w, r, strings.TrimPrefix(rest, "templates/"))
 	default:
-		writeNotFoundProblem(w, r)
+		writeRouteNotFound(w, r)
 	}
 }
 

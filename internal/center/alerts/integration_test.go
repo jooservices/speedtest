@@ -810,7 +810,7 @@ class FixedDate extends Date { static now() { return fixedNow; } }
 const context = {window: {}, location: {search: '?demo=1'}, URLSearchParams, Date: FixedDate, console,
   localStorage: {getItem() { return null; }, setItem() {}, removeItem() {}}};
 vm.createContext(context);
-for (const file of ['seed.js', 'store.js'])
+for (const file of ['i18n.js', 'seed.js', 'store.js'])
   vm.runInContext(fs.readFileSync('../../../ui/assets/js/' + file, 'utf8'), context);
 const ST = context.window.ST;
 const ips = [...new Set(ST.state.results.map(result => result.ip).filter(Boolean))];

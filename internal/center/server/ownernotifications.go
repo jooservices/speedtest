@@ -4,9 +4,11 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/jooservices/speedtest/internal/center/audit"
+	"github.com/jooservices/speedtest/internal/center/catalog"
 	"github.com/jooservices/speedtest/internal/center/notify"
 	"github.com/jooservices/speedtest/internal/center/settings"
 )
@@ -15,7 +17,7 @@ import (
 type OwnerNotificationsStore interface {
 	Test(context.Context, string) (notify.Delivery, error)
 	Delivery(context.Context, string) (notify.Delivery, error)
-	Deliveries(context.Context, string, int, int) ([]notify.Delivery, int, error)
+	Deliveries(context.Context, notify.DeliveryFilter, int, int) ([]notify.Delivery, int, error)
 	ListNotificationEvents(context.Context) ([]notify.EventView, error)
 	GetNotificationEvent(context.Context, string) (notify.EventView, error)
 	UpdateNotificationEvent(context.Context, string, notify.EventPatch) (notify.EventView, error)
@@ -149,7 +151,7 @@ func (h *ownerNotifications) serve(w http.ResponseWriter, r *http.Request) {
 		}
 		h.getDelivery(w, r, strings.TrimPrefix(rest, "deliveries/"))
 	default:
-		writeNotFoundProblem(w, r)
+		writeRouteNotFound(w, r)
 	}
 }
 
@@ -172,8 +174,13 @@ func (h *ownerNotifications) queueTest(w http.ResponseWriter, r *http.Request, c
 	writeEnvelope(w, http.StatusAccepted, "Notification queued", d)
 }
 
-// listDeliveries pages the delivery attempts, optionally for one alert event.
+// listDeliveries pages the delivery attempts, optionally for one alert event or one status/channel pair.
 func (h *ownerNotifications) listDeliveries(w http.ResponseWriter, r *http.Request) {
+	query, err := url.ParseQuery(r.URL.RawQuery)
+	if err != nil {
+		invalid(w, r, "query parameters must be valid URL encoding.")
+		return
+	}
 	page, size, ok := paging(w, r)
 	if !ok {
 		return
@@ -182,20 +189,60 @@ func (h *ownerNotifications) listDeliveries(w http.ResponseWriter, r *http.Reque
 		invalid(w, r, "page must be at most 1000000.")
 		return
 	}
-	event := ""
-	if v, present := r.URL.Query()["event"]; present {
-		if len(v) != 1 || !uuidPattern.MatchString(v[0]) {
-			invalid(w, r, "event must be an alert event ID.")
-			return
-		}
-		event = v[0]
+	filter, ok := deliveryFilter(w, r, query)
+	if !ok {
+		return
 	}
-	items, total, err := h.store.Deliveries(r.Context(), event, page, size)
+	items, total, err := h.store.Deliveries(r.Context(), filter, page, size)
 	if err != nil {
 		notificationError(w, r, err)
 		return
 	}
 	writePage(w, items, page, size, total)
+}
+
+// deliveryFilter reads the optional event, status and channel filters, rejecting unknown enum values.
+func deliveryFilter(w http.ResponseWriter, r *http.Request, query url.Values) (notify.DeliveryFilter, bool) {
+	var filter notify.DeliveryFilter
+	var present bool
+	var ok bool
+	if filter.Event, present, ok = notificationFilterValue(w, r, query, "event", "event must be an alert event ID."); !ok {
+		return filter, false
+	}
+	if present && !uuidPattern.MatchString(filter.Event) {
+		invalid(w, r, "event must be an alert event ID.")
+		return filter, false
+	}
+	if filter.Status, present, ok = notificationFilterValue(w, r, query, "status", "status must be pending, sent or failed."); !ok {
+		return filter, false
+	}
+	if present && !notify.ValidDeliveryStatus(filter.Status) {
+		invalid(w, r, "status must be pending, sent or failed.")
+		return filter, false
+	}
+	if filter.Channel, present, ok = notificationFilterValue(w, r, query, "channel", "channel must be email, telegram, slack or webhook."); !ok {
+		return filter, false
+	}
+	if present {
+		if _, known := catalog.LookupChannel(filter.Channel); !known {
+			invalid(w, r, "channel must be email, telegram, slack or webhook.")
+			return filter, false
+		}
+	}
+	return filter, true
+}
+
+// notificationFilterValue returns one optional query value and rejects a repeated parameter.
+func notificationFilterValue(w http.ResponseWriter, r *http.Request, query url.Values, name, detail string) (string, bool, bool) {
+	values, present := query[name]
+	if !present {
+		return "", false, true
+	}
+	if len(values) != 1 {
+		invalid(w, r, detail)
+		return "", true, false
+	}
+	return values[0], true, true
 }
 
 func (h *ownerNotifications) getDelivery(w http.ResponseWriter, r *http.Request, id string) {

@@ -9,6 +9,7 @@ All notable changes to Speedtest are recorded here. The format follows
 ## [Unreleased]
 
 ### Added
+- Durable daily and weekly digest scheduling (JOOST-125): owner-local 08:00 period selection, a unique period claim with a time-zone snapshot, lease renewal, retry after a failed enqueue and one completion per period across restarts and concurrent centers.
 - Delivery flow (JOOST-94): the project profile `.ai/project.json`, the pull request template and guard, and per-worktree databases from `scripts/db/tree` (the test database guard accepts `wt_<ticket>` names).
 - UI/UX improvements (JOOST-82): failure-class chips in result tables, KPI comparison with the previous period, a one-row mobile top bar, a download icon on exports, a not-enough-data note with expected-speed reference lines on sparse charts, upload percentage of expected in the Nodes table, the engine selector, keyboard fixes and an automated axe accessibility check in the E2E suite.
 - Statistics analytics now include p50/p95/p99, an ISP filter, a fixed-window heatmap, week-over-week means and bounded IP/ISP/alert events.
@@ -16,6 +17,7 @@ All notable changes to Speedtest are recorded here. The format follows
 - Monthly ISP and plan report (JOOST-79): per-ISP/per-node metrics, destination-attributed IP changes, an explicit unknown-attribution row, a Unicode PDF and CSV export, a populated UI preview, and optional previous-month e-mail with a renewable lease and stale-claim recovery.
 - IP change notifications and alert events now say which address changed to which ("Changed from 203.0.113.1 to 203.0.113.2 (city)"), and every delivered notification carries the event detail line (JOOST-91).
 - Configurable application notification events, per-channel templates, preview and reset controls, test-success and recovery deliveries, and security, bandwidth-budget and export event producers.
+- Notification delivery history can be filtered by status (`pending`, `sent`, `failed`) and channel (`email`, `telegram`, `slack`, `webhook`), combined with the event filter and paged newest first (JOOST-124).
 - Per-engine server catalogs and pins, automatic fallback warnings, and result-time pin snapshots with mismatch reporting.
 - Bandwidth accounting by result, node, engine, recorded ISP and UTC period, with monthly projections, optional shared budgets, threshold events and interval cost advice.
 - Optional two-factor sign-in with an authenticator app (TOTP) and ten one-time recovery codes, in Settings > Access; the operator command `disable-2fa` is the recovery path.

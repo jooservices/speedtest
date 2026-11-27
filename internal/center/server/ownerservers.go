@@ -52,7 +52,7 @@ func (h *ownerServers) serve(w http.ResponseWriter, r *http.Request) {
 	case "server-selection":
 		serveServerSelection(w, r, h.store, parts[2])
 	default:
-		writeNotFoundProblem(w, r)
+		writeRouteNotFound(w, r)
 	}
 }
 

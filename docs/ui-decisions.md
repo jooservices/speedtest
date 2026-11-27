@@ -3,6 +3,7 @@
 ## Decisions
 - **Statistics analytics (JOOST-81).** Extend the existing statistics pipeline and add a bounded events endpoint; keep the rolling 30-day, Monday-first 168-cell heatmap. Show p50/p95/p99 with the selected metric's unit, compare the selected metric over consecutive seven-day periods, and add weekday/hour congestion plus IP/ISP/alert marks. The exact ISP filter uses trimmed `engine_isp`, then the cached IP organisation; unknown attribution is explained in the filter help and excluded from specific ISP matches. Event marks and their list disclose the 500-item cap. Demo mode follows the same formulas and filters as the center.
 - **Plain HTML/CSS/JS, no build step, no framework.** The preview opens from a static server with `?demo=1`; without it, the store reads the same-origin command-center API. Charts are a small SVG kit in `ui/assets/js/charts.js` (line/area, bars, heatmap, sparkline, map) so the preview has no external requests.
+- **Language setting (JOOST-99).** Settings stores English (`en`) by default and lets the owner choose English or Vietnamese (`vi`). `ST.i18n` formats dates and numbers for the saved language; unit symbols and ASN identifiers stay unchanged. Full page-text translation is tracked by JOOST-100.
 - **Dark theme by default**, switchable to light; the choice is remembered. Chart colours come from a validated categorical palette; each node keeps its colour for its whole life.
 - **Nodes are independent.** No WAN or load-balancer concept in the data model. Expected speed is the only thing a node needs to be judged against, so "% of expected" is the fair way to compare nodes of different capacity (offered on the dashboard chart).
 - **Sample data** is deterministic and generated in the browser (`seed.js`): 5 nodes from the owner's real setup (Viettel Fast 50 at 300 Mbps, Viettel Pro 600 at 1000, VNPT Home 5 Super at 1000, VNPT Home 2 at 1000, and one combined node at 3300), 30 days at 30-minute intervals, outages, one degraded week, changing public IPs. Sample IPs use reserved documentation ranges only.
@@ -10,7 +11,7 @@
 - **Locations** come from a sample lookup keyed by IP, standing in for GeoLite2.
 - **Server selection** in live node settings is per engine. Ookla lists may show the distance supplied by Ookla; LibreSpeed lists are alphabetical and have no distance column. Demo mode keeps its local preview control.
 - **The map is illustrative.** The real build should use a map library with tiles.
-- Interface text is English (the product is generic); the owner reviews in Vietnamese.
+- Page text remains English until JOOST-100 is delivered; the owner reviews in Vietnamese.
 
 ## Production review improvements (JOOST-82)
 
@@ -35,8 +36,7 @@
 - Contract-shaped fake HTTP responses are validated against the exact OpenAPI operation schemas. Demo sample data, persistence and visual components remain available only with `?demo=1`.
 
 ## Open questions for review
-1. Vietnamese language option for the UI?
-2. Is a single shared login enough for v1, or are separate users and roles needed?
-3. Which notification channels matter first (email, Telegram, Slack, webhook)?
-4. Should a combined node's result be compared against the sum of the other nodes automatically (currently optional through "Add combined total" in Statistics)?
-5. Data retention default (currently one year).
+1. Is a single shared login enough for v1, or are separate users and roles needed?
+2. Which notification channels matter first (email, Telegram, Slack, webhook)?
+3. Should a combined node's result be compared against the sum of the other nodes automatically (currently optional through "Add combined total" in Statistics)?
+4. Data retention default (currently one year).

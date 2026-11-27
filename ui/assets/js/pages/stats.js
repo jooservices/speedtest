@@ -23,7 +23,7 @@
     if (!sparse.length) return null;
     var bucket = hourly ? 'hourly bucket' : 'daily bucket';
     return U.callout('Not enough data yet. A ' + ST.metrics[metric].label.toLowerCase() + ' trend needs at least three valid ' + (hourly ? 'hourly buckets. ' : 'daily buckets. ') +
-      sparse.map(function (x) { return x.name + ': ' + x.samples + (x.samples === 1 ? ' sample' : ' samples') + ' in ' + x.buckets + ' plotted ' + bucket + (x.buckets === 1 ? '' : 's'); }).join('; ') + '.', 'info', 'info');
+      sparse.map(function (x) { return x.name + ': ' + F.count(x.samples) + (x.samples === 1 ? ' sample' : ' samples') + ' in ' + F.count(x.buckets) + ' plotted ' + bucket + (x.buckets === 1 ? '' : 's'); }).join('; ') + '.', 'info', 'info');
   }
 
 
@@ -295,10 +295,10 @@
     var dist = h('div', { class: 'grid cols-3' });
     sel.forEach(function (n) {
       var d = data.dist[n.id] || { n: 0, bins: [] }, host = h('div');
-      dist.appendChild(h('div', { class: 'card card-pad' }, h('div', { class: 'row', style: 'margin-bottom:4px' }, U.dot(ST.nodeColor(n)), h('b', null, n.name), h('span', { class: 'muted' }, d.n + ' tests')), host));
+      dist.appendChild(h('div', { class: 'card card-pad' }, h('div', { class: 'row', style: 'margin-bottom:4px' }, U.dot(ST.nodeColor(n)), h('b', null, n.name), h('span', { class: 'muted' }, F.count(d.n) + ' tests')), host));
       if (d.n < 3 || !d.bins.length) { host.appendChild(U.empty('Not enough data', 'Needs a few more tests.')); return; }
       ST.charts.bars(host, { bars: d.bins.map(function (b, i) {
-        return { value: b.count, label: i % 3 === 0 ? (ST.metrics[m].unit === 'speed' ? F.speedParts(b.from).v : F.num(b.from, m === 'loss' ? 1 : 0)) : '', tipHead: fmtM(m, b.from) + ' – ' + fmtM(m, b.to), color: ST.nodeColor(n), tip: [{ label: 'Tests', value: String(b.count) + ' (' + F.num(b.percent, 0) + '%)', color: ST.nodeColor(n) }] };
+        return { value: b.count, label: i % 3 === 0 ? (ST.metrics[m].unit === 'speed' ? F.speedParts(b.from).v : F.num(b.from, m === 'loss' ? 1 : 0)) : '', tipHead: fmtM(m, b.from) + ' – ' + fmtM(m, b.to), color: ST.nodeColor(n), tip: [{ label: 'Tests', value: F.count(b.count) + ' (' + F.num(b.percent, 0) + '%)', color: ST.nodeColor(n) }] };
       }), height: 170, format: function (x) { return F.num(x, 0); }, label: 'Distribution for ' + n.name });
     });
     root.appendChild(h('div', { class: 'mt' }, U.card('Distribution', 'How many tests landed in each ' + ST.metrics[m].label.toLowerCase() + ' range. A narrow, tall shape means a steady connection.', dist)));

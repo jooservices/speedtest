@@ -13,8 +13,15 @@ const targets = ['ui/assets/js/api.js', 'ui/assets/js/store.js', 'ui/assets/js/s
 const functionMaps = new Map(targets.map(file => [file, new Map()]));
 try {
   const tests = readdirSync('tests/ui').filter(file => file.endsWith('.test.mjs')).map(file => 'tests/ui/' + file);
-  const run = spawnSync(process.execPath, ['--test', ...tests], { stdio: 'inherit', env: { ...process.env, NODE_V8_COVERAGE: directory, UI_TEST_PORT: '0' } });
-  if (run.status !== 0) process.exitCode = run.status || 1;
+  const browserTests = tests.filter(file => /from ['"]playwright['"]/.test(readFileSync(file, 'utf8')));
+  const nodeTests = tests.filter(file => !browserTests.includes(file));
+  const remotePort = process.env.PW_TEST_CONNECT_WS_ENDPOINT ? process.env.E2E_HTTP_PORT : '0';
+  for (const [files, port] of [[nodeTests, '0'], [browserTests, remotePort]]) {
+    if (!files.length) continue;
+    const testArgs = port === '0' ? ['--test', ...files] : ['--test', '--test-concurrency=1', ...files];
+    const run = spawnSync(process.execPath, testArgs, { stdio: 'inherit', env: { ...process.env, NODE_V8_COVERAGE: directory, UI_TEST_PORT: port } });
+    if (run.status !== 0) process.exitCode = run.status || 1;
+  }
   const map = istanbul.createCoverageMap({});
   for (const name of readdirSync(directory)) {
     const scripts = JSON.parse(readFileSync(directory + '/' + name)).result;

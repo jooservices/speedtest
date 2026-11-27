@@ -26,7 +26,7 @@ defaults without replacing owner rules; `00030_system_notification_events.sql`
 permits events without a node; `00031_notification_escalation.sql` records
 delivery escalation time; and `00032_notification_auth_activity.sql` stores
 bounded login-failure counts and new sign-in IPs without retaining credentials.
-Upgrading from develop migration 22 applies versions 23–32 in order. These
+Upgrading from develop migration 22 applies versions 23–36 in order. These
 changes are additive; the 1.0.0 binary continues to use its existing tables and
 columns.
 
@@ -79,8 +79,16 @@ and a resumable node-first geolocation refresh cursor. Its down migration
 preserves cached locations and address history. `00035_geo_provider_rolling_window.sql`
 adds the persisted next-request time used to enforce ip-api's 15-per-minute batch
 limit across minute boundaries; its down migration drops only that column.
-otherwise intact. Usage down preserves the 60-minute schedule default from
-00015 and restores overrides without changing rows that were not overridden.
+`00036_notification_delivery_filter_indexes.sql` adds ordered status, channel and
+status/channel indexes for the owner delivery-history filters, so each filtered
+count and newest-first page uses an index instead of scanning the table; its down
+migration drops only those indexes.
+`00037_digest_periods.sql` adds durable daily and weekly digest period claims,
+their time-zone snapshot, expiring lease, retry time and completion marker. Its
+`digest_schedule_state` table stores the per-kind initialization boundary and
+schedule watermark used to recover missed periods in bounded batches. The
+primary key on kind and local date keeps one completion when the owner time zone
+changes; its down migration drops both digest tables and the pending index.
 SQL files are embedded by
 `migrations.Files`; the migration binary needs no source directory at runtime.
 Goose records applied versions in `goose_db_version`. Add a new numbered file
@@ -157,6 +165,8 @@ that a subsequent up can reapply version 1.
 | `maintenance_jobs` | Status of owner-started maintenance work (bulk alert acknowledgement, later IP refresh) polled at `/api/jobs/{id}` |
 | `settings` | Public JSON or encrypted secret bytes, revision |
 | `monthly_report_runs` | Durable scheduled-report delivery attempts, retry time, and expiring claim lease |
+| `digest_periods` | Daily/weekly digest period key, time-zone snapshot, attempt/retry state, expiring claim lease and completion marker |
+| `digest_schedule_state` | Per-kind initialization boundary, current scheduling time zone and persisted watermark for bounded late-period recovery |
 | `api_idempotency` | Hashed request identity and encrypted one-time issuance responses, expiring after 24 hours |
 | `agent_commands` | Per-node command lifecycle and progress |
 | `node_engine_servers` | Per-node/per-engine discovered server JSON, pin and refresh timestamp |

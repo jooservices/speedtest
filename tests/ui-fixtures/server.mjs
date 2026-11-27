@@ -121,7 +121,8 @@ export async function startServer() {
         }
         let output, status = 200;
         if (url.pathname === '/api/settings') {
-          output = { ...data.settings, ...input, notify: data.settings.notify };
+          data.settings = { ...data.settings, ...input, notify: data.settings.notify };
+          output = { ...data.settings };
           delete output.geoKey;
         }
         else if (url.pathname === '/api/nodes') {
