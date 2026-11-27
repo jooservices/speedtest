@@ -563,7 +563,7 @@ func testPool(t *testing.T, trace pgx.QueryTracer, maxConns int32) *pgxpool.Pool
 	}
 	testenv.Apply(t, env)
 	cfg, err := config.LoadCenter()
-	if err != nil || db.CheckTestDatabase(cfg.Database.Name) != nil {
+	if err != nil || db.CheckDestructiveAllowed(cfg.AppEnv) != nil {
 		t.Fatal("configured non-live test database required")
 	}
 	poolCfg, err := pgxpool.ParseConfig(cfg.Database.DSN())
