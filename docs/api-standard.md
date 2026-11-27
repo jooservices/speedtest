@@ -104,4 +104,90 @@ runtime behaviour.
 - [api.md](api.md) holds the wire rules in full, the feature notes and the API versioning notes.
 - [openapi.yaml](openapi.yaml) is the operation contract. Its `x-canonical-path` and `deprecated` fields carry the
   versioning policy above.
-- Deviations from these rules are not catalogued here yet. Finding and fixing them is out of scope for JOOST-109.
+- Deviations from these rules are catalogued with a decision in [Deviations and decisions](#deviations-and-decisions).
+
+## Deviations and decisions
+
+`node scripts/api-audit.mjs` applies the rules above to [openapi.yaml](openapi.yaml) (the operations under `/api`;
+`/install.sh` is outside this policy). Run `node scripts/api-audit.mjs --list` to see the findings, and
+`node scripts/api-audit.mjs --check` to verify the table. The check exits 1 when a finding has no row, when a row names
+no current finding, or when an exception operation has no `x-rest-exception` that starts with the finding key.
+
+The rules the audit applies, and the finding key each one writes:
+
+| Rule | Key | Applies to |
+| --- | --- | --- |
+| Segments are lowercase letters, digits and hyphens | `path-charset <path>` | every path segment |
+| No empty segment and no trailing slash | `path-shape <path>` | every path |
+| A segment before an `{id}` and a collection `GET` name the plural | `plural <path>` | every path |
+| A collection `GET` accepts `page` and `size` | `list-page GET <path>` | a `GET` on a plural path |
+| A `GET` takes no request body | `get-body GET <path>` | every `GET` |
+| A `PATCH` accepts `application/merge-patch+json` | `patch-media PATCH <path>` | every `PATCH` |
+| A `PUT` or `PATCH` on an item sends `If-Match` (answers 428) | `if-match <METHOD> <path>` | every `PUT` and `PATCH` on a path with `{param}` |
+| An action (`ack`, `run`, `enroll`, `login`, `logout`, `stagger`, `heartbeat`, `resets`, `previews`, `test`) is a `POST`; before an `{id}` it is not a collection | `action-method <METHOD> <path>` | the last segment |
+| Each status code is in the standard's table | `status <METHOD> <path> <code>` | every response |
+| A `201` or `202` names the resource in `Location` | `location <METHOD> <path> <code>` | every `201` and `202` |
+| An error is `application/problem+json` | `problem <METHOD> <path> <code>` | every 4xx and 5xx |
+| Each `/api` operation is deprecated and names `/api/v1` plus the same suffix | `version <METHOD> <path>` | every `/api` operation |
+
+Each finding has one row below with a decision:
+
+- `fix`: part 2 changes the operation to follow the rule. The `/api` alias policy above is unchanged.
+- `alias`: part 2 adds the compliant form and keeps the current one as a deprecated alias, so clients do not break.
+- `exception`: the operation keeps its form. Each operation it covers carries `x-rest-exception` in
+  [openapi.yaml](openapi.yaml), a string or list of strings that starts with the finding key and a colon.
+
+| Finding | Decision | Reason |
+| --- | --- | --- |
+| `plural /api/auth/me` | exception | Singleton: the caller's own session identity. |
+| `plural /api/auth/2fa` | exception | Singleton: the caller's own two-factor status. |
+| `location POST /api/auth/2fa/setup 201` | exception | Creates a pending secret for the caller; no other resource is addressable. |
+| `status POST /api/auth/2fa/setup 503` | fix | The 503 response points at the ServerError component (a 500); part 2 gives it the right code. |
+| `location POST /api/agent/enroll 201` | fix | The enrolled node is addressable as `/api/v1/nodes/{id}`; name it in `Location`. |
+| `list-page GET /api/nodes/{id}/servers` | fix | The discovered server list grows with discovery; add `page` and `size`. |
+| `location POST /api/nodes/{id}/credential 201` | fix | The credential is addressable as `/api/v1/nodes/{id}/credential`; name it in `Location`. |
+| `status POST /api/agent/results 207` | exception | Batch ingest returns per-item outcomes; 207 is not in the standard's table. |
+| `plural /api/agent/config` | exception | Singleton: the caller's own effective configuration. |
+| `list-page GET /api/agent/commands` | exception | Returns at most 100 pending commands by design; the agent polls its own queue. |
+| `plural /api/agent/ip` | exception | Singleton: the caller's observed public IP. |
+| `path-charset /api/results/export.csv` | exception | Download; the extension names the file format for the client. |
+| `plural /api/results/export.csv` | exception | Download of a file, not a collection. |
+| `path-charset /api/export/results.csv` | exception | Full export download; the extension names the file format. |
+| `plural /api/export/results.csv` | exception | Download of a file, not a collection. |
+| `path-charset /api/export/results.json` | exception | Full export download; the extension names the file format. |
+| `plural /api/export/results.json` | exception | Download of a file, not a collection. |
+| `plural /api/reports/monthly` | exception | A report for one UTC month, not a collection. |
+| `list-page GET /api/isps` | fix | The ISP list grows as new ISPs are seen; add `page` and `size`. |
+| `plural /api/isps/compare` | exception | Computed comparison of selected ISPs in one period. |
+| `plural /api/isps/{id}/trend` | exception | Computed trend for one ISP. |
+| `list-page GET /api/isps/{id}/plans` | exception | Plans are entered by the owner per ISP; the list is not paged in v1. |
+| `location POST /api/isps/{id}/plans 201` | fix | The plan is addressable as `/api/v1/isps/{id}/plans/{planId}`; name it in `Location`. |
+| `if-match PUT /api/isps/{id}/plans/{planId}` | fix | Plans are edited without a version; add an ETag on read and `If-Match` with 412 and 428. |
+| `plural /api/stats/summary` | exception | Computed statistics view, not a collection. |
+| `plural /api/stats/trend` | exception | Computed statistics view, not a collection. |
+| `plural /api/stats/hour-of-day` | exception | Computed statistics view, not a collection. |
+| `plural /api/stats/heatmap` | exception | Computed statistics view, not a collection. |
+| `plural /api/stats/distribution` | exception | Computed statistics view, not a collection. |
+| `plural /api/usage` | exception | Computed traffic view by node, engine and period. |
+| `plural /api/usage/advice` | exception | Estimate computed from the previous 30 days of results. |
+| `list-page GET /api/usage/budgets` | exception | One budget per scope; the list is not paged in v1. |
+| `status GET /api/usage/budgets 503` | exception | The budget store is temporarily unavailable; no standard code covers that. |
+| `list-page GET /api/stats/events` | exception | Returns the newest 500 marks, a bounded list. |
+| `plural /api/dashboard` | exception | Single snapshot of the fleet, not a collection. |
+| `list-page GET /api/series` | exception | Bounded series of at most `maxPoints` per node. |
+| `list-page GET /api/schedules` | fix | Per-node schedules grow with the fleet; add `page` and `size`. |
+| `plural /api/audit` | alias | The owner change log is a collection; add `/api/v1/audit-entries` and keep `/api/audit` as an alias. |
+| `action-method PUT /api/alerts/events/{id}/ack` | alias | Clients send PUT today; add `POST /api/v1/alerts/events/{id}/ack` and keep the PUT. |
+| `list-page GET /api/notifications/events` | exception | The event catalog is bounded by the events the product defines. |
+| `patch-media PATCH /api/notifications/events/{key}` | fix | Accept `application/merge-patch+json`, as `PATCH /api/settings` does. |
+| `if-match PATCH /api/notifications/events/{key}` | fix | The event setting is editable; accept `If-Match` with 412 and 428. |
+| `if-match PUT /api/notifications/events/{key}/nodes/{id}` | fix | The per-node setting is editable; accept `If-Match` with 412 and 428. |
+| `if-match PUT /api/notifications/templates/{key}/{channel}` | fix | The template is editable; accept `If-Match` with 412 and 428. |
+| `list-page GET /api/settings` | exception | Singleton: the preferences object, not a collection. |
+| `location POST /api/settings/enrolment-key 201` | exception | Rotates the shared bootstrap key (singleton); no other resource is addressable. |
+| `plural /api/ip/history` | fix | `history` names an event log; rename to `/api/v1/ip/changes`. |
+| `plural /api/ip/lookup` | exception | Read of the location of one literal IP, not a collection. |
+| `list-page GET /api/ip/providers` | exception | The configured providers, a bounded set. |
+| `plural /api/ip/map` | exception | Computed map of the current location per node. |
+| `location POST /api/installer/probes 201` | fix | The probe is stored; name its resource in `Location`, or document why there is none. |
+| `list-page GET /api/installations/{id}/events` | exception | Server-sent event stream of one installation, not a paged list. |
