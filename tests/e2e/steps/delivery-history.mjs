@@ -21,7 +21,9 @@ export function deliveryHistorySteps(T) {
   const { page } = T;
   return {
     seed() {
-      T.db(`DELETE FROM notification_deliveries WHERE id::text LIKE '${prefix}%'; INSERT INTO notification_deliveries(id,event_id,channel,status,attempts,created_at,last_attempt,error,next_attempt_at) VALUES ${values()}`);
+      // The scenario needs a status and channel pair with no rows (the empty state), and earlier scenarios leave pending email, pending
+      // telegram and sent webhook deliveries behind, so every delivery that is not a fixture is removed before the fixtures are inserted.
+      T.db(`DELETE FROM notification_deliveries WHERE id::text NOT LIKE '${prefix}%'; DELETE FROM notification_deliveries WHERE id::text LIKE '${prefix}%'; INSERT INTO notification_deliveries(id,event_id,channel,status,attempts,created_at,last_attempt,error,next_attempt_at) VALUES ${values()}`);
     },
     cleanup() { T.db(`DELETE FROM notification_deliveries WHERE id::text LIKE '${prefix}%';`); },
     async open() {
