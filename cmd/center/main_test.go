@@ -14,8 +14,36 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jooservices/speedtest/internal/center/report"
 	"github.com/jooservices/speedtest/internal/shared/config"
 )
+
+func TestAC2DigestSchedulerIsNotBuiltWithoutNotificationSettings(t *testing.T) {
+	if got := newDigestScheduler(nil, nil, nil); got != nil {
+		t.Fatal("digest scheduler was built without notification settings")
+	}
+}
+
+func TestAC2DigestEventKeyMapsDailyAndWeeklyPeriods(t *testing.T) {
+	for _, test := range []struct {
+		kind report.PeriodKind
+		want string
+	}{
+		{kind: report.DailyPeriod, want: "digest.daily"},
+		{kind: report.WeeklyPeriod, want: "digest.weekly"},
+	} {
+		got, err := digestEventKey(test.kind)
+		if err != nil || got != test.want {
+			t.Errorf("digestEventKey(%q) = %q, %v; want %q", test.kind, got, err, test.want)
+		}
+	}
+}
+
+func TestAC2DigestEventKeyRejectsUnsupportedPeriod(t *testing.T) {
+	if _, err := digestEventKey("monthly"); err == nil {
+		t.Fatal("digestEventKey accepted an unsupported period")
+	}
+}
 
 func TestUIFilesystemEmbedded(t *testing.T) {
 	ui, source, err := uiFilesystem("")

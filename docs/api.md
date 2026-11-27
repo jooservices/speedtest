@@ -132,6 +132,24 @@ after the first heartbeat or rollback. Progress is replayable for 30 days and
 uses plain-language messages that omit credentials and remote command output.
 See the [SSH installer runbook](ssh-installer.md) for operations, repair and rollback.
 
+## API versioning (JOOST-108)
+
+- Every operation of [openapi.yaml](openapi.yaml) under `/api` is served under `/api/v1` with the same method, status
+  and body as its alias. The headers are the same too, except `Deprecation` and `Sunset`, which only the alias carries.
+  `/api/v1` is the stable surface; integrators and agents should use it.
+- The released `/api` paths keep working as deprecated aliases. Every response of an alias operation, success or error,
+  carries `Deprecation: @<unix>` (RFC 9745; 2026-11-17 00:00 UTC) and `Sunset` (an HTTP-date after which the alias stops
+  being served). Both values are the constants in `internal/center/server/api_versioning.go`.
+- An unmatched `/api` path answers the not-found problem with no alias headers. An unmatched `/api/v1` path is not
+  rewritten: it gets the response the router gives any unmatched path, with no alias headers.
+- A path is an operation only when the dispatcher serves it as the spec describes it. Most dispatchers match exact
+  paths, so a trailing slash gets no alias headers. The owner node, owner alert and owner server catalog routes accept a
+  trailing slash, so their slash forms (for example `/api/nodes/` and `/api/alerts/rules/`) carry the alias headers, but
+  only while their store is configured. Other owner routes whose dispatchers also trim slashes (schedules, usage, jobs,
+  results, installer, ISP) are not covered yet. An empty segment is never rewritten.
+- The `Sunset` date is a placeholder until it is chosen; changing it is a one-line edit of that constant.
+- The REST rules of the whole API, including this versioning and alias policy, are in [api-standard.md](api-standard.md).
+
 ## Shared wire rules
 
 - Success JSON: `success`, `code` (actual HTTP status), `message`, `data`, `meta`,
@@ -715,8 +733,9 @@ Retention, default engine, quiet hours, the stagger flag and the concurrency lim
 The test-channel POST and delivery list/detail GETs are implemented, with session
 protection and CSRF/Origin checks for POST. Tests return 202 with a delivery
 Location, or 422 for an unconfigured/disabled channel. Delivery lists accept
-page/size and optional event UUID, newest first. No delivery response exposes a
-destination, payload, URL or credential. Notification pages are limited to
+page/size and optional event UUID, status and channel filters, newest first;
+malformed query encoding and invalid filter values return 422. No delivery
+response exposes a destination, payload, URL or credential. Notification pages are limited to
 1,000,000. See [notification delivery](notifications.md) for transport Settings,
 retry/expiry behavior, the exactly-once transaction boundary and verification.
 

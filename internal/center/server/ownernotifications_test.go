@@ -13,13 +13,14 @@ import (
 )
 
 type notificationStub struct {
-	err        error
-	event      string
-	nodeEvent  string
-	nodeID     string
-	nodeOn     bool
-	page, size int
-	thresholds map[string]float64
+	err             error
+	filter          notify.DeliveryFilter
+	nodeEvent       string
+	nodeID          string
+	nodeOn          bool
+	page, size      int
+	deliveriesCalls int
+	thresholds      map[string]float64
 }
 
 func (f *notificationStub) Test(context.Context, string) (notify.Delivery, error) {
@@ -28,8 +29,9 @@ func (f *notificationStub) Test(context.Context, string) (notify.Delivery, error
 func (f *notificationStub) Delivery(context.Context, string) (notify.Delivery, error) {
 	return notify.Delivery{ID: nodeID, Channel: "webhook", Status: "sent"}, f.err
 }
-func (f *notificationStub) Deliveries(_ context.Context, event string, page, size int) ([]notify.Delivery, int, error) {
-	f.event, f.page, f.size = event, page, size
+func (f *notificationStub) Deliveries(_ context.Context, filter notify.DeliveryFilter, page, size int) ([]notify.Delivery, int, error) {
+	f.filter, f.page, f.size = filter, page, size
+	f.deliveriesCalls++
 	return []notify.Delivery{}, 51, f.err
 }
 func (f *notificationStub) ListNotificationEvents(context.Context) ([]notify.EventView, error) {
@@ -115,8 +117,68 @@ func assertNotificationTestDeliveryAccess(t *testing.T, h http.Handler) {
 
 func assertNotificationDeliveryPaging(t *testing.T, h http.Handler, f *notificationStub) {
 	t.Helper()
-	if rec := do(h, "GET", "/api/notifications/deliveries?event="+nodeID+"&page=2&size=10", "", ownerRead); rec.Code != 200 || f.event != nodeID || f.page != 2 || f.size != 10 || !strings.Contains(rec.Body.String(), `"last_page":6`) {
+	if rec := do(h, "GET", "/api/notifications/deliveries?event="+nodeID+"&status=sent&channel=email&page=2&size=10", "", ownerRead); rec.Code != 200 || f.filter.Event != nodeID || f.filter.Status != "sent" || f.filter.Channel != "email" || f.page != 2 || f.size != 10 || !strings.Contains(rec.Body.String(), `"last_page":6`) {
 		t.Fatal("paging")
+	}
+}
+
+func TestNotificationDeliveryFilterAC1(t *testing.T) {
+	f := &notificationStub{}
+	h := newNodeHandler(Options{OwnerNotifications: f})
+	rec := do(h, "GET", "/api/notifications/deliveries?event="+nodeID+"&status=failed&channel=webhook", "", ownerRead)
+	if rec.Code != 200 || f.filter != (notify.DeliveryFilter{Event: nodeID, Status: "failed", Channel: "webhook"}) {
+		t.Fatalf("combined filter = %d %+v", rec.Code, f.filter)
+	}
+	for _, query := range []string{"status=sent", "channel=telegram", "status=pending&channel=email"} {
+		if rec := do(h, "GET", "/api/notifications/deliveries?"+query, "", ownerRead); rec.Code != 200 {
+			t.Errorf("filter %s = %d", query, rec.Code)
+		}
+	}
+}
+
+func TestNotificationDeliveryFilterValidationAC2(t *testing.T) {
+	f := &notificationStub{}
+	h := newNodeHandler(Options{OwnerNotifications: f})
+	for _, query := range []string{
+		"status=nope",
+		"status=",
+		"status=sent&status=failed",
+		"channel=nope",
+		"channel=",
+		"channel=email&channel=telegram",
+		"event=",
+		"event=not-a-uuid",
+		"event=" + nodeID + "&event=" + nodeID,
+	} {
+		assertNotificationFilterRejectedAC2(t, h, f, query, 422)
+	}
+	for _, query := range []string{
+		"status=%ZZ",
+		"channel=%ZZ",
+		"event=%ZZ",
+		"status=sent&status=%ZZ",
+		"channel=email&channel=%ZZ",
+		"page=%ZZ",
+	} {
+		assertNotificationFilterRejectedAC2(t, h, f, query, 422)
+	}
+}
+
+func assertNotificationFilterRejectedAC2(t *testing.T, h http.Handler, f *notificationStub, query string, want int) {
+	t.Helper()
+	f.deliveriesCalls = 0
+	if rec := do(h, "GET", "/api/notifications/deliveries?"+query, "", ownerRead); rec.Code != want {
+		t.Errorf("%s = %d", query, rec.Code)
+	}
+	if f.deliveriesCalls != 0 {
+		t.Errorf("%s reached the store", query)
+	}
+	f.deliveriesCalls = 0
+	if rec := do(h, "GET", "/api/notifications/deliveries?"+query, "", nil); rec.Code != 401 {
+		t.Errorf("unauthenticated %s = %d", query, rec.Code)
+	}
+	if f.deliveriesCalls != 0 {
+		t.Errorf("unauthenticated %s reached the store", query)
 	}
 }
 

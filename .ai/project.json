@@ -225,7 +225,8 @@
       ],
       "parallel": "",
       "expectedSeconds": 900,
-      "requiresServices": []
+      "requiresServices": [],
+      "browser": {"portEnv": "E2E_HTTP_PORT"}
     },
     {
       "name": "ui-coverage",
@@ -242,7 +243,8 @@
       ],
       "parallel": "",
       "expectedSeconds": 1500,
-      "requiresServices": []
+      "requiresServices": [],
+      "browser": {"portEnv": "E2E_HTTP_PORT"}
     },
     {
       "name": "mutation",

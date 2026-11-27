@@ -228,6 +228,8 @@ pull request using the same pinned version.
   the API contract for the agent and UI.
 - [`docs/ui-decisions.md`](docs/ui-decisions.md) — the reasoning behind the UI
   choices and the open questions.
+- [`docs/period-summary.md`](docs/period-summary.md) — owner-local daily and
+  Monday-first weekly node summaries, UTC boundaries and aggregation rules.
 - [`docs/definition-of-done.md`](docs/definition-of-done.md) — what "done"
   means for a ticket in this project.
 

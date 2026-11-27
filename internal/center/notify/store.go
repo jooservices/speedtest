@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,20 @@ type Preferences interface {
 	NotificationConfig(context.Context, pgx.Tx, string) (settings.Settings, string, error)
 }
 
+// DeliveryFilter narrows the delivery list. Empty fields match every delivery.
+type DeliveryFilter struct {
+	Event   string
+	Status  string
+	Channel string
+}
+
+var deliveryStatuses = []string{"pending", "sent", "failed"}
+
+// ValidDeliveryStatus reports whether status is a supported delivery outcome.
+func ValidDeliveryStatus(status string) bool {
+	return slices.Contains(deliveryStatuses, status)
+}
+
 // Delivery is safe metadata. Payloads, destinations and credentials are absent.
 type Delivery struct {
 	ID          string     `json:"id"`
@@ -38,7 +53,16 @@ type Delivery struct {
 	Error       *string    `json:"error"`
 }
 
-const columns = `id::text,event_id::text,channel,status,attempts,created_at,last_attempt,error`
+const (
+	columns             = `id::text,event_id::text,channel,status,attempts,created_at,last_attempt,error`
+	deliveryFilterWhere = `($1='' OR event_id=NULLIF($1,'')::uuid) AND ($2='' OR status=$2) AND ($3='' OR channel=$3)`
+	deliveryCountSQL    = `SELECT count(*) FROM notification_deliveries WHERE ` + deliveryFilterWhere
+	deliveryPageSQL     = `SELECT ` + columns + ` FROM notification_deliveries WHERE ` + deliveryFilterWhere + ` ORDER BY created_at DESC,id DESC LIMIT $4 OFFSET $5`
+	// outboxPendingSQL and duePendingSQL are the claim predicates. The probes and the
+	// locking selects share them, so the two cannot drift apart.
+	outboxPendingSQL = `consumed_at IS NULL`
+	duePendingSQL    = `status='pending' AND next_attempt_at<=$1`
+)
 
 // Store owns durable delivery creation and dispatch. Now is injectable for retry tests.
 type Store struct {
@@ -123,16 +147,16 @@ func (s *Store) Delivery(ctx context.Context, id string) (Delivery, error) {
 	}
 	return d, err
 }
-func (s *Store) Deliveries(ctx context.Context, event string, page, size int) ([]Delivery, int, error) {
+func (s *Store) Deliveries(ctx context.Context, filter DeliveryFilter, page, size int) ([]Delivery, int, error) {
 	// Keep callers outside the HTTP layer from issuing an unbounded query.
 	if page < 1 || size < 1 || size > 100 || page > 1000000 {
 		return nil, 0, errors.New("invalid pagination")
 	}
 	var total int
-	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM notification_deliveries WHERE ($1='' OR event_id=NULLIF($1,'')::uuid)`, event).Scan(&total); err != nil {
+	if err := s.DB.QueryRow(ctx, deliveryCountSQL, filter.Event, filter.Status, filter.Channel).Scan(&total); err != nil {
 		return nil, 0, err
 	}
-	rows, err := s.DB.Query(ctx, `SELECT `+columns+` FROM notification_deliveries WHERE ($1='' OR event_id=NULLIF($1,'')::uuid) ORDER BY created_at DESC,id DESC LIMIT $2 OFFSET $3`, event, size, (page-1)*size)
+	rows, err := s.DB.Query(ctx, deliveryPageSQL, filter.Event, filter.Status, filter.Channel, size, (page-1)*size)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -148,8 +172,31 @@ func (s *Store) Deliveries(ctx context.Context, event string, page, size int) ([
 	return items, total, rows.Err()
 }
 
+// hasOutboxWork reports whether an unconsumed outbox event exists. It runs on the pool
+// without a transaction, so an idle queue costs one query and no rollback.
+func (s *Store) hasOutboxWork(ctx context.Context) (bool, error) {
+	var work bool
+	err := s.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM alert_notification_outbox WHERE `+outboxPendingSQL+`)`).Scan(&work)
+	return work, err
+}
+
+// hasDueDelivery reports whether a pending delivery is due at now, without a transaction.
+func (s *Store) hasDueDelivery(ctx context.Context, now time.Time) (bool, error) {
+	var work bool
+	err := s.DB.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM notification_deliveries WHERE `+duePendingSQL+`)`, now).Scan(&work)
+	return work, err
+}
+
 // Consume atomically creates all channel rows and marks one outbox event handled.
+// An idle queue returns before a transaction is opened.
 func (s *Store) Consume(ctx context.Context) (bool, error) {
+	work, err := s.hasOutboxWork(ctx)
+	if err != nil {
+		return false, err
+	}
+	if !work {
+		return false, nil
+	}
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return false, err
@@ -157,7 +204,7 @@ func (s *Store) Consume(ctx context.Context) (bool, error) {
 	defer func() { _ = tx.Rollback(context.Background()) }()
 	var event string
 	var channels []string
-	err = tx.QueryRow(ctx, `SELECT event_id::text,channels FROM alert_notification_outbox WHERE consumed_at IS NULL ORDER BY created_at,event_id FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&event, &channels)
+	err = tx.QueryRow(ctx, `SELECT event_id::text,channels FROM alert_notification_outbox WHERE `+outboxPendingSQL+` ORDER BY created_at,event_id FOR UPDATE SKIP LOCKED LIMIT 1`).Scan(&event, &channels)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
@@ -179,65 +226,96 @@ func (s *Store) Consume(ctx context.Context) (bool, error) {
 // Dispatch locks one due row while sending, preventing concurrent worker attempts.
 // External providers cannot participate in the transaction: a crash after acceptance
 // can cause redelivery. Logical event/channel creation is exactly once.
+// An idle queue returns before a transaction is opened.
 func (s *Store) Dispatch(ctx context.Context) (bool, error) {
+	now := s.now()
+	work, err := s.hasDueDelivery(ctx, now)
+	if err != nil {
+		return false, err
+	}
+	if !work {
+		return false, nil
+	}
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
 		return false, err
 	}
 	defer func() { _ = tx.Rollback(context.Background()) }()
-	now := s.now()
-	d, err := scanDelivery(tx.QueryRow(ctx, `SELECT `+columns+` FROM notification_deliveries WHERE status='pending' AND next_attempt_at<=$1 ORDER BY next_attempt_at,id FOR UPDATE SKIP LOCKED LIMIT 1`, now))
+	d, err := scanDelivery(tx.QueryRow(ctx, `SELECT `+columns+` FROM notification_deliveries WHERE `+duePendingSQL+` ORDER BY next_attempt_at,id FOR UPDATE SKIP LOCKED LIMIT 1`, now))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil
 	}
 	if err != nil {
 		return false, err
 	}
-	status := "failed"
-	var safeError *string
-	last := d.LastAttempt
-	next := now
-	attempts := d.Attempts
-	held := false
-	var attemptErr error
-	if now.Before(d.CreatedAt.Add(24*time.Hour)) && d.EventID != nil {
-		if held, err = heldByQuietHours(ctx, tx, *d.EventID, now); err != nil {
-			return false, err
-		}
-	}
-	switch {
-	case held:
-		// Quiet hours: the alert stays recorded and the delivery waits; look again in a minute.
-		status = "pending"
-		next = now.Add(time.Minute)
-	case !now.Before(d.CreatedAt.Add(24 * time.Hour)):
-		text := "delivery expired after 24 hours"
-		safeError = &text
-	default:
-		attemptErr = s.attempt(ctx, tx, d)
-		attempts++
-		last = &now
-		status = "sent"
-		if attemptErr != nil {
-			status = "pending"
-			text := "notification attempt failed"
-			safeError = &text
-			next = now.Add(Backoff(attempts))
-			deadline := d.CreatedAt.Add(24 * time.Hour)
-			if next.After(deadline) {
-				next = deadline
-			}
-		}
-	}
-	if _, err = tx.Exec(ctx, `UPDATE notification_deliveries SET status=$2,attempts=$3,last_attempt=$4,error=$5,next_attempt_at=$6 WHERE id=$1`, d.ID, status, attempts, last, safeError, next); err != nil {
+	if err := s.settle(ctx, tx, d, now); err != nil {
 		return false, err
 	}
-	if attemptErr != nil && attempts >= 3 && d.EventID != nil {
-		if err := s.escalateDeliveryFailure(ctx, tx, d.ID, *d.EventID, d.Channel, attempts, now); err != nil {
-			return false, err
+	return true, tx.Commit(ctx)
+}
+
+// settle decides what happens to one claimed delivery (hold, expire or attempt) and records
+// the outcome in tx. The caller commits.
+func (s *Store) settle(ctx context.Context, tx pgx.Tx, d Delivery, now time.Time) error {
+	o, err := s.decide(ctx, tx, d, now)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `UPDATE notification_deliveries SET status=$2,attempts=$3,last_attempt=$4,error=$5,next_attempt_at=$6 WHERE id=$1`, d.ID, o.status, o.attempts, o.last, o.safeError, o.next); err != nil {
+		return err
+	}
+	if o.attemptErr != nil && o.attempts >= 3 && d.EventID != nil {
+		return s.escalateDeliveryFailure(ctx, tx, d.ID, *d.EventID, d.Channel, o.attempts, now)
+	}
+	return nil
+}
+
+// settleOutcome is what settle records on a delivery row after deciding its fate.
+type settleOutcome struct {
+	status     string
+	safeError  *string
+	last       *time.Time
+	next       time.Time
+	attempts   int
+	attemptErr error
+}
+
+// decide picks the outcome for one claimed delivery: hold for quiet hours, expire after 24 hours,
+// or make an attempt.
+func (s *Store) decide(ctx context.Context, tx pgx.Tx, d Delivery, now time.Time) (settleOutcome, error) {
+	deadline := d.CreatedAt.Add(24 * time.Hour)
+	if !now.Before(deadline) {
+		text := "delivery expired after 24 hours"
+		return settleOutcome{status: "failed", safeError: &text, last: d.LastAttempt, next: now, attempts: d.Attempts}, nil
+	}
+	if d.EventID != nil {
+		held, err := heldByQuietHours(ctx, tx, *d.EventID, now)
+		if err != nil {
+			return settleOutcome{}, err
+		}
+		if held {
+			// Quiet hours: the alert stays recorded and the delivery waits; look again in a minute.
+			return settleOutcome{status: "pending", last: d.LastAttempt, next: now.Add(time.Minute), attempts: d.Attempts}, nil
 		}
 	}
-	return true, tx.Commit(ctx)
+	return s.attemptOutcome(ctx, tx, d, now, deadline), nil
+}
+
+// attemptOutcome sends the delivery and reports the row state that follows: sent, or pending
+// again with a backoff that never passes the 24 hour deadline.
+func (s *Store) attemptOutcome(ctx context.Context, tx pgx.Tx, d Delivery, now, deadline time.Time) settleOutcome {
+	err := s.attempt(ctx, tx, d)
+	o := settleOutcome{status: "sent", last: &now, next: now, attempts: d.Attempts + 1, attemptErr: err}
+	if err != nil {
+		text := "notification attempt failed"
+		o.status = "pending"
+		o.safeError = &text
+		o.next = now.Add(Backoff(o.attempts))
+		if o.next.After(deadline) {
+			o.next = deadline
+		}
+	}
+	return o
 }
 
 // heldByQuietHours reports whether an alert notification must wait because the owner's notification quiet hours

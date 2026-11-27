@@ -94,7 +94,7 @@ func (h *ownerNodes) serve(w http.ResponseWriter, r *http.Request) {
 	case len(parts) == 5:
 		h.commandProgress(w, r, parts[2], parts[4])
 	default:
-		writeNotFoundProblem(w, r)
+		writeRouteNotFound(w, r)
 	}
 }
 

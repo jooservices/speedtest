@@ -219,6 +219,8 @@ export function nodesSuite(T, ctx) {
     if (!(await enabled.isChecked())) await enabled.click();
     await T.press('Save engine schedules');
     await T.toast('Engine schedules saved').waitFor();
+    await T.settled();
+    await libreRows.nth(1).waitFor();
     assert.equal(T.db("select s.enabled from engine_schedules s join nodes n on n.id=s.node_id where n.name='E2E-1' and s.engine='librespeed'"), 't');
     return libre;
   }
@@ -247,7 +249,7 @@ export function nodesSuite(T, ctx) {
       await page.evaluate(value => document.documentElement.setAttribute('data-theme', value), theme);
       for (const width of [390, 768, 1440]) {
         await page.setViewportSize({ width, height: 900 });
-        await libre.scrollIntoViewIfNeeded();
+        await libre.waitFor({ state: 'visible' });
         await page.evaluate(() => window.scrollTo(0, 0));
         await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
         const overflow = await page.evaluate(() => {

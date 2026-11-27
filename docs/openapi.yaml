@@ -6,7 +6,8 @@ info:
     for authentication, limits, formulas, UI mapping and compatibility. All JSON successes share
     Success; errors use RFC 9457 Problem. Timestamps use Timestamp; units use Mbps, Milliseconds and
     Percent. All responses are private, Cache-Control: no-store except conditional agent config
-    (private, no-cache). Paths deliberately retain backlog /api prefix; breaking changes require a
+    (private, no-cache). The canonical paths are /api/v1 plus the same suffix; each /api operation is
+    deprecated and names its canonical form in x-canonical-path. Breaking changes require a
     new major prefix /api/v2 and coordinated migration."
   license:
     name: License not specified
@@ -52,7 +53,10 @@ security:
 paths:
   /api/auth/me:
     get:
+      x-rest-exception: "plural /api/auth/me: Singleton: the caller's own session identity."
       operationId: getSession
+      deprecated: true
+      x-canonical-path: "/api/v1/auth/me"
       tags:
         - Auth
       summary: Read identity and bootstrap CSRF token
@@ -83,6 +87,8 @@ paths:
   /api/auth/login:
     post:
       operationId: login
+      deprecated: true
+      x-canonical-path: "/api/v1/auth/login"
       tags:
         - Auth
       summary: Create authenticated session
@@ -132,6 +138,8 @@ paths:
   /api/auth/logout:
     post:
       operationId: logout
+      deprecated: true
+      x-canonical-path: "/api/v1/auth/logout"
       tags:
         - Auth
       summary: Invalidate current session
@@ -160,6 +168,8 @@ paths:
   /api/auth/password:
     post:
       operationId: changePassword
+      deprecated: true
+      x-canonical-path: "/api/v1/auth/password"
       tags:
         - Auth
       summary: Change password and invalidate other sessions
@@ -199,7 +209,10 @@ paths:
               $ref: "#/components/schemas/PasswordChange"
   /api/auth/2fa:
     get:
+      x-rest-exception: "plural /api/auth/2fa: Singleton: the caller's own two-factor status."
       operationId: getTwoFactorStatus
+      deprecated: true
+      x-canonical-path: "/api/v1/auth/2fa"
       tags:
         - Auth
       summary: Two-factor sign-in status
@@ -222,7 +235,10 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/auth/2fa/setup:
     post:
+      x-rest-exception: "location POST /api/auth/2fa/setup 201: Creates a pending secret for the caller; no other resource is addressable."
       operationId: startTwoFactorSetup
+      deprecated: true
+      x-canonical-path: "/api/v1/auth/2fa/setup"
       tags:
         - Auth
       summary: Start two-factor setup
@@ -270,6 +286,8 @@ paths:
   /api/auth/2fa/enable:
     post:
       operationId: enableTwoFactor
+      deprecated: true
+      x-canonical-path: "/api/v1/auth/2fa/enable"
       tags:
         - Auth
       summary: Turn two-factor sign-in on
@@ -315,6 +333,8 @@ paths:
   /api/auth/2fa/disable:
     post:
       operationId: disableTwoFactor
+      deprecated: true
+      x-canonical-path: "/api/v1/auth/2fa/disable"
       tags:
         - Auth
       summary: Turn two-factor sign-in off
@@ -355,6 +375,8 @@ paths:
   /api/access-tokens:
     get:
       operationId: listAccessTokens
+      deprecated: true
+      x-canonical-path: "/api/v1/access-tokens"
       tags:
         - Access tokens
       summary: List access tokens
@@ -396,6 +418,8 @@ paths:
           $ref: "#/components/responses/ServerError"
     post:
       operationId: createAccessToken
+      deprecated: true
+      x-canonical-path: "/api/v1/access-tokens"
       tags:
         - Access tokens
       summary: Create an access token
@@ -438,6 +462,8 @@ paths:
   /api/access-tokens/{id}:
     delete:
       operationId: revokeAccessToken
+      deprecated: true
+      x-canonical-path: "/api/v1/access-tokens/{id}"
       tags:
         - Access tokens
       summary: Revoke an access token
@@ -469,6 +495,8 @@ paths:
   /api/nodes:
     get:
       operationId: listNodes
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes"
       x-access-token-scope: read
       x-mcp-tool: list_nodes
       tags:
@@ -503,6 +531,8 @@ paths:
         - $ref: "#/components/parameters/Size"
     post:
       operationId: createNode
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes"
       x-access-token-scope: read-write
       tags:
         - Nodes
@@ -548,6 +578,8 @@ paths:
   /api/agent/tokens:
     post:
       operationId: createEnrollmentToken
+      deprecated: true
+      x-canonical-path: "/api/v1/agent/tokens"
       tags:
         - Agent
       summary: Create node/token using Settings enrollment key
@@ -590,6 +622,8 @@ paths:
   /api/agent/enroll:
     post:
       operationId: enroll
+      deprecated: true
+      x-canonical-path: "/api/v1/agent/enroll"
       tags:
         - Agent
       summary: Exchange single-use token for node credential
@@ -628,6 +662,8 @@ paths:
   /api/nodes/{id}:
     get:
       operationId: getNode
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes/{id}"
       x-access-token-scope: read
       x-mcp-tool: get_node
       tags:
@@ -670,6 +706,8 @@ paths:
             $ref: "#/components/schemas/ID"
     patch:
       operationId: updateNode
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes/{id}"
       x-access-token-scope: read-write
       tags:
         - Nodes
@@ -726,6 +764,8 @@ paths:
               $ref: "#/components/schemas/NodePatch"
     delete:
       operationId: deleteNode
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes/{id}"
       x-access-token-scope: full
       tags:
         - Nodes
@@ -777,6 +817,8 @@ paths:
   /api/nodes/{id}/run:
     post:
       operationId: runNode
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes/{id}/run"
       x-access-token-scope: read-write
       x-mcp-tool: run_test
       tags:
@@ -825,6 +867,8 @@ paths:
   /api/nodes/{id}/servers:
     get:
       operationId: getNodeServerCatalog
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes/{id}/servers"
       x-access-token-scope: read
       tags:
         - Nodes
@@ -869,6 +913,8 @@ paths:
           $ref: "#/components/responses/ServerError"
     post:
       operationId: refreshNodeServerCatalog
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes/{id}/servers"
       x-access-token-scope: read-write
       tags:
         - Nodes
@@ -917,6 +963,8 @@ paths:
   /api/nodes/{id}/server-selection:
     put:
       operationId: setNodeServerSelection
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes/{id}/server-selection"
       x-access-token-scope: read-write
       tags:
         - Nodes
@@ -971,6 +1019,8 @@ paths:
   /api/nodes/{id}/commands:
     post:
       operationId: createCommand
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes/{id}/commands"
       x-access-token-scope: read-write
       tags:
         - Nodes
@@ -1024,6 +1074,8 @@ paths:
   /api/nodes/{id}/commands/{commandId}:
     get:
       operationId: getCommand
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes/{id}/commands/{commandId}"
       x-access-token-scope: read
       tags:
         - Nodes
@@ -1069,6 +1121,8 @@ paths:
   /api/nodes/{id}/credential:
     post:
       operationId: rotateCredential
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes/{id}/credential"
       x-access-token-scope: full
       tags:
         - Nodes
@@ -1112,6 +1166,8 @@ paths:
         - $ref: "#/components/parameters/Idempotency"
     delete:
       operationId: revokeCredential
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes/{id}/credential"
       x-access-token-scope: full
       tags:
         - Nodes
@@ -1150,7 +1206,10 @@ paths:
         - $ref: "#/components/parameters/CSRF"
   /api/agent/results:
     post:
+      x-rest-exception: "status POST /api/agent/results 207: Batch ingest returns per-item outcomes; 207 is not in the standard's table."
       operationId: ingestResults
+      deprecated: true
+      x-canonical-path: "/api/v1/agent/results"
       tags:
         - Agent
       summary: Ingest independently validated result batch
@@ -1200,7 +1259,10 @@ paths:
               $ref: "#/components/schemas/ResultBatch"
   /api/agent/config:
     get:
+      x-rest-exception: "plural /api/agent/config: Singleton: the caller's own effective configuration."
       operationId: getAgentConfig
+      deprecated: true
+      x-canonical-path: "/api/v1/agent/config"
       tags:
         - Agent
       summary: Read own effective configuration
@@ -1245,6 +1307,8 @@ paths:
   /api/agent/heartbeat:
     post:
       operationId: heartbeat
+      deprecated: true
+      x-canonical-path: "/api/v1/agent/heartbeat"
       tags:
         - Agent
       summary: Record node liveness
@@ -1280,7 +1344,10 @@ paths:
               $ref: "#/components/schemas/Heartbeat"
   /api/agent/commands:
     get:
+      x-rest-exception: "list-page GET /api/agent/commands: Returns at most 100 pending commands by design; the agent polls its own queue."
       operationId: pollCommands
+      deprecated: true
+      x-canonical-path: "/api/v1/agent/commands"
       tags:
         - Agent
       summary: Poll own unacknowledged commands
@@ -1310,6 +1377,8 @@ paths:
   /api/agent/commands/{id}/ack:
     post:
       operationId: ackCommand
+      deprecated: true
+      x-canonical-path: "/api/v1/agent/commands/{id}/ack"
       tags:
         - Agent
       summary: Acknowledge own command
@@ -1354,7 +1423,10 @@ paths:
               $ref: "#/components/schemas/CommandAck"
   /api/agent/ip:
     get:
+      x-rest-exception: "plural /api/agent/ip: Singleton: the caller's observed public IP."
       operationId: getAgentIP
+      deprecated: true
+      x-canonical-path: "/api/v1/agent/ip"
       tags:
         - Agent
       summary: Read caller public IP as observed by center
@@ -1385,6 +1457,8 @@ paths:
   /api/results:
     get:
       operationId: listResults
+      deprecated: true
+      x-canonical-path: "/api/v1/results"
       x-access-token-scope: read
       x-mcp-tool: list_results
       tags:
@@ -1431,6 +1505,8 @@ paths:
   /api/results/{id}:
     get:
       operationId: getResult
+      deprecated: true
+      x-canonical-path: "/api/v1/results/{id}"
       x-access-token-scope: read
       tags:
         - Results
@@ -1469,7 +1545,12 @@ paths:
             $ref: "#/components/schemas/ID"
   /api/results/export.csv:
     get:
+      x-rest-exception:
+        - "path-charset /api/results/export.csv: Download; the extension names the file format for the client."
+        - "plural /api/results/export.csv: Download of a file, not a collection."
       operationId: exportFilteredCSV
+      deprecated: true
+      x-canonical-path: "/api/v1/results/export.csv"
       x-access-token-scope: read
       tags:
         - Results
@@ -1518,7 +1599,12 @@ paths:
         - $ref: "#/components/parameters/Dir"
   /api/export/results.csv:
     get:
+      x-rest-exception:
+        - "path-charset /api/export/results.csv: Full export download; the extension names the file format."
+        - "plural /api/export/results.csv: Download of a file, not a collection."
       operationId: exportAllCSV
+      deprecated: true
+      x-canonical-path: "/api/v1/export/results.csv"
       x-access-token-scope: read
       tags:
         - Results
@@ -1553,7 +1639,12 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/export/results.json:
     get:
+      x-rest-exception:
+        - "path-charset /api/export/results.json: Full export download; the extension names the file format."
+        - "plural /api/export/results.json: Download of a file, not a collection."
       operationId: exportAllJSON
+      deprecated: true
+      x-canonical-path: "/api/v1/export/results.json"
       x-access-token-scope: read
       tags:
         - Results
@@ -1591,7 +1682,10 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/reports/monthly:
     get:
+      x-rest-exception: "plural /api/reports/monthly: A report for one UTC month, not a collection."
       operationId: getMonthlyReport
+      deprecated: true
+      x-canonical-path: "/api/v1/reports/monthly"
       x-access-token-scope: read
       tags:
         - Reports
@@ -1653,6 +1747,8 @@ paths:
   /api/isps:
     get:
       operationId: listISPs
+      deprecated: true
+      x-canonical-path: "/api/v1/isps"
       x-access-token-scope: read
       tags:
         - ISPs
@@ -1685,7 +1781,10 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/isps/compare:
     get:
+      x-rest-exception: "plural /api/isps/compare: Computed comparison of selected ISPs in one period."
       operationId: compareISPs
+      deprecated: true
+      x-canonical-path: "/api/v1/isps/compare"
       x-access-token-scope: read
       tags:
         - ISPs
@@ -1724,6 +1823,8 @@ paths:
   /api/isps/{id}:
     get:
       operationId: getISP
+      deprecated: true
+      x-canonical-path: "/api/v1/isps/{id}"
       x-access-token-scope: read
       tags:
         - ISPs
@@ -1762,7 +1863,10 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/isps/{id}/trend:
     get:
+      x-rest-exception: "plural /api/isps/{id}/trend: Computed trend for one ISP."
       operationId: getISPTrend
+      deprecated: true
+      x-canonical-path: "/api/v1/isps/{id}/trend"
       x-access-token-scope: read
       tags:
         - ISPs
@@ -1802,7 +1906,10 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/isps/{id}/plans:
     get:
+      x-rest-exception: "list-page GET /api/isps/{id}/plans: Plans are entered by the owner per ISP; the list is not paged in v1."
       operationId: listISPPlans
+      deprecated: true
+      x-canonical-path: "/api/v1/isps/{id}/plans"
       x-access-token-scope: read
       tags:
         - ISPs
@@ -1833,6 +1940,8 @@ paths:
           $ref: "#/components/responses/ServerError"
     post:
       operationId: createISPPlan
+      deprecated: true
+      x-canonical-path: "/api/v1/isps/{id}/plans"
       x-access-token-scope: read-write
       tags:
         - ISPs
@@ -1876,6 +1985,8 @@ paths:
   /api/isps/{id}/plans/{planId}:
     put:
       operationId: updateISPPlan
+      deprecated: true
+      x-canonical-path: "/api/v1/isps/{id}/plans/{planId}"
       x-access-token-scope: read-write
       tags:
         - ISPs
@@ -1923,6 +2034,8 @@ paths:
           $ref: "#/components/responses/ServerError"
     delete:
       operationId: deleteISPPlan
+      deprecated: true
+      x-canonical-path: "/api/v1/isps/{id}/plans/{planId}"
       x-access-token-scope: full
       tags:
         - ISPs
@@ -1958,7 +2071,10 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/stats/summary:
     get:
+      x-rest-exception: "plural /api/stats/summary: Computed statistics view, not a collection."
       operationId: getSummary
+      deprecated: true
+      x-canonical-path: "/api/v1/stats/summary"
       x-access-token-scope: read
       x-mcp-tool: get_statistics
       tags:
@@ -2000,7 +2116,10 @@ paths:
         - $ref: "#/components/parameters/To"
   /api/stats/trend:
     get:
+      x-rest-exception: "plural /api/stats/trend: Computed statistics view, not a collection."
       operationId: getTrend
+      deprecated: true
+      x-canonical-path: "/api/v1/stats/trend"
       x-access-token-scope: read
       tags:
         - Statistics
@@ -2062,7 +2181,10 @@ paths:
             default: false
   /api/stats/hour-of-day:
     get:
+      x-rest-exception: "plural /api/stats/hour-of-day: Computed statistics view, not a collection."
       operationId: getHourOfDay
+      deprecated: true
+      x-canonical-path: "/api/v1/stats/hour-of-day"
       x-access-token-scope: read
       tags:
         - Statistics
@@ -2105,7 +2227,10 @@ paths:
         - $ref: "#/components/parameters/Timezone"
   /api/stats/heatmap:
     get:
+      x-rest-exception: "plural /api/stats/heatmap: Computed statistics view, not a collection."
       operationId: getHeatmap
+      deprecated: true
+      x-canonical-path: "/api/v1/stats/heatmap"
       x-access-token-scope: read
       tags:
         - Statistics
@@ -2149,7 +2274,10 @@ paths:
         - $ref: "#/components/parameters/Timezone"
   /api/stats/distribution:
     get:
+      x-rest-exception: "plural /api/stats/distribution: Computed statistics view, not a collection."
       operationId: getDistribution
+      deprecated: true
+      x-canonical-path: "/api/v1/stats/distribution"
       x-access-token-scope: read
       tags:
         - Statistics
@@ -2201,7 +2329,10 @@ paths:
             default: 15
   /api/usage:
     get:
+      x-rest-exception: "plural /api/usage: Computed traffic view by node, engine and period."
       operationId: getUsage
+      deprecated: true
+      x-canonical-path: "/api/v1/usage"
       x-access-token-scope: read
       x-mcp-tool: get_usage
       tags:
@@ -2262,7 +2393,10 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/usage/advice:
     get:
+      x-rest-exception: "plural /api/usage/advice: Estimate computed from the previous 30 days of results."
       operationId: getUsageAdvice
+      deprecated: true
+      x-canonical-path: "/api/v1/usage/advice"
       x-access-token-scope: read
       tags:
         - Bandwidth
@@ -2320,7 +2454,12 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/usage/budgets:
     get:
+      x-rest-exception:
+        - "list-page GET /api/usage/budgets: One budget per scope; the list is not paged in v1."
+        - "status GET /api/usage/budgets 503: The budget store is temporarily unavailable; no standard code covers that."
       operationId: getUsageBudgets
+      deprecated: true
+      x-canonical-path: "/api/v1/usage/budgets"
       x-access-token-scope: read
       tags:
         - Bandwidth
@@ -2355,6 +2494,8 @@ paths:
   /api/usage/budgets/{scope}:
     put:
       operationId: replaceUsageBudget
+      deprecated: true
+      x-canonical-path: "/api/v1/usage/budgets/{scope}"
       x-access-token-scope: read-write
       tags:
         - Bandwidth
@@ -2407,6 +2548,8 @@ paths:
           $ref: "#/components/responses/ServerError"
     delete:
       operationId: deleteUsageBudget
+      deprecated: true
+      x-canonical-path: "/api/v1/usage/budgets/{scope}"
       x-access-token-scope: read-write
       tags:
         - Bandwidth
@@ -2444,7 +2587,10 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/stats/events:
     get:
+      x-rest-exception: "list-page GET /api/stats/events: Returns the newest 500 marks, a bounded list."
       operationId: getStatisticsEvents
+      deprecated: true
+      x-canonical-path: "/api/v1/stats/events"
       x-access-token-scope: read
       tags:
         - Statistics
@@ -2486,7 +2632,10 @@ paths:
         - $ref: "#/components/parameters/To"
   /api/dashboard:
     get:
+      x-rest-exception: "plural /api/dashboard: Single snapshot of the fleet, not a collection."
       operationId: getDashboard
+      deprecated: true
+      x-canonical-path: "/api/v1/dashboard"
       x-access-token-scope: read
       x-mcp-tool: get_dashboard
       tags:
@@ -2522,7 +2671,10 @@ paths:
         - $ref: "#/components/parameters/Range"
   /api/series:
     get:
+      x-rest-exception: "list-page GET /api/series: Bounded series of at most `maxPoints` per node."
       operationId: getSeries
+      deprecated: true
+      x-canonical-path: "/api/v1/series"
       x-access-token-scope: read
       tags:
         - Dashboard
@@ -2582,6 +2734,8 @@ paths:
   /api/schedules:
     get:
       operationId: getSchedules
+      deprecated: true
+      x-canonical-path: "/api/v1/schedules"
       x-access-token-scope: read
       tags:
         - Schedules
@@ -2615,6 +2769,8 @@ paths:
   /api/schedules/{node}:
     get:
       operationId: getSchedule
+      deprecated: true
+      x-canonical-path: "/api/v1/schedules/{node}"
       x-access-token-scope: read
       x-mcp-tool: get_schedule
       tags:
@@ -2657,6 +2813,8 @@ paths:
             $ref: "#/components/schemas/ID"
     put:
       operationId: replaceSchedule
+      deprecated: true
+      x-canonical-path: "/api/v1/schedules/{node}"
       x-access-token-scope: read-write
       x-mcp-tool: update_schedule
       tags:
@@ -2716,6 +2874,8 @@ paths:
   /api/schedules/rules:
     put:
       operationId: replaceScheduleRules
+      deprecated: true
+      x-canonical-path: "/api/v1/schedules/rules"
       x-access-token-scope: read-write
       tags:
         - Schedules
@@ -2766,6 +2926,8 @@ paths:
   /api/schedules/stagger:
     post:
       operationId: staggerSchedules
+      deprecated: true
+      x-canonical-path: "/api/v1/schedules/stagger"
       x-access-token-scope: read-write
       tags:
         - Schedules
@@ -2806,6 +2968,8 @@ paths:
   /api/alerts/rules:
     get:
       operationId: listRules
+      deprecated: true
+      x-canonical-path: "/api/v1/alerts/rules"
       x-access-token-scope: read
       tags:
         - Alerts
@@ -2838,6 +3002,8 @@ paths:
         - $ref: "#/components/parameters/Size"
     post:
       operationId: createRule
+      deprecated: true
+      x-canonical-path: "/api/v1/alerts/rules"
       x-access-token-scope: read-write
       tags:
         - Alerts
@@ -2883,6 +3049,8 @@ paths:
   /api/alerts/rules/{id}:
     get:
       operationId: getRule
+      deprecated: true
+      x-canonical-path: "/api/v1/alerts/rules/{id}"
       x-access-token-scope: read
       tags:
         - Alerts
@@ -2924,6 +3092,8 @@ paths:
             $ref: "#/components/schemas/ID"
     put:
       operationId: replaceRule
+      deprecated: true
+      x-canonical-path: "/api/v1/alerts/rules/{id}"
       x-access-token-scope: read-write
       tags:
         - Alerts
@@ -2979,6 +3149,8 @@ paths:
               $ref: "#/components/schemas/AlertRuleInput"
     delete:
       operationId: deleteRule
+      deprecated: true
+      x-canonical-path: "/api/v1/alerts/rules/{id}"
       x-access-token-scope: full
       tags:
         - Alerts
@@ -3022,6 +3194,8 @@ paths:
   /api/audit:
     get:
       operationId: listAudit
+      deprecated: true
+      x-canonical-path: "/api/v1/audit"
       x-access-token-scope: read
       tags:
         - Settings
@@ -3063,6 +3237,8 @@ paths:
   /api/alerts/events:
     get:
       operationId: listEvents
+      deprecated: true
+      x-canonical-path: "/api/v1/alerts/events"
       x-access-token-scope: read
       x-mcp-tool: list_alerts
       tags:
@@ -3117,6 +3293,8 @@ paths:
   /api/alerts/events/{id}:
     get:
       operationId: getEvent
+      deprecated: true
+      x-canonical-path: "/api/v1/alerts/events/{id}"
       x-access-token-scope: read
       x-mcp-tool: get_alert
       tags:
@@ -3160,6 +3338,8 @@ paths:
   /api/alerts/events/{id}/ack:
     put:
       operationId: ackEvent
+      deprecated: true
+      x-canonical-path: "/api/v1/alerts/events/{id}/ack"
       x-access-token-scope: read-write
       x-mcp-tool: acknowledge_alert
       tags:
@@ -3217,6 +3397,8 @@ paths:
   /api/alerts/acknowledgements:
     post:
       operationId: ackAllEvents
+      deprecated: true
+      x-canonical-path: "/api/v1/alerts/acknowledgements"
       x-access-token-scope: full
       tags:
         - Alerts
@@ -3255,6 +3437,8 @@ paths:
   /api/notifications/test/{channel}:
     post:
       operationId: testNotification
+      deprecated: true
+      x-canonical-path: "/api/v1/notifications/test/{channel}"
       x-access-token-scope: full
       tags:
         - Notifications
@@ -3303,12 +3487,16 @@ paths:
   /api/notifications/deliveries:
     get:
       operationId: listDeliveries
+      deprecated: true
+      x-canonical-path: "/api/v1/notifications/deliveries"
       x-access-token-scope: read
       tags:
         - Notifications
       summary: Read notification delivery log
-      description: Newest createdAt,id first. Secret-free attempt/error metadata; retries preserve one
-        logical delivery per event/channel. Notification page is limited to 1000000.
+      description: Newest createdAt,id first. Optional event, status and channel filters combine.
+        Malformed query encoding is rejected with 422 before the list is read.
+        Secret-free attempt/error metadata; retries preserve one logical delivery per event/channel.
+        Notification page is limited to 1000000.
       security:
         - SessionCookie: []
         - OwnerBearer: []
@@ -3340,9 +3528,23 @@ paths:
           description: Optional alert event filter.
           schema:
             $ref: "#/components/schemas/ID"
+        - name: status
+          in: query
+          required: false
+          description: Optional delivery outcome filter.
+          schema:
+            $ref: "#/components/schemas/DeliveryStatus"
+        - name: channel
+          in: query
+          required: false
+          description: Optional delivery channel filter.
+          schema:
+            $ref: "#/components/schemas/Channel"
   /api/notifications/deliveries/{id}:
     get:
       operationId: getDelivery
+      deprecated: true
+      x-canonical-path: "/api/v1/notifications/deliveries/{id}"
       x-access-token-scope: read
       tags:
         - Notifications
@@ -3381,7 +3583,10 @@ paths:
             $ref: "#/components/schemas/ID"
   /api/notifications/events:
     get:
+      x-rest-exception: "list-page GET /api/notifications/events: The event catalog is bounded by the events the product defines."
       operationId: listNotificationEvents
+      deprecated: true
+      x-canonical-path: "/api/v1/notifications/events"
       x-access-token-scope: read
       tags:
         - Notifications
@@ -3406,6 +3611,8 @@ paths:
   /api/notifications/events/{key}:
     get:
       operationId: getNotificationEvent
+      deprecated: true
+      x-canonical-path: "/api/v1/notifications/events/{key}"
       x-access-token-scope: read
       tags:
         - Notifications
@@ -3437,6 +3644,8 @@ paths:
             type: string
     patch:
       operationId: updateNotificationEvent
+      deprecated: true
+      x-canonical-path: "/api/v1/notifications/events/{key}"
       x-access-token-scope: read-write
       tags:
         - Notifications
@@ -3480,6 +3689,8 @@ paths:
   /api/notifications/events/{key}/tests/{channel}:
     post:
       operationId: testNotificationEventTemplate
+      deprecated: true
+      x-canonical-path: "/api/v1/notifications/events/{key}/tests/{channel}"
       x-access-token-scope: read-write
       tags:
         - Notifications
@@ -3525,6 +3736,8 @@ paths:
   /api/notifications/events/{key}/nodes/{id}:
     get:
       operationId: getNotificationNodeEventSetting
+      deprecated: true
+      x-canonical-path: "/api/v1/notifications/events/{key}/nodes/{id}"
       x-access-token-scope: read
       tags:
         - Notifications
@@ -3568,6 +3781,8 @@ paths:
             $ref: "#/components/schemas/ID"
     put:
       operationId: updateNotificationNodeEventSetting
+      deprecated: true
+      x-canonical-path: "/api/v1/notifications/events/{key}/nodes/{id}"
       x-access-token-scope: read-write
       tags:
         - Notifications
@@ -3623,6 +3838,8 @@ paths:
   /api/notifications/templates/{key}/{channel}:
     get:
       operationId: getNotificationTemplate
+      deprecated: true
+      x-canonical-path: "/api/v1/notifications/templates/{key}/{channel}"
       x-access-token-scope: read
       tags:
         - Notifications
@@ -3659,6 +3876,8 @@ paths:
             $ref: "#/components/schemas/Channel"
     put:
       operationId: putNotificationTemplate
+      deprecated: true
+      x-canonical-path: "/api/v1/notifications/templates/{key}/{channel}"
       x-access-token-scope: read-write
       tags:
         - Notifications
@@ -3707,6 +3926,8 @@ paths:
   /api/notifications/templates/{key}/{channel}/previews:
     post:
       operationId: previewNotificationTemplate
+      deprecated: true
+      x-canonical-path: "/api/v1/notifications/templates/{key}/{channel}/previews"
       x-access-token-scope: read
       tags:
         - Notifications
@@ -3755,6 +3976,8 @@ paths:
   /api/notifications/templates/{key}/{channel}/resets:
     post:
       operationId: resetNotificationTemplate
+      deprecated: true
+      x-canonical-path: "/api/v1/notifications/templates/{key}/{channel}/resets"
       x-access-token-scope: read-write
       tags:
         - Notifications
@@ -3794,7 +4017,10 @@ paths:
         - $ref: "#/components/parameters/CSRF"
   /api/settings:
     get:
+      x-rest-exception: "list-page GET /api/settings: Singleton: the preferences object, not a collection."
       operationId: getSettings
+      deprecated: true
+      x-canonical-path: "/api/v1/settings"
       x-access-token-scope: read
       tags:
         - Settings
@@ -3827,6 +4053,8 @@ paths:
           $ref: "#/components/responses/ServerError"
     put:
       operationId: replaceSettings
+      deprecated: true
+      x-canonical-path: "/api/v1/settings"
       x-access-token-scope: full
       tags:
         - Settings
@@ -3874,6 +4102,8 @@ paths:
               $ref: "#/components/schemas/SettingsInput"
     patch:
       operationId: patchSettings
+      deprecated: true
+      x-canonical-path: "/api/v1/settings"
       x-access-token-scope: full
       tags:
         - Settings
@@ -3922,7 +4152,10 @@ paths:
               $ref: "#/components/schemas/SettingsPatch"
   /api/settings/enrolment-key:
     post:
+      x-rest-exception: "location POST /api/settings/enrolment-key 201: Rotates the shared bootstrap key (singleton); no other resource is addressable."
       operationId: rotateEnrollmentKey
+      deprecated: true
+      x-canonical-path: "/api/v1/settings/enrolment-key"
       x-access-token-scope: full
       tags:
         - Settings
@@ -3960,6 +4193,8 @@ paths:
   /api/ip/history:
     get:
       operationId: listIPChanges
+      deprecated: true
+      x-canonical-path: "/api/v1/ip/history"
       x-access-token-scope: read
       tags:
         - IP
@@ -3994,6 +4229,8 @@ paths:
   /api/ip/addresses:
     get:
       operationId: listIPAddresses
+      deprecated: true
+      x-canonical-path: "/api/v1/ip/addresses"
       x-access-token-scope: read
       tags:
         - IP
@@ -4028,7 +4265,10 @@ paths:
         - $ref: "#/components/parameters/Size"
   /api/ip/lookup:
     get:
+      x-rest-exception: "plural /api/ip/lookup: Read of the location of one literal IP, not a collection."
       operationId: lookupIP
+      deprecated: true
+      x-canonical-path: "/api/v1/ip/lookup"
       x-access-token-scope: read
       tags:
         - IP
@@ -4067,7 +4307,10 @@ paths:
             $ref: "#/components/schemas/IP"
   /api/ip/providers:
     get:
+      x-rest-exception: "list-page GET /api/ip/providers: The configured providers, a bounded set."
       operationId: listGeoProviders
+      deprecated: true
+      x-canonical-path: "/api/v1/ip/providers"
       x-access-token-scope: read
       tags:
         - IP
@@ -4092,7 +4335,10 @@ paths:
           $ref: "#/components/responses/ServerError"
   /api/ip/map:
     get:
+      x-rest-exception: "plural /api/ip/map: Computed map of the current location per node."
       operationId: getMap
+      deprecated: true
+      x-canonical-path: "/api/v1/ip/map"
       x-access-token-scope: read
       tags:
         - IP
@@ -4126,6 +4372,8 @@ paths:
   /api/jobs/{id}:
     get:
       operationId: getJob
+      deprecated: true
+      x-canonical-path: "/api/v1/jobs/{id}"
       x-access-token-scope: read
       tags:
         - Jobs
@@ -4165,6 +4413,8 @@ paths:
   /api/installer/probes:
     post:
       operationId: probeSSH
+      deprecated: true
+      x-canonical-path: "/api/v1/installer/probes"
       x-access-token-scope: full
       tags:
         - Installer
@@ -4208,6 +4458,8 @@ paths:
   /api/nodes/{id}/installations:
     post:
       operationId: installAgent
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes/{id}/installations"
       x-access-token-scope: full
       tags:
         - Installer
@@ -4262,6 +4514,8 @@ paths:
   /api/installations/{id}:
     get:
       operationId: getInstallation
+      deprecated: true
+      x-canonical-path: "/api/v1/installations/{id}"
       x-access-token-scope: read
       tags:
         - Installer
@@ -4300,7 +4554,10 @@ paths:
             $ref: "#/components/schemas/ID"
   /api/installations/{id}/events:
     get:
+      x-rest-exception: "list-page GET /api/installations/{id}/events: Server-sent event stream of one installation, not a paged list."
       operationId: streamInstallEvents
+      deprecated: true
+      x-canonical-path: "/api/v1/installations/{id}/events"
       x-access-token-scope: read
       tags:
         - Installer
@@ -4359,6 +4616,8 @@ paths:
   /api/nodes/{id}/uninstallations:
     post:
       operationId: uninstallAgent
+      deprecated: true
+      x-canonical-path: "/api/v1/nodes/{id}/uninstallations"
       x-access-token-scope: full
       tags:
         - Installer
@@ -4956,6 +5215,12 @@ components:
         - telegram
         - slack
         - webhook
+    DeliveryStatus:
+      type: string
+      enum:
+        - pending
+        - sent
+        - failed
     Severity:
       type: string
       enum:

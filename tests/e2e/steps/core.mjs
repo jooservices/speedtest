@@ -14,7 +14,29 @@ export function coreSteps(ctx) {
     url: hash => `${stack.browserOrigin}/${hash}`,
     heading: name => page.getByRole('heading', { name, level: 1 }),
     bandwidthCard: () => page.locator('section.card').filter({ has: page.getByRole('heading', { name: 'Bandwidth', exact: true }) }),
+    bandwidthBucketDate: () => T.bandwidthCard().locator('table').last().locator('tbody tr').first().locator('td').first().innerText(),
+    bandwidthRangeNumber: () => T.bandwidthCard().locator('.stat-value').first().innerText(),
     toast: text => page.locator('#toasts').getByText(text).first(),
+    languageSelector: () => page.getByLabel('Language', { exact: true }),
+    savedLanguage: () => query(stack.db, "select value->>'language' from settings where key='display'"),
+    async chooseLanguage(language) { await T.choose(T.languageSelector(), language); },
+    async reloadSettings() { await page.reload(); await T.heading('Settings').waitFor(); },
+    async documentLanguage() { return page.locator('html').getAttribute('lang'); },
+    async failNextLanguageSave(language) {
+      let refused = false;
+      await page.route('**/api/settings', async route => {
+        const request = route.request();
+        if (!refused && request.method() === 'PUT' && request.postDataJSON().language === language) {
+          refused = true;
+          await route.fulfill({ status: 500, contentType: 'application/problem+json', body: JSON.stringify({
+            type: 'about:blank', title: 'Temporary failure', status: 500, detail: 'Retry the settings save.'
+          }) });
+          return;
+        }
+        await route.continue();
+      });
+    },
+    async allowLanguageSaves() { await page.unroute('**/api/settings'); },
 
     // ---- navigation and session ----
     async open(hash, title) {

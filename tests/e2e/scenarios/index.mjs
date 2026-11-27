@@ -52,6 +52,8 @@ export function scenarios({ T, S }) {
     { id: 'SC-ISP-02', area: 'isps', title: 'ISP filters stay local to Results, Statistics and Alerts', covers: 'multi-ISP predicates, clear filters, dashboard snapshot, map and full exports', run: S.isps.filtersStayPageScopedAndClear },
     { id: 'SC-ISP-03', area: 'isps', title: 'ISP plan defaults update while explicit speeds stay fixed', covers: 'plan assignment, equal and different speed overrides, later plan edits', run: S.isps.planDefaultsPreserveOverrides },
     { id: 'SC-ISP-04', area: 'isps', title: 'the monthly ISP report previews known metrics and downloads Unicode CSV and PDF', covers: 'JOOST-79 known monthly data, preview metrics, validation, month picker, out-of-order month responses, CSV and PDF downloads', run: S.isps.monthlyReport },
+    { id: 'SC-ISP-05', area: 'isps', title: 'late ISP responses cannot replace the current page', covers: 'JOOST-130 stale ISP success and failure after navigation', run: S.isps.lateListResponseCannotReplaceNewPage },
+    { id: 'SC-ISP-06', area: 'isps', title: 'late ISP responses cannot replace a refreshed ISP page', covers: 'JOOST-130 stale ISP success and failure after refresh of the same route', run: S.isps.lateListResponseCannotReplaceRefreshedPage },
 
     { id: 'SC-ENG-01', area: 'engines', title: 'a second installed engine has an independent saved schedule', covers: 'JOOST-71 capabilities, enable/disable, 60-minute default and persistence', run: S.engines.enableSecondEngine },
     { id: 'SC-ENG-02', area: 'engines', title: 'the engine selector filters charts, results and statistics', covers: 'JOOST-71 engine-isolated views and empty states', run: S.engines.selectEngine },
@@ -64,6 +66,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-ALR-03', area: 'alerts', title: 'alerts can be acknowledged, reopened and filtered', covers: 'ack, reopen, ack all, filters', run: S.alerts.activityAcknowledge },
 
     { id: 'SC-SET-01', area: 'settings', title: 'preferences are saved and survive a reload', covers: 'decimals, units, time zone, 12-hour, range, theme', run: S.settings.preferences },
+    { id: 'SC-I18N-01', area: 'settings', title: 'AC1/AC3 language selection persists across reload and restores after a failed save', covers: 'saved language, document language, Vietnamese bandwidth date and number, translated save failure', run: S.settings.languagePreference },
     { id: 'SC-SET-02', area: 'settings', title: 'speed test and location settings are kept; provider budgets are visible and keys stay write-only', covers: 'engine, location, provider enabled state and daily usage', run: S.settings.engineAndLocation },
     { id: 'SC-SET-03', area: 'settings', title: 'notification secrets are write-only and encrypted', covers: 'secrets', run: S.settings.notificationSecrets },
     { id: 'SC-SET-04', area: 'settings', title: 'a test notification reaches the configured channel', covers: 'webhook test, unset channel refused', run: S.settings.notificationTest },
@@ -80,6 +83,7 @@ export function scenarios({ T, S }) {
     { id: 'SC-NODE-06', area: 'nodes', title: 'a node can be removed from the dashboard', covers: 'node removal', run: () => S.nodes.removeFromDashboard('E2E-1') },
 
     { id: 'SC-SET-08', area: 'settings', title: 'the activity log lists owner changes without secrets', covers: 'audit log, filter, no secrets', run: S.settings.activityLog },
+    { id: 'SC-SET-12', area: 'settings', title: 'AC1/AC2 delivery history filters, pages and exposes safe details accessibly', covers: 'authenticated sent/failed deliveries, newest-first paging, status/channel filters, loading/empty/error states, text-only failure details, keyboard pagination, 390/768 layouts in both themes', run: S.settings.deliveryHistory },
 
     { id: 'SC-AUTH-02', area: 'auth', title: 'the owner can change the password', covers: 'change password, old password refused, new one works', run: () => S.auth.changePassword('a brand new passphrase 2026') },
     { id: 'SC-AUTH-04', area: 'auth', title: 'two-factor sign-in can be turned on, used and turned off', covers: 'authenticator setup, code at sign-in, recovery code once, turn off', run: () => S.auth.twoFactor(process.env.E2E_ONLY ? undefined : 'a brand new passphrase 2026') },

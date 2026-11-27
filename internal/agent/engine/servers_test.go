@@ -2,6 +2,7 @@ package engine
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -58,6 +59,76 @@ func TestParseLibreSpeedServers(t *testing.T) {
 		if _, err := ParseLibreSpeedServers([]byte(raw)); err == nil {
 			t.Errorf("accepted invalid server %q", raw)
 		}
+	}
+}
+
+// TestParseServerID pins the rules of the single gate for server IDs used by
+// parseOoklaServer and parseLibreServer: the cutset trim of '"' and ' ', base 10
+// only, and the range 1..math.MaxInt32. Rows marked "current behaviour" document
+// what the code does today; they are not a promise.
+func TestParseServerID(t *testing.T) {
+	const invalid = "invalid server ID"
+	tests := []struct {
+		name    string
+		raw     string
+		want    int64
+		wantErr bool
+		nilRaw  bool
+	}{
+		// AC1: accepted values.
+		{name: "AC1 bare number 1", raw: `1`, want: 1},
+		{name: "AC1 bare number 42", raw: `42`, want: 42},
+		{name: "AC1 quoted number", raw: `"42"`, want: 42},
+		{name: "AC1 space-padded quoted number", raw: `" 42 "`, want: 42},
+		{name: "AC1 upper bound", raw: `2147483647`, want: 2147483647},
+		{name: "AC1 quoted upper bound", raw: `"2147483647"`, want: 2147483647},
+		// Current behaviour, not a promise: ParseInt and the cutset accept these.
+		{name: "current behaviour leading zeros", raw: `007`, want: 7},
+		{name: "current behaviour leading plus", raw: `+7`, want: 7},
+		{name: "current behaviour quoted leading plus", raw: `"+7"`, want: 7},
+		{name: "current behaviour doubled quotes", raw: `""42""`, want: 42},
+		{name: "current behaviour unquoted edge spaces", raw: ` 42 `, want: 42},
+		{name: "current behaviour unbalanced quote", raw: `"42`, want: 42},
+		{name: "current behaviour space then quote", raw: ` "42" `, want: 42},
+		// AC2: out of range, overflow, empty and null.
+		{name: "AC2 zero", raw: `0`, wantErr: true},
+		{name: "AC2 negative", raw: `-1`, wantErr: true},
+		{name: "AC2 one above upper bound", raw: `2147483648`, wantErr: true},
+		{name: "AC2 quoted one above upper bound", raw: `"2147483648"`, wantErr: true},
+		{name: "AC2 int64 overflow", raw: `99999999999999999999`, wantErr: true},
+		{name: "AC2 empty input", raw: ``, wantErr: true},
+		{name: "AC2 missing id field (nil RawMessage)", nilRaw: true, wantErr: true},
+		{name: "AC2 null", raw: `null`, wantErr: true},
+		{name: "AC2 empty quoted string", raw: `""`, wantErr: true},
+		{name: "AC2 only spaces", raw: `   `, wantErr: true},
+		// AC3: non-integer text.
+		{name: "AC3 decimal", raw: `1.5`, wantErr: true},
+		{name: "AC3 decimal with zero fraction", raw: `1.0`, wantErr: true},
+		{name: "AC3 decimal 7.5", raw: `7.5`, wantErr: true},
+		{name: "AC3 exponent", raw: `1e3`, wantErr: true},
+		{name: "AC3 hex", raw: `0x10`, wantErr: true},
+		{name: "AC3 letters", raw: `abc`, wantErr: true},
+		{name: "AC3 quoted letters", raw: `"abc"`, wantErr: true},
+		{name: "AC3 boolean", raw: `true`, wantErr: true},
+		{name: "AC3 inner space", raw: `"4 2"`, wantErr: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw := json.RawMessage(tc.raw)
+			if tc.nilRaw {
+				raw = nil
+			}
+			got, err := parseServerID(raw)
+			if tc.wantErr {
+				if err == nil || err.Error() != invalid || got != 0 {
+					t.Fatalf("parseServerID(%s) = %d, %v; want 0, %q", tc.raw, got, err, invalid)
+				}
+				return
+			}
+			if err != nil || got != tc.want {
+				t.Fatalf("parseServerID(%s) = %d, %v; want %d, nil", tc.raw, got, err, tc.want)
+			}
+		})
 	}
 }
 

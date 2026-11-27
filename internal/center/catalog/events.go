@@ -61,6 +61,13 @@ func defaultTemplates(title, body string) map[string]string {
 	}
 }
 
+func digestTemplates() map[string]string {
+	plain := "{severity_icon} {event}\n{period}\n{summary}\n{link}"
+	html := "{severity_icon} <b>{event}</b>\n{period}\n{summary}\n{link}"
+	webhook := `{"event":"{event}","severity":"{severity}","period":"{period}","summary":"{summary}","link":"{link}"}`
+	return map[string]string{"email": plain, "telegram": html, "slack": plain, "webhook": webhook}
+}
+
 func qualityBody(metric string) string {
 	trigger := map[string]string{
 		"down_pct": "Download {value} vs expected {expected} ({pct}% of expected; threshold {threshold}). ",
@@ -274,15 +281,15 @@ var events = []Event{
 	},
 	{
 		Key: "digest.daily", Category: "digests", Title: "Daily summary",
-		Description: "Daily digest (default 08:00 owner time zone). Scheduler belongs to JOOST-79.", Enabled: true, Severity: "info",
-		Channels: []string{"telegram", "email"}, Placeholders: basePlaceholders(),
-		Templates: defaultTemplates("Daily summary", successBody()),
+		Description: "Daily digest at 08:00 owner-local time for the preceding local day.", Enabled: true, Severity: "info",
+		Channels: []string{"telegram", "email"}, Placeholders: basePlaceholders("period", "summary"),
+		Templates: digestTemplates(),
 	},
 	{
 		Key: "digest.weekly", Category: "digests", Title: "Weekly summary",
-		Description: "Weekly digest. Scheduler belongs to JOOST-79.", Enabled: true, Severity: "info",
-		Channels: []string{"telegram", "email"}, Placeholders: basePlaceholders(),
-		Templates: defaultTemplates("Weekly summary", successBody()),
+		Description: "Weekly digest on Monday at 08:00 owner-local time for the preceding Monday-Sunday week.", Enabled: true, Severity: "info",
+		Channels: []string{"telegram", "email"}, Placeholders: basePlaceholders("period", "summary"),
+		Templates: digestTemplates(),
 	},
 	{
 		Key: "digest.monthly_isp", Category: "digests", Title: "Monthly ISP report",
