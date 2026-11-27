@@ -7,8 +7,9 @@ test('incomplete bandwidth advice explains missing measurements when a budget ex
   const server = await startServer();
   t.after(server.close);
   server.control.noMeasurements = true;
-  const browser = await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ?
-    { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}) });
+  const browser = process.env.PW_TEST_CONNECT_WS_ENDPOINT ? await chromium.connect(process.env.PW_TEST_CONNECT_WS_ENDPOINT)
+    : await chromium.launch({ headless: true, ...(process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE ?
+      { executablePath: process.env.PLAYWRIGHT_CHROMIUM_EXECUTABLE } : {}) });
   t.after(() => browser.close());
   const page = await browser.newPage();
   await page.goto(`${server.origin}/#/nodes/node-contract`);
