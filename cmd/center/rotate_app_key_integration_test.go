@@ -39,7 +39,7 @@ func rotationPool(t *testing.T) *pgxpool.Pool {
 	if err != nil {
 		t.Fatal("invalid worktree configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	pool, err := db.Open(t.Context(), cfg.Database)
@@ -47,9 +47,6 @@ func rotationPool(t *testing.T) *pgxpool.Pool {
 		t.Fatal("cannot open worktree database")
 	}
 	t.Cleanup(pool.Close)
-	if err := verifyLocalDatabaseIdentity(t.Context(), pool, cfg); err != nil {
-		t.Fatal(err)
-	}
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	dbtest.MigrateUp(t, pool)

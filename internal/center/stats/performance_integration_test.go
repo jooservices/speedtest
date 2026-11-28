@@ -34,7 +34,7 @@ func openStatsIntegrationStore(t *testing.T) (*pgxpool.Pool, context.Context, *S
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Minute)
@@ -44,10 +44,6 @@ func openStatsIntegrationStore(t *testing.T) (*pgxpool.Pool, context.Context, *S
 		t.Fatal("cannot connect to configured worktree database")
 	}
 	t.Cleanup(pool.Close)
-	var name, marker string
-	if err := pool.QueryRow(ctx, `SELECT current_database(), shobj_description(oid, 'pg_database') FROM pg_database WHERE datname=current_database()`).Scan(&name, &marker); err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
-		t.Fatal("integration database identity and ownership marker verification failed")
-	}
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	dbtest.MigrateUp(t, pool)

@@ -5,7 +5,7 @@
     "forbiddenTraces": [
       "(?i)co-authored-by:.*(claude|anthropic|codex|openai|chatgpt|gpt|copilot|gemini|grok|opencode|deepseek|cursor)",
       "(?i)generated (with|by)\\b",
-      "🤖",
+      "\ud83e\udd16",
       "(?i)\\bclaude code\\b"
     ],
     "sshKey": "~/.ssh/github_ed25519",
@@ -384,7 +384,6 @@
         }
       }
     ],
-    "databaseComment": "workspaces-project:speedtest",
     "baselineStages": [
       "vet",
       "lint",

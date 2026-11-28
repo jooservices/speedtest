@@ -33,7 +33,7 @@ func TestRunMigration(t *testing.T) {
 	if err != nil {
 		t.Fatal("invalid test configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -43,11 +43,6 @@ func TestRunMigration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	var name, marker string
-	err = pool.QueryRow(ctx, "SELECT current_database(),shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()").Scan(&name, &marker)
-	if err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
-		t.Fatal("database safety check failed")
-	}
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	for _, direction := range []string{"up", "up"} {

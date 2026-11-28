@@ -33,19 +33,19 @@ func expectFailure(t *testing.T, message string, action func(testReporter)) {
 	action(failureReporter{t})
 }
 
-func TestRejectUnsafeNameBeforeConnecting(t *testing.T) {
+func TestRejectDestructiveOperationsOutsideLocalAndTest(t *testing.T) {
+	t.Setenv("APP_ENV", "production")
 	cfg, err := pgxpool.ParseConfig("")
 	if err != nil {
 		t.Fatal("cannot construct lazy pool")
 	}
-	cfg.ConnConfig.Database = "speedtest"
-	pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
+		pool, err := pgxpool.NewWithConfig(context.Background(), cfg)
 	if err != nil {
 		t.Fatal("cannot construct lazy pool")
 	}
 	defer pool.Close()
-	expectFailure(t, "refusing database", func(r testReporter) { Reset(r, pool) })
-	expectFailure(t, "refusing database", func(r testReporter) { MigrateUp(r, pool) })
+	expectFailure(t, "APP_ENV", func(r testReporter) { Reset(r, pool) })
+	expectFailure(t, "APP_ENV", func(r testReporter) { MigrateUp(r, pool) })
 }
 
 func TestResetAndMigrateFailurePaths(t *testing.T) {
@@ -58,7 +58,7 @@ func TestResetAndMigrateFailurePaths(t *testing.T) {
 	if err != nil {
 		t.Fatal("invalid test configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
@@ -99,12 +99,12 @@ func TestResetAndMigrateFailurePaths(t *testing.T) {
 	expectFailure(t, "migration failed", func(r testReporter) { MigrateUp(r, pool) })
 	Reset(t, pool)
 
-	// An unavailable identity query fails closed before either operation.
+	// An unavailable database fails closed before either operation changes anything.
 	closed, err := db.Open(ctx, cfg.Database)
 	if err != nil {
 		t.Fatal(err)
 	}
 	closed.Close()
-	expectFailure(t, "identity/ownership", func(r testReporter) { Reset(r, closed) })
-	expectFailure(t, "identity/ownership", func(r testReporter) { MigrateUp(r, closed) })
+	expectFailure(t, "could not list test database tables", func(r testReporter) { Reset(r, closed) })
+	expectFailure(t, "migration failed", func(r testReporter) { MigrateUp(r, closed) })
 }

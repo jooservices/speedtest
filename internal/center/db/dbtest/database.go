@@ -12,6 +12,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jooservices/speedtest/internal/center/db"
+	"github.com/jooservices/speedtest/internal/shared/config"
 	"github.com/jooservices/speedtest/migrations"
 )
 
@@ -21,14 +22,10 @@ type testReporter interface {
 	Log(...any)
 }
 
-func verify(t testReporter, ctx context.Context, pool *pgxpool.Pool) {
+func verify(t testReporter, _ context.Context, _ *pgxpool.Pool) {
 	t.Helper()
-	if err := db.CheckTestDatabase(pool.Config().ConnConfig.Database); err != nil {
+	if err := db.CheckDestructiveAllowed(config.AppEnv()); err != nil {
 		t.Fatal(err)
-	}
-	var name, marker string
-	if err := pool.QueryRow(ctx, "SELECT current_database(), shobj_description(oid, 'pg_database') FROM pg_database WHERE datname=current_database()").Scan(&name, &marker); err != nil || name != pool.Config().ConnConfig.Database || marker != "workspaces-project:speedtest" {
-		t.Fatal("test database identity/ownership verification failed")
 	}
 }
 

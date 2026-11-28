@@ -73,22 +73,20 @@ mention an AI. The profile `.ai/project.json` declares the checks (stages).
 The command center stores everything in PostgreSQL, provided by the shared Workspaces service. There are three kinds
 of database:
 
-- `speedtest` — live data, never deleted.
-- `speedtest_test` — wiped on every test run.
-- `wt_<ticket>` — one per ticket worktree, made and removed by `scripts/db/tree` (the legacy `speedtest_wt<id>`
-  names are still accepted by the guard).
+- the live database — never deleted.
+- the test database — wiped on every test run.
+
+The source code does not care which one `SPEEDTEST_DB_*` names; it only refuses destructive operations unless
+`APP_ENV` is `local` or `test`.
 
 ### Anywhere else
 
-Run your own PostgreSQL and point `SPEEDTEST_DB_*` in `.env` at it, with the same naming scheme and the ownership
-comment `COMMENT ON DATABASE <name> IS 'workspaces-project:speedtest'`.
+Run your own PostgreSQL and point `SPEEDTEST_DB_*` in `.env` at it, and set `APP_ENV=local`.
 
 ### Safety
 
-Migrate or test only on a test or worktree database, never on `speedtest`. Verify the configured database name before
-any database operation. Unit tests need no database. Database-backed tests carry the `integration` build tag, run
-serially (`-p 1`, they share one database) and refuse any database other than `speedtest_test`, `speedtest_wt<id>` or
-`wt_<ticket>` (guard in `internal/center/db`, helpers in `internal/center/db/dbtest`). Migrations in `migrations/` are
+Migrate or test only on a test or worktree database, never on `speedtest`. Check that `SPEEDTEST_DB_*` names a disposable database before any database operation. Unit tests need no database. Database-backed tests carry the `integration` build tag, run
+serially (`-p 1`, they share one database) and refuse to run unless `APP_ENV` is `local` or `test` (guard in `internal/center/db`, helpers in `internal/center/db/dbtest`). Migrations in `migrations/` are
 applied by the embedded runner (`make migrate`, `make migrate-down`; see `migrations/README.md`).
 
 ## Running the center and the agent locally
@@ -145,8 +143,7 @@ make test-db  # integration tests (-tags integration -p 1) on the database in .e
 ```
 
 The Go tests today exercise only configuration loading and need no database.
-Database-backed tests, when they exist, run against `speedtest_test` or the
-worktree database after verifying its name — never against `speedtest`.
+Database-backed tests run against the database named by `SPEEDTEST_DB_*` and only when `APP_ENV` is `local` or `test`.
 
 ### `make ci` prerequisites
 
@@ -313,5 +310,5 @@ store-call budget.
 
 Run it with `go test -tags integration ./internal/center/stats -run
 TestStatisticsQueriesMeetLatencyTargetOnOneYearDataset -count=1 -v` using only a
-configured, ownership-marked test/worktree database. This test-only change does
+configured disposable database with `APP_ENV=test`. This test-only change does
 not introduce a user flow or change the API.

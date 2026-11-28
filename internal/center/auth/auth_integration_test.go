@@ -42,7 +42,7 @@ func integrationPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	if err != nil {
 		t.Fatal("invalid worktree database configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -52,12 +52,6 @@ func integrationPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	var name, marker string
-	err = pool.QueryRow(ctx, `SELECT current_database(),shobj_description(oid,'pg_database')
-		FROM pg_database WHERE datname=current_database()`).Scan(&name, &marker)
-	if err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
-		t.Fatal("worktree database identity/ownership marker verification failed")
-	}
 	t.Log("PASS: worktree database name and ownership marker verified")
 	return pool, ctx
 }

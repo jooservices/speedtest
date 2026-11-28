@@ -103,26 +103,9 @@ private, ignored `.env` in the current directory. Migration commands require
 that file; existing process environment values take precedence. Neither
 commands nor errors print connection strings, SQL or credentials.
 
-Before **every** database migration, seed or integration test, verify the target
-using the Workspaces safety helper:
-
-```bash
-/home/joos/Workspaces/scripts/docker/shared check-project speedtest --env-file "$PWD/.env" --mode "wt:<id>"
-```
-
-Replace `<id>` with the worktree's own ID, or `--mode test` for `speedtest_test`.
-Do not proceed if validation fails. On the Dev Workspaces VM only, Claude's
-JOOST-10 unblock comment 24165 authorizes manual verification because this
-helper targets the retired Docker stack: verify the configured name is
-`speedtest_test`, matches `^speedtest_wt[a-z0-9]{1,12}$` (legacy worktree) or matches `^wt_[a-z0-9_]{2,35}$` (the
-`wt_<ticket>` database of `scripts/db/tree`), then check the
-connected database's marker:
-
-```sql
-SELECT current_database(), shobj_description(oid, 'pg_database')
-FROM pg_database WHERE datname = current_database();
--- Expected marker: workspaces-project:speedtest
-```
+Before **every** database migration, seed or integration test, run the workspace database guard
+(`scripts/dev/guard`) from the worktree and do not proceed if it fails.
+The program itself only requires `APP_ENV` to be `local` or `test` for destructive operations.
 
 Never run development migrations against the live `speedtest` database.
 Provisioning and deploying live databases belong to the operator/deploy flow.
@@ -237,9 +220,8 @@ make ci
 ```
 
 Create `.tmp/` first for the coverage artifact. Integration tests fail closed
-without `.env`, a permitted database name and the server-side ownership marker.
-Each suite resets the project tables and goose journal after validating the
-database name and ownership marker, and leaves the schema empty on cleanup.
+without `.env` and without `APP_ENV` set to `local` or `test`.
+Each suite resets the project tables and goose journal after checking `APP_ENV`, and leaves the schema empty on cleanup.
 The geo suite applies its own schema before testing. These are destructive
 fixtures: use only a disposable test/worktree database. Always use `-p 1` and
 `-count=1`; never run separate integration commands or parallel tests against

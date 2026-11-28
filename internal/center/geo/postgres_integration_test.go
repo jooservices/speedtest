@@ -43,7 +43,7 @@ func integrationPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 	if err != nil {
 		t.Fatal("invalid test database configuration")
 	}
-	if err := centerdb.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := centerdb.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -53,10 +53,6 @@ func integrationPool(t *testing.T) (*pgxpool.Pool, context.Context) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	var name, marker string
-	if err := pool.QueryRow(ctx, "SELECT current_database(), shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()").Scan(&name, &marker); err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
-		t.Fatal("test database identity/ownership verification failed")
-	}
 	dbtest.Reset(t, pool)
 	t.Cleanup(func() { dbtest.Reset(t, pool) })
 	dbtest.MigrateUp(t, pool)

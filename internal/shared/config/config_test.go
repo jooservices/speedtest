@@ -345,3 +345,14 @@ func TestNotificationTransportOverrides(t *testing.T) {
 		t.Fatal("notification environment overrides")
 	}
 }
+
+func TestAppEnvIsTrimmedLowerCasedAndDefaultsToLocal(t *testing.T) {
+	t.Setenv("APP_ENV", "")
+	if got := AppEnv(); got != "local" {
+		t.Fatalf("default APP_ENV = %q, want local", got)
+	}
+	t.Setenv("APP_ENV", "  Production ")
+	if got := AppEnv(); got != "production" {
+		t.Fatalf("APP_ENV = %q, want production", got)
+	}
+}

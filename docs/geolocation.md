@@ -142,7 +142,7 @@ idempotent and works offline after the verified files are cached.
 python3 scripts/geo-test-fixtures.py
 # Unit and race tests use local MMDB fixtures and loopback HTTP test servers.
 go test -race ./internal/center/geo/... ./internal/center/ipwatch ./internal/center/ipapi
-# Database tests use only this worktree's configured database (speedtest_wt<ID> or wt_<ticket>).
+# Database tests use only this worktree's configured database .
 go test -p 1 -tags integration ./internal/center/geo/... -run 'Integration$' -count=1
 E2E_ONLY=SC-SET-02 node tests/e2e/main.mjs
 E2E_ONLY=SC-IP-01 node tests/e2e/main.mjs
@@ -150,7 +150,7 @@ E2E_ONLY=SC-IP-01 node tests/e2e/main.mjs
 
 Unit tests use local files and loopback `httptest` servers with fake credentials;
 they make no licensed database download or real provider call. Integration
-tests verify the project ownership marker, reset the worktree schema, apply the
+tests reset the worktree schema, apply the
 current migrations and clean their fixture rows. Do not run database suites
 concurrently against the same worktree database. The two focused E2E scenarios
 cover provider budget visibility and quality/source details in IP views. The

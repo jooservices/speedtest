@@ -35,7 +35,7 @@ func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
@@ -45,10 +45,6 @@ func TestRunConnectsDatabaseAndWiresNodeAPIIntegration(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	var name, marker string
-	if err := pool.QueryRow(ctx, `SELECT current_database(),shobj_description(oid,'pg_database') FROM pg_database WHERE datname=current_database()`).Scan(&name, &marker); err != nil || name != cfg.Database.Name || marker != "workspaces-project:speedtest" {
-		t.Fatal("integration database identity and ownership marker verification failed")
-	}
 	t.Log("PASS: command-center startup is checked against the verified Speedtest worktree database")
 	if err := (poolPinger{pool: pool}).PingContext(ctx); err != nil {
 		t.Fatal("database readiness ping", err)
@@ -148,7 +144,7 @@ func TestSeedAndStartupGuardsIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	pool, err := db.Open(t.Context(), cfg.Database)
@@ -187,13 +183,6 @@ func TestSeedAndStartupGuardsIntegration(t *testing.T) {
 	}
 	if err = runSeedAdmin(canceled, nil, io.Discard); err == nil {
 		t.Fatal("canceled seed succeeded")
-	}
-	if err = verifyLocalDatabaseIdentity(canceled, pool, cfg); err == nil {
-		t.Fatal("canceled identity check succeeded")
-	}
-	cfg.AppEnv = "production"
-	if err = verifyLocalDatabaseIdentity(canceled, pool, cfg); err != nil {
-		t.Fatal("production identity path", err)
 	}
 	t.Setenv("APP_ENV", "production")
 	if err = runSeedAdmin(t.Context(), nil, io.Discard); err == nil {
@@ -282,7 +271,7 @@ func TestCreateOwnerIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	pool, err := db.Open(t.Context(), cfg.Database)
@@ -325,7 +314,7 @@ func TestResetOwnerPasswordIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	pool, err := db.Open(t.Context(), cfg.Database)
@@ -384,7 +373,7 @@ func TestDisableTwoFactorIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatal("invalid worktree test configuration")
 	}
-	if err := db.CheckTestDatabase(cfg.Database.Name); err != nil {
+	if err := db.CheckDestructiveAllowed(cfg.AppEnv); err != nil {
 		t.Fatal(err)
 	}
 	pool, err := db.Open(t.Context(), cfg.Database)

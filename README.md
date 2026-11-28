@@ -107,13 +107,11 @@ specific machine. Set `APP_ENV=local` or `APP_ENV=test` before running
 unknown environments, and it does not replace an existing administrator
 password. The local/test default login is documented in
 `JOOservices/guides/default-credentials.md`.
-For local/test startup and seeding, the configured database must be
-`speedtest_test` or this worktree's `speedtest_wt*` or `wt_<ticket>` database and carry the
-Workspaces ownership marker; the live `speedtest` database is refused.
+Seeding runs only when `APP_ENV` is `local` or `test`; the program uses the database
+named by `SPEEDTEST_DB_*` as given.
 Read [the migration runbook](migrations/README.md) and verify the non-live
-database before any migration or database test. `make test-db` verifies the
-database name and ownership marker, resets its application tables and migration
-journal, and runs self-contained suites serially.
+database before any migration or database test. `make test-db` checks that `APP_ENV` is `local` or `test`, resets the application tables and migration
+journal of the configured database, and runs self-contained suites serially.
 Use only a disposable test/worktree database; never run integration suites
 concurrently against the same database. For API tokens and MCP clients, see
 [`docs/mcp.md`](docs/mcp.md).
