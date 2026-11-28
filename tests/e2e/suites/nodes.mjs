@@ -182,7 +182,8 @@ export function nodesSuite(T, ctx) {
     await T.toast('Ookla server selection saved').waitFor();
     await server.getByRole('button', { name: 'Pin' }).click();
     await T.toast('Ookla server selection saved').waitFor();
-    assert.equal(T.db("select pinned_server_id from node_engine_servers c join nodes n on n.id=c.node_id where n.name='E2E-1' and c.engine='ookla'"), '54321');
+    // The same toast text was shown by the save before, so the toast alone does not prove this save finished: wait for the stored value.
+    await T.eventually(() => T.db("select pinned_server_id from node_engine_servers c join nodes n on n.id=c.node_id where n.name='E2E-1' and c.engine='ookla'") === '54321', 'the Ookla server pin is stored');
     await T.press('Run test');
     const run = T.dialog('Running speed test');
     await run.getByText(/Mbps ↓|Gbps ↓|kbps ↓/).waitFor({ timeout: 90000 });
